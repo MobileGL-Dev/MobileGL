@@ -13,6 +13,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GenQueries(GLsizei n, GLuint* ids);
     void CreateQueries(GLenum target, GLsizei n, GLuint* ids);
     void DeleteQueries(GLsizei n, const GLuint* ids);
+    // Destroys every still-registered query object exactly as DeleteQueries would.
+    // Query objects are context-owned, and MobileGL::Destroy() tears every context
+    // down, so the process-global registry has to be drained there: without this the
+    // QueryObject and any backend timer-query wrapper leaked across every
+    // eglTerminate/eglInitialize cycle, and the active-query/name-allocator state
+    // from the dead context survived into the next one. Must run while the backend
+    // function table is still populated, and before a re-initialized library could
+    // pair the handles with the wrong backend's DeleteBackendQuery.
+    void DestroyAllQueryObjects();
     GLboolean IsQuery(GLuint id);
     void BeginQuery(GLenum target, GLuint id);
     void EndQuery(GLenum target);

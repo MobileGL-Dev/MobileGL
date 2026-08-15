@@ -12,6 +12,7 @@
 #include "../VkIncludes.h"
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 #include <Includes.h>
+#include <MG_Util/Types.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     // Enough of a fingerprint to identify the exact module the driver rejected without keeping the
@@ -165,7 +166,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<HashType, PipelineCacheEntry> m_cache;
         // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
         Uint64 m_frameCounter = 0;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline MobileGL::XXH64State m_hashState;
         static inline Bool s_suppressBlendedDepthWrite = false;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

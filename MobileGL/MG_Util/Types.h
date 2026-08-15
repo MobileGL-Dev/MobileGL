@@ -52,6 +52,22 @@ namespace MobileGL {
     inline UniquePtr<T> MakeUnique(Args&&... args) {
         return std::make_unique<T>(std::forward<Args>(args)...);
     }
+    // RAII owner for the one-shot XXH64 state used by the Vulkan cache hashers.
+    // The previous `static inline XXH64_state_t*` form allocated five states per
+    // process and never called XXH64_freeState; a destructor here is independent of
+    // Vulkan/glslang teardown, so it is safe at static destruction time.
+    class XXH64State {
+    public:
+        XXH64State() : m_state(XXH64_createState()) {}
+        ~XXH64State() { XXH64_freeState(m_state); }
+        XXH64State(const XXH64State&) = delete;
+        XXH64State& operator=(const XXH64State&) = delete;
+
+        XXH64_state_t* Get() const { return m_state; }
+
+    private:
+        XXH64_state_t* m_state = nullptr;
+    };
     using SizeT = std::size_t;
     template <typename T, SizeT N>
     using Array = std::array<T, N>;

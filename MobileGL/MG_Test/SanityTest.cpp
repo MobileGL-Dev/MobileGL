@@ -18,6 +18,7 @@
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/GLImpl/VertexArray/Validators.h>
@@ -1971,6 +1972,9 @@ namespace {
         MobileGL::Vector<GLuint> framebuffers;
         MobileGL::Vector<GLuint> renderbuffers;
         MobileGL::Vector<GLuint> samplers;
+        MobileGL::Vector<GLuint> vertexArrays;
+        MobileGL::Vector<GLuint> programs;
+        MobileGL::Vector<GLuint> buffers;
     };
 
     TwinDeletionSinks* g_twinDeletionSinks = nullptr;
@@ -1997,6 +2001,24 @@ namespace {
         if (!g_twinDeletionSinks) return;
         for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->samplers.push_back(ids[i]);
     }
+    void TW_GenVertexArrays(GLsizei count, GLuint* ids) {
+        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+    }
+    void TW_DeleteVertexArrays(GLsizei count, const GLuint* ids) {
+        if (!g_twinDeletionSinks) return;
+        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->vertexArrays.push_back(ids[i]);
+    }
+    GLuint TW_CreateProgram() { return g_nextTwinDriverId++; }
+    void TW_DeleteProgram(GLuint program) {
+        if (g_twinDeletionSinks) g_twinDeletionSinks->programs.push_back(program);
+    }
+    void TW_GenBuffers(GLsizei count, GLuint* ids) {
+        for (GLsizei i = 0; i < count; ++i) ids[i] = g_nextTwinDriverId++;
+    }
+    void TW_DeleteBuffers(GLsizei count, const GLuint* ids) {
+        if (!g_twinDeletionSinks) return;
+        for (GLsizei i = 0; i < count; ++i) g_twinDeletionSinks->buffers.push_back(ids[i]);
+    }
     void TW_BindFramebuffer(GLenum target, GLuint framebuffer) {
         SG_Log("BindFramebuffer:" + std::to_string(target) + ":" + std::to_string(framebuffer));
     }
@@ -2018,6 +2040,12 @@ namespace {
             functions.glGenSamplers = TW_GenSamplers;
             functions.glDeleteSamplers = TW_DeleteSamplers;
             functions.glBindSampler = TW_BindSampler;
+            functions.glGenVertexArrays = TW_GenVertexArrays;
+            functions.glDeleteVertexArrays = TW_DeleteVertexArrays;
+            functions.glCreateProgram = TW_CreateProgram;
+            functions.glDeleteProgram = TW_DeleteProgram;
+            functions.glGenBuffers = TW_GenBuffers;
+            functions.glDeleteBuffers = TW_DeleteBuffers;
             functions.glGetError = SG_NoError;
             MobileGL::MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
             g_twinDeletionSinks = &sinks;
@@ -2115,6 +2143,145 @@ TEST(DirectGLESBackendSampler, DestructorDeletesIdAndScrubsUnitCache) {
         --g_backendContextGeneration;
         EXPECT_EQ(mocks.sinks.samplers.size(), 1u);
     }
+}
+
+TEST(DirectGLESBackendVertexArray, DestructorDeletesIdAndHonorsContextGeneration) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    GLuint id = 0;
+    {
+        auto backendVao = MobileGL::MakeShared<VertexArrayImpl::BackendVertexArrayObject>();
+        id = backendVao->GetBackendVertexArrayId();
+        ASSERT_NE(id, 0u);
+    }
+    ASSERT_EQ(mocks.sinks.vertexArrays.size(), 1u);
+    EXPECT_EQ(mocks.sinks.vertexArrays[0], id);
+
+    // A twin whose context died must NOT delete a VAO name a successor context
+    // may already have recycled (both contexts restart GL names at 1).
+    {
+        auto backendVao = MobileGL::MakeShared<VertexArrayImpl::BackendVertexArrayObject>();
+        ++g_backendContextGeneration;
+        backendVao.reset();
+        --g_backendContextGeneration; // restore for later tests
+        EXPECT_EQ(mocks.sinks.vertexArrays.size(), 1u);
+    }
+}
+
+TEST(DirectGLESBackendProgram, DestructorDeletesIdAndHonorsContextGeneration) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    GLuint id = 0;
+    {
+        auto backendProgram = MobileGL::MakeShared<PrgramImpl::BackendProgramObjectImpl>();
+        id = backendProgram->GetBackendProgramId();
+        ASSERT_NE(id, 0u);
+    }
+    ASSERT_EQ(mocks.sinks.programs.size(), 1u);
+    EXPECT_EQ(mocks.sinks.programs[0], id);
+
+    {
+        auto backendProgram = MobileGL::MakeShared<PrgramImpl::BackendProgramObjectImpl>();
+        ++g_backendContextGeneration;
+        backendProgram.reset();
+        --g_backendContextGeneration;
+        EXPECT_EQ(mocks.sinks.programs.size(), 1u);
+    }
+}
+
+TEST(DirectGLESBackendProgram, GlobalUboDeletionHonorsContextGeneration) {
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    ScopedBackendTwinMocks mocks;
+
+    MobileGL::Uint id = 123;
+    PrgramImpl::DeleteBackendProgramGlobalUbo(id, g_backendContextGeneration);
+    EXPECT_EQ(id, 0u);
+    ASSERT_EQ(mocks.sinks.buffers.size(), 1u);
+    EXPECT_EQ(mocks.sinks.buffers[0], 123u);
+
+    // A buffer belonging to a dead context must be abandoned, never deleted as a
+    // recycled name in the successor context.
+    id = 124;
+    PrgramImpl::DeleteBackendProgramGlobalUbo(id, g_backendContextGeneration - 1);
+    EXPECT_EQ(id, 0u);
+    EXPECT_EQ(mocks.sinks.buffers.size(), 1u);
+}
+
+namespace {
+    struct SyncDeleteRacePayload {
+        std::atomic<MobileGL::Bool> alive{true};
+    };
+    std::atomic<MobileGL::Int> g_syncRaceDeleteCount{0};
+
+    MobileGL::MG_Backend::BackendSyncHandle SyncRaceFenceSync() {
+        return new SyncDeleteRacePayload();
+    }
+
+    GLenum SyncRaceClientWaitSync(MobileGL::MG_Backend::BackendSyncHandle handle, GLbitfield, GLuint64) {
+        auto* payload = static_cast<SyncDeleteRacePayload*>(handle);
+        // Keep the backend call in flight while the GL thread runs DeleteSync. The
+        // frontend must not release the backend handle (or the SyncObject wrapper)
+        // until this call has returned.
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        return payload->alive.load(std::memory_order_acquire) ? GL_ALREADY_SIGNALED : GL_WAIT_FAILED;
+    }
+
+    void SyncRaceWaitSync(MobileGL::MG_Backend::BackendSyncHandle, GLbitfield, GLuint64) {}
+
+    void SyncRaceDeleteSync(MobileGL::MG_Backend::BackendSyncHandle handle) {
+        auto* payload = static_cast<SyncDeleteRacePayload*>(handle);
+        payload->alive.store(false, std::memory_order_release);
+        delete payload;
+        g_syncRaceDeleteCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    MobileGL::Bool SyncRaceGetSyncStatus(MobileGL::MG_Backend::BackendSyncHandle) { return true; }
+
+    struct ScopedSyncRaceBackend {
+        ScopedSyncRaceBackend(): previous(MobileGL::MG_Backend::gBackendFunctionsTable) {
+            MobileGL::MG_Backend::GlobalBackendFunctionsTable functions{};
+            functions.GL.FenceSync = SyncRaceFenceSync;
+            functions.GL.ClientWaitSync = SyncRaceClientWaitSync;
+            functions.GL.WaitSync = SyncRaceWaitSync;
+            functions.GL.DeleteSync = SyncRaceDeleteSync;
+            functions.GL.GetSyncStatus = SyncRaceGetSyncStatus;
+            MobileGL::MG_Backend::gBackendFunctionsTable = functions;
+            g_syncRaceDeleteCount.store(0, std::memory_order_relaxed);
+        }
+
+        ~ScopedSyncRaceBackend() {
+            MobileGL::MG_Impl::GLImpl::DestroyAllSyncObjects();
+            MobileGL::MG_Backend::gBackendFunctionsTable = previous;
+        }
+
+        ScopedSyncRaceBackend(const ScopedSyncRaceBackend&) = delete;
+        ScopedSyncRaceBackend& operator=(const ScopedSyncRaceBackend&) = delete;
+
+        MobileGL::MG_Backend::GlobalBackendFunctionsTable previous;
+    };
+} // namespace
+
+TEST(SyncLifetime, DeleteWaitsForInFlightClientWait) {
+    ScopedSyncRaceBackend backend;
+
+    const GLsync sync = MobileGL::MG_Impl::GLImpl::FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    ASSERT_NE(sync, nullptr);
+
+    GLenum clientResult = GL_WAIT_FAILED;
+    std::thread waiter([sync, &clientResult] {
+        clientResult = MobileGL::MG_Impl::GLImpl::ClientWaitSync(sync, 0, 0);
+    });
+
+    // Give the worker a head start so ClientWaitSync is already inside the stub
+    // (and therefore holds the per-object lock) when DeleteSync runs.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    MobileGL::MG_Impl::GLImpl::DeleteSync(sync);
+    waiter.join();
+
+    EXPECT_EQ(clientResult, GL_ALREADY_SIGNALED);
+    EXPECT_EQ(g_syncRaceDeleteCount.load(std::memory_order_relaxed), 1);
 }
 
 TEST(DirectGLESStateGuards, DefaultFramebufferBindGoesThroughShadow) {

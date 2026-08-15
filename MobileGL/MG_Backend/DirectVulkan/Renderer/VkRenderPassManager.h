@@ -16,6 +16,7 @@
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 
 #include <Includes.h>
+#include <MG_Util/Types.h>
 #include <unordered_map>
 #include <vk_mem_alloc.h>
 
@@ -391,7 +392,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DeferRenderbufferBackingRelease(RenderbufferResource& resource);
         void CollectDeferredRenderbufferReleases(Bool destroyAll);
 
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline MobileGL::XXH64State m_hashState;
         static inline ActiveRenderPassInfo s_activeRenderPass{};
         static inline Bool s_hasActiveRenderPass = false;
         static inline VkClearManager* s_clearManager = nullptr;

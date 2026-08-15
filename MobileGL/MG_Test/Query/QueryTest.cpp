@@ -448,6 +448,39 @@ TEST_F(QueryTest, BackendResultsPropagateThroughFrontend) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+TEST_F(QueryTest, DestroyAllQueryObjectsReclaimsRegistryAndResetsContextState) {
+    const ScopedFeaturesOverride featuresGuard;
+    const ScopedBackendFunctionsOverride backendGuard;
+    InstallStubBackendTimerQueries();
+    MG_Config::Features.DisableTimerQuery = false;
+
+    GLuint id = 0;
+    MG_Impl::GLImpl::GenQueries(1, &id);
+    ASSERT_NE(id, 0u);
+    MG_Impl::GLImpl::BeginQuery(GL_TIME_ELAPSED, id);
+
+    GLint currentQuery = -1;
+    MG_Impl::GLImpl::GetQueryiv(GL_TIME_ELAPSED, GL_CURRENT_QUERY, &currentQuery);
+    EXPECT_EQ(currentQuery, static_cast<GLint>(id));
+
+    // Full teardown drains the registry through this function while the backend
+    // table is still valid. The unread backend handle must be released, the query
+    // must disappear, and a fresh context must restart with no active query and a
+    // fresh name allocator.
+    MG_Impl::GLImpl::DestroyAllQueryObjects();
+    EXPECT_EQ(g_stubDeleteCount, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::IsQuery(id), GL_FALSE);
+
+    MG_Impl::GLImpl::GetQueryiv(GL_TIME_ELAPSED, GL_CURRENT_QUERY, &currentQuery);
+    EXPECT_EQ(currentQuery, 0);
+
+    GLuint freshId = 0;
+    MG_Impl::GLImpl::GenQueries(1, &freshId);
+    EXPECT_EQ(freshId, 1u);
+    MG_Impl::GLImpl::DeleteQueries(1, &freshId);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // Environment-agnostic property test for the env -> ConfigLoader -> Features
 // chain: whatever MOBILEGL_DISABLE_TIMERQUERY is set to in the environment of
 // this test process, MG_ConfigLoader::Init must have parsed it with the

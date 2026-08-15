@@ -134,41 +134,41 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              const MG_State::GLState::ITextureObject& texture,
                                              Bool forceNearestFiltering, Bool singleLevelView) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config->CacheVersion));
+        XXHASH_VERIFY(XXH64_reset(m_hashState.Get(), m_config->CacheVersion));
 
-        XXHASH_VERIFY(XXH64_update(m_hashState, &forceNearestFiltering, sizeof(forceNearestFiltering)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &singleLevelView, sizeof(singleLevelView)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &forceNearestFiltering, sizeof(forceNearestFiltering)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &singleLevelView, sizeof(singleLevelView)));
 
         const auto minFilter = sampler.GetMinFilter();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &minFilter, sizeof(minFilter)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &minFilter, sizeof(minFilter)));
         const auto magFilter = sampler.GetMagFilter();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &magFilter, sizeof(magFilter)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &magFilter, sizeof(magFilter)));
         const auto mipmapMode = sampler.GetMipmapMode();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &mipmapMode, sizeof(mipmapMode)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &mipmapMode, sizeof(mipmapMode)));
         const auto wrapS = sampler.GetWrapS();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapS, sizeof(wrapS)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &wrapS, sizeof(wrapS)));
         const auto wrapT = sampler.GetWrapT();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapT, sizeof(wrapT)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &wrapT, sizeof(wrapT)));
         const auto wrapR = sampler.GetWrapR();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapR, sizeof(wrapR)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &wrapR, sizeof(wrapR)));
         const auto maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         const auto minLod = ResolveEffectiveMinLod(sampler, maxLod);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &minLod, sizeof(minLod)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &maxLod, sizeof(maxLod)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &minLod, sizeof(minLod)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &maxLod, sizeof(maxLod)));
         const auto lodBias = sampler.GetLodBias();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &lodBias, sizeof(lodBias)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &lodBias, sizeof(lodBias)));
         // The RESOLVED value, not the GL request: samplers that only differ in an anisotropy Vulkan
         // will not apply (NEAREST filtering, or requests past the device limit) must still share one
         // VkSampler, while two samplers that really do differ must not collide onto the first one's.
         const auto maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler, forceNearestFiltering);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &maxAnisotropy, sizeof(maxAnisotropy)));
         const auto compareMode = sampler.GetCompareMode();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &compareMode, sizeof(compareMode)));
         const auto compareFunc = sampler.GetSamplerCompareFunc();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &compareFunc, sizeof(compareFunc)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &compareFunc, sizeof(compareFunc)));
         const auto borderColor = ResolveVkBorderColor(sampler, texture);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor, sizeof(borderColor)));
-        return XXH64_digest(m_hashState);
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &borderColor, sizeof(borderColor)));
+        return XXH64_digest(m_hashState.Get());
     }
 
     VkSampler VkSamplerManager::GetOrCreateSampler(const MG_State::GLState::SamplerObject& sampler,

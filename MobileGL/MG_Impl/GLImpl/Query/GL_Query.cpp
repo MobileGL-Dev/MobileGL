@@ -344,6 +344,41 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    void DestroyAllQueryObjects() {
+        // Detach the registry under the lock and release it outside. Entries the app
+        // already deleted were erased by DeleteQueries, so nothing here double-frees;
+        // a DeleteQueries racing this sweep finds an empty registry and ignores the
+        // names. The active-query slots and the name allocator are reset under the
+        // same lock: query names are context-owned state, so a fresh context must
+        // start clean instead of inheriting the dead context's allocator cursor or
+        // a stale "a query is already active on this target" latch.
+        UnorderedMap<GLuint, QueryObject*> orphans;
+        {
+            const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
+            orphans.swap(g_liveQueryObjects);
+            g_nextQueryId = 1;
+            g_activeTimeElapsedQueryId = 0;
+            g_activePrimitivesWrittenQueryId = 0;
+            g_activePrimitivesGeneratedQueryId = 0;
+            g_activeSamplesPassedQueryId = 0;
+        }
+        if (orphans.empty()) {
+            return;
+        }
+        // Both backends' DeleteBackendQuery only free the heap wrapper once their GL
+        // context/renderer is gone (generation/current-thread guards), so this is
+        // safe after the backend has released its EGL resources - but not after the
+        // function table itself is cleared.
+        const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery;
+        for (const auto& [_, queryObject] : orphans) {
+            if (deleteBackendQuery && queryObject->backendHandle) {
+                deleteBackendQuery(queryObject->backendHandle);
+            }
+            delete queryObject;
+        }
+        MGLOG_D("DestroyAllQueryObjects: reclaimed %zu query object(s) the app left undeleted", orphans.size());
+    }
+
     GLboolean IsQuery(GLuint id) {
         if (id == 0) {
             return GL_FALSE;

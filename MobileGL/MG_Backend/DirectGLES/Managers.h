@@ -406,6 +406,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncClientSideAttributesForDrawArrays(
                 const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count);
             Uint GetBackendVertexArrayId() const { return m_backendVAOId; }
+            Uint GetContextGeneration() const { return m_contextGeneration; }
             void Bind() const;
 
             // Draw-path memo of SyncNeccessaryBuffers' attribute walk for this VAO: the
@@ -462,6 +463,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ResolvedDrawBuffers m_resolvedDrawBuffers;
             PendingAttribValueMask m_pendingAttribValueMask;
             Uint m_backendVAOId = 0;
+            // ES context generation the VAO id and client-attribute buffer ids were
+            // created under; ids from a dead context must never be deleted against a
+            // successor context (both contexts restart GL names at 1).
+            Uint m_contextGeneration = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
             Bool m_isInitialized = false;
             Uint16 m_syncedIndexBufferVersion = 0;
@@ -711,6 +716,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter already pushed onto it: the params-version early-out has to be overridden
             // once, or an unchanged version would skip the re-push forever.
             Bool m_forceTextureParamsResync = false;
+            // Same latch for the built-in sampler parameters.
+            Bool m_forceSamplerResync = false;
         };
 
         void ActivateTextureUnit(Uint unit);
@@ -1087,6 +1094,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
             Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
+            Uint GetContextGeneration() const { return m_contextGeneration; }
             // False when the last SyncToBackend could not produce a usable program (a
             // shader failed to transpile or compile, or the link itself failed). Use()
             // must not leave the previously bound program current in that case.
@@ -1149,6 +1157,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
 
             Uint m_backendProgramId = 0;
+            // ES context generation the backend program and its global UBO were created
+            // under. A stale twin must be recreated, never deleted against a successor
+            // context (both contexts restart GL names at 1).
+            Uint m_contextGeneration = 0;
             // GL name of the frontend program this was last synced from; diagnostics only, so
             // an unusable backend program can be traced back to the glCreateProgram id the app
             // knows it by.
@@ -1196,6 +1208,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
         // ES context is recreated.
         extern Uint g_lastUsedBackendProgramId;
+        // Deletes `bufferId` only while it still belongs to the live ES context. Stale
+        // generations are abandoned without a GL call: the old context already reclaimed
+        // the buffer, and its numeric id may now name a live buffer in a successor context.
+        void DeleteBackendProgramGlobalUbo(Uint& bufferId, Uint contextGeneration);
         extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
             g_backendProgramObjects;
 

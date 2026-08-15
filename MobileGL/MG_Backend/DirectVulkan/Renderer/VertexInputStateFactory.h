@@ -12,6 +12,7 @@
 #include "VertexInputStateBuilder.h"
 #include "MG_State/GLState/VertexArrayState/VertexArrayObject.h"
 #include <Includes.h>
+#include <MG_Util/Types.h>
 #include "../VkIncludes.h"
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -126,6 +127,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // matches, so an evicted entry can never be dereferenced through a
         // stale memo.
         Uint64 m_evictionEpoch = 1;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline MobileGL::XXH64State m_hashState;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

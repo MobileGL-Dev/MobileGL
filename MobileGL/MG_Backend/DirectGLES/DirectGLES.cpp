@@ -2205,6 +2205,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // accident - and it never covered the monolithic glUseProgram path at all - so the
             // dependency is stated here instead.
             if (!twin->GetBackendProgramId() ||
+                twin->GetContextGeneration() != g_backendContextGeneration ||
                 twin->GetSyncedLinkVersion() != currentProgram->GetLinkVersion() ||
                 twin->GetSyncedImageUnitVersion() != currentProgram->GetImageUnitVersion() ||
                 twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
@@ -3054,6 +3055,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         const auto program = GetCurrentBackendProgram();
         if (!currentProgram || program == nullptr ||
+            program->GetContextGeneration() != g_backendContextGeneration ||
             program->GetSyncedLinkVersion() != currentProgram->GetLinkVersion()) {
             return true;
         }
@@ -5899,6 +5901,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // fallen behind is about to be rebuilt anyway, and its current driver interface is
         // the PREVIOUS link's - applying to it could land the binding on an unrelated block.
         if (!backendObj->GetBackendProgramId() ||
+            backendObj->GetContextGeneration() != g_backendContextGeneration ||
             backendObj->GetSyncedLinkVersion() != programObject->GetLinkVersion()) {
             return; // SyncToBackend's reseed will carry it
         }

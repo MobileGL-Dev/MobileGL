@@ -1994,7 +1994,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Bound the idle pool: a one-off giant upload (initial atlas define)
         // must not pin its staging memory forever.
         constexpr VkDeviceSize kMaxFreeUploadStagingBytes = 32u * 1024u * 1024u;
-        if (m_allocator == nullptr || m_freeUploadStagingBytes + block.capacity > kMaxFreeUploadStagingBytes) {
+        if (m_allocator == nullptr) {
+            // The normal shutdown path destroys the free list through
+            // DestroyUploadPools while the allocator is still valid, so this is a
+            // defensive backstop only. Never pass a null allocator to VMA.
+            MGLOG_W_ONCE("VkTextureManager::RecycleUploadStagingBlock called with a null allocator");
+            return;
+        }
+        if (m_freeUploadStagingBytes + block.capacity > kMaxFreeUploadStagingBytes) {
             vmaDestroyBuffer(m_allocator, block.buffer, block.allocation);
             return;
         }

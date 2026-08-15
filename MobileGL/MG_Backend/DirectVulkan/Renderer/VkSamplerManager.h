@@ -11,6 +11,7 @@
 #include "../VkIncludes.h"
 #include "../VulkanRendererConfig.h"
 #include <Includes.h>
+#include <MG_Util/Types.h>
 #include <MG_State/GLState/SamplerState/SamplerObject.h>
 
 namespace MobileGL::MG_State::GLState {
@@ -85,6 +86,6 @@ private:
     UnorderedMap<Uint64, SamplerCacheEntry> m_samplers;
     // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
     Uint64 m_frameBoundaryCounter = 0;
-    static inline XXH64_state_t* m_hashState = XXH64_createState();
+    static inline MobileGL::XXH64State m_hashState;
 };
 } // namespace MobileGL::MG_Backend::DirectVulkan

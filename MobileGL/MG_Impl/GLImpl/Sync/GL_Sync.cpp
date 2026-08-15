@@ -14,10 +14,29 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Frontend sync object: wraps an optional backend fence handle. A null
         // backend handle (backend has no fence support, or could not create a
         // fence at call time) keeps the legacy always-signaled behavior.
+        //
+        // SharedPtr-owned, not raw: DeleteSync can remove the registry entry while
+        // another thread is inside ClientWaitSync/GetSynciv. Those callers hold a
+        // SharedPtr copy, so the object stays alive until the last reader leaves.
+        // `mutex` then serializes backend-handle reads against the one-time
+        // backend-handle release performed by DeleteSync / DestroyAllSyncObjects.
         struct SyncObject {
+            std::mutex mutex;
             MG_Backend::BackendSyncHandle backendHandle = nullptr;
             GLenum condition = GL_SYNC_GPU_COMMANDS_COMPLETE;
             GLbitfield flags = 0;
+
+            void ReleaseBackendHandle() {
+                const std::lock_guard<std::mutex> lock(mutex);
+                if (backendHandle == nullptr) {
+                    return;
+                }
+                const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
+                if (backendDeleteSync) {
+                    backendDeleteSync(backendHandle);
+                }
+                backendHandle = nullptr;
+            }
         };
 
         // Sync calls may arrive from any thread (launchers migrate the context
@@ -25,9 +44,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Entries left at process shutdown are simply dropped; their backend
         // handles die with the backend.
         std::mutex g_syncObjectsMutex;
-        UnorderedMap<GLsync, SyncObject*> g_liveSyncObjects;
+        UnorderedMap<GLsync, SharedPtr<SyncObject>> g_liveSyncObjects;
 
-        SyncObject* FindSyncObject(GLsync sync) {
+        SharedPtr<SyncObject> FindSyncObject(GLsync sync) {
             const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
             const auto it = g_liveSyncObjects.find(sync);
             return it != g_liveSyncObjects.end() ? it->second : nullptr;
@@ -35,13 +54,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     } // namespace
 
     GLsync FenceSync(GLenum condition, GLbitfield flags) {
-        auto* syncObject = new SyncObject;
+        auto syncObject = MakeShared<SyncObject>();
         syncObject->condition = condition;
         syncObject->flags = flags;
         if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
             syncObject->backendHandle = backendFenceSync();
         }
-        const GLsync handle = reinterpret_cast<GLsync>(syncObject);
+        const GLsync handle = reinterpret_cast<GLsync>(syncObject.get());
         const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
         g_liveSyncObjects[handle] = syncObject;
         return handle;
@@ -52,24 +71,31 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum ClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
-        const auto* syncObject = FindSyncObject(sync);
+        const SharedPtr<SyncObject> syncObject = FindSyncObject(sync);
         if (!syncObject) {
             return GL_WAIT_FAILED;
         }
         const auto backendClientWaitSync = MG_Backend::gBackendFunctionsTable.GL.ClientWaitSync;
-        if (!backendClientWaitSync || !syncObject->backendHandle) {
+        // Hold the per-object lock across the backend call: a concurrent
+        // DeleteSync may already have removed this object from the registry, but
+        // it cannot free the backend handle (or the wrapper) until this reader
+        // finishes. ClientWaitSync can block for `timeout`; that blocks only this
+        // sync object, never the registry or unrelated syncs.
+        const std::lock_guard<std::mutex> lock(syncObject->mutex);
+        if (!backendClientWaitSync || syncObject->backendHandle == nullptr) {
             return GL_ALREADY_SIGNALED; // legacy always-signaled fallback
         }
         return backendClientWaitSync(syncObject->backendHandle, flags, timeout);
     }
 
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
-        const auto* syncObject = FindSyncObject(sync);
+        const SharedPtr<SyncObject> syncObject = FindSyncObject(sync);
         if (!syncObject) {
             return;
         }
         const auto backendWaitSync = MG_Backend::gBackendFunctionsTable.GL.WaitSync;
-        if (backendWaitSync && syncObject->backendHandle) {
+        const std::lock_guard<std::mutex> lock(syncObject->mutex);
+        if (backendWaitSync && syncObject->backendHandle != nullptr) {
             backendWaitSync(syncObject->backendHandle, flags, timeout);
         }
     }
@@ -78,7 +104,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (sync == nullptr) {
             return; // glDeleteSync(0) is silently ignored
         }
-        SyncObject* syncObject = nullptr;
+        SharedPtr<SyncObject> syncObject;
         {
             const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
             const auto it = g_liveSyncObjects.find(sync);
@@ -88,15 +114,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             syncObject = it->second;
             g_liveSyncObjects.erase(it);
         }
-        const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
-        if (backendDeleteSync && syncObject->backendHandle) {
-            backendDeleteSync(syncObject->backendHandle);
-        }
-        delete syncObject;
+        // Release the backend handle under the object lock. The local SharedPtr
+        // (and any reader's SharedPtr) keeps the wrapper itself alive until every
+        // in-flight backend call has returned.
+        syncObject->ReleaseBackendHandle();
     }
 
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values) {
-        const auto* syncObject = FindSyncObject(sync);
+        const SharedPtr<SyncObject> syncObject = FindSyncObject(sync);
         if (!syncObject) {
             if (length) {
                 *length = 0;
@@ -111,7 +136,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_SYNC_STATUS: {
             const auto backendGetSyncStatus = MG_Backend::gBackendFunctionsTable.GL.GetSyncStatus;
-            const Bool signaled = !backendGetSyncStatus || !syncObject->backendHandle ||
+            const std::lock_guard<std::mutex> lock(syncObject->mutex);
+            const Bool signaled = !backendGetSyncStatus || syncObject->backendHandle == nullptr ||
                                   backendGetSyncStatus(syncObject->backendHandle);
             value = signaled ? GL_SIGNALED : GL_UNSIGNALED;
             break;
@@ -137,11 +163,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DestroyAllSyncObjects() {
         // Detach the registry under the lock, release outside it. Entries the app
         // already deleted were erased by DeleteSync, so nothing here double-frees;
-        // a DeleteSync racing this sweep finds an empty registry and returns. A
-        // thread still blocked inside ClientWaitSync/GetSynciv during teardown
-        // holds a raw SyncObject* these deletes invalidate - the same undefined
-        // race an app-driven DeleteSync already has.
-        UnorderedMap<GLsync, SyncObject*> orphans;
+        // a DeleteSync racing this sweep finds an empty registry and returns.
+        // Readers racing this sweep keep their SharedPtr copy alive, and each
+        // object's own lock makes the backend-handle release wait for them.
+        UnorderedMap<GLsync, SharedPtr<SyncObject>> orphans;
         {
             const std::lock_guard<std::mutex> lock(g_syncObjectsMutex);
             orphans.swap(g_liveSyncObjects);
@@ -153,12 +178,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         // context/renderer is gone (generation/current-thread guards), so this is
         // safe after the backend has released its EGL resources - but not after
         // the function table itself is cleared.
-        const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         for (const auto& [_, syncObject] : orphans) {
-            if (backendDeleteSync && syncObject->backendHandle) {
-                backendDeleteSync(syncObject->backendHandle);
+            if (syncObject) {
+                syncObject->ReleaseBackendHandle();
             }
-            delete syncObject;
         }
         MGLOG_D("DestroyAllSyncObjects: reclaimed %zu sync object(s) the app left undeleted", orphans.size());
     }

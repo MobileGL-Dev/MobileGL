@@ -13,25 +13,25 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     VertexInputStateFactory::HashType VertexInputStateFactory::ComputeHash(
         const MG_State::GLState::VertexArrayObject& vao) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
+        XXHASH_VERIFY(XXH64_reset(m_hashState.Get(), m_config.CacheVersion));
 
         for (Int i = 0; i < MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS; ++i) {
             const auto& attr = vao.GetAttribute(i);
 
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Enabled, sizeof(attr.Enabled)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Enabled, sizeof(attr.Enabled)));
             if (!attr.Enabled) {
                 continue;
             }
 
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Size, sizeof(attr.Size)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Type, sizeof(attr.Type)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Normalized, sizeof(attr.Normalized)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Stride, sizeof(attr.Stride)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Offset, sizeof(attr.Offset)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsInteger, sizeof(attr.IsInteger)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsLong, sizeof(attr.IsLong)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.IsBgra, sizeof(attr.IsBgra)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attr.Divisor, sizeof(attr.Divisor)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Size, sizeof(attr.Size)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Type, sizeof(attr.Type)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Normalized, sizeof(attr.Normalized)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Stride, sizeof(attr.Stride)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Offset, sizeof(attr.Offset)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.IsInteger, sizeof(attr.IsInteger)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.IsLong, sizeof(attr.IsLong)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.IsBgra, sizeof(attr.IsBgra)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attr.Divisor, sizeof(attr.Divisor)));
 
             // The bound buffer's IDENTITY is a component of the key, and it has to be the
             // buffer's never-reused lifetime id - NOT its heap address, which this used to
@@ -45,10 +45,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // test's positions) instead of its own.
             // Zero for client memory (no buffer), which is a distinct identity of its own.
             const Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
-            XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &bufferKey, sizeof(bufferKey)));
         }
 
-        return XXH64_digest(m_hashState);
+        return XXH64_digest(m_hashState.Get());
     }
 
     VertexInputStateFactory::HashType VertexInputStateFactory::GetOrComputeHash(
@@ -225,24 +225,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.attributes = builder.GetAttributes();
         // See the layoutHash declaration: hash only the resolved layout, never
         // buffer identities, so identical layouts across VAOs/buffers agree.
-        XXHASH_VERIFY(XXH64_reset(m_hashState, 0));
+        XXHASH_VERIFY(XXH64_reset(m_hashState.Get(), 0));
         for (const auto& binding : entry.bindings) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.binding, sizeof(binding.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.stride, sizeof(binding.stride)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding.inputRate, sizeof(binding.inputRate)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &binding.binding, sizeof(binding.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &binding.stride, sizeof(binding.stride)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &binding.inputRate, sizeof(binding.inputRate)));
         }
         for (const auto& attribute : entry.attributes) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.location, sizeof(attribute.location)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.binding, sizeof(attribute.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.format, sizeof(attribute.format)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &attribute.offset, sizeof(attribute.offset)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attribute.location, sizeof(attribute.location)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attribute.binding, sizeof(attribute.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attribute.format, sizeof(attribute.format)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &attribute.offset, sizeof(attribute.offset)));
         }
         for (const auto& divisor : entry.bindingDivisors) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.binding, sizeof(divisor.binding)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &divisor.divisor, sizeof(divisor.divisor)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &divisor.binding, sizeof(divisor.binding)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &divisor.divisor, sizeof(divisor.divisor)));
         }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
-        entry.layoutHash = XXH64_digest(m_hashState);
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &unsupportedAttribMask, sizeof(unsupportedAttribMask)));
+        entry.layoutHash = XXH64_digest(m_hashState.Get());
         entry.attributeLocationMask = 0;
         for (const auto& attribute : entry.attributes) {
             if (attribute.location < 32u) {

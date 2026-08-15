@@ -594,27 +594,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkRenderPassManager::HashType VkRenderPassManager::ComputeHash(
         const MG_State::GLState::FramebufferObject& fbo, Uint32 swapchainImageIndex, Bool includePendingClear,
         Bool includeDefaultFboDepthStencil) {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
+        XXHASH_VERIFY(XXH64_reset(m_hashState.Get(), m_config.CacheVersion));
         const Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
         if (isDefaultFbo) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &swapchainImageIndex, sizeof(swapchainImageIndex)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &swapchainImageIndex, sizeof(swapchainImageIndex)));
         }
         // sRGB attachments switch between their sRGB and UNORM-twin views with this
         // capability (ResolveSrgbAttachmentWriteFormat), changing the render pass formats.
         const Bool framebufferSrgbEnabled =
             MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &framebufferSrgbEnabled, sizeof(framebufferSrgbEnabled)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &framebufferSrgbEnabled, sizeof(framebufferSrgbEnabled)));
         auto& drawBuffers = fbo.GetDrawBuffers();
-        XXHASH_VERIFY(XXH64_update(m_hashState, drawBuffers.data(), drawBuffers.size() * sizeof(drawBuffers[0])));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), drawBuffers.data(), drawBuffers.size() * sizeof(drawBuffers[0])));
         auto readBuffer = fbo.GetReadBuffer();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &readBuffer, sizeof(FramebufferAttachmentType)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &readBuffer, sizeof(FramebufferAttachmentType)));
         Int validDrawBufCount = 0;
         for (Int i = 0; i < drawBuffers.size(); ++i) {
             auto drawbuf = drawBuffers[i];
             if (drawbuf != FramebufferAttachmentType::None)
                 validDrawBufCount = std::max(validDrawBufCount, i + 1);
         }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &validDrawBufCount, sizeof(validDrawBufCount)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &validDrawBufCount, sizeof(validDrawBufCount)));
 
         auto combineFramebufferAttachmentObjHash = [&](FramebufferAttachmentType attachment) {
             auto& att = fbo.GetAttachment(attachment);
@@ -623,49 +623,49 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (att.IsEmpty()) type = 0;
             else if (att.IsTexture()) type = 1;
             else if (att.IsRenderbuffer()) type = 2;
-            XXHASH_VERIFY(XXH64_update(m_hashState, &type, sizeof(type)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &type, sizeof(type)));
             void* contentPtr = nullptr;
             if (att.IsTexture())
                 contentPtr = att.GetTexture().get();
             else if (att.IsRenderbuffer())
                 contentPtr = att.GetRenderbuffer().get();
-            XXHASH_VERIFY(XXH64_update(m_hashState, &contentPtr, sizeof(contentPtr)));
+            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &contentPtr, sizeof(contentPtr)));
             if (att.IsTexture()) {
                 const Uint64 textureLifetimeId = att.GetTexture()->GetLifetimeId();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLifetimeId, sizeof(textureLifetimeId)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &textureLifetimeId, sizeof(textureLifetimeId)));
                 const Int textureLevel = att.GetTextureLevel();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLevel, sizeof(textureLevel)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &textureLevel, sizeof(textureLevel)));
                 const TextureUploadTarget textureUploadTarget = att.GetTextureUploadTarget();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &textureUploadTarget, sizeof(textureUploadTarget)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &textureUploadTarget, sizeof(textureUploadTarget)));
                 const Int textureLayer = att.GetTextureLayer();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayer, sizeof(textureLayer)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &textureLayer, sizeof(textureLayer)));
                 const Bool textureLayered = att.IsLayered();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayered, sizeof(textureLayered)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &textureLayered, sizeof(textureLayered)));
 
                 Uint64 imageIdentity = 0;
                 auto* texture = att.GetTexture().get();
                 auto* resource = m_textureManager.SyncTextureAndGetDescriptor(*texture);
                 if (resource != nullptr) {
                     imageIdentity = reinterpret_cast<Uint64>(resource->image);
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &resource->sampleCount, sizeof(resource->sampleCount)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &resource->sampleCount, sizeof(resource->sampleCount)));
                 } else {
                     const VkSampleCountFlagBits fallbackSampleCount = VK_SAMPLE_COUNT_1_BIT;
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &fallbackSampleCount, sizeof(fallbackSampleCount)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &fallbackSampleCount, sizeof(fallbackSampleCount)));
                 }
-                XXHASH_VERIFY(XXH64_update(m_hashState, &imageIdentity, sizeof(imageIdentity)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &imageIdentity, sizeof(imageIdentity)));
             }
 
             if (includePendingClear && att.IsTexture()) {
                 auto* texture = att.GetTexture().get();
                 const auto pendingClearKey = VkClearManager::MakePendingClearKey(att);
                 auto hasClear = m_clearManager.HasPendingClear(pendingClearKey);
-                XXHASH_VERIFY(XXH64_update(m_hashState, &hasClear, sizeof(hasClear)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &hasClear, sizeof(hasClear)));
                 if (hasClear) {
                     ClearAttachmentPayload clearPayload{};
                     Bool hasPayload = m_clearManager.GetPendingClear(pendingClearKey, clearPayload);
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &hasPayload, sizeof(hasPayload)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &hasPayload, sizeof(hasPayload)));
                     if (hasPayload) {
-                        XXHASH_VERIFY(XXH64_update(m_hashState, &clearPayload.mask, sizeof(clearPayload.mask)));
+                        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &clearPayload.mask, sizeof(clearPayload.mask)));
                     }
                 }
 
@@ -695,7 +695,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         currentLayout = textureResource->layout;
                     }
                 }
-                XXHASH_VERIFY(XXH64_update(m_hashState, &currentLayout, sizeof(currentLayout)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &currentLayout, sizeof(currentLayout)));
             }
             if (att.IsRenderbuffer() && att.GetRenderbuffer()) {
                 const auto& renderbuffer = att.GetRenderbuffer();
@@ -703,10 +703,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const Int width = renderbuffer->GetWidth();
                 const Int height = renderbuffer->GetHeight();
                 const Int samples = renderbuffer->GetSamples();
-                XXHASH_VERIFY(XXH64_update(m_hashState, &internalFormat, sizeof(internalFormat)));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &width, sizeof(width)));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &height, sizeof(height)));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &samples, sizeof(samples)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &internalFormat, sizeof(internalFormat)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &width, sizeof(width)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &height, sizeof(height)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &samples, sizeof(samples)));
 
                 Uint64 imageIdentity = 0;
                 VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -714,25 +714,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (resource != nullptr) {
                     imageIdentity = reinterpret_cast<Uint64>(resource->image);
                     currentLayout = resource->layout;
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &resource->sampleCount, sizeof(resource->sampleCount)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &resource->sampleCount, sizeof(resource->sampleCount)));
                 } else {
                     const VkSampleCountFlagBits fallbackSampleCount = VK_SAMPLE_COUNT_1_BIT;
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &fallbackSampleCount, sizeof(fallbackSampleCount)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &fallbackSampleCount, sizeof(fallbackSampleCount)));
                 }
-                XXHASH_VERIFY(XXH64_update(m_hashState, &imageIdentity, sizeof(imageIdentity)));
+                XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &imageIdentity, sizeof(imageIdentity)));
 
                 if (includePendingClear) {
                     const Bool hasClear = HasPendingRenderbufferClear(att);
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &hasClear, sizeof(hasClear)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &hasClear, sizeof(hasClear)));
                     if (hasClear) {
                         ClearAttachmentPayload clearPayload{};
                         const Bool hasPayload = GetPendingRenderbufferClear(renderbuffer.get(), clearPayload);
-                        XXHASH_VERIFY(XXH64_update(m_hashState, &hasPayload, sizeof(hasPayload)));
+                        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &hasPayload, sizeof(hasPayload)));
                         if (hasPayload) {
-                            XXHASH_VERIFY(XXH64_update(m_hashState, &clearPayload.mask, sizeof(clearPayload.mask)));
+                            XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &clearPayload.mask, sizeof(clearPayload.mask)));
                         }
                     }
-                    XXHASH_VERIFY(XXH64_update(m_hashState, &currentLayout, sizeof(currentLayout)));
+                    XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &currentLayout, sizeof(currentLayout)));
                 }
             }
         };
@@ -745,13 +745,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The depth-less default-FBO flavor omits the depth/stencil attachment
         // entirely, so it must hash differently from the depth-full flavor.
         const Bool depthStencilIncluded = !isDefaultFbo || includeDefaultFboDepthStencil;
-        XXHASH_VERIFY(XXH64_update(m_hashState, &depthStencilIncluded, sizeof(depthStencilIncluded)));
+        XXHASH_VERIFY(XXH64_update(m_hashState.Get(), &depthStencilIncluded, sizeof(depthStencilIncluded)));
         if (depthStencilIncluded) {
             combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Depth);
             combineFramebufferAttachmentObjHash(FramebufferAttachmentType::Stencil);
         }
 
-        return XXH64_digest(m_hashState);
+        return XXH64_digest(m_hashState.Get());
     }
 
     RenderPassEntry& VkRenderPassManager::GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,

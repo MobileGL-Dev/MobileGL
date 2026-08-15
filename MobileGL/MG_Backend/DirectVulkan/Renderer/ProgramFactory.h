@@ -15,6 +15,7 @@
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 
 #include <Includes.h>
+#include <MG_Util/Types.h>
 #include <spirv_reflect.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -489,6 +490,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ever built from one keeps referencing its module. A failed build is cached as
         // VK_NULL_HANDLE so a broken generator costs one compile, not one per draw.
         UnorderedMap<Uint32, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
-        static inline XXH64_state_t* m_hashState = XXH64_createState();
+        static inline MobileGL::XXH64State m_hashState;
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

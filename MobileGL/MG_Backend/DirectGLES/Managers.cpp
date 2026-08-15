@@ -1468,6 +1468,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             m_clientAttributeBufferIds.fill(0);
+            m_contextGeneration = g_backendContextGeneration;
             g_GLESFuncs.glGenVertexArrays(1, &m_backendVAOId);
             if (m_backendVAOId == 0) {
                 MGLOG_E_ONCE("Failed to generate vertex array object.");
@@ -1481,17 +1482,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (InProcessTeardown()) {
                 return; // see InProcessTeardown(): the driver may be unloaded already
             }
+            const Bool contextCurrent = m_contextGeneration == g_backendContextGeneration;
             if (m_backendVAOId != 0) {
+                // Scrub the binding shadow whether or not the id can still be
+                // deleted: a recycled name must never satisfy the shadow's dedup.
                 NoteVAOIdDeleted(m_backendVAOId);
-                g_GLESFuncs.glDeleteVertexArrays(1, &m_backendVAOId);
+                if (contextCurrent && g_GLESFuncs.glDeleteVertexArrays) {
+                    g_GLESFuncs.glDeleteVertexArrays(1, &m_backendVAOId);
+                }
                 m_backendVAOId = 0;
             }
             for (auto& bufferId : m_clientAttributeBufferIds) {
-                if (bufferId != 0) {
-                    BufferImpl::NoteBufferIdDeleted(bufferId);
-                    g_GLESFuncs.glDeleteBuffers(1, &bufferId);
-                    bufferId = 0;
+                if (bufferId == 0) {
+                    continue;
                 }
+                // Same discipline as the VAO id itself: a buffer id from a dead
+                // context belongs to that context and must never be deleted as a
+                // recycled name in a successor context.
+                BufferImpl::NoteBufferIdDeleted(bufferId);
+                if (contextCurrent && g_GLESFuncs.glDeleteBuffers) {
+                    g_GLESFuncs.glDeleteBuffers(1, &bufferId);
+                }
+                bufferId = 0;
             }
         }
 
@@ -1635,6 +1647,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PrepareForDraw's BindCurrentVAO establishes the draw binding regardless.
             const Uint32 currentConfigVersion = stateVAOObject->GetConfigVersion();
             const Uint16 currentIndexBufferVersion = stateVAOObject->GetIndexBufferBindingSlot().GetVersion();
+
+            // The ES context was recreated since this twin last ran. Its GL names belong to
+            // the dead context and are gone; mint a fresh VAO and force every attribute /
+            // index-binding cache to re-emit. No glDelete* here: the old names are not ours
+            // to delete in the successor context.
+            if (m_contextGeneration != g_backendContextGeneration) {
+                InvalidateVAOBindingCache();
+                m_backendVAOId = 0;
+                m_contextGeneration = g_backendContextGeneration;
+                m_clientAttributeBufferIds.fill(0);
+                m_isInitialized = false;
+                m_resolvedDrawBuffers = {};
+                m_pendingAttribValueMask = {};
+                m_hasSyncedConfigVersion = false;
+                m_syncedConfigVersion = 0;
+                m_syncedIndexBufferVersion = static_cast<Uint16>(currentIndexBufferVersion + 1);
+                m_syncedAttributeVersions.fill({});
+                m_syncedFetchBaseInstance = 0;
+                g_GLESFuncs.glGenVertexArrays(1, &m_backendVAOId);
+                if (m_backendVAOId == 0) {
+                    MGLOG_E_ONCE("Failed to recreate vertex array object for a new ES context.");
+                }
+            }
+
             const Bool attributesDirty = !m_hasSyncedConfigVersion || m_syncedConfigVersion != currentConfigVersion;
             const Bool indexBufferDirty = currentIndexBufferVersion != m_syncedIndexBufferVersion;
 
@@ -1978,6 +2014,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     TextureSwizzleParam::Alpha};
             m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             m_forceTextureParamsResync = true;
+            m_forceSamplerResync = true;
         }
 
         // Sets the backend GL unpack state to MobileGL's upload default for the scope,
@@ -2393,6 +2430,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!stateTextureObject) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
+            }
+
+            // The ES context was recreated since this twin last ran. Recreate the
+            // texture id before any version-based early-out below: those versions are
+            // frontend versions and do not move when only the backend context changed.
+            if (m_contextGeneration != g_backendContextGeneration) {
+                RecreateBackendTexture();
             }
 
 #ifdef TRACY_ENABLE
@@ -3119,14 +3163,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            if (m_contextGeneration != g_backendContextGeneration) {
+                RecreateBackendTexture();
+            }
+
             auto* samplerObject = stateTextureObject->GetSamplerObject().get();
             Uint currentSamplerVersion = samplerObject->GetVersion();
-            if (m_syncedSamplerVersion == currentSamplerVersion) {
+            if (m_syncedSamplerVersion == currentSamplerVersion && !m_forceSamplerResync) {
                 MGLOG_D("Sampler parameters have not changed for texture ID: %u, skipping sync.", m_backendTextureId);
                 return;
             }
 
             m_syncedSamplerVersion = currentSamplerVersion;
+            m_forceSamplerResync = false;
 
             MGLOG_D("Syncing texture built-in sampler with backend ID %u to backend for state ID %u",
                     m_backendTextureId, stateTextureObject->GetExternalIndex());
@@ -3227,6 +3276,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!stateTextureObject) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
                 return;
+            }
+
+            if (m_contextGeneration != g_backendContextGeneration) {
+                RecreateBackendTexture();
             }
 
             Uint16 currentTextureParamsVersion = stateTextureObject->GetTextureParamsVersion();
@@ -3902,6 +3955,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("State FBO object is null, cannot sync to backend.");
                 return;
             }
+            // Recreate the driver FBO when the ES context has moved on. The old id is
+            // gone with the old context; calling glDeleteFramebuffers on its recycled
+            // numeric value could delete a new live FBO, so simply abandon it.
+            if (m_contextGeneration != g_backendContextGeneration) {
+                m_backendFBOId = 0;
+                m_contextGeneration = g_backendContextGeneration;
+                g_GLESFuncs.glGenFramebuffers(1, &m_backendFBOId);
+                if (m_backendFBOId == 0) {
+                    MGLOG_E_ONCE("Failed to recreate framebuffer object for a new ES context.");
+                }
+                InvalidateFramebufferBindingCache();
+                InvalidateSyncedState();
+            }
             MGLOG_D("Syncing FBO with backend ID %u to backend for state ID %u, as %s FBO", m_backendFBOId,
                     stateFBOObject->GetExternalIndex(), (asTarget == FramebufferTarget::Draw ? "DRAW" : "READ"));
             GLenum glFBOTarget = MG_Util::ConvertFramebufferTargetToGLEnum(asTarget);
@@ -4412,10 +4478,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint g_lastUsedBackendProgramId = 0;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
 
+        void DeleteBackendProgramGlobalUbo(Uint& bufferId, Uint contextGeneration) {
+            if (bufferId == 0) {
+                return;
+            }
+            // Only a buffer that belongs to the LIVE context may be deleted. A stale
+            // generation means the old ES context already reclaimed it; handing its
+            // recycled numeric id to glDeleteBuffers could delete a new live buffer.
+            if (contextGeneration == g_backendContextGeneration) {
+                BufferImpl::NoteBufferIdDeleted(bufferId);
+                if (g_GLESFuncs.glDeleteBuffers) {
+                    g_GLESFuncs.glDeleteBuffers(1, &bufferId);
+                }
+            }
+            bufferId = 0;
+        }
+
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            m_contextGeneration = g_backendContextGeneration;
             m_backendProgramId = g_GLESFuncs.glCreateProgram();
             if (m_backendProgramId == 0) {
                 MGLOG_E_ONCE("Failed to create program object in backend.");
@@ -4433,14 +4516,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (InProcessTeardown()) {
                 return; // see InProcessTeardown(): the driver may be unloaded already
             }
+            DeleteBackendProgramGlobalUbo(m_backendGlobalUBOId, m_contextGeneration);
             if (m_backendProgramId != 0) {
-                MGLOG_D("Deleting backend program object with ID: %u", m_backendProgramId);
-                g_GLESFuncs.glDeleteProgram(m_backendProgramId);
+                // Same generation rule as the global UBO: a program id from a dead
+                // context is gone already and must not be deleted as a recycled name
+                // in a successor context.
+                if (m_contextGeneration == g_backendContextGeneration) {
+                    MGLOG_D("Deleting backend program object with ID: %u", m_backendProgramId);
+                    if (g_GLESFuncs.glDeleteProgram) {
+                        g_GLESFuncs.glDeleteProgram(m_backendProgramId);
+                    }
+                }
                 // The driver may recycle this GL name for a future program; a stale
                 // guard entry would then wrongly skip the glUseProgram for it.
                 if (g_lastUsedBackendProgramId == m_backendProgramId) {
                     g_lastUsedBackendProgramId = 0;
                 }
+                m_backendProgramId = 0;
             }
         }
 
@@ -4675,6 +4767,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         "program ID: %u",
                         stateProgramObject->GetExternalIndex());
                 return;
+            }
+
+            // The ES context was recreated since this twin last ran. The old program id
+            // and global UBO id belong to the dead context; drop them without GL calls
+            // and mint a fresh program before reusing any cached reflection/version data.
+            if (m_contextGeneration != g_backendContextGeneration) {
+                DeleteBackendProgramGlobalUbo(m_backendGlobalUBOId, m_contextGeneration);
+                m_backendProgramId = 0;
+                m_contextGeneration = g_backendContextGeneration;
+                m_backendProgramId = g_GLESFuncs.glCreateProgram();
+                if (m_backendProgramId == 0) {
+                    MGLOG_E_ONCE("Failed to recreate backend program object for a new ES context.");
+                }
+                m_isInitialized = false;
+                m_backendProgramUsable = false;
+                m_syncedLinkVersion = ~0u;
+                m_syncedImageUnitVersion = ~0u;
+                m_lastUploadedGlobalUboVersion = ~0u;
+                m_globalUboBackendBlockIndex = -1;
+                m_globalUboBackendBlockSize = 0;
+                m_uniformBlockBackendIndices.clear();
+                m_samplerUniformBindings.clear();
+                m_formatlessImageUnits.clear();
+                m_imageUnitFormatSignature = 0;
+                m_globalUboRingAllocation = {};
             }
 
             MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
@@ -5154,7 +5271,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // Create global UBO
+            // Create global UBO. Delete any previous one first: relink reuses this
+            // backend program, and without this every relink leaked the old buffer.
+            DeleteBackendProgramGlobalUbo(m_backendGlobalUBOId, m_contextGeneration);
             if (stateProgramObject->GetUBOSize() > 0) {
                 g_GLESFuncs.glGenBuffers(1, &m_backendGlobalUBOId);
                 g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, m_backendGlobalUBOId);
@@ -5389,6 +5508,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            if (m_contextGeneration != g_backendContextGeneration) {
+                // Old sampler id died with the old context; abandon it and mint a new
+                // one before the version-based early-out below can reuse a dead name.
+                m_backendSamplerId = 0;
+                m_contextGeneration = g_backendContextGeneration;
+                g_GLESFuncs.glGenSamplers(1, &m_backendSamplerId);
+                if (m_backendSamplerId == 0) {
+                    MGLOG_E_ONCE("Failed to recreate sampler object for a new ES context.");
+                }
+                m_isInitialized = false;
+                m_cacheSamplerParameters = {};
+                g_boundSamplersCache.fill(nullptr);
+            }
+
             Uint currentSamplerVersion = stateSamplerObject->GetVersion();
             if (m_isInitialized && m_syncedSamplerVersion == currentSamplerVersion) {
                 MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
@@ -5531,6 +5664,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!stateRBOObject) {
                 MGLOG_E_ONCE("State RBO object is null, cannot sync to backend.");
                 return;
+            }
+
+            if (m_contextGeneration != g_backendContextGeneration) {
+                // The old renderbuffer id died with the old context. Abandon it and
+                // force a fresh allocation instead of letting the parameter early-out
+                // below keep using a dead name.
+                m_backendRBOId = 0;
+                m_contextGeneration = g_backendContextGeneration;
+                g_GLESFuncs.glGenRenderbuffers(1, &m_backendRBOId);
+                if (m_backendRBOId == 0) {
+                    MGLOG_E_ONCE("Failed to recreate renderbuffer object for a new ES context.");
+                }
+                m_isInitialized = false;
+                m_cacheInternalFormat = TextureInternalFormat::Unknown;
+                m_cacheWidth = -1;
+                m_cacheHeight = -1;
+                m_cacheSamples = -1;
             }
 
             MGLOG_D("Syncing RBO with backend ID %u to backend for state ID %u", m_backendRBOId,
