@@ -62,8 +62,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // POST screen shows.
 
     // Static identity of the Magma renderer (renderer/backend names, target GL/GLSL
-    // versions, ExtraVendor) with the baseline extension advertisement (no shader
-    // subgroup, no timer queries). A live backend copies this in its constructor and
+    // versions, ExtraVendor) with the baseline extension advertisement (no runtime-gated
+    // capabilities). A live backend copies this in its constructor and
     // reconciles the Extensions in UpdateAdvertisedExtensions once real capabilities
     // exist; callers that need the advertised list for a known capability set must
     // use BuildAdvertisedExtensions instead.
@@ -74,7 +74,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // MOBILEGL_DISABLE_TIMERQUERY escape hatches are applied inside, so callers pass
     // the detected device support (passing an already-gated value is harmless).
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
-                                                  Bool anisotropicFilteringSupported);
+                                                  Bool anisotropicFilteringSupported,
+                                                  Bool nonZeroIndirectBaseInstanceSupported);
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
     // string an initialized backend returns from GetBackendAPIVersionString (and that

@@ -1149,6 +1149,10 @@ namespace MobileGL {
             // GLES 3.2 core or GL_OES_shader_multisample_interpolation exposes
             // interpolateAtOffset and the three fragment-offset limit queries.
             Bool SupportsShaderMultisampleInterpolation = false;
+            // ES 3.1+ exposes glDrawArraysIndirect / glDrawElementsIndirect in core. Keep the
+            // version and both entry-point checks together so extension advertisement and the
+            // DirectGLES dispatch path cannot disagree on whether native indirect draws exist.
+            Bool SupportsDrawIndirect = false;
             // GL_EXT_multi_draw_indirect is present AND glMultiDrawArraysIndirectEXT /
             // glMultiDrawElementsIndirectEXT both resolved. Multi-draw is not core in any ES
             // version, and eglGetProcAddress may return a live-looking stub on drivers without

@@ -712,9 +712,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     {
                         .TargetGLVersion = {4, 0, 0},   // GL target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
-                        // Baseline advertisement (no timer queries / anisotropy yet); reconciled
-                        // once the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
-                        .Extensions = BuildAdvertisedExtensions(false, false),
+                        // Baseline advertisement (no runtime capabilities yet); reconciled once
+                        // the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
+                        .Extensions = BuildAdvertisedExtensions(false, false, false, false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -734,9 +734,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // thread can only observe the extension string after the
         // advertisement for its context has settled; rebuilding the whole
         // list keeps the re-run after a context recreation idempotent.
-        void UpdateAdvertisedCapabilityExtensions(Bool anisotropicFilteringSupported) {
-            MutableRendererInfo().RendererGLInfo.Extensions =
-                BuildAdvertisedExtensions(AreTimerQueriesSupported(), anisotropicFilteringSupported);
+        void UpdateAdvertisedCapabilityExtensions(const MG_External::GLESCapabilities& capabilities) {
+            MutableRendererInfo().RendererGLInfo.Extensions = BuildAdvertisedExtensions(
+                AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
+                capabilities.SupportsDrawIndirect,
+                capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance);
         }
     } // namespace
 
@@ -779,11 +781,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
         DirectGLES::SetGLESCapabilities(m_GLESCapabilities);
-        // Now that g_GLESCapabilities knows about GL_EXT_disjoint_timer_query and
-        // GL_EXT_texture_filter_anisotropic, reconcile the advertisement (see the comment on
-        // UpdateAdvertisedCapabilityExtensions for why it cannot happen when the extension
-        // list is first built).
-        UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities.SupportsTextureFilterAnisotropy);
+        // Now that g_GLESCapabilities knows the host extensions, entry points, and ES version,
+        // reconcile every runtime-gated advertisement (see the comment on
+        // UpdateAdvertisedCapabilityExtensions for why this cannot happen when the list is first
+        // built).
+        UpdateAdvertisedCapabilityExtensions(m_GLESCapabilities);
         UpdateDynamicBackendParameters();
         PopulateFormatCapabilities(m_GLESFunctions, m_GLESCapabilities, MutableFormatCapabilities());
         PrintFormatCapabilities(GetFormatCapabilities());
@@ -924,7 +926,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return MutableRendererInfo();
     }
 
-    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported) {
+    Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
+                                                  Bool drawIndirectSupported,
+                                                  Bool nonZeroIndirectBaseInstanceSupported) {
         Vector<GLExtension> extensions = {
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
@@ -955,6 +959,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Minecraft 26.3 checks this prerequisite before it even considers
+        // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader
+        // folds the version and pointer checks into SupportsDrawIndirect.
+        if (drawIndirectSupported) {
+            extensions.push_back(E_GL_ARB_draw_indirect);
+        }
+        // ARB_base_instance also defines the last word of an indirect command. Direct calls are
+        // emulated on every Espryt device, but without host GL_EXT_base_instance a native indirect
+        // draw cannot shift divisor attributes by a GPU-authored non-zero value, so do not promise
+        // that incomplete case.
+        if (drawIndirectSupported && nonZeroIndirectBaseInstanceSupported) {
+            extensions.push_back(E_GL_ARB_base_instance);
+        }
         // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the host ES
         // driver's: the compiler threads are MobileGL's, and glCompileShader/glLinkProgram
         // are serviced entirely inside the frontend. Whether the device driver advertises

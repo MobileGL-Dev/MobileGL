@@ -310,6 +310,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The samplerAnisotropy device feature was granted, so GL_TEXTURE_MAX_ANISOTROPY_EXT is
         // honored rather than accepted-and-ignored.
         Bool IsSamplerAnisotropySupported() const { return m_samplerAnisotropyFeatureEnabled; }
+        // ARB_base_instance extends indirect command records with a non-zero firstInstance and
+        // requires gl_InstanceID to remain zero-based. Vulkan needs both features to honor that
+        // complete contract: one legalizes the command word, the other enables the shader rebase.
+        Bool IsNonZeroIndirectBaseInstanceSupported() const {
+            return m_drawIndirectFirstInstanceFeatureEnabled && m_shaderDrawParametersFeatureEnabled;
+        }
         // Ensures the frame command buffer is recording (same lazy pattern as
         // SetupDraw) and writes a bottom-of-pipe timestamp into the current
         // frame's pool. Null when unsupported or the pool is exhausted.

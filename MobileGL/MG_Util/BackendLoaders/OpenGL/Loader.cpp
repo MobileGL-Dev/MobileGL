@@ -955,6 +955,8 @@ namespace MobileGL::MG_Util::BackendLoader {
                                  (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
         const Bool esAtLeast31 = caps.GLESVersion.Major > 3 ||
                                  (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
+        caps.SupportsDrawIndirect = esAtLeast31 && glesFuncs.glDrawArraysIndirect != nullptr &&
+                                    glesFuncs.glDrawElementsIndirect != nullptr;
         caps.SupportsDrawElementsBaseVertex = (esAtLeast32 || hasDrawElementsBaseVertexExtension) &&
                                               glesFuncs.glDrawElementsBaseVertex != nullptr;
         caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
@@ -976,6 +978,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    indexed glColorMaski: %s", caps.SupportsIndexedColorMask ? "yes" : "no");
         MGLOG_I("    dual-source blend (EXT_blend_func_extended): %s",
                 caps.SupportsDualSourceBlend ? "yes" : "no");
+        MGLOG_I("    draw indirect (ES 3.1 core): %s", caps.SupportsDrawIndirect ? "yes" : "no");
         MGLOG_I("    multi-draw indirect (EXT_multi_draw_indirect): %s",
                 caps.SupportsMultiDrawIndirect ? "yes" : "no");
         MGLOG_I("    multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): %s",

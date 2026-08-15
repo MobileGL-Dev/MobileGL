@@ -725,20 +725,55 @@ TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSu
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
-    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false);
+    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false);
     EXPECT_FALSE(contains(without, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_FALSE(contains(without, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
-    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true);
+    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false);
     EXPECT_TRUE(contains(with, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(with, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
     // Same rule on the Vulkan backend, where the gate is the samplerAnisotropy device feature.
-    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false);
+    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false);
     EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_EXT_texture_filter_anisotropic));
-    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true);
+    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true, false);
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_ARB_texture_filter_anisotropic));
+}
+
+// Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised
+// ARB_multi_draw_indirect, then separately requires ARB_base_instance before enabling its terrain
+// indirect path. Pin both strings and, just as importantly, the non-zero firstInstance gate.
+TEST(IndirectDrawAdvertisement, MatchesEachBackendsUsableCommandSemantics) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+
+    const auto esWithoutIndirect =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false);
+    EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_draw_indirect));
+    EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_base_instance));
+
+    const auto esWithoutBaseInstance =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, false);
+    EXPECT_TRUE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_draw_indirect));
+    EXPECT_FALSE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_base_instance));
+
+    const auto esWithBoth =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, true);
+    EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_draw_indirect));
+    EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_base_instance));
+
+    const auto vkWithoutBaseInstance =
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false);
+    EXPECT_TRUE(contains(vkWithoutBaseInstance, MobileGL::E_GL_ARB_draw_indirect));
+    EXPECT_FALSE(contains(vkWithoutBaseInstance, MobileGL::E_GL_ARB_base_instance));
+
+    const auto vkWithBoth =
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, true);
+    EXPECT_TRUE(contains(vkWithBoth, MobileGL::E_GL_ARB_draw_indirect));
+    EXPECT_TRUE(contains(vkWithBoth, MobileGL::E_GL_ARB_base_instance));
 }
 
 TEST(TextureAnisotropyCapabilities, MaxAnisotropyIsQueriedOnlyWhenTheExtensionIsPresent) {
@@ -835,4 +870,64 @@ TEST(MultiDrawCapabilities, ExtensionWithoutResolvedPointerIsNotSupport) {
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
     EXPECT_FALSE(caps.SupportsMultiDrawIndirect);
     EXPECT_FALSE(caps.SupportsMultiDrawElementsBaseVertex);
+}
+
+TEST(DrawIndirectCapabilities, RequiresEs31AndBothCoreEntryPoints) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    auto funcs = MakeFakeGLESFunctions();
+    funcs.glDrawElementsIndirect = [](GLenum, GLenum, const void*) {};
+
+    MobileGL::MG_External::GLESCapabilities supportedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(supportedCaps, funcs));
+    EXPECT_TRUE(supportedCaps.SupportsDrawIndirect);
+
+    // The same pointers on an ES 3.0 context are not core entry points and cannot back the
+    // desktop extension contract.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 0;
+    MobileGL::MG_External::GLESCapabilities es30Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es30Caps, funcs));
+    EXPECT_FALSE(es30Caps.SupportsDrawIndirect);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    const auto missingElements = MakeFakeGLESFunctions();
+    MobileGL::MG_External::GLESCapabilities missingEntryPointCaps;
+    ASSERT_TRUE(
+        MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, missingElements));
+    EXPECT_FALSE(missingEntryPointCaps.SupportsDrawIndirect);
+}
+
+TEST(BaseInstanceCapabilities, RequiresTheExtensionAndAllThreeEntryPoints) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    auto funcs = MakeFakeGLESFunctions();
+    funcs.glDrawArraysInstancedBaseInstanceEXT = [](GLenum, GLint, GLsizei, GLsizei, GLuint) {};
+    funcs.glDrawElementsInstancedBaseInstanceEXT =
+        [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLuint) {};
+    funcs.glDrawElementsInstancedBaseVertexBaseInstanceEXT =
+        [](GLenum, GLsizei, GLenum, const void*, GLsizei, GLint, GLuint) {};
+
+    // Resolved stubs alone must never make the capability true.
+    MobileGL::MG_External::GLESCapabilities pointersOnlyCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(pointersOnlyCaps, funcs));
+    EXPECT_FALSE(pointersOnlyCaps.SupportsBaseInstance);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_base_instance");
+    MobileGL::MG_External::GLESCapabilities supportedCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(supportedCaps, funcs));
+    EXPECT_TRUE(supportedCaps.SupportsBaseInstance);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_base_instance");
+    funcs.glDrawElementsInstancedBaseInstanceEXT = nullptr;
+    MobileGL::MG_External::GLESCapabilities missingEntryPointCaps;
+    ASSERT_TRUE(
+        MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, funcs));
+    EXPECT_FALSE(missingEntryPointCaps.SupportsBaseInstance);
 }

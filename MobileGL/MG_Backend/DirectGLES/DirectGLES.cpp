@@ -3061,10 +3061,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     static Bool SupportsNativeIndirectDraws() {
-        const auto& version = g_GLESCapabilities.GLESVersion;
-        const Bool esVersionOk = version.Major > 3 || (version.Major == 3 && version.Minor >= 1);
-        return esVersionOk && g_GLESFuncs.glDrawElementsIndirect != nullptr &&
-               g_GLESFuncs.glDrawArraysIndirect != nullptr;
+        return g_GLESCapabilities.SupportsDrawIndirect;
     }
 
     // Runs an (indexed) indirect multi-draw. When a GL_DRAW_INDIRECT_BUFFER is bound the draws

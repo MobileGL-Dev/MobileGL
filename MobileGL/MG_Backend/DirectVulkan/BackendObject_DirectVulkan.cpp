@@ -497,20 +497,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .ExtraVendor = Nullopt,
             .RendererGLInfo = {.TargetGLVersion = {4, 0, 0},
                                .TargetGLSLVersion = {4, 6, 0},
-                               // Baseline advertisement (no shader subgroup, no timer queries); a
-                               // live backend reconciles its copy in UpdateAdvertisedExtensions.
-                               .Extensions = BuildAdvertisedExtensions(false, false, false),
+                               // Baseline advertisement (no runtime-gated capabilities); a live
+                               // backend reconciles its copy in UpdateAdvertisedExtensions.
+                               .Extensions = BuildAdvertisedExtensions(false, false, false, false),
                                .IsCompatibilityProfile = false},
             .StaticBackendCapability = {.AllowVSOnlyPrograms = false}};
         return rendererInfo;
     }
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
-                                                  Bool anisotropicFilteringSupported) {
+                                                  Bool anisotropicFilteringSupported,
+                                                  Bool nonZeroIndirectBaseInstanceSupported) {
         Vector<GLExtension> extensions = {
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_multi_draw_indirect,
+            E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
+            E_GL_ARB_multi_draw_indirect,
             E_GL_ARB_indirect_parameters, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
             E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample,
             E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access, E_GL_ARB_shader_draw_parameters,
@@ -530,6 +532,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
+        // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
+        // commands; the renderer supplies true only when that word is legal and gl_InstanceID can
+        // be rebased to OpenGL's zero-based semantics.
+        if (nonZeroIndirectBaseInstanceSupported) {
+            extensions.push_back(E_GL_ARB_base_instance);
+        }
         if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
@@ -690,7 +699,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the whole list keeps re-runs idempotent.
         m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
             m_vulkanCaps.SupportsShaderSubgroup, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
-            pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported());
+            pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
+            pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported());
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {

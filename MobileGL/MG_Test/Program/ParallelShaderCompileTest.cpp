@@ -516,17 +516,17 @@ TEST_F(ParallelShaderCompileTest, MaxShaderCompilerThreadsIgnoresTheCurrentBudge
 TEST_F(ParallelShaderCompileTest, BothBackendsAdvertiseTheExtensionIffAsyncIsEnabled) {
     {
         const AsyncModeScope async(true);
-        EXPECT_TRUE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false),
+        EXPECT_TRUE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false),
                                E_GL_KHR_parallel_shader_compile));
-        EXPECT_TRUE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false),
+        EXPECT_TRUE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false),
                                E_GL_KHR_parallel_shader_compile));
     }
     {
         const AsyncModeScope async(false);
-        EXPECT_FALSE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false),
+        EXPECT_FALSE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false),
                                 E_GL_KHR_parallel_shader_compile))
             << "MOBILEGL_ASYNC_SHADER_COMPILE=0 must withdraw the extension, not only the threading";
-        EXPECT_FALSE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false),
+        EXPECT_FALSE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false),
                                 E_GL_KHR_parallel_shader_compile))
             << "MOBILEGL_ASYNC_SHADER_COMPILE=0 must withdraw the extension, not only the threading";
     }

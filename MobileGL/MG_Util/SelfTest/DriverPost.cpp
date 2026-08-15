@@ -1168,7 +1168,9 @@ namespace MobileGL::MG_Util::SelfTest {
             backendApiVersionString = MG_Backend::DirectGLES::FormatBackendAPIVersionString(
                 summary.caps.GLESRendererString, summary.caps.GLESVersion.Major, summary.caps.GLESVersion.Minor);
             advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectGLES::BuildAdvertisedExtensions(
-                summary.caps.SupportsDisjointTimerQuery, summary.caps.SupportsTextureFilterAnisotropy));
+                summary.caps.SupportsDisjointTimerQuery, summary.caps.SupportsTextureFilterAnisotropy,
+                summary.caps.SupportsDrawIndirect,
+                summary.caps.SupportsDrawIndirect && summary.caps.SupportsBaseInstance));
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectGLES::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);
@@ -1461,6 +1463,8 @@ namespace MobileGL::MG_Util::SelfTest {
             Bool shaderSubgroupUsable = false;
             Bool timerQueriesSupported = false;
             Bool samplerAnisotropySupported = false;
+            Bool drawIndirectFirstInstanceSupported = false;
+            Bool shaderDrawParametersSupported = false;
         };
     } // namespace
 
@@ -1744,6 +1748,7 @@ namespace MobileGL::MG_Util::SelfTest {
         VkPhysicalDeviceFeatures features{};
         vkGetPhysicalDeviceFeaturesFn(physicalDevice, &features);
         summary.samplerAnisotropySupported = features.samplerAnisotropy == VK_TRUE;
+        summary.drawIndirectFirstInstanceSupported = features.drawIndirectFirstInstance == VK_TRUE;
         if (features.multiDrawIndirect == VK_TRUE) {
             builder.Pass("multiDrawIndirect", "indirect multi-draw batches run as single native commands");
         } else {
@@ -1910,6 +1915,7 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Warn("shaderDrawParameters",
                          "unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
         }
+        summary.shaderDrawParametersSupported = shaderDrawParameters;
 
         Bool provokingVertexLast = false;
         Bool transformFeedbackPreservesProvokingVertex = false;
@@ -2108,7 +2114,8 @@ namespace MobileGL::MG_Util::SelfTest {
             backendApiVersionString = MG_Backend::DirectVulkan::FormatBackendAPIVersionString(
                 summary.deviceName, summary.apiVersionString, summary.driverVersionString);
             advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(
-                summary.shaderSubgroupUsable, summary.timerQueriesSupported, summary.samplerAnisotropySupported));
+                summary.shaderSubgroupUsable, summary.timerQueriesSupported, summary.samplerAnisotropySupported,
+                summary.drawIndirectFirstInstanceSupported && summary.shaderDrawParametersSupported));
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectVulkan::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);
