@@ -8,9 +8,28 @@
 
 #include <gtest/gtest.h>
 #include <iostream>
+#include <utility>
 #include <vector>
 
-#include <vulkan/vulkan.h>
+#include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
+
+TEST(DirectVulkanSanity, ProgramMovePreservesViewportIndexUsage) {
+    using VkProgramObject = MobileGL::MG_Backend::DirectVulkan::ProgramFactory::VkProgramObject;
+
+    VkProgramObject moveConstructedSource;
+    moveConstructedSource.writesViewportIndexBuiltin = true;
+    VkProgramObject moveConstructed(std::move(moveConstructedSource));
+    EXPECT_TRUE(moveConstructed.writesViewportIndexBuiltin);
+    EXPECT_FALSE(moveConstructedSource.writesViewportIndexBuiltin);
+
+    VkProgramObject moveAssignedSource;
+    moveAssignedSource.writesViewportIndexBuiltin = true;
+    VkProgramObject moveAssigned;
+    moveAssigned = std::move(moveAssignedSource);
+    EXPECT_TRUE(moveAssigned.writesViewportIndexBuiltin);
+    EXPECT_FALSE(moveAssignedSource.writesViewportIndexBuiltin);
+}
+
 TEST(DirectVulkanSanity, ExtensionEnumeration) {
     uint32_t extensionCount = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);

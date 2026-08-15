@@ -224,6 +224,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
                 readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
+                writesViewportIndexBuiltin = other.writesViewportIndexBuiltin;
                 needsPassthroughTessControl = other.needsPassthroughTessControl;
                 passthroughTessControlEmulatable = other.passthroughTessControlEmulatable;
                 lastUsedFrame = other.lastUsedFrame;
@@ -240,6 +241,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
                 other.readsBaseVertexBuiltin = false;
+                other.writesViewportIndexBuiltin = false;
                 other.needsPassthroughTessControl = false;
                 other.passthroughTessControlEmulatable = false;
                 other.lastUsedFrame = 0;
@@ -282,6 +284,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 fragmentInputComponentCount = other.fragmentInputComponentCount;
                 fragmentReplacesDepth = other.fragmentReplacesDepth;
                 readsBaseVertexBuiltin = other.readsBaseVertexBuiltin;
+                writesViewportIndexBuiltin = other.writesViewportIndexBuiltin;
                 needsPassthroughTessControl = other.needsPassthroughTessControl;
                 passthroughTessControlEmulatable = other.passthroughTessControlEmulatable;
                 lastUsedFrame = other.lastUsedFrame;
@@ -298,6 +301,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.fragmentInputComponentCount = 0;
                 other.fragmentReplacesDepth = false;
                 other.readsBaseVertexBuiltin = false;
+                other.writesViewportIndexBuiltin = false;
                 other.needsPassthroughTessControl = false;
                 other.passthroughTessControlEmulatable = false;
                 other.lastUsedFrame = 0;
