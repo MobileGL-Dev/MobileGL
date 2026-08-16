@@ -23,7 +23,8 @@ namespace MobileGL {
                 static Result<SharedPtr<glslang::TProgram>> LinkProgram(const ProgramAttrib& attrib);
                 static Result<Vector<Vector<unsigned>>> GetSpirvBinaryFromProgram(const ProgramBinaryAttrib& attrib);
                 static bool SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
-                                                      Vector<uint32_t>& outputBinary);
+                                                      Vector<uint32_t>& outputBinary,
+                                                      bool validateOutput = true);
                 // Demotes DrawIndex/BaseInstance/BaseVertex builtins to plain Private globals
                 // (mg_DrawID/mg_BaseInstance/mg_BaseVertex) so SPIRV-Cross can emit ESSL.
                 // Only for backends without native draw-parameter support (DirectGLES).
@@ -185,16 +186,15 @@ namespace MobileGL {
                 // no way left to warm it.
                 static void ResetPrewarmLatch();
 
-                // Test-environment SPIR-V validation. When enabled, every Optimizer wrapper
-                // in this file validates its OUTPUT binary - the bytes a driver can actually
-                // receive - and a failure logs the VUID (via MGLOG_I; see the consumer for
-                // why not MGLOG_E) and bumps the failure latch below WITHOUT changing the
-                // wrapper's return value: control flow must stay identical between the
-                // validating and shipping configurations, or fail-open call sites would make
-                // the two render differently. Resolved lazily from MOBILEGL_VALIDATE_SPIRV;
-                // defaults on for desktop/CI/WSL builds and off for device (__ANDROID__)
-                // builds. The setter wins over the environment and is safe to call from test
-                // fixtures at any time.
+                // SPIR-V validation is disabled by default because it is diagnostics-only
+                // overhead. MOBILEGL_ENABLE_SPIRV_VALIDATION is parsed once during
+                // MobileGL::Initialize() and published before workers are started. When enabled,
+                // every Optimizer wrapper in this file validates its OUTPUT binary - the bytes a
+                // driver can actually receive - and a failure logs the VUID and bumps the failure
+                // latch below WITHOUT changing the wrapper's return value: control flow must stay
+                // identical between validating and shipping configurations, or fail-open call
+                // sites would make the two render differently. The setter is safe for test
+                // fixtures and other standalone compiler users.
                 static bool SpirvValidationEnabled();
                 static void SetSpirvValidationEnabled(bool enabled);
 

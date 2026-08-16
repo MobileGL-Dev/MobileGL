@@ -369,12 +369,10 @@ namespace MobileGL {
                 return allSpirv;
             }
 
-            // -1 unresolved, 0 off, 1 on. Resolved once from MOBILEGL_VALIDATE_SPIRV on first
-            // use. A live getenv rather than an MG_Config::Features field, for the same reason
-            // Config.h already exempts MOBILEGL_LOG_FILE_PATH: suites like SpirvPassTest never
-            // run MobileGL::Initialize(), and every Initialize() re-runs MG_ConfigLoader::Init,
-            // which would clobber a programmatic override stored in the feature table.
-            static std::atomic<int> g_validateSpirv{-1};
+            // Published by MobileGL::Initialize() before shader workers are created. Standalone
+            // compiler users and tests start with validation disabled and can opt in through the
+            // setter without reading process environment from parallel work.
+            static std::atomic<int> g_validateSpirv{0};
             // Total validation failures observed this process. This latch - not the wrappers'
             // return values - is the test-lane signal: validation must never change what a
             // wrapper returns, or the validating lanes would render differently from the
@@ -383,28 +381,6 @@ namespace MobileGL {
             static std::atomic<Uint64> g_spirvValidationFailures{0};
 
             namespace {
-                // Test lanes (desktop/CI/WSL) validate by default; device builds do not -
-                // validation costs real time per module, and on device the driver is the
-                // final validator anyway. MOBILEGL_VALIDATE_SPIRV overrides in either
-                // direction, using the ConfigLoader truthy rule.
-                constexpr bool kValidateSpirvDefault =
-#if defined(__ANDROID__)
-                    false;
-#else
-                    true;
-#endif
-
-                bool IsTruthySpirvEnvValue(const char* value) {
-                    if (value == nullptr || value[0] == '\0') {
-                        return false;
-                    }
-                    String lowered(value);
-                    for (auto& c : lowered) {
-                        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                    }
-                    return lowered != "0" && lowered != "false";
-                }
-
                 // spirv-tools' validator lazily constructs function-local static tables on
                 // its first run, which on this codebase happens on a ShaderCompilePool
                 // worker. Function-local statics are destroyed in reverse construction
@@ -502,32 +478,23 @@ namespace MobileGL {
                 // spirv-tools drops pass diagnostics on the floor.
                 bool RunOptimizerChecked(const char* site, spvtools::Optimizer& optimizer,
                                          const Vector<Uint32>& inputBinary,
-                                         Vector<uint32_t>& outputBinary) {
+                                         Vector<uint32_t>& outputBinary,
+                                         bool validateOutput = true) {
                     spvtools::OptimizerOptions options;
                     options.set_run_validator(false);
                     optimizer.SetMessageConsumer(MakeSpirvMessageConsumer(site));
                     if (!optimizer.Run(inputBinary.data(), inputBinary.size(), &outputBinary, options)) {
                         return false;
                     }
-                    ValidateOrLatch(site, outputBinary);
+                    if (validateOutput) {
+                        ValidateOrLatch(site, outputBinary);
+                    }
                     return true;
                 }
             } // namespace
 
             bool ShaderCompiler::SpirvValidationEnabled() {
-                int state = g_validateSpirv.load(std::memory_order_acquire);
-                if (state < 0) {
-                    const char* env = std::getenv("MOBILEGL_VALIDATE_SPIRV");
-                    const bool resolved = env != nullptr ? IsTruthySpirvEnvValue(env) : kValidateSpirvDefault;
-                    int expected = -1;
-                    g_validateSpirv.compare_exchange_strong(expected, resolved ? 1 : 0,
-                                                            std::memory_order_acq_rel);
-                    state = g_validateSpirv.load(std::memory_order_acquire);
-                    if (state == 1) {
-                        PinValidatorTablesForProcessExit();
-                    }
-                }
-                return state == 1;
+                return g_validateSpirv.load(std::memory_order_acquire) == 1;
             }
 
             void ShaderCompiler::SetSpirvValidationEnabled(bool enabled) {
@@ -613,7 +580,8 @@ namespace MobileGL {
             }
 
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
-                                                           Vector<uint32_t>& outputBinary) {
+                                                           Vector<uint32_t>& outputBinary,
+                                                           bool validateOutput) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
@@ -663,7 +631,7 @@ namespace MobileGL {
                 optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
                 return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, validateOutput);
             }
 
             bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,

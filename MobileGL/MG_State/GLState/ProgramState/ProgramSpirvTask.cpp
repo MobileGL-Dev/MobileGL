@@ -102,7 +102,9 @@ namespace MobileGL::MG_State::GLState {
         }
 
         MGLOG_D("ProgramObject %u: Starting SPIR-V generation", externalIndex);
-        GenerateSpirv(handoff, externalIndex);
+        const Bool deferOutputValidationForDirectVulkan =
+            m_phaseA->in.env != nullptr && m_phaseA->in.env->backend == BackendType::DirectVulkan;
+        GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan);
         // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
         // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
         // them here rather than at the end of the body, which is ~87% of this node's runtime
@@ -137,7 +139,8 @@ namespace MobileGL::MG_State::GLState {
                 artifacts.generatedSpirv.size());
     }
 
-    void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex) {
+    void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex,
+                                         const Bool deferOutputValidationForDirectVulkan) {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
@@ -169,7 +172,8 @@ namespace MobileGL::MG_State::GLState {
         Bool allOptimized = true;
         {
             for (auto& spv : artifacts.generatedSpirv) {
-                auto success = ShaderCompiler::SanitizeAndOptimizeBinary(spv, spv);
+                auto success = ShaderCompiler::SanitizeAndOptimizeBinary(
+                    spv, spv, !deferOutputValidationForDirectVulkan);
                 if (!success) {
                     // The one genuine phase-B failure mode: one of the seven optimizer passes
                     // reported failure, so `spv` is whatever the run left behind. A fordebug
