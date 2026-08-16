@@ -511,7 +511,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<GLExtension> extensions = {
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
+            E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
             E_GL_ARB_multi_draw_indirect,
             E_GL_ARB_indirect_parameters, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
             E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample,

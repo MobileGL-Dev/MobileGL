@@ -250,6 +250,34 @@ namespace MobileGL::MG_State::GLState {
         NotifyContentWrite(atOffset, data.size);
     }
 
+    void BufferObject::FillSubData(DataPtr pattern, SizeT atOffset, SizeT size) {
+        MOBILEGL_ASSERT(pattern.data != nullptr && pattern.size > 0,
+                        "FillSubData requires a non-empty pattern.");
+        MOBILEGL_ASSERT(size % pattern.size == 0,
+                        "FillSubData size (%zu) must be a multiple of pattern size (%zu).", size, pattern.size);
+        MOBILEGL_ASSERT(atOffset <= m_size && size <= m_size - atOffset,
+                        "FillSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,
+                        m_size);
+        MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
+                        "Cannot fill data while buffer is non-persistently mapped.");
+        if (size == 0) return;
+
+        // A clear is ordered after all earlier GPU writes. Partial clears additionally need the
+        // retained shadow bytes; whole-store clears need the same synchronization before writing
+        // an adopted persistent mapping that the GPU may still be accessing.
+        SyncGpuWrites();
+
+        Uint8* dst = m_resource.Bytes() + atOffset;
+        if (pattern.size == 1) {
+            Memset(dst, *static_cast<const Uint8*>(pattern.data), size);
+        } else {
+            for (SizeT at = 0; at < size; at += pattern.size) {
+                Memcpy(dst + at, pattern.data, pattern.size);
+            }
+        }
+        NotifyContentWrite(atOffset, size);
+    }
+
     void BufferObject::DownloadSubData(void* dst, SizeT atOffset, SizeT size) const {
         MOBILEGL_ASSERT(atOffset + size <= m_size,
                         "DownloadSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,

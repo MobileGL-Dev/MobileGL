@@ -423,6 +423,26 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
             InternalPackedLayout internalPacked;
         };
 
+        Bool IsValidUnpackPixelPair(TextureInputFormat format, TexturePixelDataType type) {
+            UnpackChannelMapping mapping{};
+            if (!GetUnpackChannelMapping(format, mapping)) return false;
+
+            PackedTypeLayout packed{};
+            if (GetPackedTypeLayout(type, packed)) {
+                return packed.fieldCount == mapping.channelCount;
+            }
+
+            switch (type) {
+            case TexturePixelDataType::UnsignedInt5999Rev:
+            case TexturePixelDataType::UnsignedInt101111Rev:
+                return !mapping.isInteger && mapping.channelCount == 3;
+            default: {
+                ShadowComponent component{};
+                return GetDirectShadowComponentForType(type, mapping.isInteger, component);
+            }
+            }
+        }
+
         // Returns true when the (format, type) -> internal-format upload needs a per-texel conversion;
         // returns false both for layouts that already match the shadow bytes (memcpy fast path) and for
         // combinations the converter does not support (legacy copy behavior).
@@ -962,6 +982,32 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         }
 
         return outputPixels;
+    }
+
+    Bool ConvertOnePixelToInternal(TextureInternalFormat targetInternalFormat,
+                                   TextureInputFormat textureInputFormat,
+                                   TexturePixelDataType inputDataType,
+                                   const void* inputPixel,
+                                   Vector<Uint8>& outputPixel) {
+        outputPixel.clear();
+        if (inputPixel == nullptr || !IsValidUnpackPixelPair(textureInputFormat, inputDataType)) return false;
+
+        PixelStoreParameters params{};
+        params.Alignment = 1;
+        SizeT convertedSize = 0;
+        void* converted = ProcessTexturePixelsDataUnpack(
+            inputPixel, params, targetInternalFormat, textureInputFormat, inputDataType, {1, 1, 1}, false,
+            convertedSize);
+        const SizeT expectedSize = MG_Util::GetSizedInternalFormatSizeInBytes(targetInternalFormat);
+        if (converted == nullptr || convertedSize != expectedSize || expectedSize == 0) {
+            if (converted != nullptr) free(converted);
+            return false;
+        }
+
+        outputPixel.resize(convertedSize);
+        Memcpy(outputPixel.data(), converted, convertedSize);
+        free(converted);
+        return true;
     }
 
     void* ProcessTexturePixelsDataPack(const void* inputPixels, const PixelStoreParameters& params,

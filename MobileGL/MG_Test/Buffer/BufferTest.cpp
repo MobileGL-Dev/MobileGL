@@ -16,6 +16,7 @@
 #include <MG_State/GLState/Core.h>
 
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
+#include <MG_Impl/GetProcAddress.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 
 using namespace MobileGL;
@@ -598,6 +599,117 @@ TEST_F(BufferTest, ClearNamedBufferSubDataRepeatsPattern) {
     Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size() * sizeof(Uint32));
     EXPECT_EQ(actual, (Vector<Uint32>{0, pattern, pattern, pattern, 0}));
     EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+TEST_F(BufferTest, ClearBufferSubDataInitializesIrisStaticSsboRange) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+
+    Vector<Uint8> initial(32, 0x7F);
+    MobileGL::MG_Impl::GLImpl::BufferData(
+        GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    const GLbyte zero = 0;
+    const auto clear = reinterpret_cast<PFNGLCLEARBUFFERSUBDATAPROC>(
+        MobileGL::MG_Impl::GetProcAddress("glClearBufferSubData"));
+    ASSERT_NE(clear, nullptr);
+    clear(GL_SHADER_STORAGE_BUFFER, GL_R8, 4, 24, GL_RED, GL_BYTE, &zero);
+
+    Vector<Uint8> actual(initial.size());
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
+    EXPECT_EQ(actual, (Vector<Uint8>{0x7F, 0x7F, 0x7F, 0x7F,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                    0x7F, 0x7F, 0x7F, 0x7F}));
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+TEST_F(BufferTest, ClearBufferSubDataInitializesCompleteIrisStaticSsbo) {
+    constexpr SizeT irisStaticSsboSize = 5'000'192;
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+
+    Vector<Uint8> initial(irisStaticSsboSize, 0x7F);
+    MobileGL::MG_Impl::GLImpl::BufferData(
+        GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    const GLbyte zero = 0;
+    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(
+        GL_SHADER_STORAGE_BUFFER, GL_R8, 0, irisStaticSsboSize, GL_RED, GL_BYTE, &zero);
+
+    Vector<Uint8> actual(irisStaticSsboSize);
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
+    EXPECT_EQ(actual, Vector<Uint8>(irisStaticSsboSize, 0));
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+TEST_F(BufferTest, ClearBufferDataConvertsOneClientPixelBeforeRepeatingIt) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    Vector<Uint32> initial(4, 0u);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, initial.size() * sizeof(Uint32), initial.data(),
+                                           GL_STATIC_DRAW);
+    const Uint8 value = 0xAB;
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(
+        GL_ARRAY_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &value);
+
+    Vector<Uint32> actual(initial.size());
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size() * sizeof(Uint32));
+    EXPECT_EQ(actual, Vector<Uint32>(initial.size(), value));
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+TEST_F(BufferTest, ClearBufferSubDataRejectsUnboundTarget) {
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    const GLbyte zero = 0;
+    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(
+        GL_SHADER_STORAGE_BUFFER, GL_R8, 0, 1, GL_RED, GL_BYTE, &zero);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+TEST_F(BufferTest, ClearBufferDataRejectsInvalidPixelFormatTypePairs) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    const Vector<Uint8> initial{0x7F, 0x7F};
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    const Uint16 packed = 0;
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(
+        GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, &packed);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(
+        GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    Vector<Uint8> actual(initial.size());
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
+    EXPECT_EQ(actual, initial);
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
 }
 
 

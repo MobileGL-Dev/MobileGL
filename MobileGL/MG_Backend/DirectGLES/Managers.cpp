@@ -729,8 +729,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_ReadbackFromGpu(BufferObject& bufferObject) {
                 auto* resource = ResourceOf(bufferObject);
                 if (!resource || resource->id == 0 || !resource->storageInitialized) return;
-                if (resource->persistentMapped) return; // shadow already IS the GPU storage
                 if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
+                if (resource->persistentMapped) {
+                    // Host writes to a persistent map must not race shader writes already queued
+                    // on this context. There is no backend copy to read back in this case.
+                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                    return;
+                }
                 if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
                 const SizeT size = std::min<SizeT>(bufferObject.GetSize(), resource->storageSize);
                 if (size == 0) return;

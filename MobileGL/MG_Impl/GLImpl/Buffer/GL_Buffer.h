@@ -27,6 +27,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     void NamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, const void* data);
     void CopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset,
                                 GLsizeiptr size);
+    void ClearBufferData(GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data);
+    void ClearBufferSubData(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format,
+                            GLenum type, const void* data);
     void ClearNamedBufferData(GLuint buffer, GLenum internalformat, GLenum format, GLenum type, const void* data);
     void ClearNamedBufferSubData(GLuint buffer, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format,
                                  GLenum type, const void* data);

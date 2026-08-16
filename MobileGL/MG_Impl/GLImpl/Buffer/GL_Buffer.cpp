@@ -18,6 +18,7 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/BufferEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/BufferEnumConverter.h>
+#include <MG_Util/Texture/PixelStoreProcessor.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -31,6 +32,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             NamedBufferData,
             NamedBufferSubData,
             CopyNamedBufferSubData,
+            ClearBufferData,
+            ClearBufferSubData,
             ClearNamedBufferData,
             ClearNamedBufferSubData,
             MapBufferRange,
@@ -65,6 +68,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return "NamedBufferSubData";
             case BufferOp::CopyNamedBufferSubData:
                 return "CopyNamedBufferSubData";
+            case BufferOp::ClearBufferData:
+                return "ClearBufferData";
+            case BufferOp::ClearBufferSubData:
+                return "ClearBufferSubData";
             case BufferOp::ClearNamedBufferData:
                 return "ClearNamedBufferData";
             case BufferOp::ClearNamedBufferSubData:
@@ -143,16 +150,6 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return 0;
             }
 
-            // The pattern is replicated verbatim, which is only the whole story while the client
-            // layout already matches the internal format - the case every entry point in practice
-            // uses, and the only one the conversion machinery here can express. Say so rather than
-            // quietly writing a differently-sized pattern.
-            const SizeT sourceSize = MG_Util::GetInputBytesPerPixel(inputFormat, pixelType);
-            if (sourceSize != elementSize) {
-                MGLOG_W_ONCE("%s: clear pattern is %zu bytes but internalformat 0x%X stores %zu; "
-                        "converting between them is not implemented",
-                        GetBufferOpName(op), sourceSize, internalformat, elementSize);
-            }
             return elementSize;
         }
 
@@ -194,27 +191,59 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
-        void ClearNamedBufferRange_State(GLuint buffer, GLenum internalformat, GLintptr offset, GLsizeiptr size,
-                                         GLenum format, GLenum type, const void* data, BufferOp op) {
+        Bool BuildClearPattern(GLenum internalformat, GLenum format, GLenum type, const void* data,
+                               SizeT patternSize, BufferOp op, Vector<Uint8>& pattern) {
+            const TextureInternalFormat internal = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+            const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
+            const TexturePixelDataType inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
+
+            Vector<Uint8> zeroInput;
+            const void* inputPixel = data;
+            if (inputPixel == nullptr) {
+                const SizeT inputSize = MG_Util::GetInputBytesPerPixel(inputFormat, inputType);
+                if (inputSize == 0) {
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::InvalidValue,
+                        MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                     "format and type do not describe a source pixel."));
+                    return false;
+                }
+                zeroInput.resize(inputSize);
+                inputPixel = zeroInput.data();
+            }
+
+            if (!MG_Util::PixelStoreProcessor::ConvertOnePixelToInternal(
+                    internal, inputFormat, inputType, inputPixel, pattern)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", GetBufferOpName(op),
+                        std::format("Cannot convert one ({}, {}) pixel into internalformat 0x{:X}.",
+                                    MG_Util::ConvertGLEnumToString(format), MG_Util::ConvertGLEnumToString(type),
+                                    internalformat)));
+                return false;
+            }
+
+            if (data == nullptr) {
+                // GL defines a null clear value as all zero bits in the destination store, while
+                // retaining the format/type validation above.
+                pattern.assign(patternSize, 0);
+            }
+            return true;
+        }
+
+        void ClearBufferRange_State(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
+                                    GLenum internalformat, GLintptr offset, GLsizeiptr size,
+                                    GLenum format, GLenum type, const void* data, BufferOp op) {
             const SizeT patternSize = GetClearPatternSize(internalformat, format, type, op);
             if (patternSize == 0) return;
-
-            auto bufferObject = GetNamedBufferObject(buffer, op);
-            if (!bufferObject) return;
             if (!ValidateBufferClearRange(bufferObject, offset, size, patternSize, op)) return;
             if (size == 0) return;
 
-            Vector<Uint8> clearData(static_cast<SizeT>(size));
-            if (data) {
-                const auto* pattern = static_cast<const Uint8*>(data);
-                for (SizeT at = 0; at < clearData.size(); at += patternSize) {
-                    Memcpy(clearData.data() + at, pattern, patternSize);
-                }
-            } else {
-                Memset(clearData.data(), 0, clearData.size());
-            }
-
-            bufferObject->UploadSubData({clearData.data(), clearData.size()}, static_cast<SizeT>(offset));
+            Vector<Uint8> pattern;
+            if (!BuildClearPattern(internalformat, format, type, data, patternSize, op, pattern)) return;
+            bufferObject->FillSubData({pattern.data(), pattern.size()}, static_cast<SizeT>(offset),
+                                      static_cast<SizeT>(size));
         }
 
         auto& GetBufferBindingSlot(BufferTarget target) {
@@ -1197,17 +1226,34 @@ namespace MobileGL::MG_Impl::GLImpl {
                                         static_cast<SizeT>(writeOffset), static_cast<SizeT>(size));
     }
 
+    void ClearBufferData_State(GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data) {
+        auto bufferObject = GetBoundBufferObject(target, BufferOp::ClearBufferData);
+        if (!bufferObject) return;
+        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()), format,
+                               type, data, BufferOp::ClearBufferData);
+    }
+
+    void ClearBufferSubData_State(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size,
+                                  GLenum format, GLenum type, const void* data) {
+        auto bufferObject = GetBoundBufferObject(target, BufferOp::ClearBufferSubData);
+        if (!bufferObject) return;
+        ClearBufferRange_State(bufferObject, internalformat, offset, size, format, type, data,
+                               BufferOp::ClearBufferSubData);
+    }
+
     void ClearNamedBufferData_State(GLuint buffer, GLenum internalformat, GLenum format, GLenum type, const void* data) {
         auto bufferObject = GetNamedBufferObject(buffer, BufferOp::ClearNamedBufferData);
         if (!bufferObject) return;
-        ClearNamedBufferRange_State(buffer, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()), format,
-                                    type, data, BufferOp::ClearNamedBufferData);
+        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()), format,
+                               type, data, BufferOp::ClearNamedBufferData);
     }
 
     void ClearNamedBufferSubData_State(GLuint buffer, GLenum internalformat, GLintptr offset, GLsizeiptr size,
                                        GLenum format, GLenum type, const void* data) {
-        ClearNamedBufferRange_State(buffer, internalformat, offset, size, format, type, data,
-                                    BufferOp::ClearNamedBufferSubData);
+        auto bufferObject = GetNamedBufferObject(buffer, BufferOp::ClearNamedBufferSubData);
+        if (!bufferObject) return;
+        ClearBufferRange_State(bufferObject, internalformat, offset, size, format, type, data,
+                               BufferOp::ClearNamedBufferSubData);
     }
 
     void* MapNamedBuffer_State(GLuint buffer, GLenum access) {
@@ -1660,6 +1706,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     void CopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset,
                                 GLsizeiptr size) {
         CopyNamedBufferSubData_State(readBuffer, writeBuffer, readOffset, writeOffset, size);
+    }
+
+    void ClearBufferData(GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data) {
+        ClearBufferData_State(target, internalformat, format, type, data);
+    }
+
+    void ClearBufferSubData(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format,
+                            GLenum type, const void* data) {
+        ClearBufferSubData_State(target, internalformat, offset, size, format, type, data);
     }
 
     void ClearNamedBufferData(GLuint buffer, GLenum internalformat, GLenum format, GLenum type, const void* data) {

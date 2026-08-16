@@ -132,6 +132,9 @@ namespace MobileGL {
 
             void UploadData(DataPtr data, SizeT atOffset);
             void UploadSubData(DataPtr data, SizeT atOffset);
+            // Repeats one already-converted element through [atOffset, atOffset + size) and
+            // publishes the range as one content mutation.
+            void FillSubData(DataPtr pattern, SizeT atOffset, SizeT size);
             // Reads `size` bytes from the CPU shadow at `atOffset` into `dst` (glGetBufferSubData).
             // The shadow reflects CPU writes (BufferData/SubData/maps) and backend write-backs, but not
             // arbitrary GPU-side writes.
