@@ -128,9 +128,10 @@ namespace MobileGL::MG_Config {
         // explicitly request a core profile via EGL_CONTEXT_OPENGL_PROFILE_MASK / a >=3.1
         // version request.
         Bool RelaxedSemantics = false;
-        // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN: overrides the shader-source quirk that
-        // rewrites the recognized workgroup prefix-scan template on Qualcomm devices with
-        // subgroups wider than 32 lanes (see ShaderSourceProcessor's quirk registry).
+        // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN: overrides the shader-source quirk that rewrites
+        // recognized subgroup reductions when narrow Vulkan subgroups overflow fixed scratch
+        // arrays, or when Qualcomm subgroups are wider than the captured 32-lane model (see
+        // ShaderSourceProcessor's quirk registry).
         QuirkOverride SubgroupPrefixScanQuirk = QuirkOverride::Auto;
         // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE: overrides the DirectVulkan quirk that
         // strips depth writes from accumulation-blended pipelines (MIN/MAX or additive

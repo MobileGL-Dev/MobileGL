@@ -31,6 +31,7 @@
 #include <MG_Backend/DirectVulkan/Renderer/VulkanRenderer.h>
 #include <MG_Util/Math/HalfFloat.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Types.h>
@@ -708,6 +709,37 @@ TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
                                   GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
                                   GL_SUBGROUP_FEATURE_QUAD_BIT_KHR));
     EXPECT_TRUE(backend.GetDynamicParameters().SubgroupQuadOperationsInAllStages);
+}
+
+TEST(DirectVulkanSanity, CapabilityRefreshInvalidatesTheCachedCompileEnvironment) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    auto backend = MakeUnique<MG_Backend::DirectVulkan::BackendObject_DirectVulkan>();
+    auto* backendPtr = backend.get();
+    MG_Backend::pActiveBackendObject = Move(backend);
+
+    const auto before = MG_State::pGLContext->GetCompileEnv();
+    EXPECT_EQ(before->params.SubgroupSize, 0u);
+
+    MG_External::VulkanCapabilities caps;
+    caps.SupportsShaderSubgroup = true;
+    caps.SubgroupSize = 8;
+    caps.SubgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+    caps.SubgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+    backendPtr->ApplyVulkanCapabilitiesForTesting(caps);
+
+    const auto after = MG_State::pGLContext->GetCompileEnv();
+    EXPECT_NE(after.get(), before.get());
+    EXPECT_NE(after->fingerprint, before->fingerprint);
+    EXPECT_EQ(after->backend, BackendType::DirectVulkan);
+    EXPECT_EQ(after->params.SubgroupSize, 8u);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
 }
 
 TEST(DirectVulkanSanity, KeepsOptionalGpuShaderInt64BranchForVoxyQuadDecode) {

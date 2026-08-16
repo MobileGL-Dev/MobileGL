@@ -23,6 +23,7 @@
 namespace {
     using MobileGL::SizeT;
     using MobileGL::String;
+    using MobileGL::Uint32;
     using MobileGL::Vector;
 
     bool IsIdentifierChar(char ch) {
@@ -252,6 +253,46 @@ namespace {
             }
         }
         return true;
+    }
+
+    SizeT CountTokenSequence(const Vector<CodeToken>& tokens,
+                             std::initializer_list<const char*> expected) {
+        SizeT count = 0;
+        for (SizeT position = 0; position < tokens.size(); ++position) {
+            if (MatchTokenSequence(tokens, position, expected)) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    bool FindUniqueTokenSequence(const Vector<CodeToken>& tokens, const Vector<CodeToken>& expected,
+                                 SizeT& sourceBegin, SizeT& sourceEnd) {
+        if (expected.empty() || expected.size() > tokens.size()) {
+            return false;
+        }
+
+        SizeT matchCount = 0;
+        for (SizeT position = 0; position + expected.size() <= tokens.size(); ++position) {
+            bool matches = true;
+            for (SizeT expectedIndex = 0; expectedIndex < expected.size(); ++expectedIndex) {
+                if (tokens[position + expectedIndex].text != expected[expectedIndex].text) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (!matches) {
+                continue;
+            }
+            ++matchCount;
+            sourceBegin = tokens[position].begin;
+            sourceEnd = tokens[position + expected.size() - 1].end;
+        }
+        return matchCount == 1;
+    }
+
+    bool IsPowerOfTwo(Uint32 value) {
+        return value != 0u && (value & (value - 1u)) == 0u;
     }
 
     struct LinearPrefixScanMatch {
@@ -504,6 +545,164 @@ namespace {
         replacement += "barrier();\n";
         replacement += "float " + match.sum + " = " + match.cache + "[0];";
         return replacement;
+    }
+
+    struct WeightedExposureReductionMatch {
+        SizeT mainBegin = 0;
+        SizeT mainEnd = 0;
+    };
+
+    bool ParseWeightedExposureReductionTemplate(const Vector<CodeToken>& tokens,
+                                                WeightedExposureReductionMatch& match) {
+        // IterationRP's exposure pass is a complete, stable shader-pack template. Match the
+        // whole main body before replacing it: a partial match would be unsafe because the
+        // replacement deliberately replays the 32x16 sample grid from one invocation.
+        static const Vector<CodeToken> expectedMain = TokenizeCode(R"glsl(
+void main() {
+vec2 texCoord = (vec2(gl_GlobalInvocationID.xy) + 0.5f) * vec2(1.0f / 32.0f, 1.0f / 16.0f);
+vec2 sampleCoord = texCoord * (1.0f / 64.0f);
+sampleCoord.x += (15.0f / 32.0f) + pixelSize.x * 12.0f;
+float tileExposure = dot(textureLod(colortex2, sampleCoord, 0.0f).rgb, vec3(0.2125f, 0.7154f, 0.0721f));
+vec2 sampleLuminance = vec2(tileExposure, 0.0f);
+sampleLuminance = subgroupInclusiveAdd(sampleLuminance);
+if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleLuminance;
+barrier();
+uint loopLength = uint(findMSB(gl_NumSubgroups));
+loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+for (uint i = 0; i < loopLength; i++) {
+if ((gl_SubgroupID & (1u << i)) > 0u) {
+sampleLuminance += prefixSumCache[(gl_SubgroupID >> i << i) - 1u];
+if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleLuminance;
+}
+barrier();
+}
+if (gl_LocalInvocationIndex == 511u) prefixSumCache[0] = sampleLuminance / 512.0f;
+;
+barrier();
+float avg = prefixSumCache[0].x;
+vec2 tileDistance = texCoord * 2.0f - 1.0f;
+tileDistance.y /= aspectRatio;
+float centerDistance = length(tileDistance);
+float tileWeight = remapSaturate(centerDistance, 0.6f, 0.4f);
+tileExposure = max(7.0E-7f, tileExposure);
+float lumaWeight = avg / tileExposure;
+lumaWeight = pow(lumaWeight, remapSaturate(avg, 0.02f, 0.001f) * 0.4f + 0.2f);
+tileWeight *= lumaWeight;
+vec2 sampleExposure = vec2(tileExposure * tileWeight, tileWeight);
+sampleExposure = subgroupInclusiveAdd(sampleExposure);
+if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleExposure;
+barrier();
+for (uint i = 0; i < loopLength; i++) {
+if ((gl_SubgroupID & (1u << i)) > 0u) {
+sampleExposure += prefixSumCache[(gl_SubgroupID >> i << i) - 1u];
+if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleExposure;
+}
+barrier();
+}
+if (gl_LocalInvocationIndex == 511u) {
+float avgExposure = max(sampleExposure.x / sampleExposure.y * 29.3f, 1.0E-10f);
+avgExposure = log2(avgExposure);
+float prevAvgExposure = log2(texelFetch(pixelData2D, ivec2(0, 0), 0).x);
+float frameTimeFixed = frameTime + step(frameCounter, 20) * 100.0f;
+float exposureTime = clamp(frameTimeFixed * (2.0f / 1.0f), 0.0f, 1.0f);
+avgExposure = mix(prevAvgExposure, avgExposure, exposureTime);
+avgExposure = max(exp2(avgExposure), 1.0E-5f);
+float exposure = GetExposureValue(avgExposure);
+imageStore(img_pixelData2D, ivec2(0, 0), vec4(avgExposure, exposure, 0.0f, 0.0f));
+}
+}
+)glsl");
+
+        if (!FindUniqueTokenSequence(tokens, expectedMain, match.mainBegin, match.mainEnd) ||
+            CountTokenSequence(tokens,
+                               {"layout", "(", "local_size_x", "=", "32", ",", "local_size_y", "=", "16",
+                                ")", "in", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"shared", "vec2", "prefixSumCache", "[", "32", "]", ";"}) != 1 ||
+            CountTokenSequence(tokens,
+                               {"float", "GetExposureValue", "(", "float", "luminance", ")", "{"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "int", "frameCounter", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "float", "frameTime", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "float", "aspectRatio", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "vec2", "pixelSize", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "sampler2D", "colortex2", ";"}) != 1 ||
+            CountTokenSequence(tokens, {"uniform", "sampler2D", "pixelData2D", ";"}) != 1 ||
+            CountTokenSequence(tokens,
+                               {"layout", "(", "rg16f", ")", "uniform", "image2D", "img_pixelData2D", ";"}) !=
+                1) {
+            return false;
+        }
+
+        // No second user of the scratch array or lane-width-sensitive builtin may survive the
+        // rewrite. These counts describe the fully matched main body plus its one declaration.
+        if (CountToken(tokens, "prefixSumCache") != 9 || CountToken(tokens, "GetExposureValue") != 2 ||
+            CountToken(tokens, "subgroupInclusiveAdd") != 2 ||
+            CountToken(tokens, "gl_SubgroupInvocationID") != 4 || CountToken(tokens, "gl_SubgroupSize") != 4 ||
+            CountToken(tokens, "gl_SubgroupID") != 8 || CountToken(tokens, "gl_NumSubgroups") != 2 ||
+            CountToken(tokens, "gl_LocalInvocationIndex") != 2 || CountToken(tokens, "barrier") != 5 ||
+            CountToken(tokens, "findMSB") != 1 ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "subgroup", {"subgroupInclusiveAdd"}) ||
+            HasIdentifierWithPrefixOutsideAllowed(
+                tokens, "gl_Subgroup",
+                {"gl_SubgroupInvocationID", "gl_SubgroupSize", "gl_SubgroupID", "gl_NumSubgroups"}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_SubGroup", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_Warp", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_Thread", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "gl_SMID", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "ballot", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "shuffle", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "readInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "readFirstInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "anyInvocation", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "allInvocations", {}) ||
+            HasIdentifierWithPrefixOutsideAllowed(tokens, "mglExposure", {})) {
+            return false;
+        }
+        return true;
+    }
+
+    String BuildWeightedExposureReductionReplacement() {
+        return R"glsl(void main() {
+if (gl_LocalInvocationIndex != 0u) return;
+float mglExposureAverage = 0.0f;
+for (uint mglExposureY = 0u; mglExposureY < 16u; ++mglExposureY) {
+for (uint mglExposureX = 0u; mglExposureX < 32u; ++mglExposureX) {
+vec2 mglExposureTexCoord = (vec2(mglExposureX, mglExposureY) + 0.5f) * vec2(1.0f / 32.0f, 1.0f / 16.0f);
+vec2 mglExposureSampleCoord = mglExposureTexCoord * (1.0f / 64.0f);
+mglExposureSampleCoord.x += (15.0f / 32.0f) + pixelSize.x * 12.0f;
+mglExposureAverage += dot(textureLod(colortex2, mglExposureSampleCoord, 0.0f).rgb,
+                          vec3(0.2125f, 0.7154f, 0.0721f));
+}
+}
+mglExposureAverage /= 512.0f;
+vec2 mglExposureWeightedSum = vec2(0.0f);
+for (uint mglExposureY = 0u; mglExposureY < 16u; ++mglExposureY) {
+for (uint mglExposureX = 0u; mglExposureX < 32u; ++mglExposureX) {
+vec2 mglExposureTexCoord = (vec2(mglExposureX, mglExposureY) + 0.5f) * vec2(1.0f / 32.0f, 1.0f / 16.0f);
+vec2 mglExposureSampleCoord = mglExposureTexCoord * (1.0f / 64.0f);
+mglExposureSampleCoord.x += (15.0f / 32.0f) + pixelSize.x * 12.0f;
+float mglExposureTile = dot(textureLod(colortex2, mglExposureSampleCoord, 0.0f).rgb,
+                            vec3(0.2125f, 0.7154f, 0.0721f));
+vec2 mglExposureDistance = mglExposureTexCoord * 2.0f - 1.0f;
+mglExposureDistance.y /= aspectRatio;
+float mglExposureWeight = remapSaturate(length(mglExposureDistance), 0.6f, 0.4f);
+mglExposureTile = max(7.0E-7f, mglExposureTile);
+float mglExposureLumaWeight = mglExposureAverage / mglExposureTile;
+mglExposureLumaWeight = pow(mglExposureLumaWeight,
+                             remapSaturate(mglExposureAverage, 0.02f, 0.001f) * 0.4f + 0.2f);
+mglExposureWeight *= mglExposureLumaWeight;
+mglExposureWeightedSum += vec2(mglExposureTile * mglExposureWeight, mglExposureWeight);
+}
+}
+float avgExposure = max(mglExposureWeightedSum.x / mglExposureWeightedSum.y * 29.3f, 1.0E-10f);
+avgExposure = log2(avgExposure);
+float prevAvgExposure = log2(texelFetch(pixelData2D, ivec2(0, 0), 0).x);
+float frameTimeFixed = frameTime + step(frameCounter, 20) * 100.0f;
+float exposureTime = clamp(frameTimeFixed * (2.0f / 1.0f), 0.0f, 1.0f);
+avgExposure = mix(prevAvgExposure, avgExposure, exposureTime);
+avgExposure = max(exp2(avgExposure), 1.0E-5f);
+float exposure = GetExposureValue(avgExposure);
+imageStore(img_pixelData2D, ivec2(0, 0), vec4(avgExposure, exposure, 0.0f, 0.0f));
+})glsl";
     }
 
     void SkipDirectiveWhitespace(const MobileGL::String& source, SizeT& pos, SizeT lineEnd) {
@@ -1256,15 +1455,12 @@ namespace MobileGL {
             Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize,
                                                           String& source) {
                 constexpr Uint32 capturedSubgroupSize = 32;
-                if (stage != ShaderStage::Compute || nativeSubgroupSize <= capturedSubgroupSize ||
-                    nativeSubgroupSize % capturedSubgroupSize != 0) {
-                    return false;
-                }
-
-                // Vulkan subgroup widths are powers of two. Keep the workaround restricted to
-                // wider widths which are a power-of-two multiple of the captured 32-lane model.
-                const Uint32 subgroupScale = nativeSubgroupSize / capturedSubgroupSize;
-                if ((subgroupScale & (subgroupScale - 1u)) != 0u) {
+                const Bool narrowSubgroup = nativeSubgroupSize != 0u && nativeSubgroupSize < 16u &&
+                                            capturedSubgroupSize % nativeSubgroupSize == 0u;
+                const Bool wideSubgroup = nativeSubgroupSize > capturedSubgroupSize &&
+                                          nativeSubgroupSize % capturedSubgroupSize == 0u;
+                if (stage != ShaderStage::Compute || !IsPowerOfTwo(nativeSubgroupSize) ||
+                    (!narrowSubgroup && !wideSubgroup)) {
                     return false;
                 }
 
@@ -1276,8 +1472,8 @@ namespace MobileGL {
                     // silently falls back to the driver's miscompiled path. Make that visible.
                     if (CountToken(tokens, "subgroupInclusiveAdd") > 0) {
                         MGLOG_W_ONCE("%s: subgroupInclusiveAdd present but the linear prefix-scan template "
-                                "did not match; the wide-subgroup rewrite was NOT applied",
-                                __func__);
+                                     "did not match; the subgroup-compatibility rewrite was NOT applied",
+                                     __func__);
                     }
                     return false;
                 }
@@ -1288,6 +1484,30 @@ namespace MobileGL {
                 // valid after the first replacement.
                 source.replace(match.sharedArraySizeBegin, match.sharedArraySizeEnd - match.sharedArraySizeBegin,
                                "1024");
+                return true;
+            }
+
+            Bool RewriteWeightedExposureSubgroupReductionForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize,
+                                                                    String& source) {
+                if (stage != ShaderStage::Compute || !IsPowerOfTwo(nativeSubgroupSize) ||
+                    nativeSubgroupSize >= 16u) {
+                    return false;
+                }
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                WeightedExposureReductionMatch match;
+                if (!ParseWeightedExposureReductionTemplate(tokens, match)) {
+                    if (CountToken(tokens, "subgroupInclusiveAdd") == 2 &&
+                        CountToken(tokens, "GetExposureValue") > 0) {
+                        MGLOG_W_ONCE("%s: weighted exposure subgroup reductions were present but the complete "
+                                     "template did not match; the narrow-subgroup rewrite was NOT applied",
+                                     __func__);
+                    }
+                    return false;
+                }
+
+                source.replace(match.mainBegin, match.mainEnd - match.mainBegin,
+                               BuildWeightedExposureReductionReplacement());
                 return true;
             }
 
@@ -1320,16 +1540,20 @@ namespace MobileGL {
                         "subgroup-prefix-scan-rewrite",
                         [](const CompileEnv& env) { return env.subgroupPrefixScanQuirk; },
                         [](const ShaderSourceQuirkContext& ctx) {
-                            // Qualcomm's Vulkan driver miscompiles the recognized float
-                            // InclusiveScan pattern for native subgroups wider than the
-                            // captured 32 lanes; other vendors compile it correctly and
-                            // should keep their native scan.
+                            // Narrow subgroups overflow the pack's fixed subgroup-result scratch
+                            // arrays. Qualcomm also miscompiles the recognized float InclusiveScan
+                            // pattern when its native subgroup is wider than the captured 32 lanes.
                             return ctx.backend == BackendType::DirectVulkan &&
-                                   ctx.vendor == MG_Backend::GpuVendorKind::Qualcomm;
+                                   ((ctx.subgroupSize != 0u && ctx.subgroupSize < 16u) ||
+                                    (ctx.vendor == MG_Backend::GpuVendorKind::Qualcomm &&
+                                     ctx.subgroupSize > 32u));
                         },
                         [](const ShaderSourceQuirkContext& ctx, String& source) {
-                            return RewriteLinearSubgroupPrefixScanForVulkan(ctx.stage, ctx.subgroupSize,
-                                                                            source);
+                            const Bool exposureRewritten = RewriteWeightedExposureSubgroupReductionForVulkan(
+                                ctx.stage, ctx.subgroupSize, source);
+                            const Bool prefixScanRewritten = RewriteLinearSubgroupPrefixScanForVulkan(
+                                ctx.stage, ctx.subgroupSize, source);
+                            return exposureRewritten || prefixScanRewritten;
                         },
                     },
                 };

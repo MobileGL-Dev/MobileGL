@@ -413,9 +413,12 @@ namespace MobileGL {
                 // cannot be captured in MG_State::Init() - that runs BEFORE MG_Backend::Init(),
                 // so there is no backend to query yet. Re-captured whenever the active backend
                 // object changes, which also rolls the fingerprint and therefore invalidates
-                // every P0b preprocess memo keyed against the old one.
+                // every P0b preprocess memo keyed against the old one. A backend whose dynamic
+                // capabilities become available without changing object identity must call
+                // InvalidateCompileEnv() after publishing them.
                 // GL thread only.
                 const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv>& GetCompileEnv();
+                void InvalidateCompileEnv();
 
             private:
                 // State Components

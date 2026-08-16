@@ -39,6 +39,11 @@ namespace MobileGL::MG_State {
             return m_compileEnv;
         }
 
+        void GLContext::InvalidateCompileEnv() {
+            m_compileEnv.reset();
+            m_compileEnvBackend = nullptr;
+        }
+
         // Error
         void GLContext::RecordError(ErrorCode code, UniquePtr<ErrorInfo> info) {
             // Invariant I1, mechanically enforced: the GL error state is GL-thread-owned.

@@ -30,17 +30,16 @@ namespace MobileGL {
             // tests and diagnostics that drive the preprocessor standalone.
             void PreprocessShaderSource(ShaderStage stage, String& source);
 
-            // Some desktop-captured compute shaders build a workgroup-wide linear prefix scan
-            // from subgroupInclusiveAdd plus a shared array of subgroup totals. Qualcomm's
-            // Vulkan driver miscompiles that exact float InclusiveScan path for native subgroups
-            // wider than the capture's 32 lanes. For the narrowly recognized, uniform-control-
-            // flow template, replace the subgroup-local scan with a shared-memory, strict
-            // left-fold over virtual 32-lane segments. Returns true only when the complete safe
-            // template was recognized and rewritten. PreprocessShaderSource reaches this through
-            // its device-quirk registry: by default only on detected Qualcomm Vulkan devices,
-            // overridable either way with MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN=1/0. The explicit
-            // entry point exists for deterministic tests.
+            // Some desktop-captured compute shaders size shared scratch for a 32-lane subgroup
+            // model. Narrow Vulkan subgroups can produce more subgroup totals than that storage
+            // holds; Qualcomm also miscompiles one recognized scan when its subgroup is wider.
+            // These entry points replace only complete, known-safe templates with lane-independent
+            // algorithms. PreprocessShaderSource reaches them through its device-quirk registry;
+            // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN=1/0 overrides the automatic device gate. The
+            // explicit entry points exist for deterministic tests.
             Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize, String& source);
+            Bool RewriteWeightedExposureSubgroupReductionForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize,
+                                                                    String& source);
 
             // Rewrites a "#version 330 core" directive that PreprocessShaderSource normalized down
             // from a legacy desktop version back up to "#version 460 core". Returns false (leaving

@@ -2106,13 +2106,90 @@ void main() {
 }
 )";
     }
+
+    String MakeWeightedExposureSubgroupReductionShader() {
+        return R"(#version 460 core
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+uniform int frameCounter;
+uniform float frameTime;
+uniform float aspectRatio;
+uniform vec2 pixelSize;
+uniform sampler2D colortex2;
+uniform sampler2D pixelData2D;
+layout(local_size_x = 32, local_size_y = 16) in;
+layout(rg16f) uniform image2D img_pixelData2D;
+shared vec2 prefixSumCache[32];
+
+float remapSaturate(float value, float edge0, float edge1) {
+    return clamp((value - edge0) / (edge1 - edge0), 0.0f, 1.0f);
+}
+
+float GetExposureValue(float luminance) {
+    return max(luminance, 1.0E-5f);
+}
+
+void main() {
+    vec2 texCoord = (vec2(gl_GlobalInvocationID.xy) + 0.5f) * vec2(1.0f / 32.0f, 1.0f / 16.0f);
+    vec2 sampleCoord = texCoord * (1.0f / 64.0f);
+    sampleCoord.x += (15.0f / 32.0f) + pixelSize.x * 12.0f;
+    float tileExposure = dot(textureLod(colortex2, sampleCoord, 0.0f).rgb, vec3(0.2125f, 0.7154f, 0.0721f));
+    vec2 sampleLuminance = vec2(tileExposure, 0.0f);
+    sampleLuminance = subgroupInclusiveAdd(sampleLuminance);
+    if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleLuminance;
+    barrier();
+    uint loopLength = uint(findMSB(gl_NumSubgroups));
+    loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+    for (uint i = 0; i < loopLength; i++) {
+        if ((gl_SubgroupID & (1u << i)) > 0u) {
+            sampleLuminance += prefixSumCache[(gl_SubgroupID >> i << i) - 1u];
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleLuminance;
+        }
+        barrier();
+    }
+    if (gl_LocalInvocationIndex == 511u) prefixSumCache[0] = sampleLuminance / 512.0f;
+    ;
+    barrier();
+    float avg = prefixSumCache[0].x;
+    vec2 tileDistance = texCoord * 2.0f - 1.0f;
+    tileDistance.y /= aspectRatio;
+    float centerDistance = length(tileDistance);
+    float tileWeight = remapSaturate(centerDistance, 0.6f, 0.4f);
+    tileExposure = max(7.0E-7f, tileExposure);
+    float lumaWeight = avg / tileExposure;
+    lumaWeight = pow(lumaWeight, remapSaturate(avg, 0.02f, 0.001f) * 0.4f + 0.2f);
+    tileWeight *= lumaWeight;
+    vec2 sampleExposure = vec2(tileExposure * tileWeight, tileWeight);
+    sampleExposure = subgroupInclusiveAdd(sampleExposure);
+    if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleExposure;
+    barrier();
+    for (uint i = 0; i < loopLength; i++) {
+        if ((gl_SubgroupID & (1u << i)) > 0u) {
+            sampleExposure += prefixSumCache[(gl_SubgroupID >> i << i) - 1u];
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u) prefixSumCache[gl_SubgroupID] = sampleExposure;
+        }
+        barrier();
+    }
+    if (gl_LocalInvocationIndex == 511u) {
+        float avgExposure = max(sampleExposure.x / sampleExposure.y * 29.3f, 1.0E-10f);
+        avgExposure = log2(avgExposure);
+        float prevAvgExposure = log2(texelFetch(pixelData2D, ivec2(0, 0), 0).x);
+        float frameTimeFixed = frameTime + step(frameCounter, 20) * 100.0f;
+        float exposureTime = clamp(frameTimeFixed * (2.0f / 1.0f), 0.0f, 1.0f);
+        avgExposure = mix(prevAvgExposure, avgExposure, exposureTime);
+        avgExposure = max(exp2(avgExposure), 1.0E-5f);
+        float exposure = GetExposureValue(avgExposure);
+        imageStore(img_pixelData2D, ivec2(0, 0), vec4(avgExposure, exposure, 0.0f, 0.0f));
+    }
+}
+)";
+    }
 } // namespace
 
-TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanUsesSharedMemoryAndProducesValidSpirv) {
+TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanForNarrowSubgroupsProducesValidSpirv) {
     using namespace MG_Util::ShaderTranspiler;
 
     String source = MakeLinearSubgroupPrefixScanShader();
-    ASSERT_TRUE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+    ASSERT_TRUE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 8, source));
 
     EXPECT_NE(source.find("shared float prefixSumCache[1024]"), String::npos) << source;
     EXPECT_NE(source.find("mglVirtualSubgroupInvocation"), String::npos) << source;
@@ -2121,7 +2198,7 @@ TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanUsesSharedMemoryAndProduc
     EXPECT_EQ(source.find("gl_Subgroup"), String::npos) << source;
 
     const String onceRewritten = source;
-    EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+    EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 8, source));
     EXPECT_EQ(source, onceRewritten);
 
     ShaderAttrib shaderAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = source};
@@ -2150,12 +2227,21 @@ TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanUsesSharedMemoryAndProduc
     EXPECT_EQ(spirvText.find("OpGroupNonUniform"), String::npos) << spirvText;
 }
 
+TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanStillSupportsWideQualcommSubgroups) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = MakeLinearSubgroupPrefixScanShader();
+    EXPECT_TRUE(RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage::Compute, 64, source));
+    EXPECT_EQ(source.find("subgroupInclusiveAdd"), String::npos) << source;
+}
+
 TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanRejectsOtherStagesAndSubgroupWidths) {
     using namespace MG_Util::ShaderTranspiler;
 
     const String original = MakeLinearSubgroupPrefixScanShader();
     for (const auto& [stage, subgroupSize] :
-         {std::pair{ShaderStage::Compute, Uint32{32}}, std::pair{ShaderStage::Fragment, Uint32{64}},
+         {std::pair{ShaderStage::Compute, Uint32{0}}, std::pair{ShaderStage::Compute, Uint32{16}},
+          std::pair{ShaderStage::Compute, Uint32{32}}, std::pair{ShaderStage::Fragment, Uint32{64}},
           std::pair{ShaderStage::Compute, Uint32{96}}}) {
         String source = original;
         EXPECT_FALSE(RewriteLinearSubgroupPrefixScanForVulkan(stage, subgroupSize, source));
@@ -2218,6 +2304,92 @@ TEST_F(ProgramUtilTest, RewriteLinearSubgroupPrefixScanRejectsPartialOrUnsafeTem
     nvShuffleCall.insert(nvShuffleCall.find("float importance"),
                          "float other = shuffleNV(1.0f, 0u, 32u);\n    ");
     expectUnchanged(std::move(nvShuffleCall));
+}
+
+TEST_F(ProgramUtilTest, RewriteWeightedExposureReductionForEightLaneSubgroupsProducesValidSpirv) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = MakeWeightedExposureSubgroupReductionShader();
+    ASSERT_TRUE(RewriteWeightedExposureSubgroupReductionForVulkan(ShaderStage::Compute, 8, source));
+
+    EXPECT_NE(source.find("mglExposureWeightedSum"), String::npos) << source;
+    EXPECT_EQ(source.find("subgroupInclusiveAdd"), String::npos) << source;
+    EXPECT_EQ(source.find("gl_Subgroup"), String::npos) << source;
+    EXPECT_EQ(source.find("barrier()"), String::npos) << source;
+
+    const String onceRewritten = source;
+    EXPECT_FALSE(RewriteWeightedExposureSubgroupReductionForVulkan(ShaderStage::Compute, 8, source));
+    EXPECT_EQ(source, onceRewritten);
+
+    ShaderAttrib shaderAttrib{.shaderType = GL_COMPUTE_SHADER, .sourceStr = source};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    ASSERT_TRUE(shaderResult) << shaderResult.error().log << "\nsource:\n" << source;
+
+    ProgramAttrib programAttrib{.shaders = {shaderResult.value()}};
+    auto programResult = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(programResult) << programResult.error().log;
+
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_COMPUTE_SHADER}, .program = *programResult.value()};
+    auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(binaryResult) << binaryResult.error().log;
+    ASSERT_EQ(binaryResult->size(), 1u);
+
+    String validationDiagnostics;
+    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
+    tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+        validationDiagnostics += message;
+        validationDiagnostics += '\n';
+    });
+    EXPECT_TRUE(tools.Validate(binaryResult->front())) << validationDiagnostics;
+
+    String spirvText;
+    ASSERT_TRUE(tools.Disassemble(binaryResult->front(), &spirvText));
+    EXPECT_EQ(spirvText.find("OpGroupNonUniform"), String::npos) << spirvText;
+}
+
+TEST_F(ProgramUtilTest, RewriteWeightedExposureReductionRejectsOtherWidthsAndUnsafeTemplates) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String original = MakeWeightedExposureSubgroupReductionShader();
+    const auto expectUnchanged = [&](ShaderStage stage, Uint32 subgroupSize, String source) {
+        const String before = source;
+        EXPECT_FALSE(RewriteWeightedExposureSubgroupReductionForVulkan(stage, subgroupSize, source));
+        EXPECT_EQ(source, before);
+    };
+
+    expectUnchanged(ShaderStage::Compute, 0, original);
+    expectUnchanged(ShaderStage::Compute, 16, original);
+    expectUnchanged(ShaderStage::Compute, 32, original);
+    expectUnchanged(ShaderStage::Fragment, 8, original);
+
+    String wrongScratchSize = original;
+    wrongScratchSize.replace(wrongScratchSize.find("prefixSumCache[32]"), std::strlen("prefixSumCache[32]"),
+                             "prefixSumCache[64]");
+    expectUnchanged(ShaderStage::Compute, 8, std::move(wrongScratchSize));
+
+    String changedWeighting = original;
+    changedWeighting.replace(changedWeighting.find("29.3f"), std::strlen("29.3f"), "30.0f");
+    expectUnchanged(ShaderStage::Compute, 8, std::move(changedWeighting));
+
+    String extraSubgroupUse = original;
+    extraSubgroupUse.insert(extraSubgroupUse.find("void main()"),
+                            "float extraSubgroupUse(float value) { return subgroupAdd(value); }\n");
+    expectUnchanged(ShaderStage::Compute, 8, std::move(extraSubgroupUse));
+}
+
+TEST_F(ProgramUtilTest, NarrowSubgroupQuirkRunsForDirectVulkanWithoutVendorSpoofing) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    CompileEnv env;
+    env.backend = BackendType::DirectVulkan;
+    env.params.SubgroupSize = 8;
+    env.params.GpuVendor = MG_Backend::GpuVendorKind::Unknown;
+    env.subgroupPrefixScanQuirk = MG_Config::QuirkOverride::Auto;
+
+    String source = MakeWeightedExposureSubgroupReductionShader();
+    PreprocessShaderSource(ShaderStage::Compute, source, env);
+    EXPECT_NE(source.find("mglExposureWeightedSum"), String::npos) << source;
+    EXPECT_EQ(source.find("subgroupInclusiveAdd"), String::npos) << source;
 }
 
 // The LEXICAL half must fire at the source level (before the parse) for the
