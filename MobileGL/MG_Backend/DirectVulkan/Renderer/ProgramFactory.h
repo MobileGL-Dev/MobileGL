@@ -375,10 +375,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
                                 Bool shaderDrawParametersEnabled,
                                 Bool unformattedFloatStorageImagesEnabled,
+                                Bool enableSpirvValidation,
                                 UpdateAfterBindLimits updateAfterBindLimits)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
+              m_enableSpirvValidation(enableSpirvValidation),
               m_updateAfterBindLimits(updateAfterBindLimits) {
             VkProgramObject::s_device = device;
         }
@@ -502,6 +504,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True only when the logical device enabled both
         // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
         Bool m_unformattedFloatStorageImagesEnabled = false;
+        // Startup snapshot used only by internally synthesized shader modules, which do not
+        // originate from a ProgramLinkTask.
+        Bool m_enableSpirvValidation = false;
         // Device feature and limit gate resolved before vkCreateDevice. Keeping it in
         // the factory lets each reflected layout choose ordinary descriptors when its
         // own counts would exceed the update-after-bind budget.

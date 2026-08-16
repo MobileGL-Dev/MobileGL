@@ -494,6 +494,7 @@ namespace MobileGL::MG_State::GLState {
         auto task = MakeShared<ProgramLinkTask>();
         task->in.externalIndex = m_externalIndex;
         task->in.env = MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
+        task->in.enableSpirvValidation = MG_Config::Features.EnableSpirvValidation;
         task->in.explicitAttribLocations = m_explicitAttribLocations;
         task->in.explicitFragDataLocation = m_explicitFragDataLocation;
         task->in.explicitFragDataIndex = m_explicitFragDataIndex;

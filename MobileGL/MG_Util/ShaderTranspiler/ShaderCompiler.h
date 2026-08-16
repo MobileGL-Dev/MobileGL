@@ -24,19 +24,22 @@ namespace MobileGL {
                 static Result<Vector<Vector<unsigned>>> GetSpirvBinaryFromProgram(const ProgramBinaryAttrib& attrib);
                 static bool SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
-                                                      bool validateOutput = true);
+                                                      bool validateOutput = true,
+                                                      bool enableSpirvValidation = false);
                 // Demotes DrawIndex/BaseInstance/BaseVertex builtins to plain Private globals
                 // (mg_DrawID/mg_BaseInstance/mg_BaseVertex) so SPIRV-Cross can emit ESSL.
                 // Only for backends without native draw-parameter support (DirectGLES).
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
-                                                       Vector<uint32_t>& outputBinary);
+                                                       Vector<uint32_t>& outputBinary,
+                                                       bool enableSpirvValidation = false);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
                 // locations, seeding a Private copy of the array so indexed reads still work.
                 // GLSL ES has no array vertex inputs and SPIRV-Cross refuses the whole module
                 // rather than emulating them, so without this the stage never reaches the
                 // driver. Only for the DirectGLES transpile path.
                 static bool SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
-                                                          Vector<uint32_t>& outputBinary);
+                                                          Vector<uint32_t>& outputBinary,
+                                                          bool enableSpirvValidation = false);
                 // Replaces the named interface BLOCKS with one variable per member, named
                 // "<Block>_<member>", shadowing the block itself so the body is untouched. The
                 // Adreno ES driver silently captures NOTHING for a transform-feedback varying
@@ -47,7 +50,8 @@ namespace MobileGL {
                 static bool FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
                                                              const std::set<String>& blockNames,
                                                              std::set<String>& flattenedBlockNames,
-                                                             Vector<uint32_t>& outputBinary);
+                                                             Vector<uint32_t>& outputBinary,
+                                                             bool enableSpirvValidation = false);
                 // The capture request "StageData.attrib[0]" as the pass above renamed it,
                 // "StageData_attrib[0]", or false when it does not name a member of a block
                 // that was flattened.
@@ -59,17 +63,20 @@ namespace MobileGL {
                 // drivers reject cross-stage uniform blocks whose member precisions differ.
                 // Only for the DirectGLES transpile path.
                 static bool StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
-                                                                  Vector<uint32_t>& outputBinary);
+                                                                  Vector<uint32_t>& outputBinary,
+                                                             bool enableSpirvValidation = false);
                 // Removes NoPerspective decorations so SPIRV-Cross emits plain (smooth) ESSL varyings.
                 // DirectGLES fallback only, for devices lacking GL_NV_shader_noperspective_interpolation
                 // (SPIRV-Cross would otherwise require that extension and the driver would reject it).
                 static bool StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
-                                                      Vector<uint32_t>& outputBinary);
+                                                      Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Emulates noperspective (screen-linear) interpolation via gl_Position.w / gl_FragCoord.w
                 // so no NV extension is needed; strips what it cannot emulate. DirectGLES fallback for
                 // devices lacking GL_NV_shader_noperspective_interpolation. See EmulateNoPerspectivePass.
                 static bool EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
-                                                        Vector<uint32_t>& outputBinary);
+                                                        Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Makes every index into a fragment-output array a constant integral
                 // expression, which is what GLSL ES requires and SPIR-V does not. Runs the
                 // stock folding chain first (loop unrolling folds the loop-derived indices
@@ -80,7 +87,8 @@ namespace MobileGL {
                 // dynamically, which is every shader but a handful.
                 // See LegalizeFragmentOutputIndexPass.
                 static bool LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
-                                                                  Vector<uint32_t>& outputBinary);
+                                                                  Vector<uint32_t>& outputBinary,
+                                                             bool enableSpirvValidation = false);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
@@ -89,7 +97,8 @@ namespace MobileGL {
                 // divides the coordinate of each normalized-coordinate lookup by the texture
                 // size and rewrites the image type to 2D. See NormalizeRectCoordinatesPass for
                 // what it declines and why.
-                static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
+                static bool LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                                            bool enableSpirvValidation = false);
                 // GL_TEXTURE_1D_ARRAY storage images rewritten to the 2D-array shape the texture
                 // is actually stored in on ES, with the layer moved from the coordinate's second
                 // component to its third. DirectGLES transpile path only - Vulkan binds a real
@@ -97,7 +106,8 @@ namespace MobileGL {
                 // through untouched when the module declares no such image, which is every shader
                 // but a handful. See Lower1DArrayImagesPass for what it declines and why.
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
-                                                      Vector<uint32_t>& outputBinary);
+                                                      Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Gives each format-less storage image the format bound to its image unit, so
                 // the emitted ESSL can carry the format layout qualifier GLSL ES requires of
                 // every image and desktop GLSL lets a writeonly declaration omit. `glFormatByName`
@@ -106,7 +116,8 @@ namespace MobileGL {
                 // natively. See BakeImageFormatsPass for what it declines and why.
                 static bool BakeImageFormatsForEssl(const Vector<Uint32>& inputBinary,
                                                     const UnorderedMap<String, Uint>& glFormatByName,
-                                                    Vector<uint32_t>& outputBinary);
+                                                    Vector<uint32_t>& outputBinary,
+                                                    bool enableSpirvValidation = false);
                 // Whether the module declares a storage image with no format qualifier at all,
                 // i.e. whether BakeImageFormatsForEssl could change anything. One module parse,
                 // so the ~every shader that declares none pays no optimizer run.
@@ -125,27 +136,31 @@ namespace MobileGL {
                 // emitted text instead.
                 static bool SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
-                                                         Vector<uint32_t>& outputBinary);
+                                                         Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Builds the non-indexed-draw variant of a vertex shader: every gl_BaseVertex
                 // read becomes zero, which is what GL defines for a command carrying no
                 // baseVertex parameter while Vulkan's builtin would report firstVertex.
                 // See ZeroBaseVertexPass.
                 static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
-                                                    Vector<uint32_t>& outputBinary);
+                                                    Vector<uint32_t>& outputBinary,
+                                                    bool enableSpirvValidation = false);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
                 // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex
                 // buffers. Vertex stage, DirectVulkan only; pairs with the Float64 case in
                 // VertexInputStateFactory::ToVkVertexFormat.
                 static bool PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
-                                                            Vector<uint32_t>& outputBinary);
+                                                            Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Adds the Invariant decoration to every Position builtin output. GL apps
                 // routinely rely on cross-program position invariance for multi-pass
                 // equality depth tests (e.g. GEQUAL re-draws of the same geometry), and
                 // mobile drivers that optimize per-pipeline break that without the
                 // decoration. DirectVulkan only.
                 static bool DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
-                                                               Vector<uint32_t>& outputBinary);
+                                                               Vector<uint32_t>& outputBinary,
+                                                             bool enableSpirvValidation = false);
                 // Replaces the declared format of float storage images with Unknown and adds the
                 // matching SPIR-V capabilities. DirectVulkan uses this only when both Vulkan
                 // shaderStorageImage*WithoutFormat features are enabled, allowing the
@@ -153,13 +168,15 @@ namespace MobileGL {
                 // storage images deliberately keep their declared format for GL-compatible bit
                 // reinterpretation paths (for example, R32F storage accessed as r32ui).
                 static bool UseUnformattedFloatStorageImagesForVulkan(
-                    const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary);
+                    const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                    bool enableSpirvValidation = false);
                 // Rewrites every 64-bit float in the module to a 32-bit one, preserving every
                 // block offset and stride exactly (see DemoteFloat64Pass). Already part of
                 // SanitizeAndOptimizeBinary, which is where production reaches it; exposed
                 // separately so a test can drive the demotion on its own.
                 static bool DemoteFloat64ToFloat32(const Vector<Uint32>& inputBinary,
-                                                   Vector<uint32_t>& outputBinary);
+                                                   Vector<uint32_t>& outputBinary,
+                                                   bool enableSpirvValidation = false);
                 static Result<String> DecompileShader(SpvcSession& session);
 
                 // Parses one trivial shader in each configuration the production path can
@@ -186,17 +203,16 @@ namespace MobileGL {
                 // no way left to warm it.
                 static void ResetPrewarmLatch();
 
-                // SPIR-V validation is disabled by default because it is diagnostics-only
-                // overhead. MOBILEGL_ENABLE_SPIRV_VALIDATION is parsed once during
-                // MobileGL::Initialize() and published before workers are started. When enabled,
-                // every Optimizer wrapper in this file validates its OUTPUT binary - the bytes a
-                // driver can actually receive - and a failure logs the VUID and bumps the failure
-                // latch below WITHOUT changing the wrapper's return value: control flow must stay
-                // identical between validating and shipping configurations, or fail-open call
-                // sites would make the two render differently. The setter is safe for test
-                // fixtures and other standalone compiler users.
-                static bool SpirvValidationEnabled();
-                static void SetSpirvValidationEnabled(bool enabled);
+                // Validation is an explicit immutable option of each compiler operation. The
+                // program-link task snapshots MOBILEGL_ENABLE_SPIRV_VALIDATION before it can run
+                // on a worker; standalone callers pass true directly. A failure logs the VUID and
+                // bumps the latch below WITHOUT changing a wrapper's return value, so validating
+                // and shipping configurations preserve identical rendering control flow.
+
+                // Makes validator table lifetime safe before an external final-module validator
+                // runs. This has no configuration state; callers invoke it only for an enabled
+                // task-local validation option.
+                static void PrepareSpirvValidation();
 
                 // The test-lane enforcement signal: total validation failures observed this
                 // process. Tests snapshot it, run the operation under scrutiny, and assert

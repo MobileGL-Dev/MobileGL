@@ -369,10 +369,6 @@ namespace MobileGL {
                 return allSpirv;
             }
 
-            // Published by MobileGL::Initialize() before shader workers are created. Standalone
-            // compiler users and tests start with validation disabled and can opt in through the
-            // setter without reading process environment from parallel work.
-            static std::atomic<int> g_validateSpirv{0};
             // Total validation failures observed this process. This latch - not the wrappers'
             // return values - is the test-lane signal: validation must never change what a
             // wrapper returns, or the validating lanes would render differently from the
@@ -421,11 +417,6 @@ namespace MobileGL {
                             tools.Validate(warmup);
                         }
                         std::atexit(+[] {
-                            // Flip validation off first: a validator table this warmup does
-                            // not know about (a future spirv-tools bump) would still be
-                            // destroyed before this handler, and workers must stop entering
-                            // Validate before the drain waits for them.
-                            g_validateSpirv.store(0, std::memory_order_release);
                             Async::ShaderCompilePool::StopAndDrainProcessPoolAtExit();
                         });
                     });
@@ -454,10 +445,10 @@ namespace MobileGL {
                 // Validation is decoupled from control flow on purpose: a failure logs and
                 // bumps the latch, and the caller proceeds exactly as the shipping (non-
                 // validating) configuration would. Tests assert on the latch delta.
-                void ValidateOrLatch(const char* site, const Vector<Uint32>& binary) {
-                    if (!ShaderCompiler::SpirvValidationEnabled()) {
-                        return;
-                    }
+                void ValidateOrLatch(const char* site, const Vector<Uint32>& binary,
+                                     const bool enableSpirvValidation) {
+                    if (!enableSpirvValidation) return;
+                    PinValidatorTablesForProcessExit();
                     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
                     tools.SetMessageConsumer(MakeSpirvMessageConsumer(site));
                     if (!tools.Validate(binary)) {
@@ -478,8 +469,8 @@ namespace MobileGL {
                 // spirv-tools drops pass diagnostics on the floor.
                 bool RunOptimizerChecked(const char* site, spvtools::Optimizer& optimizer,
                                          const Vector<Uint32>& inputBinary,
-                                         Vector<uint32_t>& outputBinary,
-                                         bool validateOutput = true) {
+                                         Vector<uint32_t>& outputBinary, const bool validateOutput,
+                                         const bool enableSpirvValidation) {
                     spvtools::OptimizerOptions options;
                     options.set_run_validator(false);
                     optimizer.SetMessageConsumer(MakeSpirvMessageConsumer(site));
@@ -487,21 +478,14 @@ namespace MobileGL {
                         return false;
                     }
                     if (validateOutput) {
-                        ValidateOrLatch(site, outputBinary);
+                        ValidateOrLatch(site, outputBinary, enableSpirvValidation);
                     }
                     return true;
                 }
             } // namespace
 
-            bool ShaderCompiler::SpirvValidationEnabled() {
-                return g_validateSpirv.load(std::memory_order_acquire) == 1;
-            }
-
-            void ShaderCompiler::SetSpirvValidationEnabled(bool enabled) {
-                g_validateSpirv.store(enabled ? 1 : 0, std::memory_order_release);
-                if (enabled) {
-                    PinValidatorTablesForProcessExit();
-                }
+            void ShaderCompiler::PrepareSpirvValidation() {
+                PinValidatorTablesForProcessExit();
             }
 
             Uint64 ShaderCompiler::NoteSpirvValidationFailure() {
@@ -571,17 +555,19 @@ namespace MobileGL {
             }
 
             bool ShaderCompiler::DemoteFloat64ToFloat32(const Vector<Uint32>& inputBinary,
-                                                        Vector<uint32_t>& outputBinary) {
+                                                        Vector<uint32_t>& outputBinary,
+                                                        const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
-                return RunOptimizerChecked("DemoteFloat64ToFloat32", optimizer, inputBinary, outputBinary);
+                return RunOptimizerChecked("DemoteFloat64ToFloat32", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary,
-                                                           bool validateOutput) {
+                                                           const bool validateOutput,
+                                                           const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
@@ -631,38 +617,41 @@ namespace MobileGL {
                 optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
                 return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
-                                           outputBinary, validateOutput);
+                                           outputBinary, validateOutput, enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
-                                                            Vector<uint32_t>& outputBinary) {
+                                                            Vector<uint32_t>& outputBinary,
+                                                            const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
 
                 return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
-                                                               Vector<uint32_t>& outputBinary) {
+                                                               Vector<uint32_t>& outputBinary,
+                                                               const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(SplitArrayVertexInputsPass::CreateSplitArrayVertexInputsPass());
 
                 return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::BakeImageFormatsForEssl(const Vector<Uint32>& inputBinary,
                                                          const UnorderedMap<String, Uint>& glFormatByName,
-                                                         Vector<uint32_t>& outputBinary) {
+                                                         Vector<uint32_t>& outputBinary,
+                                                         const bool enableSpirvValidation) {
                 using namespace spvtools;
                 if (glFormatByName.empty()) return false;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(BakeImageFormatsPass::CreateBakeImageFormatsPass(glFormatByName));
 
-                return RunOptimizerChecked("BakeImageFormatsForEssl", optimizer, inputBinary, outputBinary);
+                return RunOptimizerChecked("BakeImageFormatsForEssl", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeclaresFormatlessStorageImage(const Vector<Uint32>& binary) {
@@ -686,7 +675,8 @@ namespace MobileGL {
             bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
                                                                   const std::set<String>& blockNames,
                                                                   std::set<String>& flattenedBlockNames,
-                                                                  Vector<uint32_t>& outputBinary) {
+                                                                  Vector<uint32_t>& outputBinary,
+                                                                  const bool enableSpirvValidation) {
                 using namespace spvtools;
                 if (blockNames.empty()) return false;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
@@ -694,7 +684,7 @@ namespace MobileGL {
                     blockNames, &flattenedBlockNames));
 
                 return RunOptimizerChecked("FlattenXfbInterfaceBlocksForEssl", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(
@@ -704,48 +694,53 @@ namespace MobileGL {
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
-                                                                 Vector<uint32_t>& outputBinary) {
+                                                                 Vector<uint32_t>& outputBinary,
+                                                                 const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(PackDoubleVertexInputsPass::CreatePackDoubleVertexInputsPass());
 
                 return RunOptimizerChecked("PackDoubleVertexInputsForVulkan", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
-                                                                       Vector<uint32_t>& outputBinary) {
+                                                                       Vector<uint32_t>& outputBinary,
+                                                                       const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(
                     StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
 
                 return RunOptimizerChecked("StripUboMemberRelaxedPrecisionForEssl", optimizer,
-                                           inputBinary, outputBinary);
+                                           inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
-                                                           Vector<uint32_t>& outputBinary) {
+                                                           Vector<uint32_t>& outputBinary,
+                                                           const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(StripNoPerspectivePass::CreateStripNoPerspectivePass());
 
                 return RunOptimizerChecked("StripNoPerspectiveForEssl", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
-                                                             Vector<uint32_t>& outputBinary) {
+                                                             Vector<uint32_t>& outputBinary,
+                                                             const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(EmulateNoPerspectivePass::CreateEmulateNoPerspectivePass());
 
                 return RunOptimizerChecked("EmulateNoPerspectiveForEssl", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
-                                                                       Vector<uint32_t>& outputBinary) {
+                                                                       Vector<uint32_t>& outputBinary,
+                                                                       const bool enableSpirvValidation) {
                 using namespace spvtools;
 
                 // Detection gates everything: a module with no dynamically indexed fragment
@@ -778,7 +773,7 @@ namespace MobileGL {
 
                 Vector<uint32_t> folded;
                 if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.fold", folder, inputBinary,
-                                         folded) ||
+                                         folded, true, enableSpirvValidation) ||
                     folded.empty()) {
                     // Fail open onto the fallback rather than onto the illegal module.
                     folded = inputBinary;
@@ -797,7 +792,7 @@ namespace MobileGL {
                 lowerer.RegisterPass(CreateAggressiveDCEPass(false));
 
                 if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.lower", lowerer, folded,
-                                         outputBinary) ||
+                                         outputBinary, true, enableSpirvValidation) ||
                     outputBinary.empty()) {
                     outputBinary = folded;
                     return true;
@@ -814,16 +809,17 @@ namespace MobileGL {
             }
 
             bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary,
-                                                 Vector<uint32_t>& outputBinary) {
+                                                 Vector<uint32_t>& outputBinary,
+                                                 const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(NormalizeRectCoordinatesPass::CreateNormalizeRectCoordinatesPass());
 
-                return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary);
+                return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
-                                                            Vector<uint32_t>& outputBinary) {
+                                                            Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
                 using namespace spvtools;
 
                 // Declined rather than half-translated: after the rewrite the image is a 2D
@@ -865,40 +861,41 @@ namespace MobileGL {
                 // second Shader. Deduplicating afterwards collapses all three at once.
                 optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
-                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary);
+                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
-                                                              Vector<uint32_t>& outputBinary) {
+                                                              Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(RebaseInstanceIndexPass::CreateRebaseInstanceIndexPass());
 
                 return RunOptimizerChecked("RebaseInstanceIndexForVulkan", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
-                                                         Vector<uint32_t>& outputBinary) {
+                                                         Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(ZeroBaseVertexPass::CreateZeroBaseVertexPass());
 
-                return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary);
+                return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
-                                                                    Vector<uint32_t>& outputBinary) {
+                                                                    Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DecoratePositionInvariantPass::CreateDecoratePositionInvariantPass());
 
                 return RunOptimizerChecked("DecoratePositionInvariantForVulkan", optimizer, inputBinary,
-                                           outputBinary);
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary) {
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const bool enableSpirvValidation) {
                 constexpr SizeT kSpirvHeaderWordCount = 5;
                 outputBinary.clear();
                 if (inputBinary.size() < kSpirvHeaderWordCount || inputBinary[0] != spv::MagicNumber) {
@@ -1026,7 +1023,8 @@ namespace MobileGL {
                                     addedCapabilities.begin(), addedCapabilities.end());
                 // Hand-rolled word walk, so no Optimizer wrapper ever sees this rewrite;
                 // check the modified module explicitly in validating lanes.
-                ValidateOrLatch("UseUnformattedFloatStorageImagesForVulkan", outputBinary);
+                ValidateOrLatch("UseUnformattedFloatStorageImagesForVulkan", outputBinary,
+                                enableSpirvValidation);
                 return true;
             }
 

@@ -98,7 +98,6 @@ class FlattenXfbInterfaceBlocksTest : public ::testing::Test {
 protected:
     void SetUp() override {
         MobileGL::Initialize();
-        ShaderCompiler::SetSpirvValidationEnabled(true);
         m_validationFailuresAtStart = ShaderCompiler::SpirvValidationFailureCount();
     }
 
@@ -116,7 +115,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, FlattensACapturedBlockIntoOneVariablePerMe
 
     std::set<String> flattened;
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output));
+    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output, true));
     ASSERT_FALSE(output.empty());
     EXPECT_EQ(flattened, (std::set<String>{"StageData"}));
 
@@ -145,7 +144,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, TheEmittedDeclarationIsAPlainArrayNotABloc
 
     std::set<String> flattened;
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output));
+    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output, true));
 
     const String after = Transpile(output);
     EXPECT_NE(after.find("StageData_attrib[16]"), String::npos) << after;
@@ -162,7 +161,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, GivesEachMemberItsOwnConsecutiveLocations)
 
     std::set<String> flattened;
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output));
+    ASSERT_TRUE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"StageData"}, flattened, output, true));
     ASSERT_FALSE(output.empty());
 
     const String dis = Disassemble(output);
@@ -184,7 +183,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, LeavesABlockNoCaptureNamesAlone) {
     std::set<String> flattened;
     Vector<Uint32> output;
     ASSERT_TRUE(
-        ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"SomeOtherBlock"}, flattened, output));
+        ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {"SomeOtherBlock"}, flattened, output, true));
     EXPECT_TRUE(flattened.empty());
 
     const String after = Transpile(output);
@@ -200,7 +199,7 @@ TEST_F(FlattenXfbInterfaceBlocksTest, DeclinesAnEmptyRequestWithoutRewriting) {
 
     std::set<String> flattened;
     Vector<Uint32> output;
-    EXPECT_FALSE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {}, flattened, output));
+    EXPECT_FALSE(ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(input, {}, flattened, output, true));
     EXPECT_TRUE(flattened.empty());
     EXPECT_TRUE(output.empty());
 }

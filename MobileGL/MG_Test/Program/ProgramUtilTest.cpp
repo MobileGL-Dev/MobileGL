@@ -2849,16 +2849,6 @@ vec4 helperTint() { return vec4(1.0); }
         return binaryResult->front();
     }
 
-    struct SpirvValidationScope {
-        bool previous;
-        explicit SpirvValidationScope(bool enabled)
-            : previous(MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
-            MG_Util::ShaderTranspiler::ShaderCompiler::SetSpirvValidationEnabled(enabled);
-        }
-        ~SpirvValidationScope() {
-            MG_Util::ShaderTranspiler::ShaderCompiler::SetSpirvValidationEnabled(previous);
-        }
-    };
 } // namespace
 
 TEST_F(ProgramUtilTest, DeadPrivateChainVertexInputIsEliminatedFromOptimizedBinary) {
@@ -2880,7 +2870,7 @@ TEST_F(ProgramUtilTest, DeadPrivateChainVertexInputIsEliminatedFromOptimizedBina
         << "entry-point-with-calls shape it exists for";
 
     Vector<Uint32> optimized;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, true));
 
     const SpirvVariableCensus after = TakeVariableCensus(optimized);
     EXPECT_EQ(after.inputCount, 1u)
@@ -2918,7 +2908,7 @@ void main() {
     ASSERT_GE(before.outputCount, 3u);
 
     Vector<Uint32> optimized;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, true));
     EXPECT_EQ(TakeVariableCensus(optimized).outputCount, before.outputCount)
         << "a declared-but-unwritten output was deleted; a fragment stage reading it now "
         << "fails to link (ES) or breaks the Vulkan stage interface";
@@ -2977,17 +2967,15 @@ void main() {
         // succeeds - fail-open call sites downstream must not see a different world),
         // and the failure latch is the signal. This is the catch that took a device
         // bisect to find when the validator was off everywhere.
-        SpirvValidationScope validationOn(true);
         const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
-        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, true));
         EXPECT_GT(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
             << "an invalid optimized module must bump the validation-failure latch";
     }
     {
         // The shipping configuration: same result, no validation, latch untouched.
-        SpirvValidationScope validationOff(false);
         const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
-        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, false));
         EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
     }
 }
@@ -3057,10 +3045,9 @@ void main() {
     ASSERT_FALSE(raw.empty());
     ASSERT_GE(CountRectImageTypes(raw), 1u) << "glslang no longer emits Dim::Rect for sampler2DRect";
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
     Vector<Uint32> optimized;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, true));
     EXPECT_EQ(CountRectImageTypes(optimized), 0u);
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "a rectangle module must leave the chain valid, not latched as a failure";
@@ -3085,10 +3072,9 @@ void main() {
     ASSERT_TRUE(AnyLocationOnUniformStorage(raw))
         << "glslang no longer keeps the explicit uniform location; the strip pass may be obsolete";
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
     Vector<Uint32> optimized;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, optimized, true, true));
     EXPECT_FALSE(AnyLocationOnUniformStorage(optimized));
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "the stripped module must validate clean";
@@ -3185,11 +3171,10 @@ void main() {
         << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
         << DisassembleSpirv(raw);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> legalized;
-    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
     ASSERT_FALSE(legalized.empty());
 
     const String disassembly = DisassembleSpirv(legalized);
@@ -3226,11 +3211,10 @@ void main() {
     ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
         << DisassembleSpirv(raw);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> legalized;
-    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
     ASSERT_FALSE(legalized.empty());
 
     const String disassembly = DisassembleSpirv(legalized);
@@ -3270,11 +3254,10 @@ void main() {
     ASSERT_FALSE(raw.empty());
     ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw));
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> legalized;
-    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
     ASSERT_FALSE(legalized.empty());
 
     const String disassembly = DisassembleSpirv(legalized);
@@ -3313,7 +3296,7 @@ void main() {
     ASSERT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw));
 
     Vector<Uint32> legalized;
-    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized));
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
     EXPECT_EQ(legalized, raw) << "the module must not be rewritten - not even re-serialized - when "
                                  "nothing indexes a fragment output dynamically";
 }
@@ -3563,11 +3546,10 @@ TEST_F(ProgramUtilTest, Lower1DArrayImagesRewritesTheTypeAndWidensTheCoordinate)
     ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u)
         << "the shared chain must leave the 1D-array image for this pass to handle";
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> lowered;
-    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     ASSERT_FALSE(lowered.empty());
 
     EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u)
@@ -3615,11 +3597,10 @@ void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r + imageLoad(i1, ivec3(1, 1,
     ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
     ASSERT_EQ(Count1DArrayStorageImageTypes(spirv), 1u);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> lowered;
-    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     ASSERT_FALSE(lowered.empty());
 
     EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 0u) << DisassembleSpirv(lowered);
@@ -3649,7 +3630,7 @@ void main() { ssb.sum = imageLoad(i0, 2).r; }
     ASSERT_FALSE(spirv.empty());
 
     Vector<Uint32> lowered;
-    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     EXPECT_EQ(lowered, spirv) << "a non-arrayed 1D storage image must pass through byte for byte";
 
     const String essl = DecompileToEssl(lowered);
@@ -3673,7 +3654,7 @@ void main() { fragColor = texture(uTex, vUv); }
     ASSERT_FALSE(spirv.empty());
 
     Vector<Uint32> lowered;
-    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     EXPECT_EQ(lowered, spirv) << "a sampled 1D-array image must pass through byte for byte";
 }
 
@@ -3697,7 +3678,7 @@ void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
         << "the fixture must contain the shape the pass declines";
 
     Vector<Uint32> lowered;
-    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered));
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
     EXPECT_EQ(lowered, spirv) << "a declined module must be handed back untouched, not partly rewritten";
     EXPECT_EQ(Count1DArrayStorageImageTypes(lowered), 1u)
         << "declining means the 1D-array type is still there for the driver to reject";
@@ -3748,11 +3729,10 @@ void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 
     // Precondition: SPIRV-Cross prints no format for it, which is the ESSL the driver refuses.
     EXPECT_EQ(DecompileToEssl(spirv).find("r32ui"), String::npos);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked, true));
     ASSERT_FALSE(baked.empty());
     EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked)) << DisassembleSpirv(baked);
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
@@ -3813,7 +3793,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
 
     Vector<Uint32> baked;
     // Even asked to, with a format of the right component class.
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked, true));
     EXPECT_EQ(baked, spirv) << "a module with nothing format-less must pass through byte for byte";
     EXPECT_NE(DecompileToEssl(baked).find("rgba32ui"), String::npos);
 }
@@ -3835,11 +3815,10 @@ void main() { writeIt(uni_image); }
     ASSERT_FALSE(spirv.empty());
     ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked, true));
     EXPECT_EQ(baked, spirv) << "a shape the retype cannot follow must leave the module untouched, "
                                "not partly rewritten:\n"
                             << DisassembleSpirv(baked);
@@ -3861,18 +3840,17 @@ void main() { imageStore(uni_image, ivec2(0), vec4(1.0)); }
                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32ui}}, baked, true));
     EXPECT_EQ(baked, spirv) << "a declined module must be handed back untouched, not partly rewritten";
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore);
 
     // ...and the same image with a float bind format is baked, so the decline above is about the
     // class and not about the pass refusing float images.
     Vector<Uint32> bakedFloat;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32f}}, bakedFloat));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR32f}}, bakedFloat, true));
     EXPECT_NE(DecompileToEssl(bakedFloat).find("r32f"), String::npos) << DisassembleSpirv(bakedFloat);
 }
 
@@ -3896,12 +3874,11 @@ void main() {
     ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 1u)
         << "the fixture must have the two images sharing one type:\n" << DisassembleSpirv(spirv);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
     ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(
-        spirv, {{"imgA", kGlR32ui}, {"imgB", kGlRgba32ui}}, baked));
+        spirv, {{"imgA", kGlR32ui}, {"imgB", kGlRgba32ui}}, baked, true));
     ASSERT_FALSE(baked.empty());
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "splitting the shared type must not leave a dangling or duplicate declaration:\n"
@@ -3934,11 +3911,10 @@ void main() {
     ASSERT_EQ(CountSpirvOpcode(DisassembleSpirv(spirv), "OpTypeImage"), 2u)
         << "the fixture needs one Unknown-format and one r32ui image type:\n" << DisassembleSpirv(spirv);
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"formatless", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"formatless", kGlR32ui}}, baked, true));
     ASSERT_FALSE(baked.empty());
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
         << "the baked image collided with the module's own r32ui image and left a duplicate type:\n"
@@ -3963,11 +3939,10 @@ void main() {
     ASSERT_FALSE(spirv.empty());
     ASSERT_TRUE(ShaderCompiler::DeclaresFormatlessStorageImage(spirv));
 
-    SpirvValidationScope validationOn(true);
     const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"imgs", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"imgs", kGlR32ui}}, baked, true));
     ASSERT_FALSE(baked.empty());
     EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked)) << DisassembleSpirv(baked);
     EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
@@ -3993,7 +3968,7 @@ void main() { fragColor = texture(uni_sampler, vUv); }
         << "a sampled image must not read as a format-less STORAGE image:\n" << DisassembleSpirv(spirv);
 
     Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_sampler", kGlR32ui}}, baked));
+    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_sampler", kGlR32ui}}, baked, true));
     EXPECT_EQ(baked, spirv) << "a sampled image must pass through byte for byte";
 }
 

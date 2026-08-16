@@ -3119,6 +3119,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& shaders = program.GetAttachedShaders();
         auto& spirv = program.GetGeneratedSpirv();
         Vector<Vector<Uint>> moduleSpirvs(spirv.size());
+        const Bool enableSpirvValidation = program.GetSpirvValidationEnabled();
+        if (enableSpirvValidation) {
+            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
+        }
 
         const ShaderStage fixupStage = PickClipFixupStage(shaders);
 
@@ -3164,7 +3168,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // stored as - which addresses [0,1] where the application addressed texels.
             {
                 Vector<Uint> rectLoweredSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(moduleSpirvs[i], rectLoweredSpirv) &&
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(moduleSpirvs[i], rectLoweredSpirv, enableSpirvValidation) &&
                     !rectLoweredSpirv.empty()) {
                     moduleSpirvs[i] = Move(rectLoweredSpirv);
                 }
@@ -3177,7 +3181,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             {
                 Vector<Uint> invariantSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::DecoratePositionInvariantForVulkan(
-                        moduleSpirvs[i], invariantSpirv)) {
+                        moduleSpirvs[i], invariantSpirv, enableSpirvValidation)) {
                     moduleSpirvs[i] = std::move(invariantSpirv);
                 } else {
                     // The pass round-trips through SPIRV-Tools IR, so an unparseable module
@@ -3201,7 +3205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_shaderDrawParametersEnabled) {
                 Vector<Uint> rebasedSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::RebaseInstanceIndexForVulkan(moduleSpirvs[i],
-                                                                                            rebasedSpirv)) {
+                                                                                            rebasedSpirv, enableSpirvValidation)) {
                     moduleSpirvs[i] = std::move(rebasedSpirv);
                 } else {
                     MGLOG_E("ProgramFactory: failed to rebase gl_InstanceID for program %u; "
@@ -3219,7 +3223,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 (flags & CompileOptionBit::ZeroBaseVertex)) {
                 Vector<Uint> zeroedSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(moduleSpirvs[i],
-                                                                                       zeroedSpirv)) {
+                                                                                       zeroedSpirv, enableSpirvValidation)) {
                     moduleSpirvs[i] = std::move(zeroedSpirv);
                 } else {
                     // Failing open keeps the native builtin, which is the pre-fix behavior:
@@ -3242,7 +3246,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex) {
                 Vector<Uint> packedSpirv;
                 const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
-                    moduleSpirvs[i], packedSpirv);
+                    moduleSpirvs[i], packedSpirv, enableSpirvValidation);
                 MOBILEGL_ASSERT(packOk,
                                 "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
                                 "vertex-input format and the shader input type now disagree",
@@ -3266,7 +3270,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (m_unformattedFloatStorageImagesEnabled) {
                 Vector<Uint> unformattedSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
-                        moduleSpirvs[i], unformattedSpirv)) {
+                        moduleSpirvs[i], unformattedSpirv, enableSpirvValidation)) {
                     moduleSpirvs[i] = std::move(unformattedSpirv);
                 } else {
                     MGLOG_E("ProgramFactory: failed to make float storage images unformatted for program %u",
@@ -3287,7 +3291,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #else
             // Final module the driver receives; also checked in the INFO-level CI/test
             // lanes, where the DEBUG gate above is compiled out.
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
+            if (enableSpirvValidation) {
                 ValidateTransformedSpirv(moduleSpv, shaders[i]->GetShaderStage(), program.GetExternalIndex());
             }
 #endif
@@ -3505,7 +3509,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
 #else
-        if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvValidationEnabled()) {
+        if (m_enableSpirvValidation) {
+            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
             ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
         }
 #endif

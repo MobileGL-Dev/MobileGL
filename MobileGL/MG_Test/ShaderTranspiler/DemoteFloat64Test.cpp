@@ -154,7 +154,6 @@ class DemoteFloat64Test : public ::testing::Test {
 protected:
     void SetUp() override {
         MobileGL::Initialize();
-        ShaderCompiler::SetSpirvValidationEnabled(true);
         m_validationFailuresAtStart = ShaderCompiler::SpirvValidationFailureCount();
     }
 
@@ -175,7 +174,7 @@ TEST_F(DemoteFloat64Test, DemotesEveryWidthAndDropsTheCapability) {
     ASSERT_TRUE(DeclaresFloat64Capability(input));
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     EXPECT_EQ(CountFloatTypesOfWidth(output, 64), 0u) << Disassemble(output);
     // And exactly one 32-bit float type survives: the merge has to happen, or spirv-val rejects
@@ -210,7 +209,7 @@ void main() {
         << Disassemble(input);
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     // std140 for the demoted members: float at 4, vec2 at 8, vec3 at 16 (aligned like a vec4),
     // vec4 at 32, mat4 at 48 with a 16-byte column stride, the array at 112 with the std140
@@ -241,7 +240,7 @@ void main() {
     EXPECT_EQ(CollectOffsetsOf(input, "Ssbo"), (Vector<Uint32>{0, 32, 64})) << Disassemble(input);
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     // std430, so the array packs at its element size rather than being rounded to 16: float at 0,
     // vec4 at 16, float[4] at 32 with a 4-byte stride. A storage block must NOT come out std140,
@@ -273,7 +272,7 @@ void main() {
     ASSERT_FALSE(before.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     // Only the block that actually narrowed is re-laid-out. Touching the other one would be
     // churn at best, and a disagreement with glslang's own layout at worst.
@@ -287,7 +286,7 @@ TEST_F(DemoteFloat64Test, FoldsTheConversionsThatBecameIdentities) {
     ASSERT_GT(CountFConverts(input), 0u) << "the fixture no longer converts between the two widths";
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     // SPIR-V requires the two component widths of an OpFConvert to differ, so every one of them
     // has to be gone: both sides are 32 bits now.
@@ -307,7 +306,7 @@ void main() {
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
 
     // A 64-bit literal is two words wide and a 32-bit one is a single word, so a constant left
     // unconverted is not merely imprecise - it is an unparseable instruction. Disassembling both
@@ -326,7 +325,7 @@ void main() { gl_Position = inPos; }
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
     // The pass reports SuccessWithoutChange here, and SPIRV-Tools asserts (in assert-enabled
     // builds) that such a run round-trips byte-identically.
     EXPECT_EQ(output, input);
@@ -351,7 +350,7 @@ void main() {
     ASSERT_EQ(CountFloatTypesOfWidth(input, 64), 1u) << Disassemble(input);
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
     EXPECT_EQ(output, input) << Disassemble(output);
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64(output));
 }
@@ -362,7 +361,7 @@ TEST_F(DemoteFloat64Test, ModuleDeclaresFloat64AnswersBothWays) {
     EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64(wide));
 
     Vector<Uint32> demoted;
-    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(wide, demoted));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(wide, demoted, true));
     EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64(demoted));
 
     EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64({}));
@@ -375,7 +374,7 @@ TEST_F(DemoteFloat64Test, TheSharedChainDemotesToo) {
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output, true, true));
     EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64(output)) << Disassemble(output);
 }
 
@@ -459,7 +458,7 @@ TEST_P(DemoteFloat64EsslTest, TheDemotedModuleCanBeEmittedAsEssl) {
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output));
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output, true, true));
 
     SpvcSession session(output, SessionUsageBit::Transpile);
     spvc_compiler_options options;
@@ -482,7 +481,7 @@ TEST_P(DemoteFloat64EsslTest, TheDemotedModuleCanBeEmittedAsEssl) {
 TEST_F(DemoteFloat64Test, RejectsGarbageInput) {
     const Vector<Uint32> notSpirv{0xdeadbeefu, 0u, 0u, 0u, 0u};
     Vector<Uint32> output;
-    EXPECT_FALSE(ShaderCompiler::DemoteFloat64ToFloat32(notSpirv, output));
+    EXPECT_FALSE(ShaderCompiler::DemoteFloat64ToFloat32(notSpirv, output, true));
 }
 
 // EliminateFloatEqualsZeroPass turns a comparison against 0.0 into an epsilon test, a
@@ -502,7 +501,7 @@ namespace {
         EXPECT_FALSE(input.empty());
         if (input.empty()) return false;
         Vector<Uint32> output;
-        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output));
+        EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output, true, true));
         return Disassemble(output).find("FAbs") != String::npos;
     }
 

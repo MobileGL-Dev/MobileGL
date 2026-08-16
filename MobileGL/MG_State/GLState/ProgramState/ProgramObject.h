@@ -819,6 +819,9 @@ namespace MobileGL::MG_State::GLState {
         // backend asks this exactly where it used to ask GetLinkStatus(), i.e. right before
         // it builds or draws with the program.
         Bool GetSpirvStatus() const { return Spirv().spirvStatus; }
+        // Copied from the link task that generated this program's SPIR-V. Backends use it for
+        // their final transforms, which must honor the same diagnostic setting as phase B.
+        Bool GetSpirvValidationEnabled() const { return Spirv().enableSpirvValidation; }
 
         // The linked glslang reflection itself, for the ONE consumer that needs resource
         // lists no typed getter above exposes: the GL program-interface query layer
@@ -985,6 +988,7 @@ namespace MobileGL::MG_State::GLState {
         // cannot be lifted out of glslang's reflection instead.
         struct SpirvArtifacts {
             Vector<Vector<unsigned>> generatedSpirv;
+            Bool enableSpirvValidation = false;
             // Byte offset of each uniform location inside globalUboScratch, or
             // kInvalidUniformOffset. Sized maxUniformLocation + 1 by the routing pass.
             Vector<Uint> uniformOffsets;

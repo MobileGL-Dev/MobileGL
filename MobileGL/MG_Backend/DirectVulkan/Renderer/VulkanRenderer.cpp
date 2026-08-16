@@ -3061,6 +3061,7 @@ void main() {
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
                                                       m_shaderDrawParametersFeatureEnabled,
                                                       m_unformattedFloatStorageImagesEnabled,
+                                                      MG_Config::Features.EnableSpirvValidation,
                                                       m_updateAfterBindLimits);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
         // The swapchain already exists at this point (Initialize creates it first), so seed the

@@ -60,6 +60,8 @@ namespace MobileGL::MG_State::GLState {
             Uint externalIndex = 0; // logs only
             Vector<LinkShaderInput> shaders; // already stage-sorted
             SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
+            // Startup configuration copied with the task, never read from worker code.
+            Bool enableSpirvValidation = false;
             // The four "takes effect at the next link" request maps. Snapshotted rather than
             // referenced, which is precisely what makes glBindAttribLocation and friends
             // legal to call over a pending link without cancelling it: the pending link keeps

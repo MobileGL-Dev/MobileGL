@@ -85,8 +85,6 @@ namespace MobileGL {
         MG_Util::Debug::InitFile();
         MGLOG_I("Initializing MobileGL...");
         MG_ConfigLoader::Init();
-        MG_Util::ShaderTranspiler::ShaderCompiler::SetSpirvValidationEnabled(
-            MG_Config::Features.EnableSpirvValidation);
         MGLOG_I("Config loaded");
         MG_State::Init();
         MGLOG_D("MG_State initialized");

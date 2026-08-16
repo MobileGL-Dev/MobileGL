@@ -4741,6 +4741,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("%s:", src.empty() ? "" : src.c_str());
             }
             auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
+            const Bool enableSpirvValidation = stateProgramObject->GetSpirvValidationEnabled();
 
             // Blocks a transform-feedback capture request names a member of ("StageData" of
             // "StageData.attrib[0]"). The Adreno ES driver accepts such a request, links, and
@@ -4794,7 +4795,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<unsigned int> loweredSpirv;
                 const Vector<unsigned int>* effectiveSpirv = &spirvCode;
                 if (glShaderType == GL_VERTEX_SHADER &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv) &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv, enableSpirvValidation) &&
                     !loweredSpirv.empty()) {
                     effectiveSpirv = &loweredSpirv;
                 }
@@ -4804,7 +4805,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<unsigned int> splitArrayInputSpirv;
                 if (glShaderType == GL_VERTEX_SHADER &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::SplitArrayVertexInputsForEssl(
-                        *effectiveSpirv, splitArrayInputSpirv) &&
+                        *effectiveSpirv, splitArrayInputSpirv, enableSpirvValidation) &&
                     !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
                     // Only when the pass ACTUALLY split something. The optimizer hands back a
                     // re-serialised copy either way, and adopting that copy for every vertex
@@ -4826,7 +4827,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!xfbCaptureBlockNames.empty() &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(
                         *effectiveSpirv, xfbCaptureBlockNames, stageFlattenedXfbBlockNames,
-                        flattenedXfbSpirv) &&
+                        flattenedXfbSpirv, enableSpirvValidation) &&
                     !flattenedXfbSpirv.empty() && !stageFlattenedXfbBlockNames.empty()) {
                     effectiveSpirv = &flattenedXfbSpirv;
                     flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
@@ -4842,7 +4843,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // declare the member highp; nothing else about emission changes.
                 Vector<unsigned int> uboPrecisionSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(
-                        *effectiveSpirv, uboPrecisionSpirv) &&
+                        *effectiveSpirv, uboPrecisionSpirv, enableSpirvValidation) &&
                     !uboPrecisionSpirv.empty()) {
                     effectiveSpirv = &uboPrecisionSpirv;
                 }
@@ -4857,7 +4858,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<unsigned int> noperspectiveSpirv;
                 if (!g_GLESCapabilities.SupportsNoperspectiveInterpolation &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::EmulateNoPerspectiveForEssl(
-                        *effectiveSpirv, noperspectiveSpirv) &&
+                        *effectiveSpirv, noperspectiveSpirv, enableSpirvValidation) &&
                     !noperspectiveSpirv.empty()) {
                     effectiveSpirv = &noperspectiveSpirv;
                 }
@@ -4867,7 +4868,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // divides the coordinate of every normalized-coordinate lookup by the texture
                 // size, which is the whole of the difference between the two.
                 Vector<unsigned int> rectLoweredSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv) &&
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv, enableSpirvValidation) &&
                     !rectLoweredSpirv.empty()) {
                     effectiveSpirv = &rectLoweredSpirv;
                 }
@@ -4881,7 +4882,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
                 Vector<unsigned int> arrayImageSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
-                                                                                          arrayImageSpirv) &&
+                                                                                          arrayImageSpirv, enableSpirvValidation) &&
                     !arrayImageSpirv.empty()) {
                     effectiveSpirv = &arrayImageSpirv;
                 }
@@ -4900,7 +4901,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!imageFormatBake.glFormatByUniformName.empty() &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
-                        *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv) &&
+                        *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv,
+                        enableSpirvValidation) &&
                     !imageFormatSpirv.empty()) {
                     effectiveSpirv = &imageFormatSpirv;
                 }
@@ -4916,7 +4918,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<unsigned int> outputIndexSpirv;
                 if (glShaderType == GL_FRAGMENT_SHADER &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(
-                        *effectiveSpirv, outputIndexSpirv) &&
+                        *effectiveSpirv, outputIndexSpirv, enableSpirvValidation) &&
                     !outputIndexSpirv.empty()) {
                     effectiveSpirv = &outputIndexSpirv;
                 }
