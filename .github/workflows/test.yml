@@ -491,6 +491,7 @@ jobs:
       - benchmark
       - integration
     outputs:
+      matrix: ${{ steps.trace-cases.outputs.matrix }}
       names: ${{ steps.trace-cases.outputs.names }}
     steps:
       - name: Checkout repo
@@ -498,7 +499,9 @@ jobs:
 
       - name: Load trace cases
         id: trace-cases
-        run: echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-test-matrix)" >> "$GITHUB_OUTPUT"
+          echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
@@ -577,11 +580,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 4
-      matrix:
-        backend:
-          - DirectGLES
-          - DirectVulkan
-        case: ${{ fromJSON(needs.trace-cases.outputs.names) }}
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.matrix) }}
 
     steps:
       - name: Set Swap Space

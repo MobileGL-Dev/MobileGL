@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 TRACE_CASES_JSON = Path(__file__).with_name("trace_cases.json")
+CI_BACKENDS = ("DirectGLES", "DirectVulkan")
 
 
 def load_trace_case_manifest(path=TRACE_CASES_JSON):
@@ -71,6 +72,46 @@ def ci_trace_cases(cases):
     return [case for case in cases if case.get("ci", True)]
 
 
+def ci_backends(case):
+    backends = case.get("ci_backends")
+    if backends is None:
+        return CI_BACKENDS
+    if not isinstance(backends, list) or not backends:
+        raise ValueError(f"ci_backends must be a non-empty list for {case['name']}")
+    unknown = [backend for backend in backends if backend not in CI_BACKENDS]
+    if unknown:
+        raise ValueError(
+            f"unknown ci_backends for {case['name']}: {', '.join(unknown)}"
+        )
+    if len(set(backends)) != len(backends):
+        raise ValueError(f"ci_backends contains duplicates for {case['name']}")
+    return backends
+
+
+def github_test_matrix(cases):
+    return {
+        "include": [
+            {"backend": backend, "case": case["name"]}
+            for case in cases
+            for backend in ci_backends(case)
+        ]
+    }
+
+
+def github_apk_matrix(cases):
+    backends = {
+        "DirectGLES": {"name": "DirectGLES", "gpu": "software"},
+        "DirectVulkan": {"name": "DirectVulkan", "gpu": "lavapipe"},
+    }
+    return {
+        "include": [
+            {"backend": backends[backend], "case": github_apk_case(case)}
+            for case in cases
+            for backend in ci_backends(case)
+        ]
+    }
+
+
 def cmake_quote(value):
     return '"' + str(value).replace("\\", "/").replace('"', '\\"') + '"'
 
@@ -114,7 +155,14 @@ def parse_args():
     parser.add_argument("--fixture-root", default="tools/trace_replay/fixtures")
     parser.add_argument(
         "--format",
-        choices=("names", "github-apk", "fixture-files", "cmake"),
+        choices=(
+            "names",
+            "github-test-matrix",
+            "github-apk",
+            "github-apk-matrix",
+            "fixture-files",
+            "cmake",
+        ),
         default="names",
     )
     return parser.parse_args()
@@ -127,8 +175,12 @@ def main():
         cases = ci_trace_cases(cases)
     if args.format == "names":
         print(json.dumps([case["name"] for case in cases], separators=(",", ":")))
+    elif args.format == "github-test-matrix":
+        print(json.dumps(github_test_matrix(cases), separators=(",", ":")))
     elif args.format == "github-apk":
         print(json.dumps([github_apk_case(case) for case in cases], separators=(",", ":")))
+    elif args.format == "github-apk-matrix":
+        print(json.dumps(github_apk_matrix(cases), separators=(",", ":")))
     elif args.format == "fixture-files":
         if not args.case_name:
             print("--case is required for --format fixture-files", file=sys.stderr)

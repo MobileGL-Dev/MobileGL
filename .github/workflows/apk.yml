@@ -209,7 +209,7 @@ jobs:
       - name: Load trace cases
         id: trace-cases
         run: |
-          echo "android=$(python3 tools/trace_replay/trace_cases.py --ci --format github-apk)" >> "$GITHUB_OUTPUT"
+          echo "android=$(python3 tools/trace_replay/trace_cases.py --ci --format github-apk-matrix)" >> "$GITHUB_OUTPUT"
           echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
@@ -337,13 +337,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 4
-      matrix:
-        backend:
-          - name: DirectGLES
-            gpu: software
-          - name: DirectVulkan
-            gpu: lavapipe
-        case: ${{ fromJSON(needs.trace-cases.outputs.android) }}
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@v1.0
