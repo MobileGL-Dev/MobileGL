@@ -2973,8 +2973,73 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             bindings.push_back(layoutBinding);
         }
 
+        // UPDATE_AFTER_BIND is strictly an optional per-layout acceleration. The GL
+        // descriptor model still resolves every sampler uniform element independently
+        // (including its texture-unit sampler-object override); selecting this path
+        // changes neither that resolution nor the set versioning in UniformManager.
+        // A conservative count keeps a layout on ordinary descriptors whenever any
+        // relevant update-after-bind limit is not large enough, rather than asking a
+        // driver to reject it during vkCreateDescriptorSetLayout.
+        Uint32 updateAfterBindSamplers = 0;
+        Uint32 updateAfterBindUniformBuffers = 0;
+        Uint32 updateAfterBindStorageBuffers = 0;
+        Uint32 updateAfterBindSampledImages = 0;
+        Uint32 updateAfterBindStorageImages = 0;
+        for (Uint32 binding = 0; binding < m_maxBindings; ++binding) {
+            const Uint32 count = entry.bindingDescriptorCounts[binding];
+            switch (entry.bindingKinds[binding]) {
+                case DescriptorBindingKind::UniformBufferDynamic:
+                    updateAfterBindUniformBuffers += count;
+                    break;
+                case DescriptorBindingKind::CombinedImageSampler:
+                    updateAfterBindSamplers += count;
+                    updateAfterBindSampledImages += count;
+                    break;
+                case DescriptorBindingKind::UniformTexelBuffer:
+                    updateAfterBindSampledImages += count;
+                    break;
+                case DescriptorBindingKind::StorageBuffer:
+                case DescriptorBindingKind::StorageTexelBuffer:
+                    updateAfterBindStorageBuffers += count;
+                    break;
+                case DescriptorBindingKind::StorageImage:
+                    updateAfterBindStorageImages += count;
+                    break;
+                case DescriptorBindingKind::None:
+                    break;
+            }
+        }
+        const Uint32 updateAfterBindResources = updateAfterBindUniformBuffers + updateAfterBindStorageBuffers +
+                                                updateAfterBindSampledImages + updateAfterBindStorageImages;
+        const auto& uab = m_updateAfterBindLimits;
+        entry.usesUpdateAfterBind =
+            uab.enabled && updateAfterBindSamplers <= uab.maxPerStageSamplers &&
+            updateAfterBindUniformBuffers <= uab.maxPerStageUniformBuffers &&
+            updateAfterBindStorageBuffers <= uab.maxPerStageStorageBuffers &&
+            updateAfterBindSampledImages <= uab.maxPerStageSampledImages &&
+            updateAfterBindStorageImages <= uab.maxPerStageStorageImages &&
+            updateAfterBindResources <= uab.maxPerStageResources &&
+            updateAfterBindSamplers <= uab.maxSetSamplers &&
+            updateAfterBindUniformBuffers <= uab.maxSetUniformBuffers &&
+            updateAfterBindUniformBuffers <= uab.maxSetUniformBuffersDynamic &&
+            updateAfterBindStorageBuffers <= uab.maxSetStorageBuffers &&
+            updateAfterBindStorageBuffers <= uab.maxSetStorageBuffersDynamic &&
+            updateAfterBindSampledImages <= uab.maxSetSampledImages &&
+            updateAfterBindStorageImages <= uab.maxSetStorageImages;
+
+        Vector<VkDescriptorBindingFlags> bindingFlags;
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{};
+        if (entry.usesUpdateAfterBind) {
+            bindingFlags.assign(bindings.size(), VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+            bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+            bindingFlagsInfo.bindingCount = static_cast<Uint32>(bindingFlags.size());
+            bindingFlagsInfo.pBindingFlags = bindingFlags.data();
+        }
+
         VkDescriptorSetLayoutCreateInfo setLayoutInfo{};
         setLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        setLayoutInfo.flags = entry.usesUpdateAfterBind ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT : 0;
+        setLayoutInfo.pNext = entry.usesUpdateAfterBind ? &bindingFlagsInfo : nullptr;
         setLayoutInfo.bindingCount = static_cast<Uint32>(bindings.size());
         setLayoutInfo.pBindings = bindings.data();
         VK_VERIFY(vkCreateDescriptorSetLayout(m_device, &setLayoutInfo, nullptr, &entry.descriptorSetLayout),
@@ -3299,14 +3364,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const VkDescriptorSetLayout descriptorSetLayout = it->second.descriptorSetLayout;
                 MGLOG_D("ProgramFactory::OnFrameBoundary: evicting idle program entry hash=0x%llx",
                         static_cast<unsigned long long>(hash));
-                // erase runs ~VkProgramObject (modules/layouts destroyed); notify after
-                // so an observer never observes a half-destroyed entry through a lookup.
-                // Observers only need the handle values to purge their keyed caches.
-                ++m_cacheStructureEpoch; // erase moves/kills entries: memoised pointers die
-                it = m_cache.erase(it);
+                // The observer destroys dependent pipelines and frees descriptor sets while
+                // this entry still owns its layout. Vulkan requires every descriptor set to be
+                // freed before its VkDescriptorSetLayout is destroyed.
                 if (m_evictionObserver != nullptr) {
                     m_evictionObserver->OnProgramEvicted(hash, descriptorSetLayout);
                 }
+                ++m_cacheStructureEpoch; // erase moves/kills entries: memoised pointers die
+                it = m_cache.erase(it);
             } else {
                 ++it;
             }

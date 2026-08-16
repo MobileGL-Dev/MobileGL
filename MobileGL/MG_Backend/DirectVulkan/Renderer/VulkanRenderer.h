@@ -555,6 +555,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
         Bool m_unformattedFloatStorageImagesEnabled = false;
+        // Set only after descriptor-indexing feature AND property queries prove that
+        // update-after-bind is legal for every descriptor category this renderer emits.
+        ProgramFactory::UpdateAfterBindLimits m_updateAfterBindLimits{};
         // fillModeNonSolid gates VK_POLYGON_MODE_LINE/_POINT (glPolygonMode); independentBlend gates
         // per-draw-buffer color write masks (glColorMaski). Both are cached at device creation and
         // drive a runtime fallback when the device lacks them.

@@ -156,13 +156,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             frame.descriptorPools.clear();
 
             VkDescriptorPool initialPool = VK_NULL_HANDLE;
-            if (!CreateDescriptorPool(m_setsPerFrame, initialPool)) {
+            if (!CreateDescriptorPool(m_setsPerFrame, false, initialPool)) {
                 MGLOG_E_ONCE("UniformDescriptorBinder::Initialize failed: cannot create frame descriptor pool %u",
                         frameIndex);
                 Shutdown();
                 return false;
             }
-            frame.descriptorPools.push_back({initialPool, m_setsPerFrame, 0});
+            frame.descriptorPools.push_back({initialPool, m_setsPerFrame, 0, false});
             MGLOG_D("UniformDescriptorBinder: frame %u descriptor pool created (maxSets=%u)", frameIndex,
                     m_setsPerFrame);
         }
@@ -1390,7 +1390,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    Bool UniformManager::CreateDescriptorPool(Uint32 maxSets, VkDescriptorPool& outPool) const {
+    Bool UniformManager::CreateDescriptorPool(Uint32 maxSets, Bool updateAfterBind, VkDescriptorPool& outPool) const {
         outPool = VK_NULL_HANDLE;
         if (m_device == VK_NULL_HANDLE || maxSets == 0 || m_maxBindings == 0) {
             return false;
@@ -1433,7 +1433,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (OnDescriptorSetLayoutDestroyed) so program churn recycles pool capacity.
         // The cost is on set allocation only, which happens when a layout's per-frame
         // cache grows - never on the per-draw reuse path.
-        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT |
+                         (updateAfterBind ? VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT : 0);
         poolInfo.maxSets = maxSets;
         poolInfo.poolSizeCount = static_cast<Uint32>(std::size(poolSizes));
         poolInfo.pPoolSizes = poolSizes;
@@ -1447,24 +1448,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    Bool UniformManager::GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex) {
+    Bool UniformManager::GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex, Bool updateAfterBind) {
         if (frame.descriptorPools.empty()) {
             return false;
         }
 
-        const auto& currentBucket = frame.descriptorPools[frame.activeDescriptorPoolIndex];
-        const Uint32 currentMaxSets = std::max<Uint32>(1, currentBucket.maxSets);
+        const auto matchingBucket = std::find_if(
+            frame.descriptorPools.begin(), frame.descriptorPools.end(),
+            [updateAfterBind](const DescriptorPoolBucket& candidate) { return candidate.updateAfterBind == updateAfterBind; });
+        const Uint32 currentMaxSets = matchingBucket != frame.descriptorPools.end()
+                                          ? std::max<Uint32>(1, matchingBucket->maxSets)
+                                          : m_setsPerFrame;
         const Uint32 grownMaxSets = currentMaxSets <= (std::numeric_limits<Uint32>::max() / 2) ? (currentMaxSets * 2)
                                                                                                  : currentMaxSets;
 
         VkDescriptorPool grownPool = VK_NULL_HANDLE;
-        if (!CreateDescriptorPool(grownMaxSets, grownPool)) {
+        if (!CreateDescriptorPool(grownMaxSets, updateAfterBind, grownPool)) {
             MGLOG_E_ONCE("UniformDescriptorBinder::GrowFrameDescriptorPool failed: cannot create grown pool (%u -> %u sets)",
                     currentMaxSets, grownMaxSets);
             return false;
         }
 
-        frame.descriptorPools.push_back({grownPool, grownMaxSets, 0});
+        frame.descriptorPools.push_back({grownPool, grownMaxSets, 0, updateAfterBind});
         frame.activeDescriptorPoolIndex = static_cast<Uint32>(frame.descriptorPools.size() - 1);
         MGLOG_D(
             "UniformDescriptorBinder: frame %u descriptor pool exhausted, grew pool (%u -> %u sets), poolCount=%zu",
@@ -1474,14 +1479,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkResult UniformManager::AllocateDescriptorSetsFromActivePool(Uint32 frameIndex, const ProgramFactory::VkProgramObject& programObj, VkDescriptorSet& outDescriptorSet) {
         auto& frame = m_frames[frameIndex];
-        if (frame.activeDescriptorPoolIndex >= frame.descriptorPools.size()) {
-            frame.activeDescriptorPoolIndex = 0;
-        }
-        if (frame.descriptorPools[frame.activeDescriptorPoolIndex].allocatedSets >=
-            frame.descriptorPools[frame.activeDescriptorPoolIndex].maxSets) {
+        const Bool updateAfterBind = programObj.usesUpdateAfterBind;
+        if (frame.activeDescriptorPoolIndex >= frame.descriptorPools.size() ||
+            frame.descriptorPools[frame.activeDescriptorPoolIndex].updateAfterBind != updateAfterBind ||
+            frame.descriptorPools[frame.activeDescriptorPoolIndex].allocatedSets >=
+                frame.descriptorPools[frame.activeDescriptorPoolIndex].maxSets) {
             const auto availableBucket = std::find_if(
                 frame.descriptorPools.begin(), frame.descriptorPools.end(),
-                [](const DescriptorPoolBucket& candidate) { return candidate.allocatedSets < candidate.maxSets; });
+                [updateAfterBind](const DescriptorPoolBucket& candidate) {
+                    return candidate.updateAfterBind == updateAfterBind && candidate.allocatedSets < candidate.maxSets;
+                });
             if (availableBucket == frame.descriptorPools.end()) {
                 outDescriptorSet = VK_NULL_HANDLE;
                 return VK_ERROR_OUT_OF_POOL_MEMORY;
@@ -1517,7 +1524,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else {
             VkResult allocResult = AllocateDescriptorSetsFromActivePool(frameIndex, programObj, outDescriptorSet);
             if (allocResult == VK_ERROR_OUT_OF_POOL_MEMORY || allocResult == VK_ERROR_FRAGMENTED_POOL) {
-                if (!GrowFrameDescriptorPool(frame, frameIndex)) {
+                if (!GrowFrameDescriptorPool(frame, frameIndex, programObj.usesUpdateAfterBind)) {
                     MGLOG_E_ONCE("UniformDescriptorBinder::AcquireDescriptorSet failed: descriptor pool growth failed");
                     return allocResult;
                 }

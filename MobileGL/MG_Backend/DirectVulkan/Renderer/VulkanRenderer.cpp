@@ -1480,7 +1480,8 @@ void main() {
             const char* label = nullptr;
         };
 
-        static Uint32 ComputeMaxProgramBindings(const VkPhysicalDeviceProperties& properties) {
+        static Uint32 ComputeMaxProgramBindings(const VkPhysicalDeviceProperties& properties,
+                                                const ProgramFactory::UpdateAfterBindLimits& updateAfterBindLimits) {
             const auto& limits = properties.limits;
             static constexpr Uint32 kMinProgramBindings = 16;
             static constexpr Uint32 kMaxProgramBindingsCap = 256;
@@ -1494,6 +1495,21 @@ void main() {
             Uint32 maxBindings = limits.maxPerStageResources;
             maxBindings = std::min(maxBindings, maxCombinedImageSamplers);
             maxBindings = std::min(maxBindings, maxSampledImages + maxDynamicUniformBuffers);
+
+            if (updateAfterBindLimits.enabled) {
+                const Uint32 updateAfterBindSamplers = std::min(updateAfterBindLimits.maxPerStageSamplers,
+                                                                 updateAfterBindLimits.maxSetSamplers);
+                const Uint32 updateAfterBindSampledImages = std::min(updateAfterBindLimits.maxPerStageSampledImages,
+                                                                      updateAfterBindLimits.maxSetSampledImages);
+                const Uint32 updateAfterBindDynamicUniformBuffers =
+                    std::min(updateAfterBindLimits.maxPerStageUniformBuffers,
+                             updateAfterBindLimits.maxSetUniformBuffersDynamic);
+                Uint32 updateAfterBindBindings = updateAfterBindLimits.maxPerStageResources;
+                updateAfterBindBindings = std::min(updateAfterBindBindings, updateAfterBindSamplers);
+                updateAfterBindBindings =
+                    std::min(updateAfterBindBindings, updateAfterBindSampledImages + updateAfterBindDynamicUniformBuffers);
+                maxBindings = std::max(maxBindings, updateAfterBindBindings);
+            }
 
             maxBindings = std::max(kMinProgramBindings, maxBindings);
             maxBindings = std::min(kMaxProgramBindingsCap, maxBindings);
@@ -3010,7 +3026,7 @@ void main() {
         succeeded = m_renderPassManager->Initialize();
         MOBILEGL_ASSERT(succeeded, "VkRenderPassManager initialization failed.");
 
-        const Uint32 maxProgramBindings = ComputeMaxProgramBindings(m_physicalDevice.properties);
+        const Uint32 maxProgramBindings = ComputeMaxProgramBindings(m_physicalDevice.properties, m_updateAfterBindLimits);
         MGLOG_I("DirectVulkan: using %u program descriptor bindings", maxProgramBindings);
         if (IsPowerVRDevice(m_physicalDevice.properties)) {
             m_config.DisablePipelineCache = true;
@@ -3044,7 +3060,8 @@ void main() {
         }
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
                                                       m_shaderDrawParametersFeatureEnabled,
-                                                      m_unformattedFloatStorageImagesEnabled);
+                                                      m_unformattedFloatStorageImagesEnabled,
+                                                      m_updateAfterBindLimits);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
         // The swapchain already exists at this point (Initialize creates it first), so seed the
         // height the factory could not be told about from CreateSwapchain.
@@ -11899,6 +11916,17 @@ void main() {
     }
 
     void VulkanRenderer::CreateInstance() {
+#if defined(VK_USE_PLATFORM_METAL_EXT)
+        // MoltenVK snapshots its configuration when the loader first discovers the ICD. Set
+        // this before instance-extension enumeration, while preserving an explicit user value.
+        if (std::getenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS") == nullptr) {
+            if (::setenv("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", "1", 0) == 0) {
+                MGLOG_I("MoltenVK: enabling Metal argument buffers");
+            } else {
+                MGLOG_W("MoltenVK: could not enable Metal argument buffers before ICD discovery");
+            }
+        }
+#endif
         m_extensions = EnumerateInstanceExtensions();
         MGLOG_I("Got %d Vulkan instance extensions: ", m_extensions.size());
         for (auto& extension : m_extensions) {
@@ -12040,16 +12068,18 @@ void main() {
 
         auto debugMessengerCreateInfo = PopulateDebugMessengerCreateInfo();
         // Layers
+        const void* instanceCreatePNext = nullptr;
         if (m_validationLayersEnabled) {
             MGLOG_I("Enabling validation layer...");
             instanceInfo.enabledLayerCount = static_cast<uint32_t>(std::size(s_validationLayerNames));
             instanceInfo.ppEnabledLayerNames = s_validationLayerNames;
             // Chaining the messenger create-info is only legal with the extension on.
-            instanceInfo.pNext = debugUtilsAvailable ? &debugMessengerCreateInfo : nullptr;
+            instanceCreatePNext = debugUtilsAvailable ? &debugMessengerCreateInfo : nullptr;
         } else {
             instanceInfo.enabledLayerCount = 0;
-            instanceInfo.pNext = nullptr;
         }
+
+        instanceInfo.pNext = instanceCreatePNext;
 
         VK_VERIFY(vkCreateInstance(&instanceInfo, nullptr, &m_instance), "vkCreateInstance failed");
 
@@ -12474,6 +12504,75 @@ void main() {
         if (getPhysicalDeviceFeatures2 == nullptr) {
             getPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
                 vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFeatures2KHR"));
+        }
+
+        m_updateAfterBindLimits = {};
+        VkPhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
+        descriptorIndexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        VkPhysicalDeviceDescriptorIndexingProperties descriptorIndexingProperties{};
+        descriptorIndexingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+        const Bool descriptorIndexingCore = m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2;
+        const Bool descriptorIndexingExtension =
+            IsExtensionSupported(availableExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+        auto getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+            vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2"));
+        if (getPhysicalDeviceProperties2 == nullptr) {
+            getPhysicalDeviceProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceProperties2KHR"));
+        }
+        if ((descriptorIndexingCore || descriptorIndexingExtension) && getPhysicalDeviceFeatures2 != nullptr &&
+            getPhysicalDeviceProperties2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &descriptorIndexingFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            VkPhysicalDeviceProperties2 propertyQuery{};
+            propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            propertyQuery.pNext = &descriptorIndexingProperties;
+            getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+
+            // This renderer emits every descriptor category listed below, including
+            // dynamic UBOs and combined image samplers. Do not enable a partial
+            // descriptor-indexing contract: it would make a later reflected program
+            // fail in the driver instead of choosing its ordinary descriptor layout.
+            const Bool allUpdateAfterBindFeatures =
+                descriptorIndexingFeatures.descriptorBindingUniformBufferUpdateAfterBind == VK_TRUE &&
+                descriptorIndexingFeatures.descriptorBindingSampledImageUpdateAfterBind == VK_TRUE &&
+                descriptorIndexingFeatures.descriptorBindingStorageImageUpdateAfterBind == VK_TRUE &&
+                descriptorIndexingFeatures.descriptorBindingStorageBufferUpdateAfterBind == VK_TRUE &&
+                descriptorIndexingFeatures.descriptorBindingUniformTexelBufferUpdateAfterBind == VK_TRUE &&
+                descriptorIndexingFeatures.descriptorBindingStorageTexelBufferUpdateAfterBind == VK_TRUE &&
+                (!deviceFeatures.robustBufferAccess || descriptorIndexingProperties.robustBufferAccessUpdateAfterBind);
+            if (allUpdateAfterBindFeatures) {
+                if (!descriptorIndexingCore && !IsExtensionAlreadyEnabled(
+                                                   enabledDeviceExtensions,
+                                                   VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
+                }
+                descriptorIndexingFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &descriptorIndexingFeatures;
+                m_updateAfterBindLimits = {
+                    true,
+                    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSamplers,
+                    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindUniformBuffers,
+                    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindStorageBuffers,
+                    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages,
+                    descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindStorageImages,
+                    descriptorIndexingProperties.maxPerStageUpdateAfterBindResources,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSamplers,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindUniformBuffers,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindUniformBuffersDynamic,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindStorageBuffers,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindStorageBuffersDynamic,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages,
+                    descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindStorageImages};
+                MGLOG_I("Vulkan: update-after-bind descriptor layouts enabled");
+            } else {
+                MGLOG_I("Vulkan: descriptor indexing is present but lacks the complete update-after-bind feature set; "
+                        "using ordinary descriptor layouts");
+            }
+        } else {
+            MGLOG_I("Vulkan: descriptor indexing unavailable; using ordinary descriptor layouts");
         }
 
         VkPhysicalDeviceIndexTypeUint8Features indexTypeUint8Features{};

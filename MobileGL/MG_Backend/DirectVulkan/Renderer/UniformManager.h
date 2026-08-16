@@ -114,6 +114,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkDescriptorPool handle = VK_NULL_HANDLE;
             Uint32 maxSets = 0;
             Uint32 allocatedSets = 0;
+            Bool updateAfterBind = false;
         };
 
         // A cached descriptor set together with the pool it was allocated from, so a
@@ -223,8 +224,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void BindDescriptorSetDeduped(VkCommandBuffer commandBuffer, VkPipelineBindPoint bindPoint,
                                       VkPipelineLayout pipelineLayout, VkDescriptorSet descriptorSet,
                                       const Vector<Uint32>& dynamicOffsets);
-        Bool CreateDescriptorPool(Uint32 maxSets, VkDescriptorPool& outPool) const;
-        Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex);
+        Bool CreateDescriptorPool(Uint32 maxSets, Bool updateAfterBind, VkDescriptorPool& outPool) const;
+        Bool GrowFrameDescriptorPool(FrameResources& frame, Uint32 frameIndex, Bool updateAfterBind);
         VkResult AllocateDescriptorSetsFromActivePool(
             Uint32 frameIndex, const ProgramFactory::VkProgramObject& programObj, VkDescriptorSet& outDescriptorSet);
         VkResult AcquireDescriptorSet(Uint32 frameIndex,

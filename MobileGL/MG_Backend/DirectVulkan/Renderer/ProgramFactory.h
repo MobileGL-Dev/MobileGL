@@ -76,6 +76,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using CompileOptionFlags = Flags<CompileOptionBit>;
         using HashType = Uint64;
 
+        struct UpdateAfterBindLimits {
+            Bool enabled = false;
+            Uint32 maxPerStageSamplers = 0;
+            Uint32 maxPerStageUniformBuffers = 0;
+            Uint32 maxPerStageStorageBuffers = 0;
+            Uint32 maxPerStageSampledImages = 0;
+            Uint32 maxPerStageStorageImages = 0;
+            Uint32 maxPerStageResources = 0;
+            Uint32 maxSetSamplers = 0;
+            Uint32 maxSetUniformBuffers = 0;
+            Uint32 maxSetUniformBuffersDynamic = 0;
+            Uint32 maxSetStorageBuffers = 0;
+            Uint32 maxSetStorageBuffersDynamic = 0;
+            Uint32 maxSetSampledImages = 0;
+            Uint32 maxSetStorageImages = 0;
+        };
+
         struct VkProgramObject {
             static constexpr Uint32 kMaxVertexInputLocations = 32;
 
@@ -88,6 +105,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             // Layout data (previously in separate VkProgramLayout)
             VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+            // True only when this layout passed every descriptor-indexing feature and
+            // update-after-bind limit gate at reflection time. It controls both the
+            // layout/binding flags and the pool class used by UniformManager.
+            Bool usesUpdateAfterBind = false;
             VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
             Vector<DescriptorBindingKind> bindingKinds;
             // The bindings this program actually declares, ascending. bindingKinds is sized to the
@@ -196,6 +217,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // a pipeline failure would be reported against the wrong SPIR-V.
                 stageSpirvDigests = std::move(other.stageSpirvDigests);
                 descriptorSetLayout = other.descriptorSetLayout;
+                usesUpdateAfterBind = other.usesUpdateAfterBind;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
                 activeBindings = std::move(other.activeBindings);
@@ -230,6 +252,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
+                other.usesUpdateAfterBind = false;
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
@@ -256,6 +279,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 modules = std::move(other.modules);
                 stageSpirvDigests = std::move(other.stageSpirvDigests); // travels with `modules` - see the move ctor
                 descriptorSetLayout = other.descriptorSetLayout;
+                usesUpdateAfterBind = other.usesUpdateAfterBind;
                 pipelineLayout = other.pipelineLayout;
                 bindingKinds = std::move(other.bindingKinds);
                 activeBindings = std::move(other.activeBindings);
@@ -290,6 +314,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 lastUsedFrame = other.lastUsedFrame;
                 other.hash = 0;
                 other.descriptorSetLayout = VK_NULL_HANDLE;
+                other.usesUpdateAfterBind = false;
                 other.pipelineLayout = VK_NULL_HANDLE;
                 other.hasStorageImages = false;
                 other.declinedDescriptors = false;
@@ -347,12 +372,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             virtual void OnProgramEvicted(HashType programHash, VkDescriptorSetLayout descriptorSetLayout) = 0;
         };
 
-        explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings = 16,
-                                Bool shaderDrawParametersEnabled = false,
-                                Bool unformattedFloatStorageImagesEnabled = false)
+        explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
+                                Bool shaderDrawParametersEnabled,
+                                Bool unformattedFloatStorageImagesEnabled,
+                                UpdateAfterBindLimits updateAfterBindLimits)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
-              m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled) {
+              m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
+              m_updateAfterBindLimits(updateAfterBindLimits) {
             VkProgramObject::s_device = device;
         }
         // Destroys the pass-through tessellation control modules. Runs while the device is
@@ -475,6 +502,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True only when the logical device enabled both
         // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
         Bool m_unformattedFloatStorageImagesEnabled = false;
+        // Device feature and limit gate resolved before vkCreateDevice. Keeping it in
+        // the factory lets each reflected layout choose ordinary descriptors when its
+        // own counts would exceed the update-after-bind budget.
+        UpdateAfterBindLimits m_updateAfterBindLimits{};
         // See SetDefaultFramebufferHeight. 0 means "not known yet"; the FragCoordYFlip bit is
         // never set before the swapchain exists, so no variant can be compiled against it.
         Uint32 m_defaultFramebufferHeight = 0;
