@@ -30,17 +30,6 @@ namespace MobileGL {
             // tests and diagnostics that drive the preprocessor standalone.
             void PreprocessShaderSource(ShaderStage stage, String& source);
 
-            // Some desktop-captured compute shaders size shared scratch for a 32-lane subgroup
-            // model. Narrow Vulkan subgroups can produce more subgroup totals than that storage
-            // holds; Qualcomm also miscompiles one recognized scan when its subgroup is wider.
-            // These entry points replace only complete, known-safe templates with lane-independent
-            // algorithms. PreprocessShaderSource reaches them through its device-quirk registry;
-            // MOBILEGL_QUIRK_SUBGROUP_PREFIX_SCAN=1/0 overrides the automatic device gate. The
-            // explicit entry points exist for deterministic tests.
-            Bool RewriteLinearSubgroupPrefixScanForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize, String& source);
-            Bool RewriteWeightedExposureSubgroupReductionForVulkan(ShaderStage stage, Uint32 nativeSubgroupSize,
-                                                                    String& source);
-
             // Rewrites a "#version 330 core" directive that PreprocessShaderSource normalized down
             // from a legacy desktop version back up to "#version 460 core". Returns false (leaving
             // the source untouched) for anything else: ES, compatibility, or an already-modern

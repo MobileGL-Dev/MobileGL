@@ -221,10 +221,13 @@ typedef signed   char          khronos_int8_t;
 typedef unsigned char          khronos_uint8_t;
 typedef signed   short int     khronos_int16_t;
 typedef unsigned short int     khronos_uint16_t;
-typedef signed   long  int     khronos_intptr_t;
-typedef unsigned long  int     khronos_uintptr_t;
-typedef signed   long  int     khronos_ssize_t;
-typedef unsigned long  int     khronos_usize_t;
+/* `long` is 32-bit on LLP64 Windows, including 64-bit MinGW.  Use the
+ * standard pointer-sized integer types so these remain pointer-width there. */
+#include <stdint.h>
+typedef intptr_t                   khronos_intptr_t;
+typedef uintptr_t                  khronos_uintptr_t;
+typedef intptr_t                   khronos_ssize_t;
+typedef uintptr_t                  khronos_usize_t;
 
 #if KHRONOS_SUPPORT_FLOAT
 /*

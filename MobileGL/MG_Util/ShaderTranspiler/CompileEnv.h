@@ -12,9 +12,9 @@
 #include <MG_Backend/BackendObject.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
-    // Everything the shader compile/link pipeline reads from OUTSIDE its own (stage, source)
-    // inputs: backend identity, backend limits, the advertised extension list, and the one
-    // config quirk the source rewriter branches on.
+    // everything outside (stage, source) this reads - advertised extensions and backend limits -
+    // so the transformation is a pure function of its three arguments and can run on a worker
+    // thread.
     //
     // Why it exists (P1): every one of those reads is a reach-back into
     // MG_Backend::pActiveBackendObject / gBackendFunctionsTable, and one of them
@@ -45,9 +45,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         BackendType backend = BackendType::Unknown;
         MG_Backend::DynamicBackendParameters params{};   // by value, never by reference
         Vector<GLExtension> advertisedExtensions;
-
-        // --- config the source rewriter branches on ---
-        MG_Config::QuirkOverride subgroupPrefixScanQuirk = MG_Config::QuirkOverride::Auto;
 
         Uint64 fingerprint = 0;   // set by CaptureCompileEnv()
 

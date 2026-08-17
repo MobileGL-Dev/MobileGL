@@ -33,13 +33,13 @@ namespace MobileGL {
 
         std::string GetThreadName() {
             char buffer[64] = {0};
-#if defined(_WIN32) && !defined(__MINGW32__)
+#if defined(_WIN32)
             PWSTR desc = nullptr;
             if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &desc))) {
                 WideCharToMultiByte(CP_UTF8, 0, desc, -1, buffer, sizeof(buffer), nullptr, nullptr);
                 LocalFree(desc);
             }
-#elif defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__) || defined(__MINGW32__)
+#elif defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__)
             pthread_getname_np(pthread_self(), buffer, sizeof(buffer));
 #endif
             return buffer[0] ? buffer : "UnknownThread";

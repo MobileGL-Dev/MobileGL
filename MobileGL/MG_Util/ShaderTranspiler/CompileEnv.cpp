@@ -38,7 +38,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             HashBytes(state, env.advertisedExtensions.data(),
                       env.advertisedExtensions.size() * sizeof(GLExtension));
         }
-        HashValue(state, env.subgroupPrefixScanQuirk);
         return state;
     }
 
@@ -73,8 +72,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
                                      kFrontendMaxComputeWorkGroupInvocations)
                           : kFrontendMaxComputeWorkGroupInvocations;
 
-        env->subgroupPrefixScanQuirk = MG_Config::Features.SubgroupPrefixScanQuirk;
-
         env->fingerprint = ComputeCompileEnvFingerprint(*env);
         return env;
     }
@@ -84,7 +81,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // computed, and this must not run before MG_Config is loaded.
         static const SharedPtr<const CompileEnv> kDefault = [] {
             auto env = MakeShared<CompileEnv>();
-            env->subgroupPrefixScanQuirk = MG_Config::Features.SubgroupPrefixScanQuirk;
             env->fingerprint = ComputeCompileEnvFingerprint(*env);
             return SharedPtr<const CompileEnv>(Move(env));
         }();
