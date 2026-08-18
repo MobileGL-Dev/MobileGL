@@ -12,6 +12,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
+#include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/VertexArray/GL_VertexArray.h>
 #include <MG_State/GLState/Core.h>
 #include <Init.h>
@@ -94,6 +95,7 @@ void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
     AttachShader(program, fs);
     LinkProgram(program);
     UseProgram(program);
+    Viewport(0, 0, 256, 256);
 
     // Upload a triangle into a real GL buffer and describe it through a VAO.
     const float vertices[] = {

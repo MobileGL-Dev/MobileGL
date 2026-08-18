@@ -396,8 +396,31 @@ void main()
         ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
         m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
-        ::Diligent::Viewport viewport{0, 0, static_cast<Float>(m_width), static_cast<Float>(m_height), 0.0f, 1.0f};
+        auto glViewport = MG_State::pGLContext->GetViewport();
+        if (glViewport.z() <= 0 || glViewport.w() <= 0) {
+            glViewport = IntVec4(0, 0, static_cast<Int32>(m_width), static_cast<Int32>(m_height));
+        }
+        ::Diligent::Viewport viewport{
+            static_cast<Float>(glViewport.x()),
+            static_cast<Float>(glViewport.y()),
+            static_cast<Float>(glViewport.z()),
+            static_cast<Float>(glViewport.w()),
+            0.0f, 1.0f};
         m_pContext->SetViewports(1, &viewport, m_width, m_height);
+
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const auto scissor = MG_State::pGLContext->GetScissorBox();
+            ::Diligent::Rect rect{
+                scissor.x(),
+                scissor.y(),
+                scissor.x() + scissor.z(),
+                scissor.y() + scissor.w()};
+            m_pContext->SetScissorRects(1, &rect, m_width, m_height);
+        } else {
+            ::Diligent::Rect rect{0, 0, static_cast<::Diligent::Int32>(m_width),
+                                  static_cast<::Diligent::Int32>(m_height)};
+            m_pContext->SetScissorRects(1, &rect, m_width, m_height);
+        }
 
         ::Diligent::IBuffer* pVBs[] = {m_pVertexBuffer};
         m_pContext->SetVertexBuffers(0, 1, pVBs, nullptr,
