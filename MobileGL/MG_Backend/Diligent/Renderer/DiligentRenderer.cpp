@@ -297,6 +297,7 @@ void main()
             initialData.pData = vertices;
             initialData.DataSize = static_cast<Uint32>(dataSize);
 
+            m_pVertexBuffer.Release();
             m_pDevice->CreateBuffer(buffDesc, &initialData, &m_pVertexBuffer);
             if (!m_pVertexBuffer) {
                 MGLOG_E("DiligentRenderer: failed to create dynamic vertex buffer");
@@ -452,6 +453,7 @@ void main()
 
         psoCI.pVS = pVS;
         psoCI.pPS = pPS;
+        m_pPSO.Release();
         m_pDevice->CreateGraphicsPipelineState(psoCI, &m_pPSO);
         if (!m_pPSO) {
             MGLOG_E("DiligentRenderer: failed to create state pipeline");
@@ -576,6 +578,7 @@ void main()
             ::Diligent::BufferData initialData;
             initialData.pData = vertexData.data();
             initialData.DataSize = static_cast<::Diligent::Uint32>(vertexData.size());
+            m_pVertexBuffer.Release();
             m_pDevice->CreateBuffer(buffDesc, &initialData, &m_pVertexBuffer);
             if (!m_pVertexBuffer) {
                 return false;
