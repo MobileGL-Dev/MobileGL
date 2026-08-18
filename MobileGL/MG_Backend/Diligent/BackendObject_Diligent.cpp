@@ -44,6 +44,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
                 const auto& color = MG_State::pGLContext->GetClearColor();
                 renderer->Clear(color.x(), color.y(), color.z(), color.w());
             }
+            if ((mask & GL_DEPTH_BUFFER_BIT) != 0) {
+                renderer->ClearDepth(MG_State::pGLContext->GetClearDepth());
+            }
         }
 
         void DrawArrays(GLenum mode, GLint first, GLsizei count) {
