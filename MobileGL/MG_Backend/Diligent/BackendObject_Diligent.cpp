@@ -7,6 +7,7 @@
 
 #include "BackendObject_Diligent.h"
 #include "DiligentVulkan.h"
+#include "Renderer/DiligentRenderer.h"
 #include <MG_Backend/BackendObject.h>
 
 #include <EngineFactoryVk.h>
@@ -32,6 +33,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         : m_rendererInfo(BuildInitialRendererInfo()) {}
 
     BackendObject_Diligent::~BackendObject_Diligent() {
+        m_pRenderer.reset();
         m_pContext.Release();
         m_pDevice.Release();
         m_pFactoryVk = nullptr;
@@ -96,7 +98,18 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             MGLOG_W("Diligent: backend initialization failed");
             return;
         }
+
+        m_pRenderer = std::make_unique<DiligentRenderer>(m_pDevice, m_pContext);
+        if (!m_pRenderer->Initialize(256, 256)) {
+            MGLOG_W("Diligent: renderer initialization failed");
+            m_pRenderer.reset();
+            return;
+        }
         m_initialized = true;
+    }
+
+    DiligentRenderer* BackendObject_Diligent::GetRenderer() {
+        return m_pRenderer.get();
     }
 
     Bool BackendObject_Diligent::InitCapabilities() {

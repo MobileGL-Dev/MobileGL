@@ -28,6 +28,8 @@ namespace Diligent {
 }
 
 namespace MobileGL::MG_Backend::DiligentBackend {
+    class DiligentRenderer;
+
     // New Diligent/Vulkan backend, implemented from scratch on top of
     // DiligentCore. The backend object owns the Diligent device/context and
     // currently advertises OpenGL 3.2 core capability; the GL function table
@@ -47,6 +49,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         const DynamicBackendParameters& GetDynamicParameters() const override;
         BackendType GetBackendType() const override;
 
+        DiligentRenderer* GetRenderer();
+
     private:
         Bool CreateDiligentDevice();
 
@@ -56,6 +60,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::IEngineFactoryVk* m_pFactoryVk = nullptr;
         ::Diligent::RefCntAutoPtr<::Diligent::IRenderDevice> m_pDevice;
         ::Diligent::RefCntAutoPtr<::Diligent::IDeviceContext> m_pContext;
+        std::unique_ptr<DiligentRenderer> m_pRenderer;
         Bool m_initialized = false;
     };
 } // namespace MobileGL::MG_Backend::DiligentBackend

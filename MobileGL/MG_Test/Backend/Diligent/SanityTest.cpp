@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <MG_Backend/BackendObject.h>
 #include <MG_Backend/Diligent/BackendObject_Diligent.h>
+#include <MG_Backend/Diligent/Renderer/DiligentRenderer.h>
 #include <MG_Backend/BackendObjects.h>
 
 using namespace MobileGL;
@@ -28,4 +29,29 @@ TEST(DiligentVulkanBackend, CreatesDiligentDeviceAndAdvertisesGL32) {
 
     EXPECT_FALSE(backend.GetBackendAPIVersionString().empty());
     EXPECT_FALSE(backend.GetRendererInfo().BackendName.empty());
+}
+
+TEST(DiligentVulkanBackend, ClearsAndDrawsTriangleOffscreen) {
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping offscreen rendering test";
+    }
+
+    // Clear to green, then draw a red triangle over the center.
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawTriangle();
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_GT(center[0], 200) << "center should be red from the triangle";
+    EXPECT_LT(center[1], 50) << "center should not be green";
+
+    std::uint8_t corner[4] = {};
+    renderer->ReadPixels(0, 0, 1, 1, corner);
+    EXPECT_GT(corner[1], 200) << "corner should remain green after clear";
+    EXPECT_LT(corner[0], 50) << "corner should not be red";
 }

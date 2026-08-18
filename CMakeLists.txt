@@ -416,6 +416,7 @@ if(MOBILEGL_ENABLE_DILIGENT)
     list(APPEND SOURCE_FILES
         MobileGL/MG_Backend/Diligent/BackendObject_Diligent.cpp
         MobileGL/MG_Backend/Diligent/DiligentVulkan.cpp
+        MobileGL/MG_Backend/Diligent/Renderer/DiligentRenderer.cpp
     )
 endif()
 

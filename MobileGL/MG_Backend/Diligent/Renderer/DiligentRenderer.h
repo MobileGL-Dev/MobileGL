@@ -1,0 +1,66 @@
+// MobileGL - MobileGL/MG_Backend/Diligent/Renderer/DiligentRenderer.h
+// Copyright (c) 2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+
+#pragma once
+
+#include <Includes.h>
+
+// X11 (pulled in by Includes.h through Vulkan-Headers) defines True/False as
+// macros, which collide with Diligent's Bool constants in BasicTypes.h.
+#if defined(True)
+#undef True
+#endif
+#if defined(False)
+#undef False
+#endif
+
+#include <RefCntAutoPtr.hpp>
+
+namespace Diligent {
+    struct IRenderDevice;
+    struct IDeviceContext;
+    struct ITexture;
+    struct ITextureView;
+    struct IPipelineState;
+    struct IBuffer;
+}
+
+namespace MobileGL::MG_Backend::DiligentBackend {
+    // Minimal real Diligent renderer used to prove the GL 3.2 basic path:
+    // clear an offscreen color target, draw a hardcoded triangle, and read
+    // pixels back. This is the first concrete rendering layer on top of the
+    // Diligent device; it will be expanded into the full MobileGL backend.
+    class DiligentRenderer {
+    public:
+        DiligentRenderer(::Diligent::IRenderDevice* device, ::Diligent::IDeviceContext* context);
+        ~DiligentRenderer();
+
+        Bool Initialize(Uint32 width, Uint32 height);
+        void Clear(Float r, Float g, Float b, Float a);
+        void DrawTriangle();
+        void ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels);
+        void Present();
+
+        ::Diligent::IRenderDevice* GetDevice() const { return m_pDevice; }
+        ::Diligent::IDeviceContext* GetContext() const { return m_pContext; }
+
+    private:
+        Bool CreateOffscreenTargets();
+        Bool CreatePipeline();
+        Bool CreateVertexBuffer();
+
+        ::Diligent::IRenderDevice* m_pDevice = nullptr;
+        ::Diligent::IDeviceContext* m_pContext = nullptr;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pColorTarget;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pColorRTV;
+        ::Diligent::RefCntAutoPtr<::Diligent::IPipelineState> m_pPSO;
+        ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pVertexBuffer;
+        Uint32 m_width = 256;
+        Uint32 m_height = 256;
+        Bool m_initialized = false;
+    };
+} // namespace MobileGL::MG_Backend::DiligentBackend
