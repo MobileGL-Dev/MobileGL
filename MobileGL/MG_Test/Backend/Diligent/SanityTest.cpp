@@ -209,3 +209,69 @@ void main() { Color = texture(g_Texture, vUV); }
     EXPECT_GT(center[0], 200) << "center should be red from textured triangle";
     EXPECT_LT(center[1], 50) << "center should not be green";
 }
+
+TEST(DiligentVulkanBackend, DrawsIndexedFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); }
+)";
+    const char* fsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    UseProgram(program);
+    Viewport(0, 0, 256, 256);
+
+    const float vertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    const GLuint indices[] = {0, 1, 2};
+
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint ebo = 0;
+    GenBuffers(1, &ebo);
+    BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    BufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping indexed state test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, GL_UNSIGNED_INT, nullptr);
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_GT(center[0], 200) << "center should be red from indexed triangle";
+    EXPECT_LT(center[1], 50) << "center should not be green";
+}
