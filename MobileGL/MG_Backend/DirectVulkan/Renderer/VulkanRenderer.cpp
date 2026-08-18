@@ -5412,7 +5412,81 @@ void main() {
         }
         return true;
     }
+    Bool VulkanRenderer::PrepareSamplerImageFeedbackSnapshots(
+        FrameContext::FrameData& frame,
+        const MG_State::GLState::ProgramObject& program,
+        const ProgramFactory::VkProgramObject& programObj,
+        VkPipelineStageFlags consumerShaderStageMask) {
+        auto& feedbackBindings = m_samplerImageFeedbackScratch;
+        auto& overrides = m_samplerImageBindingOverridesScratch;
+        overrides.clear();
+        if (!programObj.hasStorageImages) {
+            feedbackBindings.clear();
+            return true;
+        }
+        if (!m_uniformManager->CollectSamplerImageFeedback(program, programObj, feedbackBindings)) {
+            MGLOG_E_ONCE("%s: failed to collect sampler/image feedback for program=%u", __func__,
+                         program.GetExternalIndex());
+            return false;
+        }
 
+        if (feedbackBindings.empty()) {
+            return true;
+        }
+        // Copy and layout barriers cannot be recorded inside a render pass. A graphics draw only
+        // gets here after an actual sampled/writable-image mip overlap was found, so ordinary
+        // graphics draws retain the active pass.
+        if (VkRenderPassManager::GetActiveRenderPass() != nullptr) {
+            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        }
+
+        struct SnapshotCacheEntry {
+            MG_State::GLState::ITextureObject* texture = nullptr;
+            SamplerNumericDomain numericDomain = SamplerNumericDomain::Unknown;
+            VkTextureManager::SampledTextureSnapshot snapshot{};
+        };
+        Vector<SnapshotCacheEntry> snapshotCache;
+        snapshotCache.reserve(feedbackBindings.size());
+        overrides.reserve(feedbackBindings.size());
+        for (const auto& feedback : feedbackBindings) {
+            VkTextureManager::SampledTextureSnapshot snapshot{};
+            const auto existing = std::find_if(
+                snapshotCache.begin(), snapshotCache.end(), [&feedback](const SnapshotCacheEntry& candidate) {
+                    return candidate.texture == feedback.texture && candidate.numericDomain == feedback.numericDomain;
+                });
+            if (existing != snapshotCache.end()) {
+                snapshot = existing->snapshot;
+            } else {
+                if (!m_textureManager->SnapshotTextureForSampling(frame.commandBuffer, *feedback.texture,
+                                                                  feedback.numericDomain, consumerShaderStageMask,
+                                                                  snapshot) ||
+                    snapshot.imageView == VK_NULL_HANDLE) {
+                    MGLOG_E_ONCE("%s: failed to snapshot textureId=%d for sampler binding=%u element=%u", __func__,
+                                 feedback.texture != nullptr ? feedback.texture->GetExternalIndex() : 0,
+                                 feedback.samplerBinding, feedback.samplerElement);
+                    return false;
+                }
+                snapshotCache.push_back({.texture = feedback.texture,
+                                         .numericDomain = feedback.numericDomain,
+                                         .snapshot = snapshot});
+            }
+            overrides.push_back({
+                .binding = feedback.samplerBinding,
+                .element = feedback.samplerElement,
+                .texture = feedback.texture,
+                .sampler = feedback.sampler,
+                .imageView = snapshot.imageView,
+                .imageLayout = snapshot.layout,
+                .forceNearestFiltering = feedback.numericDomain == SamplerNumericDomain::SignedInteger ||
+                                         feedback.numericDomain == SamplerNumericDomain::UnsignedInteger,
+            });
+            if (program.GetExternalIndex() == 194 && feedback.texture->GetExternalIndex() == 75) {
+                MGLOG_D_ONCE("sampler/image feedback snapshot: program=194 texture=75 binding=%u element=%u view=%p",
+                             feedback.samplerBinding, feedback.samplerElement, snapshot.imageView);
+            }
+        }
+        return true;
+    }
 
     // The scissor rectangle Vulkan needs for ARB_viewport_array index `index`. Vulkan has no
     // per-viewport scissor-test TOGGLE - a scissor rectangle always applies - so an index whose
@@ -6094,6 +6168,11 @@ void main() {
             MGLOG_E_ONCE("SetupDraw skipped: storage image preparation failed");
             return false;
         }
+        if (!PrepareSamplerImageFeedbackSnapshots(frame, program, programObj,
+                                                  VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT)) {
+            MGLOG_E_ONCE("SetupDraw skipped: sampler/image feedback snapshot failed");
+            return false;
+        }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
 
@@ -6338,7 +6417,9 @@ void main() {
         }
 
         const Bool boundUniforms = m_uniformManager->BindProgramUniformBuffers(
-            frame.commandBuffer, program, programObj, m_frameContext.GetCurrentFrameIndex());
+            frame.commandBuffer, program, programObj, m_frameContext.GetCurrentFrameIndex(),
+            VK_PIPELINE_BIND_POINT_GRAPHICS, nullptr, false,
+            m_samplerImageBindingOverridesScratch.empty() ? nullptr : &m_samplerImageBindingOverridesScratch);
         if (!boundUniforms) {
             MGLOG_E_ONCE("SetupDraw skipped: BindProgramUniformBuffers failed");
             return false;
@@ -6461,6 +6542,11 @@ void main() {
             MGLOG_E_ONCE("DispatchCompute skipped: storage image preparation failed");
             return;
         }
+        if (!PrepareSamplerImageFeedbackSnapshots(frame, program, programObj,
+                                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+            MGLOG_E_ONCE("DispatchCompute skipped: sampler/image feedback snapshot failed");
+            return;
+        }
 
         const VkPipeline pipeline = GetOrCreateComputePipeline(programObj);
         if (pipeline == VK_NULL_HANDLE) {
@@ -6472,7 +6558,8 @@ void main() {
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         const Bool boundUniforms = m_uniformManager->BindProgramUniformBuffers(
             frame.commandBuffer, program, programObj, m_frameContext.GetCurrentFrameIndex(),
-            VK_PIPELINE_BIND_POINT_COMPUTE);
+            VK_PIPELINE_BIND_POINT_COMPUTE, nullptr, false,
+            m_samplerImageBindingOverridesScratch.empty() ? nullptr : &m_samplerImageBindingOverridesScratch);
         if (!boundUniforms) {
             MGLOG_E_ONCE("DispatchCompute skipped: BindProgramUniformBuffers failed");
             return;
@@ -6507,6 +6594,11 @@ void main() {
             MGLOG_E_ONCE("DispatchComputeIndirect skipped: storage image preparation failed");
             return;
         }
+        if (!PrepareSamplerImageFeedbackSnapshots(frame, program, programObj,
+                                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT)) {
+            MGLOG_E_ONCE("DispatchComputeIndirect skipped: sampler/image feedback snapshot failed");
+            return;
+        }
 
         const VkPipeline pipeline = GetOrCreateComputePipeline(programObj);
         if (pipeline == VK_NULL_HANDLE) {
@@ -6518,7 +6610,8 @@ void main() {
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
         const Bool boundUniforms = m_uniformManager->BindProgramUniformBuffers(
             frame.commandBuffer, program, programObj, m_frameContext.GetCurrentFrameIndex(),
-            VK_PIPELINE_BIND_POINT_COMPUTE);
+            VK_PIPELINE_BIND_POINT_COMPUTE, nullptr, false,
+            m_samplerImageBindingOverridesScratch.empty() ? nullptr : &m_samplerImageBindingOverridesScratch);
         if (!boundUniforms) {
             MGLOG_E_ONCE("DispatchComputeIndirect skipped: BindProgramUniformBuffers failed");
             return;

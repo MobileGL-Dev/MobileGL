@@ -223,7 +223,8 @@ target_include_directories(glretrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/helpers"
-        "${APITRACE_ROOT}/retrace")
+        "${APITRACE_ROOT}/retrace"
+        "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay")
 target_compile_definitions(glretrace_common PRIVATE
         main=mobilegl_apitrace_main)
 target_redirect_exit(glretrace_common)
@@ -231,14 +232,16 @@ target_link_libraries(glretrace_common PUBLIC retrace_common glhelpers glproc)
 
 add_library(trace_replay_runner SHARED
         trace_replay_core.cpp
-        trace_replay_jni.cpp)
+        trace_replay_jni.cpp
+        "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay/apitrace_fbo_dump.cpp")
 
 target_compile_features(trace_replay_runner PRIVATE cxx_std_17)
 target_compile_definitions(trace_replay_runner PRIVATE
         MOBILEGL_APITRACE_RETRACE_MAIN=mobilegl_apitrace_main)
 
 target_include_directories(trace_replay_runner PRIVATE
-        "${APITRACE_ROOT}/lib/image")
+        "${APITRACE_ROOT}/lib/image"
+        "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay")
 
 target_link_libraries(trace_replay_runner
         glretrace_common

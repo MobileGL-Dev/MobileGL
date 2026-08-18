@@ -298,6 +298,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp
 
     MobileGL/MG_Util/SelfTest/DriverPost.cpp
+    MobileGL/MG_Util/SelfTest/DriverPostProgram203Witness.cpp
 
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp

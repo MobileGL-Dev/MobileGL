@@ -13,8 +13,13 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
+#if defined(_WIN32)
+#include <direct.h>
+#else
 #include <sys/stat.h>
+#endif
 #include <vector>
 
 // Dumps every colour attachment (and the depth attachment) of every live framebuffer
@@ -34,6 +39,7 @@ using PfnGetIntegerv = void (*)(GLenum, GLint *);
 using PfnGetError = GLenum (*)(void);
 
 constexpr const char *kDumpPointsEnv = "MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS";
+constexpr const char *kTexture2dDumpPointsEnv = "MOBILEGL_TRACE_DUMP_TEXTURE_2D";
 constexpr const char *kScanLimitEnv = "MOBILEGL_TRACE_DUMP_FBO_SCAN_LIMIT";
 constexpr unsigned kDefaultScanLimit = 1024;
 
@@ -42,6 +48,16 @@ struct DumpPoint {
     std::string directory;
     // Empty means "every framebuffer object the driver still knows about".
     std::vector<unsigned> framebuffers;
+    bool done = false;
+};
+
+// CALL,TEXTURE,LEVEL,DIR entries, separated by ';'. This deliberately does not share the
+// framebuffer dump grammar: an absolute Windows directory contains ':' but not ','.
+struct Texture2dDumpPoint {
+    unsigned call = 0;
+    unsigned texture = 0;
+    unsigned level = 0;
+    std::string directory;
     bool done = false;
 };
 
@@ -56,6 +72,7 @@ struct AttachmentDesc {
 };
 
 std::vector<DumpPoint> gDumpPoints;
+std::vector<Texture2dDumpPoint> gTexture2dDumpPoints;
 bool gInstalled = false;
 bool gConfigured = false;
 retrace::Dumper *gInnerDumper = nullptr;
@@ -105,13 +122,27 @@ bool MakeDirectories(const std::string &path) {
     for (std::size_t i = 0; i < path.size(); ++i) {
         partial.push_back(path[i]);
         const bool last = i + 1 == path.size();
-        if (path[i] != '/' && !last) {
+#if defined(_WIN32)
+        const bool separator = path[i] == '/' || path[i] == '\\';
+#else
+        const bool separator = path[i] == '/';
+#endif
+        if (!separator && !last) {
             continue;
         }
         if (partial == "/") {
             continue;
         }
+#if defined(_WIN32)
+        if (separator && partial.size() == 3 && partial[1] == ':') {
+            continue;
+        }
+#endif
+#if defined(_WIN32)
+        if (_mkdir(partial.c_str()) != 0 && errno != EEXIST) {
+#else
         if (mkdir(partial.c_str(), 0755) != 0 && errno != EEXIST) {
+#endif
             return false;
         }
     }
@@ -158,6 +189,52 @@ void ParseDumpPoints(const char *spec) {
             }
         }
         gDumpPoints.push_back(point);
+    }
+}
+
+bool IsDecimal(const std::string &value) {
+    return !value.empty() && value.find_first_not_of("0123456789") == std::string::npos;
+}
+
+void ParseTexture2dDumpPoints(const char *spec) {
+    for (const std::string &entry : Split(spec, ';')) {
+        if (entry.empty()) {
+            continue;
+        }
+        const std::vector<std::string> fields = Split(entry, ',');
+        if (fields.size() != 4 || !IsDecimal(fields[0]) || !IsDecimal(fields[1]) ||
+            !IsDecimal(fields[2]) || fields[3].empty()) {
+            std::cerr << "warning: ignoring malformed " << kTexture2dDumpPointsEnv
+                      << " entry: " << entry << "\n";
+            continue;
+        }
+
+        char *end = nullptr;
+        const unsigned long call = std::strtoul(fields[0].c_str(), &end, 10);
+        if (*end != '\0' || call > std::numeric_limits<unsigned>::max()) {
+            std::cerr << "warning: ignoring malformed " << kTexture2dDumpPointsEnv
+                      << " call: " << entry << "\n";
+            continue;
+        }
+        const unsigned long texture = std::strtoul(fields[1].c_str(), &end, 10);
+        if (*end != '\0' || texture == 0 || texture > std::numeric_limits<unsigned>::max()) {
+            std::cerr << "warning: ignoring malformed " << kTexture2dDumpPointsEnv
+                      << " texture: " << entry << "\n";
+            continue;
+        }
+        const unsigned long level = std::strtoul(fields[2].c_str(), &end, 10);
+        if (*end != '\0' || level > static_cast<unsigned long>(std::numeric_limits<GLint>::max())) {
+            std::cerr << "warning: ignoring malformed " << kTexture2dDumpPointsEnv
+                      << " level: " << entry << "\n";
+            continue;
+        }
+
+        Texture2dDumpPoint point;
+        point.call = static_cast<unsigned>(call);
+        point.texture = static_cast<unsigned>(texture);
+        point.level = static_cast<unsigned>(level);
+        point.directory = fields[3];
+        gTexture2dDumpPoints.push_back(point);
     }
 }
 
@@ -235,6 +312,45 @@ bool DescribeAttachment(GLenum attachment, AttachmentDesc &desc) {
     return desc.width > 0 && desc.height > 0;
 }
 
+bool DescribeTexture2D(GLuint texture, GLint level, AttachmentDesc &desc) {
+    const GLint savedTexture = GetInteger(GL_TEXTURE_BINDING_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    desc.objectType = GL_TEXTURE;
+    desc.objectName = static_cast<GLint>(texture);
+    desc.level = level;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_WIDTH, &desc.width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_HEIGHT, &desc.height);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_INTERNAL_FORMAT, &desc.internalFormat);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, level, GL_TEXTURE_RED_TYPE, &desc.componentType);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+    return DrainErrors() == 0 && desc.width > 0 && desc.height > 0;
+}
+
+bool ReadTexture2DFloats(const AttachmentDesc &desc, std::vector<float> &pixels) {
+    const std::size_t count = static_cast<std::size_t>(desc.width) * desc.height * 4;
+    pixels.assign(count, 0.0f);
+    const GLint savedTexture = GetInteger(GL_TEXTURE_BINDING_2D);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(desc.objectName));
+    if (desc.componentType == GL_INT || desc.componentType == GL_UNSIGNED_INT) {
+        std::vector<std::int32_t> raw(count, 0);
+        const GLenum type = desc.componentType == GL_INT ? GL_INT : GL_UNSIGNED_INT;
+        glGetTexImage(GL_TEXTURE_2D, desc.level, GL_RGBA_INTEGER, type, raw.data());
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+        if (DrainErrors() != 0) {
+            return false;
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            pixels[i] = desc.componentType == GL_INT
+                                ? static_cast<float>(raw[i])
+                                : static_cast<float>(static_cast<std::uint32_t>(raw[i]));
+        }
+        return true;
+    }
+    glGetTexImage(GL_TEXTURE_2D, desc.level, GL_RGBA, GL_FLOAT, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(savedTexture));
+    return DrainErrors() == 0;
+}
+
 // Reads the attachment as floats regardless of its storage: normalised and float targets
 // convert on the way out, integer targets are read as integers and widened. The float view
 // keeps out-of-[0,1] accumulation buffers legible in the statistics even though the PNG
@@ -308,6 +424,17 @@ std::string FormatStatistics(const std::vector<float> &pixels, unsigned channels
                       static_cast<double>(minimum[c]), static_cast<double>(maximum[c]), mean);
         text += buffer;
     }
+    if (pixelCount > 0) {
+        text += " first=(";
+        for (unsigned c = 0; c < channels; ++c) {
+            if (c > 0) {
+                text += ",";
+            }
+            std::snprintf(buffer, sizeof(buffer), "%.9g", static_cast<double>(pixels[c]));
+            text += buffer;
+        }
+        text += ")";
+    }
     std::snprintf(buffer, sizeof(buffer), " nonfinite=%zu hash=%016llx", nonFinite,
                   static_cast<unsigned long long>(hash));
     text += buffer;
@@ -325,8 +452,8 @@ bool WriteFloatPng(const std::string &path, const AttachmentDesc &desc, unsigned
     return snapshot.writePNG(path.c_str());
 }
 
-void DumpOneAttachment(std::ofstream &manifest, const std::string &directory, unsigned framebuffer,
-                       GLenum attachment, const char *label, bool depth) {
+void DumpOneAttachment(std::ofstream &manifest, const std::string &directory,
+                       const std::string &identity, GLenum attachment, const char *label, bool depth) {
     AttachmentDesc desc;
     if (!DescribeAttachment(attachment, desc)) {
         return;
@@ -343,14 +470,13 @@ void DumpOneAttachment(std::ofstream &manifest, const std::string &directory, un
     std::vector<float> pixels;
     const bool read = ReadAttachmentFloats(desc, depth, channels, pixels);
 
-    const std::string path =
-            directory + "/fbo" + std::to_string(framebuffer) + "-" + label + ".png";
+    const std::string path = directory + "/" + identity + "-" + label + ".png";
     const bool wrote = read && WriteFloatPng(path, desc, channels, pixels);
 
     char header[512];
     std::snprintf(header, sizeof(header),
-                  "fbo %u %s object=%s name=%d level=%d size=%dx%d internalformat=0x%04x component=%s",
-                  framebuffer, label,
+                  "%s %s object=%s name=%d level=%d size=%dx%d internalformat=0x%04x component=%s",
+                  identity.c_str(), label,
                   desc.objectType == GL_RENDERBUFFER ? "renderbuffer" : "texture", desc.objectName,
                   desc.level, desc.width, desc.height, static_cast<unsigned>(desc.internalFormat),
                   ComponentTypeName(desc.componentType));
@@ -381,13 +507,14 @@ void DumpFramebuffer(std::ofstream &manifest, const std::string &directory, unsi
     }
 
     const GLint savedReadBuffer = GetInteger(GL_READ_BUFFER);
+    const std::string identity = "fbo" + std::to_string(framebuffer);
     for (GLint index = 0; index < maxColorAttachments; ++index) {
         char label[32];
         std::snprintf(label, sizeof(label), "att%d", index);
-        DumpOneAttachment(manifest, directory, framebuffer,
+        DumpOneAttachment(manifest, directory, identity,
                           static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + index), label, false);
     }
-    DumpOneAttachment(manifest, directory, framebuffer, GL_DEPTH_ATTACHMENT, "depth", true);
+    DumpOneAttachment(manifest, directory, identity, GL_DEPTH_ATTACHMENT, "depth", true);
 
     // The read buffer is per-framebuffer state the trace goes on using; put it back.
     if (framebuffer != 0 && savedReadBuffer != 0) {
@@ -416,6 +543,7 @@ void RunDumpPoint(DumpPoint &point) {
     const GLint savedPackSkipRows = GetInteger(GL_PACK_SKIP_ROWS);
     const GLint savedPackImageHeight = GetInteger(GL_PACK_IMAGE_HEIGHT);
     const GLint savedPackSkipImages = GetInteger(GL_PACK_SKIP_IMAGES);
+    const GLint savedPackSwapBytes = GetInteger(GL_PACK_SWAP_BYTES);
     DrainErrors();
 
     if (savedPackBuffer != 0) {
@@ -427,6 +555,7 @@ void RunDumpPoint(DumpPoint &point) {
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
     glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
     glPixelStorei(GL_PACK_SKIP_IMAGES, 0);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
     DrainErrors();
 
     const GLint maxColorAttachments = GetInteger(GL_MAX_COLOR_ATTACHMENTS);
@@ -462,6 +591,7 @@ void RunDumpPoint(DumpPoint &point) {
     glPixelStorei(GL_PACK_SKIP_ROWS, savedPackSkipRows);
     glPixelStorei(GL_PACK_IMAGE_HEIGHT, savedPackImageHeight);
     glPixelStorei(GL_PACK_SKIP_IMAGES, savedPackSkipImages);
+    glPixelStorei(GL_PACK_SWAP_BYTES, savedPackSwapBytes);
     DrainErrors();
 
     std::cerr << "MOBILEGL_TRACE_FBO_DUMP: call " << retrace::callNo << " -> " << manifestPath
@@ -469,10 +599,96 @@ void RunDumpPoint(DumpPoint &point) {
     point.done = true;
 }
 
+void RunTexture2dDumpPoint(Texture2dDumpPoint &point) {
+    if (!MakeDirectories(point.directory)) {
+        std::cerr << "warning: failed to create texture dump directory " << point.directory << "\n";
+        point.done = true;
+        return;
+    }
+
+    // glGetError is destructive. This debug-only snapshot hook deliberately starts from a
+    // clean error state so diagnostics below identify the dump rather than an earlier trace call.
+    DrainErrors();
+    const GLint savedReadFramebuffer = GetInteger(GL_READ_FRAMEBUFFER_BINDING);
+    const GLint savedPackBuffer = GetInteger(GL_PIXEL_PACK_BUFFER_BINDING);
+    const GLint savedPackAlignment = GetInteger(GL_PACK_ALIGNMENT);
+    const GLint savedPackRowLength = GetInteger(GL_PACK_ROW_LENGTH);
+    const GLint savedPackSkipPixels = GetInteger(GL_PACK_SKIP_PIXELS);
+    const GLint savedPackSkipRows = GetInteger(GL_PACK_SKIP_ROWS);
+    const GLint savedPackImageHeight = GetInteger(GL_PACK_IMAGE_HEIGHT);
+    const GLint savedPackSkipImages = GetInteger(GL_PACK_SKIP_IMAGES);
+    const GLint savedPackSwapBytes = GetInteger(GL_PACK_SWAP_BYTES);
+    DrainErrors();
+
+    if (savedPackBuffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
+    glPixelStorei(GL_PACK_SKIP_IMAGES, 0);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+    DrainErrors();
+
+    const std::string identity = "texture" + std::to_string(point.texture) +
+                                 "-level" + std::to_string(point.level);
+    const std::string manifestPath = point.directory + "/manifest.txt";
+    std::ofstream manifest(manifestPath, std::ios::trunc);
+    manifest << "call " << retrace::callNo << " texture " << point.texture << " level "
+             << point.level << "\n";
+    AttachmentDesc desc;
+    if (glIsTexture(point.texture) == GL_FALSE ||
+        !DescribeTexture2D(point.texture, static_cast<GLint>(point.level), desc)) {
+        manifest << identity << " skipped=not-live-2d-texture\n";
+    } else {
+        std::vector<float> pixels;
+        const bool read = ReadTexture2DFloats(desc, pixels);
+        const bool wrote = read && WriteFloatPng(point.directory + "/" + identity + ".png", desc, 4, pixels);
+        manifest << identity << " object=texture name=" << desc.objectName << " level=" << desc.level
+                 << " size=" << desc.width << "x" << desc.height << " internalformat=0x" << std::hex
+                 << static_cast<unsigned>(desc.internalFormat) << std::dec
+                 << " component=" << ComponentTypeName(desc.componentType);
+        if (read) {
+            manifest << FormatStatistics(pixels, 4);
+        } else {
+            manifest << " read=failed";
+        }
+        if (!wrote) {
+            manifest << " png=failed";
+        }
+        manifest << "\n";
+    }
+    manifest.flush();
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(savedReadFramebuffer));
+    if (savedPackBuffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(savedPackBuffer));
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, savedPackAlignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, savedPackRowLength);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, savedPackSkipPixels);
+    glPixelStorei(GL_PACK_SKIP_ROWS, savedPackSkipRows);
+    glPixelStorei(GL_PACK_IMAGE_HEIGHT, savedPackImageHeight);
+    glPixelStorei(GL_PACK_SKIP_IMAGES, savedPackSkipImages);
+    glPixelStorei(GL_PACK_SWAP_BYTES, savedPackSwapBytes);
+    DrainErrors();
+
+    std::cerr << "MOBILEGL_TRACE_TEXTURE_2D_DUMP: call " << retrace::callNo << " texture "
+              << point.texture << " level " << point.level << " -> " << manifestPath << "\n";
+    point.done = true;
+}
+
 void RunPendingDumps() {
     for (DumpPoint &point : gDumpPoints) {
         if (!point.done && point.call == retrace::callNo) {
             RunDumpPoint(point);
+        }
+    }
+    for (Texture2dDumpPoint &point : gTexture2dDumpPoints) {
+        if (!point.done && point.call == retrace::callNo) {
+            RunTexture2dDumpPoint(point);
         }
     }
 }
@@ -511,8 +727,12 @@ void InstallIfRequested() {
         if (spec != nullptr && spec[0] != '\0') {
             ParseDumpPoints(spec);
         }
+        const char *textureSpec = std::getenv(kTexture2dDumpPointsEnv);
+        if (textureSpec != nullptr && textureSpec[0] != '\0') {
+            ParseTexture2dDumpPoints(textureSpec);
+        }
     }
-    if (gDumpPoints.empty()) {
+    if (gDumpPoints.empty() && gTexture2dDumpPoints.empty()) {
         gInstalled = true;
         return;
     }
@@ -526,6 +746,11 @@ void InstallIfRequested() {
     gInstalled = true;
     for (const DumpPoint &point : gDumpPoints) {
         std::cerr << "MOBILEGL_TRACE_FBO_DUMP: armed for call " << point.call << " -> "
+                  << point.directory << "\n";
+    }
+    for (const Texture2dDumpPoint &point : gTexture2dDumpPoints) {
+        std::cerr << "MOBILEGL_TRACE_TEXTURE_2D_DUMP: armed for call " << point.call
+                  << " texture " << point.texture << " level " << point.level << " -> "
                   << point.directory << "\n";
     }
 }

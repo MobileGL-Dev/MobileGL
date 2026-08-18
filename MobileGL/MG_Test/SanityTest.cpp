@@ -2387,3 +2387,13 @@ TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
 }
+
+TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMip) {
+    using MobileGL::MG_Backend::DirectVulkan::UniformManager;
+
+    EXPECT_TRUE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 2, GL_WRITE_ONLY));
+    EXPECT_TRUE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 3, GL_READ_WRITE));
+    EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 2, GL_READ_ONLY));
+    EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 0, GL_WRITE_ONLY));
+    EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 4, GL_WRITE_ONLY));
+}

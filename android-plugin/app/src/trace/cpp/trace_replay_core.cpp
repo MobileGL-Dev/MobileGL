@@ -176,6 +176,18 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         }
         setenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS", dumpPoints.c_str(), 1);
     }
+    if (request.texture2dDumps.empty()) {
+        unsetenv("MOBILEGL_TRACE_DUMP_TEXTURE_2D");
+    } else {
+        std::string dumpPoints;
+        for (const std::string& dumpPoint : request.texture2dDumps) {
+            if (!dumpPoints.empty()) {
+                dumpPoints += ';';
+            }
+            dumpPoints += dumpPoint;
+        }
+        setenv("MOBILEGL_TRACE_DUMP_TEXTURE_2D", dumpPoints.c_str(), 1);
+    }
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
@@ -378,6 +390,13 @@ std::string SnapshotCallSet(const Request& request) {
     std::string callSet = std::to_string(request.targetCall);
     for (const std::string& dumpPoint : request.fboAttachmentDumps) {
         const std::size_t separator = dumpPoint.find(':');
+        const std::string call = dumpPoint.substr(0, separator);
+        if (!call.empty() && call != std::to_string(request.targetCall)) {
+            callSet += "," + call;
+        }
+    }
+    for (const std::string& dumpPoint : request.texture2dDumps) {
+        const std::size_t separator = dumpPoint.find(',');
         const std::string call = dumpPoint.substr(0, separator);
         if (!call.empty() && call != std::to_string(request.targetCall)) {
             callSet += "," + call;

@@ -31,6 +31,7 @@ Usage:
     [--avoid-angle-llvmpipe-sampler-mipmap-min-filter] \
     [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
+    [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
     --timeout-seconds N
 
 Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
@@ -104,6 +105,7 @@ use_pbuffer=0
 avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
 avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
+texture_2d_dumps=""
 timeout_seconds=""
 
 while [ "$#" -gt 0 ]; do
@@ -144,6 +146,7 @@ while [ "$#" -gt 0 ]; do
       shift 1
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
+    --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -262,6 +265,27 @@ copy_app_artifact() {
   fi
 }
 
+copy_texture_2d_dumps() {
+  [ -n "${texture_2d_dumps}" ] || return
+  saved_ifs="${IFS}"
+  IFS=';'
+  set -- ${texture_2d_dumps}
+  IFS="${saved_ifs}"
+  for dump_point in "$@"; do
+    dump_dir="${dump_point#*,}"
+    dump_dir="${dump_dir#*,}"
+    dump_dir="${dump_dir#*,}"
+    [ -n "${dump_dir}" ] || continue
+    dump_name="$(basename "${dump_dir}")"
+    destination_dir="${result_dir}/${dump_name}"
+    mkdir -p "${destination_dir}"
+    if ! adb_device_path exec-out run-as "${package_name}" tar -C "${dump_dir}" -cf - . | tar -xf - -C "${destination_dir}"; then
+      echo "trace-replay-ci.sh: warning: failed to copy texture dump ${dump_dir}" >&2
+      rm -rf "${destination_dir}"
+    fi
+  done
+}
+
 prepare_fixture() {
   fixture_dir="${fixture_root}/${safe_case}"
   rm -rf "${fixture_dir}"
@@ -339,6 +363,9 @@ run_retrace() {
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true
   fi
+  if [ -n "${texture_2d_dumps}" ]; then
+    set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"
+  fi
   set -- "$@" \
     --es output_dir "${app_dir}/output" \
     --es diff_path "${app_dir}/output/${safe_case}-diff.png" \
@@ -399,6 +426,7 @@ run_retrace() {
   copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
   copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
   copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
+  copy_texture_2d_dumps
 
   # A replay that wrote result.json but did not pass used to print nothing but
   # the JSON, which for a non-zero statusCode says only "retrace failed with

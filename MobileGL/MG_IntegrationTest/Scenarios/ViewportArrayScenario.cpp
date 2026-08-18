@@ -428,15 +428,15 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             std::vector<GLfloat> pixels(static_cast<size_t>(kWidth) * kHeight, 0.0f);
             glReadPixels(0, 0, kWidth, kHeight, GL_RED, GL_FLOAT, pixels.data());
             for (int i = 0; i < kViewportCount; ++i) {
-                const float near = static_cast<float>(i) / 16.0f;
-                const float far = 1.0f - static_cast<float>(i) / 16.0f;
+                const float nearDepth = static_cast<float>(i) / 16.0f;
+                const float farDepth = 1.0f - static_cast<float>(i) / 16.0f;
                 // The tolerance covers depth-buffer-free rasterization of gl_FragCoord.z on a
                 // software rasterizer; the per-index values are 1/16 apart, so it cannot let a
                 // neighbouring viewport's range through, and viewport 0's range (0, 1) differs
                 // from every other index by at least 1/16.
-                EXPECT_NEAR(pixels[i], near, 1.0e-3f)
+                EXPECT_NEAR(pixels[i], nearDepth, 1.0e-3f)
                     << "viewport " << i << " near-plane depth; got viewport 0's range if this is 0";
-                EXPECT_NEAR(pixels[static_cast<size_t>(kWidth) + i], far, 1.0e-3f)
+                EXPECT_NEAR(pixels[static_cast<size_t>(kWidth) + i], farDepth, 1.0e-3f)
                     << "viewport " << i << " far-plane depth; got viewport 0's range if this is 1";
             }
 

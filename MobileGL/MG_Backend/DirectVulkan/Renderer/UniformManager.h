@@ -26,9 +26,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     public:
         struct SamplerBindingOverride {
             Uint32 binding = 0;
+            Uint32 element = 0;
             MG_State::GLState::ITextureObject* texture = nullptr;
             const MG_State::GLState::SamplerObject* sampler = nullptr;
             VkImageView imageView = VK_NULL_HANDLE;
+            VkImageLayout imageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            Bool forceNearestFiltering = false;
+        };
+
+        struct SamplerImageFeedbackBinding {
+            Uint32 samplerBinding = 0;
+            Uint32 samplerElement = 0;
+            MG_State::GLState::ITextureObject* texture = nullptr;
+            const MG_State::GLState::SamplerObject* sampler = nullptr;
+            SamplerNumericDomain numericDomain = SamplerNumericDomain::Unknown;
         };
 
         Bool Initialize(VkDevice device, VkBufferManager* bufferManager,
@@ -79,6 +90,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool CollectStorageImageTextures(const MG_State::GLState::ProgramObject& program,
                                          const ProgramFactory::VkProgramObject& programObj,
                                          Vector<MG_State::GLState::ITextureObject*>& outTextures) const;
+        Bool CollectSamplerImageFeedback(
+            const MG_State::GLState::ProgramObject& program,
+            const ProgramFactory::VkProgramObject& programObj,
+            Vector<SamplerImageFeedbackBinding>& outBindings) const;
+        static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
+                                                             GLint imageLevel, GLenum imageAccess);
         // samplerDescriptorsUnchangedHint: the caller (SetupDraw fast path) proved that
         // every input of every combined-image-sampler resolution is unchanged since the
         // previous draw's resolve - same (texture, sampler) per binding, texture params
@@ -91,7 +108,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                        Uint32 frameIndex,
                                        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                                        const SamplerBindingOverride* samplerBindingOverride = nullptr,
-                                       Bool samplerDescriptorsUnchangedHint = false);
+                                       Bool samplerDescriptorsUnchangedHint = false,
+                                       const Vector<SamplerBindingOverride>* samplerBindingOverrides = nullptr);
 
         // Pure format-policy helper kept public for host regression tests. Formatted storage
         // images use their shader qualifier; transformed float images use glBindImageTexture's

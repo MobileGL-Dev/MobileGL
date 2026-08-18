@@ -1,0 +1,164 @@
+// MobileGL - MobileGL/MG_Util/SelfTest/DriverPostProgram203Witness.comp
+// Copyright (c) 2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+//
+// Native Vulkan GLSL 450 witness for Program 203's first subgroup reduction.
+// It is intentionally independent of the GL 430 integration scenario. The body
+// below preserves Program 203's source reduction; the surrounding diagnostics
+// only observe its topology and cache handoffs.
+
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
+
+const uint kTopologyNonuniformNumSubgroups = 1u << 0u;
+const uint kTopologyInvalidNumSubgroups = 1u << 1u;
+const uint kTopologyInvalidSubgroupId = 1u << 2u;
+const uint kTopologyInvalidSubgroupLane = 1u << 3u;
+const uint kWitnessMagic = 0x50323033u;
+
+layout(std430, set = 0, binding = 0) buffer Program203WitnessOutput {
+    uint magic;
+    uint topologyFlags;
+    uint numSubgroups;
+    uint loopLength;
+    uint seenSubgroupMask;
+
+    uvec4 owner511;
+
+    uint lastLaneWriterCount[32];
+    uint indexedInputTotal[32];
+
+    vec2 rawPrefix[32];
+    vec2 scanCache[6][32];
+    vec2 finalAverage;
+} outWitness;
+
+// Program 203's cache stays separate from all diagnostic shared state. In
+// particular, no instrumentation stores through prefixSumCache except source
+// writes retained below.
+shared vec2 prefixSumCache[32];
+shared uint canonicalNumSubgroups;
+shared uint topologyFlagsShared;
+shared uint seenSubgroupMaskShared;
+shared uint lastLaneWriterCountShared[32];
+shared uint indexedInputTotalShared[32];
+
+void main() {
+    const uint localInvocationIndex = gl_LocalInvocationIndex;
+
+    // Host memory is deliberately poisoned before dispatch. Initialize only
+    // shared atomic diagnostic state; owner, average, and magic remain poisoned
+    // until their required post-source-barrier writes below.
+    if (localInvocationIndex == 0u) {
+        canonicalNumSubgroups = 0u;
+        topologyFlagsShared = 0u;
+        seenSubgroupMaskShared = 0u;
+    }
+    if (localInvocationIndex < 32u) {
+        lastLaneWriterCountShared[localInvocationIndex] = 0u;
+        indexedInputTotalShared[localInvocationIndex] = 0u;
+    }
+    memoryBarrierShared();
+    barrier();
+
+    // Invocation zero defines the canonical domain. It is broadcast through
+    // shared memory before every invocation records its own raw observation.
+    if (localInvocationIndex == 0u) {
+        canonicalNumSubgroups = gl_NumSubgroups;
+        outWitness.numSubgroups = gl_NumSubgroups;
+    }
+    barrier();
+
+    const uint canonicalN = canonicalNumSubgroups;
+    if (gl_NumSubgroups != canonicalN)
+        atomicOr(topologyFlagsShared, kTopologyNonuniformNumSubgroups);
+    if (gl_NumSubgroups < 2u || gl_NumSubgroups > 32u)
+        atomicOr(topologyFlagsShared, kTopologyInvalidNumSubgroups);
+    if (gl_SubgroupID >= canonicalN || gl_SubgroupID >= 32u)
+        atomicOr(topologyFlagsShared, kTopologyInvalidSubgroupId);
+    if (gl_SubgroupSize == 0u || gl_SubgroupInvocationID >= gl_SubgroupSize)
+        atomicOr(topologyFlagsShared, kTopologyInvalidSubgroupLane);
+
+    // Keep all atomic collection bounded by the canonical valid domain. A
+    // nonuniform/broken report reaches the uniform safety branch below instead
+    // of making some lanes return before a barrier.
+    const bool canonicalDomain = canonicalN >= 2u && canonicalN <= 32u;
+    const bool idInCanonicalDomain = canonicalDomain && gl_SubgroupID < canonicalN;
+    if (idInCanonicalDomain) {
+        atomicOr(seenSubgroupMaskShared, 1u << gl_SubgroupID);
+        atomicAdd(indexedInputTotalShared[gl_SubgroupID], localInvocationIndex + 1u);
+        if (gl_SubgroupSize != 0u && gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+            atomicAdd(lastLaneWriterCountShared[gl_SubgroupID], 1u);
+    }
+    memoryBarrierShared();
+    barrier();
+
+    if (localInvocationIndex == 0u)
+        outWitness.seenSubgroupMask = seenSubgroupMaskShared;
+    if (localInvocationIndex < 32u) {
+        outWitness.lastLaneWriterCount[localInvocationIndex] = lastLaneWriterCountShared[localInvocationIndex];
+        outWitness.indexedInputTotal[localInvocationIndex] = indexedInputTotalShared[localInvocationIndex];
+    }
+
+    // This branch is uniform after collection and is solely a safety guard for
+    // broken topology reports. The valid side retains Program 203 verbatim.
+    const bool sourceDomain = canonicalDomain && topologyFlagsShared == 0u;
+    if (sourceDomain) {
+        vec2 sampleLuminance = vec2(float(gl_LocalInvocationIndex + 1u), 0.0);
+        sampleLuminance = subgroupInclusiveAdd(sampleLuminance);
+
+        if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+            prefixSumCache[gl_SubgroupID] = sampleLuminance;
+        barrier();
+
+        if (gl_LocalInvocationIndex < gl_NumSubgroups)
+            outWitness.rawPrefix[gl_LocalInvocationIndex] = prefixSumCache[gl_LocalInvocationIndex];
+        barrier();
+
+        uint loopLength = uint(findMSB(gl_NumSubgroups));
+        loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+        if (gl_LocalInvocationIndex == 0u)
+            outWitness.loopLength = loopLength;
+
+        for (uint scanStage = 0u; scanStage < loopLength; ++scanStage) {
+            if ((gl_SubgroupID & (1u << scanStage)) > 0u) {
+                sampleLuminance += prefixSumCache[(gl_SubgroupID >> scanStage << scanStage) - 1u];
+                if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+                    prefixSumCache[gl_SubgroupID] = sampleLuminance;
+            }
+            barrier();
+
+            if (gl_LocalInvocationIndex < gl_NumSubgroups)
+                outWitness.scanCache[scanStage][gl_LocalInvocationIndex] =
+                    prefixSumCache[gl_LocalInvocationIndex];
+            // A second, diagnostic-only barrier prevents a faster invocation
+            // from entering the next source stage while another reads this cache.
+            barrier();
+        }
+
+        if (gl_LocalInvocationIndex == 511u)
+            prefixSumCache[0] = sampleLuminance / 512.0;
+        barrier();
+
+        if (gl_LocalInvocationIndex == 511u) {
+            outWitness.owner511 = uvec4(gl_SubgroupSize, gl_NumSubgroups, gl_SubgroupID,
+                                        gl_SubgroupInvocationID);
+            outWitness.finalAverage = prefixSumCache[0];
+        }
+    }
+
+    // Both sides of the uniform branch reach this barrier. The magic is the
+    // completion latch and therefore cannot be written before the final barrier.
+    barrier();
+    if (localInvocationIndex == 0u) {
+        outWitness.topologyFlags = topologyFlagsShared;
+        outWitness.magic = kWitnessMagic;
+    }
+}

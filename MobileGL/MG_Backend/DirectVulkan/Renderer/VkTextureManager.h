@@ -310,6 +310,11 @@ public:
         static inline VmaAllocator s_allocator = VK_NULL_HANDLE;
     };
 
+    struct SampledTextureSnapshot {
+        VkImageView imageView = VK_NULL_HANDLE;
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    };
+
     Bool Initialize(const InitInfo& initInfo);
     void Shutdown();
     void BeginFrame(Uint32 frameIndex);
@@ -343,6 +348,13 @@ public:
                                                       VkImageLayout newLayout);
     Bool TransitionTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
     Bool TransitionTextureForStorageImage(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture);
+    // Copies the complete sampler-visible mip range into a transient sampled image. The source is
+    // restored to its prior layout, so image-store descriptors continue to name the original image.
+    // The transient ownership is tied to the current frame slot and is safe through its submission.
+    Bool SnapshotTextureForSampling(VkCommandBuffer commandBuffer, MG_State::GLState::ITextureObject& texture,
+                                    SamplerNumericDomain numericDomain,
+                                    VkPipelineStageFlags consumerShaderStageMask,
+                                    SampledTextureSnapshot& outSnapshot);
 
     // Recording-generation bookkeeping for the pre-pass command stream. The
     // generation advances every time the frame command buffer (re)begins

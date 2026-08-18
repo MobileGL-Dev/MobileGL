@@ -115,7 +115,8 @@ public final class TraceReplayActivity extends Activity {
                 request.usePbuffer,
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 request.avoidAngleLlvmpipeExplicitLodBias,
-                request.coherentAsFlush
+                request.coherentAsFlush,
+                request.texture2dDumps
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -147,7 +148,8 @@ public final class TraceReplayActivity extends Activity {
             boolean usePbuffer,
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
             boolean avoidAngleLlvmpipeExplicitLodBias,
-            boolean coherentAsFlush
+            boolean coherentAsFlush,
+            String texture2dDumps
     );
 
     private static final class TraceReplayRequest {
@@ -172,6 +174,7 @@ public final class TraceReplayActivity extends Activity {
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
         final boolean avoidAngleLlvmpipeExplicitLodBias;
         final boolean coherentAsFlush;
+        final String texture2dDumps;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -194,7 +197,8 @@ public final class TraceReplayActivity extends Activity {
                 boolean usePbuffer,
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 boolean avoidAngleLlvmpipeExplicitLodBias,
-                boolean coherentAsFlush
+                boolean coherentAsFlush,
+                String texture2dDumps
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -217,6 +221,7 @@ public final class TraceReplayActivity extends Activity {
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
             this.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias;
             this.coherentAsFlush = coherentAsFlush;
+            this.texture2dDumps = texture2dDumps;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
@@ -243,7 +248,8 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("use_pbuffer", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_explicit_lod_bias", false),
-                    intent.getBooleanExtra("coherent_as_flush", false)
+                    intent.getBooleanExtra("coherent_as_flush", false),
+                    readString(intent, "texture_2d_dumps", "")
             );
         }
 

@@ -15,6 +15,11 @@
 #include <ostream>
 #include <sstream>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 // MobileGL's own headers, in the order MobileGL/Includes.h uses them: GL/gl.h
 // first, then glcorearb.h for the 3.x+ entry points. This binary links
 // MobileGL_s, so every gl*/egl* below binds to MobileGL's implementation, not
@@ -52,6 +57,37 @@ namespace MGITest {
         // bug cannot hide behind a square.
         constexpr int kSurfaceWidth = 128;
         constexpr int kSurfaceHeight = 96;
+
+#if defined(_WIN32)
+        HWND g_testWindow = nullptr;
+
+        HWND CreateTestWindow() {
+            static const wchar_t* const kClassName = L"MobileGLIntegrationTestWindow";
+            static bool registered = false;
+            if (!registered) {
+                WNDCLASSW windowClass{};
+                windowClass.lpfnWndProc = DefWindowProcW;
+                windowClass.hInstance = GetModuleHandleW(nullptr);
+                windowClass.lpszClassName = kClassName;
+                if (RegisterClassW(&windowClass) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+                    return nullptr;
+                }
+                registered = true;
+            }
+            return CreateWindowExW(0, kClassName, L"MobileGL Integration Test", WS_OVERLAPPEDWINDOW,
+                                   CW_USEDEFAULT, CW_USEDEFAULT, kSurfaceWidth, kSurfaceHeight, nullptr, nullptr,
+                                   GetModuleHandleW(nullptr), nullptr);
+        }
+#endif
+
+        bool UseWindowSurface() {
+#if defined(_WIN32)
+            const char* value = std::getenv("MOBILEGL_ITEST_WINDOW_SURFACE");
+            return value != nullptr && value[0] != '\0' && std::strcmp(value, "0") != 0;
+#else
+            return false;
+#endif
+        }
 
         std::string EnvOr(const char* name, const char* fallback) {
             const char* value = std::getenv(name);
@@ -134,8 +170,9 @@ namespace MGITest {
                 return 3;
             }
 
+            const bool useWindowSurface = UseWindowSurface();
             const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
-                                            EGL_PBUFFER_BIT,
+                                            useWindowSurface ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
                                             EGL_RED_SIZE,
                                             8,
                                             EGL_GREEN_SIZE,
@@ -152,7 +189,9 @@ namespace MGITest {
             EGLConfig config = nullptr;
             EGLint configCount = 0;
             if (eglChooseConfig(display, configAttribs, &config, 1, &configCount) != EGL_TRUE || configCount < 1) {
-                outReason = WithEglError("eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
+                outReason = WithEglError(useWindowSurface
+                                             ? "eglChooseConfig found no window-capable RGBA8/D24 config"
+                                             : "eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
                 return 4;
             }
 
@@ -166,10 +205,23 @@ namespace MGITest {
                 return 5;
             }
 
-            const EGLint pbufferAttribs[] = {EGL_WIDTH, kSurfaceWidth, EGL_HEIGHT, kSurfaceHeight, EGL_NONE};
-            EGLSurface surface = eglCreatePbufferSurface(display, config, pbufferAttribs);
+            EGLSurface surface = EGL_NO_SURFACE;
+            if (useWindowSurface) {
+#if defined(_WIN32)
+                if (g_testWindow == nullptr) g_testWindow = CreateTestWindow();
+                if (g_testWindow == nullptr) {
+                    outReason = "failed to create the Windows integration-test window";
+                    return 6;
+                }
+                surface = eglCreateWindowSurface(display, config, g_testWindow, nullptr);
+#endif
+            } else {
+                const EGLint pbufferAttribs[] = {EGL_WIDTH, kSurfaceWidth, EGL_HEIGHT, kSurfaceHeight, EGL_NONE};
+                surface = eglCreatePbufferSurface(display, config, pbufferAttribs);
+            }
             if (surface == EGL_NO_SURFACE) {
-                outReason = WithEglError("eglCreatePbufferSurface failed");
+                outReason = WithEglError(useWindowSurface ? "eglCreateWindowSurface failed"
+                                                         : "eglCreatePbufferSurface failed");
                 return 6;
             }
             // The step that brings the whole backend up (DirectVulkan creates its
@@ -491,6 +543,12 @@ namespace MGITest {
         if (m_context != nullptr) eglDestroyContext(display, static_cast<EGLContext>(m_context));
         if (m_surface != nullptr) eglDestroySurface(display, static_cast<EGLSurface>(m_surface));
         eglTerminate(display);
+#if defined(_WIN32)
+        if (g_testWindow != nullptr) {
+            DestroyWindow(g_testWindow);
+            g_testWindow = nullptr;
+        }
+#endif
         m_context = nullptr;
         m_surface = nullptr;
         m_display = nullptr;

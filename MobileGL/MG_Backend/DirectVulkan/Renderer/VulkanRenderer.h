@@ -929,6 +929,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // already sampleable.
         Vector<VkTextureManager::TextureResource*> m_sampledResourcesScratch;
         Vector<MG_State::GLState::ITextureObject*> m_storageImageTexturesScratch;
+        Vector<UniformManager::SamplerImageFeedbackBinding> m_samplerImageFeedbackScratch;
+        Vector<UniformManager::SamplerBindingOverride> m_samplerImageBindingOverridesScratch;
         Vector<VkBuffer> m_vertexBuffersScratch;
         Vector<VkDeviceSize> m_vertexOffsetsScratch;
         Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
@@ -1148,6 +1150,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             FrameContext::FrameData& frame,
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj);
+        // Vulkan forbids a sampled descriptor and writable storage descriptor from naming the
+        // same image subresource in one shader operation. Snapshot only the sampler side; the
+        // storage descriptor continues to name the application texture.
+        Bool PrepareSamplerImageFeedbackSnapshots(
+            FrameContext::FrameData& frame,
+            const MG_State::GLState::ProgramObject& program,
+            const ProgramFactory::VkProgramObject& programObj,
+            VkPipelineStageFlags consumerShaderStageMask);
 
         // The per-draw dynamic-state tail (viewport, scissor, blend constants, depth
         // bias, line width, stencil), gated behind one render-state-parameters-version

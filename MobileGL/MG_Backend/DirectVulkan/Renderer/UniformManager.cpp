@@ -542,11 +542,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         outImageInfo = {
             .sampler = m_samplerManager->GetOrCreateSampler(*samplerBindingOverride.sampler,
-                                                            *samplerBindingOverride.texture),
+                                                            *samplerBindingOverride.texture,
+                                                            samplerBindingOverride.forceNearestFiltering,
+                                                            resource->sampledLevelCount),
             .imageView = samplerBindingOverride.imageView != VK_NULL_HANDLE ?
                 samplerBindingOverride.imageView :
                 (resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView),
-            .imageLayout = resource->layout,
+            .imageLayout = samplerBindingOverride.imageLayout != VK_IMAGE_LAYOUT_UNDEFINED ?
+                samplerBindingOverride.imageLayout : resource->layout,
         };
         return outImageInfo.sampler != VK_NULL_HANDLE;
     }
@@ -1269,6 +1272,87 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool UniformManager::SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
+                                                                 GLint imageLevel, GLenum imageAccess) {
+        return imageAccess != GL_READ_ONLY && imageLevel >= samplerBaseLevel && imageLevel <= samplerMaxLevel;
+    }
+
+    Bool UniformManager::CollectSamplerImageFeedback(
+        const MG_State::GLState::ProgramObject& program,
+        const ProgramFactory::VkProgramObject& programObj,
+        Vector<SamplerImageFeedbackBinding>& outBindings) const {
+        outBindings.clear();
+        MOBILEGL_ASSERT(MG_State::pGLContext != nullptr,
+                        "CollectSamplerImageFeedback: GL context is null");
+        if (programObj.declinedDescriptors) return true;
+
+        for (const Uint32 samplerBinding : programObj.activeBindings) {
+            if (samplerBinding >= m_maxBindings ||
+                programObj.bindingKinds[samplerBinding] != ProgramFactory::DescriptorBindingKind::CombinedImageSampler) {
+                continue;
+            }
+            const Uint32 samplerCount = BindingDescriptorCount(programObj, samplerBinding);
+            for (Uint32 samplerElement = 0; samplerElement < samplerCount; ++samplerElement) {
+                MG_State::GLState::ITextureObject* sampledTexture = nullptr;
+                const MG_State::GLState::SamplerObject* sampledSampler = nullptr;
+                if (!ResolveSampledBinding(program, programObj, samplerBinding, samplerElement,
+                                           sampledTexture, sampledSampler) ||
+                    sampledTexture == nullptr || sampledSampler == nullptr ||
+                    MG_State::GLState::SamplesAsIncompleteTexture(sampledTexture, sampledSampler)) {
+                    // ResolveSamplerDescriptor uses a fallback in these cases, which cannot
+                    // alias the image-unit binding of the original texture.
+                    continue;
+                }
+                // Multisample source images intentionally omit TRANSFER_SRC usage. Keep their existing
+                // direct binding instead of turning otherwise valid sampler2DMS/image2DMS dispatches
+                // into failed dispatches; a correct snapshot for them needs a same-sample-count path.
+                const TextureTarget sampledTarget = sampledTexture->GetTarget();
+                if (sampledTarget == TextureTarget::Texture2DMultisample ||
+                    sampledTarget == TextureTarget::Texture2DMultisampleArray) {
+                    continue;
+                }
+                const auto& levelRange = sampledTexture->GetLevelRange();
+                Bool aliasesWritableImage = false;
+                for (const Uint32 imageBinding : programObj.activeBindings) {
+                    if (imageBinding >= m_maxBindings ||
+                        programObj.bindingKinds[imageBinding] != ProgramFactory::DescriptorBindingKind::StorageImage) {
+                        continue;
+                    }
+                    if (imageBinding >= programObj.samplerUniformLocationByBinding.size()) return false;
+                    const Int baseLocation = programObj.samplerUniformLocationByBinding[imageBinding];
+                    if (baseLocation < 0) return false;
+                    const Uint32 imageCount = BindingDescriptorCount(programObj, imageBinding);
+                    for (Uint32 imageElement = 0; imageElement < imageCount; ++imageElement) {
+                        const Int location = ResolveDescriptorElementLocation(program, baseLocation, imageElement);
+                        if (location < 0) return false;
+                        const Int imageUnit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+                        if (imageUnit < 0 || imageUnit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
+                            return false;
+                        }
+                        const auto& image = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
+                        // A sampler view exposes all layers of its target; equal texture plus an
+                        // overlapping mip therefore aliases the writable image subresource.
+                        if (image.Texture.get() == sampledTexture &&
+                            SamplerOverlapsWritableImageSubresource(levelRange.x(), levelRange.y(),
+                                                                     image.Level, image.Access)) {
+                            aliasesWritableImage = true;
+                            break;
+                        }
+                    }
+                    if (aliasesWritableImage) break;
+                }
+                if (aliasesWritableImage) {
+                    outBindings.push_back({.samplerBinding = samplerBinding,
+                                           .samplerElement = samplerElement,
+                                           .texture = sampledTexture,
+                                           .sampler = sampledSampler,
+                                           .numericDomain = programObj.samplerNumericDomainByBinding[samplerBinding]});
+                }
+            }
+        }
+        return true;
+    }
+
     Bool UniformManager::ResolveUniformBufferPayload(const MG_State::GLState::ProgramObject& program,
                                                      const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                                      Uint32 arrayElement, UboBindResult& out) const {
@@ -1642,7 +1726,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              Uint32 frameIndex,
                                                              VkPipelineBindPoint bindPoint,
                                                              const SamplerBindingOverride* samplerBindingOverride,
-                                                             Bool samplerDescriptorsUnchangedHint) {
+                                                             Bool samplerDescriptorsUnchangedHint,
+                                                             const Vector<SamplerBindingOverride>* samplerBindingOverrides) {
         // This program has a descriptor MobileGL could not resolve (see
         // VkProgramObject::declinedDescriptors). Refusing here is the whole of the decline: the
         // binding is still declared in the layout, so the pipeline is consistent with the shader
@@ -1669,7 +1754,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // sampler binding, and an unchanged (buffer, range) for the single
         // dynamic UBO covers the rest - except the dynamic offset, which rebinding
         // the SAME set delivers without any descriptor write.
-        const Bool cacheable = (samplerBindingOverride == nullptr);
+        const Bool cacheable = samplerBindingOverride == nullptr &&
+                               (samplerBindingOverrides == nullptr || samplerBindingOverrides->empty());
         if (cacheable && samplerDescriptorsUnchangedHint && m_fastRebindMemo.valid &&
             m_fastRebindMemo.frameIndex == frameIndex &&
             m_fastRebindMemo.programLifetimeId == program.GetLifetimeId() &&
@@ -1893,13 +1979,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 const SizeT firstImageInfoIndex = imageInfos.size();
                 for (Uint32 element = 0; element < descriptorCount; ++element) {
                     VkDescriptorImageInfo imageInfo{};
-                    Bool hasImage = false;
-                    if (overrideThisBinding && element == 0) {
-                        hasImage = ResolveSamplerDescriptorOverride(*samplerBindingOverride, imageInfo);
-                    } else {
-                        hasImage = ResolveSamplerDescriptor(commandBuffer, program, programObj, binding, element,
-                                                            imageInfo, samplerDescriptorsUnchangedHint);
+                    const SamplerBindingOverride* overrideForElement =
+                        overrideThisBinding && element == 0 ? samplerBindingOverride : nullptr;
+                    if (overrideForElement == nullptr && samplerBindingOverrides != nullptr) {
+                        const auto overrideIt = std::find_if(
+                            samplerBindingOverrides->begin(), samplerBindingOverrides->end(),
+                            [binding, element](const SamplerBindingOverride& candidate) {
+                                return candidate.binding == binding && candidate.element == element;
+                            });
+                        if (overrideIt != samplerBindingOverrides->end()) {
+                            overrideForElement = &*overrideIt;
+                        }
                     }
+                    const Bool hasImage = overrideForElement != nullptr
+                                              ? ResolveSamplerDescriptorOverride(*overrideForElement, imageInfo)
+                                              : ResolveSamplerDescriptor(commandBuffer, program, programObj, binding,
+                                                                         element, imageInfo,
+                                                                         samplerDescriptorsUnchangedHint);
                     if (!hasImage) {
                         MGLOG_E_ONCE(
                             "UniformDescriptorBinder::BindProgramUniformBuffers failed: sampler binding %u element %u "

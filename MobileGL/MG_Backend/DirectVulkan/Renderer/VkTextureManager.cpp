@@ -1291,6 +1291,158 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ok;
     }
 
+    Bool VkTextureManager::SnapshotTextureForSampling(VkCommandBuffer commandBuffer,
+                                                      MG_State::GLState::ITextureObject& texture,
+                                                      SamplerNumericDomain numericDomain,
+                                                      VkPipelineStageFlags consumerShaderStageMask,
+                                                      SampledTextureSnapshot& outSnapshot) {
+        outSnapshot = {};
+        TextureResource* source = SyncTextureAndGetDescriptor(texture);
+        if (source == nullptr || source->image == VK_NULL_HANDLE || source->sampleCount != VK_SAMPLE_COUNT_1_BIT ||
+            source->sampledLevelCount == 0) {
+            return false;
+        }
+
+        const VkFormat sampledFormat = ResolveSampledImageViewFormat(source->format, numericDomain);
+        if (sampledFormat == VK_FORMAT_UNDEFINED ||
+            !AreSampledImageViewFormatsCompatible(source->format, sampledFormat)) {
+            MGLOG_E_ONCE("SnapshotTextureForSampling: textureId=%d cannot create sampled view format=%d from image format=%d",
+                         texture.GetExternalIndex(), static_cast<Int>(sampledFormat), static_cast<Int>(source->format));
+            return false;
+        }
+        if (sampledFormat != source->format &&
+            (source->imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
+            MGLOG_E_ONCE("SnapshotTextureForSampling: textureId=%d needs unavailable mutable image format=%d for sampled view=%d",
+                         texture.GetExternalIndex(), static_cast<Int>(source->format), static_cast<Int>(sampledFormat));
+            return false;
+        }
+
+        VkImageType imageType = VK_IMAGE_TYPE_2D;
+        switch (source->viewType) {
+        case VK_IMAGE_VIEW_TYPE_1D:
+        case VK_IMAGE_VIEW_TYPE_1D_ARRAY:
+            imageType = VK_IMAGE_TYPE_1D;
+            break;
+        case VK_IMAGE_VIEW_TYPE_3D:
+            imageType = VK_IMAGE_TYPE_3D;
+            break;
+        default:
+            break;
+        }
+
+        TextureResource snapshot{};
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.flags = source->imageCreateFlags;
+        imageInfo.imageType = imageType;
+        imageInfo.extent = {source->extent.width, source->extent.height, source->depth};
+        imageInfo.mipLevels = source->mipLevels;
+        imageInfo.arrayLayers = source->arrayLayers;
+        imageInfo.format = source->format;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        // Keep the temporary's view-format list just as narrow as the source's sampler use. This
+        // has no storage-image usage, so unlike an app image binding the exact list is knowable.
+        Vector<VkFormat> viewFormats;
+        VkImageFormatListCreateInfo formatListInfo{};
+        if (m_imageFormatListSupported && (imageInfo.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0) {
+            viewFormats.push_back(source->format);
+            if (sampledFormat != source->format) {
+                viewFormats.push_back(sampledFormat);
+            }
+            formatListInfo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+            formatListInfo.viewFormatCount = static_cast<Uint32>(viewFormats.size());
+            formatListInfo.pViewFormats = viewFormats.data();
+            imageInfo.pNext = &formatListInfo;
+        }
+
+        VmaAllocationCreateInfo allocationInfo{};
+        allocationInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocationInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        const VkResult createResult =
+            vmaCreateImage(m_allocator, &imageInfo, &allocationInfo, &snapshot.image, &snapshot.allocation, nullptr);
+        if (createResult != VK_SUCCESS) {
+            MGLOG_E_ONCE("SnapshotTextureForSampling: vmaCreateImage failed result=%d textureId=%d", createResult,
+                         texture.GetExternalIndex());
+            return false;
+        }
+
+        snapshot.extent = source->extent;
+        snapshot.depth = source->depth;
+        snapshot.arrayLayers = source->arrayLayers;
+        snapshot.mipLevels = source->mipLevels;
+        snapshot.sampledBaseMipLevel = source->sampledBaseMipLevel;
+        snapshot.sampledLevelCount = source->sampledLevelCount;
+        snapshot.format = source->format;
+        snapshot.aspect = source->aspect;
+        snapshot.viewType = source->viewType;
+        snapshot.sampleCount = VK_SAMPLE_COUNT_1_BIT;
+        snapshot.imageCreateFlags = imageInfo.flags;
+        snapshot.usageFlags = imageInfo.usage;
+
+        const TextureFormatInfo formatInfo = ResolveTextureFormatInfo(texture.GetFormat());
+        const VkComponentMapping sampledComponents = ResolveSampledViewComponents(texture, formatInfo);
+        const VkImageAspectFlags sampledAspect =
+            ResolveSampledImageViewAspectMask(snapshot.aspect, texture.GetDepthStencilTextureMode());
+        snapshot.sampledView = CreateImageView(snapshot.image, sampledFormat, sampledAspect, snapshot.viewType,
+                                               snapshot.sampledBaseMipLevel, snapshot.sampledLevelCount, 0,
+                                               snapshot.arrayLayers, &sampledComponents);
+        if (snapshot.sampledView == VK_NULL_HANDLE) {
+            MGLOG_E_ONCE("SnapshotTextureForSampling: failed to create sampled view textureId=%d", texture.GetExternalIndex());
+            return false;
+        }
+
+        VkPipelineStageFlags sourceStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkAccessFlags sourceAccessMask = 0;
+        const VkImageLayout sourceLayout = source->layout;
+        GetImageTransitionSourceState(sourceLayout, sourceStageMask, sourceAccessMask);
+        if (!TransitionImageLayout(commandBuffer, source->image, source->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   sourceStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, sourceAccessMask,
+                                   VK_ACCESS_TRANSFER_READ_BIT, source->aspect, 0, source->mipLevels) ||
+            !TransitionImageLayout(commandBuffer, snapshot.image, snapshot.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                   VK_ACCESS_TRANSFER_WRITE_BIT, snapshot.aspect, snapshot.sampledBaseMipLevel,
+                                   snapshot.sampledLevelCount)) {
+            return false;
+        }
+
+        Vector<VkImageCopy> copyRegions;
+        copyRegions.reserve(snapshot.sampledLevelCount);
+        for (Uint32 level = snapshot.sampledBaseMipLevel;
+             level < snapshot.sampledBaseMipLevel + snapshot.sampledLevelCount; ++level) {
+            VkImageCopy copy{};
+            copy.srcSubresource = {source->aspect, level, 0, source->arrayLayers};
+            copy.dstSubresource = {snapshot.aspect, level, 0, snapshot.arrayLayers};
+            copy.extent = {std::max(source->extent.width >> level, 1u),
+                           std::max(source->extent.height >> level, 1u),
+                           std::max(source->depth >> level, 1u)};
+            copyRegions.push_back(copy);
+        }
+        vkCmdCopyImage(commandBuffer, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, snapshot.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<Uint32>(copyRegions.size()), copyRegions.data());
+
+        if (!TransitionImageLayout(commandBuffer, snapshot.image, snapshot.layout,
+                                   ResolveSampledReadOnlyLayout(snapshot.aspect), VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                   consumerShaderStageMask, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                   VK_ACCESS_SHADER_READ_BIT, snapshot.aspect, snapshot.sampledBaseMipLevel,
+                                   snapshot.sampledLevelCount) ||
+            !TransitionImageLayout(commandBuffer, source->image, source->layout, sourceLayout,
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT, consumerShaderStageMask,
+                                   VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                                   source->aspect, 0, source->mipLevels)) {
+            return false;
+        }
+
+        StampResourceRecordingUse(*source);
+        outSnapshot = {.imageView = snapshot.sampledView, .layout = snapshot.layout};
+        DeferResourceRelease(Move(snapshot));
+        return true;
+    }
+
     void VkTextureManager::MarkStorageImageTexture(MG_State::GLState::ITextureObject& texture) {
         m_storageImageTextures.insert(MakeTextureIdentity(&texture));
     }

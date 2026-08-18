@@ -1,3 +1,4 @@
+#include "apitrace_fbo_dump.hpp"
 #include "glws.hpp"
 #include "retrace.hpp"
 
@@ -375,6 +376,7 @@ bool makeCurrentInternal(Drawable *drawable, Drawable *readable, Context *contex
     }
     gCurrentDrawable = drawable;
     gCurrentContext = eglContext;
+    mobilegl_trace_dump::InstallIfRequested();
     return true;
 }
 
