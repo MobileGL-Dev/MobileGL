@@ -212,6 +212,50 @@ void main()
         m_pContext->Draw(drawAttrs);
     }
 
+    void DiligentRenderer::DrawVertices(const Float* vertices, Uint32 vertexCount) {
+        if (!m_initialized || !m_pContext || !m_pPSO || vertices == nullptr || vertexCount == 0) {
+            return;
+        }
+
+        const Uint64 dataSize = static_cast<Uint64>(vertexCount) * 2 * sizeof(Float);
+        if (dataSize > m_pVertexBuffer->GetDesc().Size) {
+            ::Diligent::BufferDesc buffDesc;
+            buffDesc.Name = "MobileGL Diligent dynamic vertex buffer";
+            buffDesc.BindFlags = ::Diligent::BIND_VERTEX_BUFFER;
+            buffDesc.Size = dataSize;
+
+            ::Diligent::BufferData initialData;
+            initialData.pData = vertices;
+            initialData.DataSize = static_cast<Uint32>(dataSize);
+
+            m_pDevice->CreateBuffer(buffDesc, &initialData, &m_pVertexBuffer);
+            if (!m_pVertexBuffer) {
+                MGLOG_E("DiligentRenderer: failed to create dynamic vertex buffer");
+                return;
+            }
+        } else {
+            m_pContext->UpdateBuffer(m_pVertexBuffer, 0, dataSize, vertices,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        }
+
+        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
+        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        ::Diligent::Viewport viewport{0, 0, static_cast<Float>(m_width), static_cast<Float>(m_height), 0.0f, 1.0f};
+        m_pContext->SetViewports(1, &viewport, m_width, m_height);
+
+        ::Diligent::IBuffer* pVBs[] = {m_pVertexBuffer};
+        m_pContext->SetVertexBuffers(0, 1, pVBs, nullptr,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                     ::Diligent::SET_VERTEX_BUFFERS_FLAG_RESET);
+
+        m_pContext->SetPipelineState(m_pPSO);
+        ::Diligent::DrawAttribs drawAttrs;
+        drawAttrs.NumVertices = vertexCount;
+        drawAttrs.Flags = ::Diligent::DRAW_FLAG_VERIFY_ALL;
+        m_pContext->Draw(drawAttrs);
+    }
+
     void DiligentRenderer::ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels) {
         if (!m_initialized || !m_pContext || !m_pColorTarget || pixels == nullptr) {
             return;

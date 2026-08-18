@@ -40,9 +40,15 @@ TEST(DiligentVulkanBackend, ClearsAndDrawsTriangleOffscreen) {
         GTEST_SKIP() << "No Vulkan adapter available; skipping offscreen rendering test";
     }
 
-    // Clear to green, then draw a red triangle over the center.
+    // Clear to green, then draw a red triangle over the center using a
+    // dynamically uploaded vertex buffer.
     renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
-    renderer->DrawTriangle();
+    const float triangleVertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    renderer->DrawVertices(triangleVertices, 3);
     renderer->Present();
 
     std::uint8_t center[4] = {};

@@ -42,6 +42,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool Initialize(Uint32 width, Uint32 height);
         void Clear(Float r, Float g, Float b, Float a);
         void DrawTriangle();
+        void DrawVertices(const Float* vertices, Uint32 vertexCount);
         void ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels);
         void Present();
 
