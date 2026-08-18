@@ -189,6 +189,8 @@ void main()
         m_pPSO.Release();
         m_pColorRTV.Release();
         m_pColorTarget.Release();
+        m_pDepthDSV.Release();
+        m_pDepthTarget.Release();
     }
 
     Bool DiligentRenderer::Initialize(Uint32 width, Uint32 height) {
@@ -238,6 +240,29 @@ void main()
         m_pColorRTV = m_pColorTarget->GetDefaultView(::Diligent::TEXTURE_VIEW_RENDER_TARGET);
         if (!m_pColorRTV) {
             MGLOG_E("DiligentRenderer: failed to get offscreen RTV");
+            return false;
+        }
+
+        ::Diligent::TextureDesc depthDesc;
+        depthDesc.Name = "MobileGL Diligent offscreen depth target";
+        depthDesc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
+        depthDesc.Format = ::Diligent::TEX_FORMAT_D32_FLOAT;
+        depthDesc.Width = m_width;
+        depthDesc.Height = m_height;
+        depthDesc.MipLevels = 1;
+        depthDesc.BindFlags = ::Diligent::BIND_DEPTH_STENCIL;
+        depthDesc.Usage = ::Diligent::USAGE_DEFAULT;
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pDepthTarget;
+        m_pDevice->CreateTexture(depthDesc, nullptr, &pDepthTarget);
+        if (!pDepthTarget) {
+            MGLOG_E("DiligentRenderer: failed to create offscreen depth target");
+            return false;
+        }
+        m_pDepthTarget = pDepthTarget;
+        m_pDepthDSV = m_pDepthTarget->GetDefaultView(::Diligent::TEXTURE_VIEW_DEPTH_STENCIL);
+        if (!m_pDepthDSV) {
+            MGLOG_E("DiligentRenderer: failed to get offscreen DSV");
             return false;
         }
         return true;
@@ -323,9 +348,19 @@ void main()
             return;
         }
         ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         const Float clearColor[] = {r, g, b, a};
         m_pContext->ClearRenderTarget(m_pColorRTV, clearColor, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    void DiligentRenderer::ClearDepth(Float depth) {
+        if (!m_initialized || !m_pContext || !m_pDepthDSV) {
+            return;
+        }
+        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
+        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->ClearDepthStencil(m_pDepthDSV, ::Diligent::CLEAR_DEPTH_FLAG, depth, 0,
+                                      ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     }
 
     void DiligentRenderer::DrawTriangle() {
@@ -334,7 +369,7 @@ void main()
         }
 
         ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         ::Diligent::Viewport viewport{0, 0, static_cast<Float>(m_width), static_cast<Float>(m_height), 0.0f, 1.0f};
         m_pContext->SetViewports(1, &viewport, m_width, m_height);
@@ -379,7 +414,7 @@ void main()
         }
 
         ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         ::Diligent::Viewport viewport{0, 0, static_cast<Float>(m_width), static_cast<Float>(m_height), 0.0f, 1.0f};
         m_pContext->SetViewports(1, &viewport, m_width, m_height);
@@ -408,7 +443,7 @@ void main()
         }
 
         ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         auto glViewport = MG_State::pGLContext->GetViewport();
         if (glViewport.z() <= 0 || glViewport.w() <= 0) {

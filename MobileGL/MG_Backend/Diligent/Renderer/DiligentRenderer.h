@@ -41,6 +41,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
 
         Bool Initialize(Uint32 width, Uint32 height);
         void Clear(Float r, Float g, Float b, Float a);
+        void ClearDepth(Float depth);
         void DrawTriangle();
         void DrawVertices(const Float* vertices, Uint32 vertexCount);
         // Draws using the live MG_State GL context: current program, VAO and
@@ -63,6 +64,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::IDeviceContext* m_pContext = nullptr;
         ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pColorTarget;
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pColorRTV;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pDepthTarget;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pDepthDSV;
         ::Diligent::RefCntAutoPtr<::Diligent::IPipelineState> m_pPSO;
         ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pVertexBuffer;
         Uint32 m_width = 256;
