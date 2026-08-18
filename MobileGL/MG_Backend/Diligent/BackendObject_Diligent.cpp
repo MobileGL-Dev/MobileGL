@@ -9,6 +9,8 @@
 #include "DiligentVulkan.h"
 #include "Renderer/DiligentRenderer.h"
 #include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendObjects.h>
+#include <MG_State/GLState/Core.h>
 
 #include <EngineFactoryVk.h>
 #include <RenderDevice.h>
@@ -26,6 +28,52 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             info.RendererGLInfo.TargetGLSLVersion = {1, 50, 0};
             info.RendererGLInfo.IsCompatibilityProfile = false;
             return info;
+        }
+
+        DiligentRenderer* GetActiveRenderer() {
+            auto* backend = dynamic_cast<BackendObject_Diligent*>(pActiveBackendObject.get());
+            return backend != nullptr ? backend->GetRenderer() : nullptr;
+        }
+
+        void Clear(GLbitfield mask) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || MG_State::pGLContext == nullptr) {
+                return;
+            }
+            if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+                const auto& color = MG_State::pGLContext->GetClearColor();
+                renderer->Clear(color.x(), color.y(), color.z(), color.w());
+            }
+        }
+
+        void DrawArrays(GLenum mode, GLint first, GLsizei count) {
+            (void)mode;
+            (void)first;
+            (void)count;
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                // Placeholder: draw the built-in triangle until the real
+                // buffer/VAO/program state is wired into the renderer.
+                renderer->DrawTriangle();
+            }
+        }
+
+        void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+            (void)mode;
+            (void)count;
+            (void)type;
+            (void)indices;
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->DrawTriangle();
+            }
+        }
+
+        void Present() {
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->Present();
+            }
         }
     } // namespace
 
@@ -105,6 +153,12 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             m_pRenderer.reset();
             return;
         }
+
+        m_functions.GL.Clear = Clear;
+        m_functions.GL.DrawArrays = DrawArrays;
+        m_functions.GL.DrawElements = DrawElements;
+        m_functions.Present = Present;
+
         m_initialized = true;
     }
 
