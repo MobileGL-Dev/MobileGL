@@ -165,6 +165,20 @@ void main()
             default: return ::Diligent::CULL_MODE_NONE;
             }
         }
+
+        ::Diligent::STENCIL_OP ConvertStencilOp(StencilOperation op) {
+            switch (op) {
+            case StencilOperation::Keep: return ::Diligent::STENCIL_OP_KEEP;
+            case StencilOperation::Zero: return ::Diligent::STENCIL_OP_ZERO;
+            case StencilOperation::Replace: return ::Diligent::STENCIL_OP_REPLACE;
+            case StencilOperation::IncrementClamp: return ::Diligent::STENCIL_OP_INCR_SAT;
+            case StencilOperation::DecrementClamp: return ::Diligent::STENCIL_OP_DECR_SAT;
+            case StencilOperation::Invert: return ::Diligent::STENCIL_OP_INVERT;
+            case StencilOperation::IncrementWrap: return ::Diligent::STENCIL_OP_INCR_WRAP;
+            case StencilOperation::DecrementWrap: return ::Diligent::STENCIL_OP_DECR_WRAP;
+            default: return ::Diligent::STENCIL_OP_KEEP;
+            }
+        }
     } // namespace
 
     DiligentRenderer::DiligentRenderer(::Diligent::IRenderDevice* device, ::Diligent::IDeviceContext* context)
@@ -427,6 +441,10 @@ void main()
                                      ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                                      ::Diligent::SET_VERTEX_BUFFERS_FLAG_RESET);
         m_pContext->SetPipelineState(m_pPSO);
+        if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest)) {
+            const auto& front = MG_State::pGLContext->GetStencilState(StencilFace::Front);
+            m_pContext->SetStencilRef(static_cast<::Diligent::Uint32>(front.Ref));
+        }
 
         ::Diligent::DrawAttribs drawAttrs;
         drawAttrs.NumVertices = m_lastDrawVertexCount;
@@ -558,6 +576,33 @@ void main()
         graphicsPipeline.DepthStencilDesc.DepthEnable = depthEnabled;
         graphicsPipeline.DepthStencilDesc.DepthWriteEnable = MG_State::pGLContext->GetDepthMask();
         graphicsPipeline.DepthStencilDesc.DepthFunc = ConvertDepthFunc(MG_State::pGLContext->GetDepthFunc());
+
+        const Bool stencilEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
+        if (stencilEnabled) {
+            const auto& front = MG_State::pGLContext->GetStencilState(StencilFace::Front);
+            const auto& back = MG_State::pGLContext->GetStencilState(StencilFace::Back);
+            auto& dsDesc = graphicsPipeline.DepthStencilDesc;
+            dsDesc.StencilEnable = true;
+            dsDesc.StencilReadMask = static_cast<::Diligent::Uint8>(front.ValueMask & 0xFFu);
+            dsDesc.StencilWriteMask = static_cast<::Diligent::Uint8>(front.WriteMask & 0xFFu);
+            dsDesc.FrontFace.StencilFailOp = ConvertStencilOp(front.FailOp);
+            dsDesc.FrontFace.StencilDepthFailOp = ConvertStencilOp(front.PassDepthFailOp);
+            dsDesc.FrontFace.StencilPassOp = ConvertStencilOp(front.PassDepthPassOp);
+            dsDesc.FrontFace.StencilFunc = ConvertDepthFunc(front.Func);
+            dsDesc.BackFace.StencilFailOp = ConvertStencilOp(back.FailOp);
+            dsDesc.BackFace.StencilDepthFailOp = ConvertStencilOp(back.PassDepthFailOp);
+            dsDesc.BackFace.StencilPassOp = ConvertStencilOp(back.PassDepthPassOp);
+            dsDesc.BackFace.StencilFunc = ConvertDepthFunc(back.Func);
+        }
+
+        const auto colorMask = MG_State::pGLContext->GetColorMask();
+        auto& rtBlend = graphicsPipeline.BlendDesc.RenderTargets[0];
+        rtBlend.RenderTargetWriteMask = ::Diligent::COLOR_MASK_NONE;
+        if (colorMask.x()) rtBlend.RenderTargetWriteMask |= ::Diligent::COLOR_MASK_RED;
+        if (colorMask.y()) rtBlend.RenderTargetWriteMask |= ::Diligent::COLOR_MASK_GREEN;
+        if (colorMask.z()) rtBlend.RenderTargetWriteMask |= ::Diligent::COLOR_MASK_BLUE;
+        if (colorMask.w()) rtBlend.RenderTargetWriteMask |= ::Diligent::COLOR_MASK_ALPHA;
+
         graphicsPipeline.InputLayout.LayoutElements = layoutElements.data();
         graphicsPipeline.InputLayout.NumElements = static_cast<::Diligent::Uint32>(layoutElements.size());
 
