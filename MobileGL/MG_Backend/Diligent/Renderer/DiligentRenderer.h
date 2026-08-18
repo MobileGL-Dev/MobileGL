@@ -43,6 +43,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void Clear(Float r, Float g, Float b, Float a);
         void DrawTriangle();
         void DrawVertices(const Float* vertices, Uint32 vertexCount);
+        // Draws using the live MG_State GL context: current program, VAO and
+        // bound buffers. This is the front-end emulation entry point.
+        void DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
         void ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels);
         void Present();
 
@@ -53,6 +56,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool CreateOffscreenTargets();
         Bool CreatePipeline();
         Bool CreateVertexBuffer();
+        Bool CreatePipelineFromState(GLenum mode);
+        Bool UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
 
         ::Diligent::IRenderDevice* m_pDevice = nullptr;
         ::Diligent::IDeviceContext* m_pContext = nullptr;
@@ -62,6 +67,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pVertexBuffer;
         Uint32 m_width = 256;
         Uint32 m_height = 256;
+        Uint32 m_lastDrawVertexCount = 0;
         Bool m_initialized = false;
     };
 } // namespace MobileGL::MG_Backend::DiligentBackend

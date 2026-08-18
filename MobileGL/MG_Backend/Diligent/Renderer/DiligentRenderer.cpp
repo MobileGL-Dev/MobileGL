@@ -14,6 +14,14 @@
 #include <PipelineState.h>
 #include <InputLayout.h>
 
+#include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+#include <spirv_reflect.h>
+
+#include <vector>
+
 namespace MobileGL::MG_Backend::DiligentBackend {
     namespace {
         constexpr Uint32 kTriangleVertexCount = 3;
@@ -40,6 +48,67 @@ void main()
             Float X;
             Float Y;
         };
+
+        SizeT GetDataTypeSize(DataType type) {
+            switch (type) {
+            case DataType::Int8:
+            case DataType::Uint8:
+                return 1;
+            case DataType::Int16:
+            case DataType::Uint16:
+            case DataType::Float16:
+                return 2;
+            case DataType::Int32:
+            case DataType::Uint32:
+            case DataType::Float32:
+            case DataType::Fixed32:
+            case DataType::Int2101010Rev:
+            case DataType::Uint2101010Rev:
+                return 4;
+            case DataType::Float64:
+                return 8;
+            default:
+                return 4;
+            }
+        }
+
+        ::Diligent::VALUE_TYPE GetValueType(DataType type) {
+            switch (type) {
+            case DataType::Int8: return ::Diligent::VT_INT8;
+            case DataType::Uint8: return ::Diligent::VT_UINT8;
+            case DataType::Int16: return ::Diligent::VT_INT16;
+            case DataType::Uint16: return ::Diligent::VT_UINT16;
+            case DataType::Int32: return ::Diligent::VT_INT32;
+            case DataType::Uint32: return ::Diligent::VT_UINT32;
+            case DataType::Float16: return ::Diligent::VT_FLOAT16;
+            case DataType::Float32: return ::Diligent::VT_FLOAT32;
+            case DataType::Float64: return ::Diligent::VT_FLOAT64;
+            default: return ::Diligent::VT_FLOAT32;
+            }
+        }
+
+        Bool GetSpirvStage(const Vector<unsigned>& spv, ::Diligent::SHADER_TYPE& outStage) {
+            if (spv.empty()) {
+                return false;
+            }
+            SpvReflectShaderModule module{};
+            if (spvReflectCreateShaderModule(spv.size() * sizeof(unsigned), spv.data(), &module) !=
+                SPV_REFLECT_RESULT_SUCCESS) {
+                return false;
+            }
+            const SpvReflectShaderStageFlagBits stage = module.shader_stage;
+            spvReflectDestroyShaderModule(&module);
+            switch (stage) {
+            case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
+                outStage = ::Diligent::SHADER_TYPE_VERTEX;
+                return true;
+            case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
+                outStage = ::Diligent::SHADER_TYPE_PIXEL;
+                return true;
+            default:
+                return false;
+            }
+        }
     } // namespace
 
     DiligentRenderer::DiligentRenderer(::Diligent::IRenderDevice* device, ::Diligent::IDeviceContext* context)
@@ -254,6 +323,269 @@ void main()
         drawAttrs.NumVertices = vertexCount;
         drawAttrs.Flags = ::Diligent::DRAW_FLAG_VERIFY_ALL;
         m_pContext->Draw(drawAttrs);
+    }
+
+    void DiligentRenderer::DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices) {
+        if (!m_initialized || !m_pContext || MG_State::pGLContext == nullptr) {
+            return;
+        }
+        if (!CreatePipelineFromState(mode)) {
+            return;
+        }
+        if (!UploadVertexDataFromState(mode, first, count, type, indices)) {
+            return;
+        }
+
+        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
+        m_pContext->SetRenderTargets(1, rtvs, nullptr, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+        ::Diligent::Viewport viewport{0, 0, static_cast<Float>(m_width), static_cast<Float>(m_height), 0.0f, 1.0f};
+        m_pContext->SetViewports(1, &viewport, m_width, m_height);
+
+        ::Diligent::IBuffer* pVBs[] = {m_pVertexBuffer};
+        m_pContext->SetVertexBuffers(0, 1, pVBs, nullptr,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                     ::Diligent::SET_VERTEX_BUFFERS_FLAG_RESET);
+        m_pContext->SetPipelineState(m_pPSO);
+
+        ::Diligent::DrawAttribs drawAttrs;
+        drawAttrs.NumVertices = m_lastDrawVertexCount;
+        drawAttrs.Flags = ::Diligent::DRAW_FLAG_VERIFY_ALL;
+        m_pContext->Draw(drawAttrs);
+    }
+
+    Bool DiligentRenderer::CreatePipelineFromState(GLenum mode) {
+        if (MG_State::pGLContext == nullptr) {
+            return false;
+        }
+
+        const auto& program = MG_State::pGLContext->GetProgramForDraw();
+        if (!program || !program->GetSpirvStatus()) {
+            return false;
+        }
+
+        const auto& spirvs = program->GetGeneratedSpirv();
+        ::Diligent::RefCntAutoPtr<::Diligent::IShader> pVS;
+        ::Diligent::RefCntAutoPtr<::Diligent::IShader> pPS;
+        for (const auto& spv : spirvs) {
+            ::Diligent::SHADER_TYPE stage = ::Diligent::SHADER_TYPE_UNKNOWN;
+            if (!GetSpirvStage(spv, stage)) {
+                continue;
+            }
+            ::Diligent::ShaderCreateInfo shaderCI;
+            shaderCI.ByteCode = spv.data();
+            shaderCI.ByteCodeSize = spv.size() * sizeof(unsigned);
+            shaderCI.Desc = {"MobileGL Diligent state shader", stage, true};
+            ::Diligent::RefCntAutoPtr<::Diligent::IShader> pShader;
+            m_pDevice->CreateShader(shaderCI, &pShader);
+            if (!pShader) {
+                MGLOG_E("DiligentRenderer: failed to create state shader");
+                return false;
+            }
+            if (stage == ::Diligent::SHADER_TYPE_VERTEX) {
+                pVS = pShader;
+            } else if (stage == ::Diligent::SHADER_TYPE_PIXEL) {
+                pPS = pShader;
+            }
+        }
+        if (!pVS || !pPS) {
+            MGLOG_W("DiligentRenderer: state program has no vertex/pixel SPIR-V");
+            return false;
+        }
+
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        const auto& attributes = vao.GetAllAttributes();
+
+        Vector<::Diligent::LayoutElement> layoutElements;
+        Vector<Uint32> activeAttribs;
+        for (Uint32 i = 0; i < vao.MAX_VERTEX_ATTRIBS; ++i) {
+            const auto& attr = attributes[i];
+            if (!attr.Enabled) {
+                continue;
+            }
+            ::Diligent::LayoutElement elem{};
+            elem.InputIndex = i;
+            elem.BufferSlot = 0;
+            elem.NumComponents = static_cast<::Diligent::Uint32>(attr.Size);
+            elem.ValueType = GetValueType(attr.Type);
+            elem.IsNormalized = attr.Normalized;
+            activeAttribs.push_back(i);
+            layoutElements.push_back(elem);
+        }
+        if (layoutElements.empty()) {
+            MGLOG_W("DiligentRenderer: no enabled vertex attributes");
+            return false;
+        }
+
+        ::Diligent::GraphicsPipelineStateCreateInfo psoCI;
+        auto& psoDesc = psoCI.PSODesc;
+        auto& graphicsPipeline = psoCI.GraphicsPipeline;
+        psoDesc.PipelineType = ::Diligent::PIPELINE_TYPE_GRAPHICS;
+        psoDesc.Name = "MobileGL Diligent state PSO";
+        graphicsPipeline.NumRenderTargets = 1;
+        graphicsPipeline.RTVFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+        switch (mode) {
+        case GL_POINTS:
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_POINT_LIST;
+            break;
+        case GL_LINES:
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_LINE_LIST;
+            break;
+        case GL_LINE_STRIP:
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_LINE_STRIP;
+            break;
+        case GL_TRIANGLES:
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
+        case GL_TRIANGLE_STRIP:
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+            break;
+        default:
+            // GL_TRIANGLE_FAN and GL_LINE_LOOP are emulated in UploadVertexData.
+            graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            break;
+        }
+        graphicsPipeline.RasterizerDesc.CullMode = ::Diligent::CULL_MODE_NONE;
+        graphicsPipeline.DepthStencilDesc.DepthEnable = false;
+        graphicsPipeline.InputLayout.LayoutElements = layoutElements.data();
+        graphicsPipeline.InputLayout.NumElements = static_cast<::Diligent::Uint32>(layoutElements.size());
+
+        psoCI.pVS = pVS;
+        psoCI.pPS = pPS;
+        m_pDevice->CreateGraphicsPipelineState(psoCI, &m_pPSO);
+        if (!m_pPSO) {
+            MGLOG_E("DiligentRenderer: failed to create state pipeline");
+            return false;
+        }
+        return true;
+    }
+
+    Bool DiligentRenderer::UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type,
+                                                     const void* indices) {
+        if (MG_State::pGLContext == nullptr) {
+            return false;
+        }
+
+        const auto& vao = *MG_State::pGLContext->GetBoundVertexArray();
+        const auto& attributes = vao.GetAllAttributes();
+
+        Vector<Uint32> activeAttribs;
+        for (Uint32 i = 0; i < vao.MAX_VERTEX_ATTRIBS; ++i) {
+            if (attributes[i].Enabled) {
+                activeAttribs.push_back(i);
+            }
+        }
+        if (activeAttribs.empty()) {
+            return false;
+        }
+
+        // Resolve the vertex index list (DrawArrays first..first+count or
+        // DrawElements index buffer/client memory).
+        Vector<Uint32> indicesData;
+        const Uint32 vertexCount = static_cast<Uint32>(count);
+        if (mode == GL_TRIANGLE_FAN) {
+            // Expand a triangle fan into a triangle list.
+            indicesData.reserve((vertexCount - 2) * 3);
+            for (Uint32 i = 1; i + 1 < vertexCount; ++i) {
+                indicesData.push_back(0);
+                indicesData.push_back(i);
+                indicesData.push_back(i + 1);
+            }
+        } else if (mode == GL_LINE_LOOP) {
+            indicesData.reserve(vertexCount + 1);
+            for (Uint32 i = 0; i < vertexCount; ++i) {
+                indicesData.push_back(i);
+            }
+            if (vertexCount > 0) {
+                indicesData.push_back(0);
+            }
+        } else if (type != 0 || indices != nullptr) {
+            // DrawElements path.
+            const auto& indexSlot = vao.GetIndexBufferBindingSlot();
+            const auto& indexBuffer = indexSlot.GetBoundObject();
+            const Uint8* indexBase = nullptr;
+            if (indexBuffer) {
+                indexBuffer->SyncPersistentMappedRange();
+                indexBase = indexBuffer->MappedData();
+                if (indexBase == nullptr) {
+                    return false;
+                }
+                indexBase += reinterpret_cast<SizeT>(indices);
+            } else {
+                indexBase = static_cast<const Uint8*>(indices);
+                if (indexBase == nullptr) {
+                    return false;
+                }
+            }
+
+            const SizeT indexSize = GetDataTypeSize(
+                type == GL_UNSIGNED_BYTE ? DataType::Uint8 :
+                type == GL_UNSIGNED_SHORT ? DataType::Uint16 : DataType::Uint32);
+            indicesData.reserve(vertexCount);
+            for (Uint32 i = 0; i < vertexCount; ++i) {
+                if (indexSize == 1) {
+                    indicesData.push_back(indexBase[i]);
+                } else if (indexSize == 2) {
+                    indicesData.push_back(reinterpret_cast<const Uint16*>(indexBase)[i]);
+                } else {
+                    indicesData.push_back(reinterpret_cast<const Uint32*>(indexBase)[i]);
+                }
+            }
+        }
+
+        const Uint32 drawVertexCount = indicesData.empty() ? vertexCount : static_cast<Uint32>(indicesData.size());
+        if (drawVertexCount == 0) {
+            return false;
+        }
+
+        // Pack enabled attributes into a single interleaved vertex buffer.
+        SizeT vertexStride = 0;
+        for (Uint32 attrIndex : activeAttribs) {
+            vertexStride += GetDataTypeSize(attributes[attrIndex].Type) * static_cast<SizeT>(attributes[attrIndex].Size);
+        }
+
+        Vector<Uint8> vertexData(static_cast<SizeT>(drawVertexCount) * vertexStride);
+        for (Uint32 vi = 0; vi < drawVertexCount; ++vi) {
+            const Uint32 srcIndex = indicesData.empty() ? (static_cast<Uint32>(first) + vi) : indicesData[vi];
+            Uint8* dst = vertexData.data() + static_cast<SizeT>(vi) * vertexStride;
+            for (Uint32 attrIndex : activeAttribs) {
+                const auto& attr = attributes[attrIndex];
+                if (!attr.Buffer) {
+                    return false;
+                }
+                attr.Buffer->SyncPersistentMappedRange();
+                const Uint8* src = attr.Buffer->MappedData();
+                if (src == nullptr) {
+                    return false;
+                }
+                const SizeT elemSize = GetDataTypeSize(attr.Type) * static_cast<SizeT>(attr.Size);
+                const SizeT srcOffset = attr.Offset + static_cast<SizeT>(srcIndex) * static_cast<SizeT>(attr.Stride);
+                if (srcOffset + elemSize > attr.Buffer->GetSize()) {
+                    return false;
+                }
+                std::memcpy(dst, src + srcOffset, elemSize);
+                dst += elemSize;
+            }
+        }
+
+        if (!m_pVertexBuffer || m_pVertexBuffer->GetDesc().Size < vertexData.size()) {
+            ::Diligent::BufferDesc buffDesc;
+            buffDesc.Name = "MobileGL Diligent state vertex buffer";
+            buffDesc.BindFlags = ::Diligent::BIND_VERTEX_BUFFER;
+            buffDesc.Size = vertexData.size();
+            ::Diligent::BufferData initialData;
+            initialData.pData = vertexData.data();
+            initialData.DataSize = static_cast<::Diligent::Uint32>(vertexData.size());
+            m_pDevice->CreateBuffer(buffDesc, &initialData, &m_pVertexBuffer);
+            if (!m_pVertexBuffer) {
+                return false;
+            }
+        } else {
+            m_pContext->UpdateBuffer(m_pVertexBuffer, 0, vertexData.size(), vertexData.data(),
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        }
+        m_lastDrawVertexCount = drawVertexCount;
+        return true;
     }
 
     void DiligentRenderer::ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels) {

@@ -47,25 +47,16 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         }
 
         void DrawArrays(GLenum mode, GLint first, GLsizei count) {
-            (void)mode;
-            (void)first;
-            (void)count;
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
-                // Placeholder: draw the built-in triangle until the real
-                // buffer/VAO/program state is wired into the renderer.
-                renderer->DrawTriangle();
+                renderer->DrawFromState(mode, first, count, 0, nullptr);
             }
         }
 
         void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
-            (void)mode;
-            (void)count;
-            (void)type;
-            (void)indices;
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
-                renderer->DrawTriangle();
+                renderer->DrawFromState(mode, 0, count, type, indices);
             }
         }
 
