@@ -175,14 +175,14 @@ namespace MobileGL::MG_Impl::GLXImpl {
 
         struct ContextObject {
             Display* XDisplay = nullptr;
-            EGLDisplay Display = EGL_NO_DISPLAY;
+            EGLDisplay Dpy = EGL_NO_DISPLAY;
             EGLConfig Config = nullptr;
             EGLContext Context = EGL_NO_CONTEXT;
             const FBConfigInfo* FBConfig = nullptr;
         };
 
         struct DrawableSurface {
-            EGLDisplay Display = EGL_NO_DISPLAY;
+            EGLDisplay Dpy = EGL_NO_DISPLAY;
             EGLSurface Surface = EGL_NO_SURFACE;
             Uint32 Width = 0;
             Uint32 Height = 0;
@@ -294,7 +294,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             if (width == surface.Width && height == surface.Height) {
                 return;
             }
-            if (EGLImpl::ResizePlatformWindowSurface(surface.Display, surface.Surface,
+            if (EGLImpl::ResizePlatformWindowSurface(surface.Dpy, surface.Surface,
                                                      static_cast<EGLint>(width),
                                                      static_cast<EGLint>(height))) {
                 surface.Width = width;
@@ -324,7 +324,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
                 EGL_NONE,
             };
             EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(
-                context.Display, context.Config, reinterpret_cast<void*>(drawable), attribs);
+                context.Dpy, context.Config, reinterpret_cast<void*>(drawable), attribs);
             if (surface == EGL_NO_SURFACE) {
                 MGLOG_E_ONCE("glx: failed to create window surface for drawable 0x%lx (%ux%u)", drawable,
                         width, height);
@@ -332,7 +332,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             }
 
             DrawableSurface record;
-            record.Display = context.Display;
+            record.Dpy = context.Dpy;
             record.Surface = surface;
             record.Width = width;
             record.Height = height;
@@ -388,7 +388,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
 
             ContextObject object;
             object.XDisplay = dpy;
-            object.Display = display;
+            object.Dpy = display;
             object.Config = config;
             object.Context = eglContext;
             object.FBConfig = fbconfig;
@@ -895,7 +895,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return;
         }
         if (object->Context != EGL_NO_CONTEXT) {
-            EGLImpl::DestroyContext(object->Display, object->Context);
+            EGLImpl::DestroyContext(object->Dpy, object->Context);
         }
         Contexts().erase(context);
     }
@@ -929,7 +929,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return 0;
         }
 
-        if (!EGLImpl::MakeCurrent(object->Display, surface->Surface, surface->Surface,
+        if (!EGLImpl::MakeCurrent(object->Dpy, surface->Surface, surface->Surface,
                                   object->Context)) {
             MGLOG_E_ONCE("glx: eglMakeCurrent failed (drawable=0x%lx, ctx=%p)", drawable, context);
             return 0;
@@ -962,7 +962,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
             return;
         }
         SyncSurfaceSize(dpy, drawable, it->second);
-        EGLImpl::SwapBuffers(it->second.Display, it->second.Surface);
+        EGLImpl::SwapBuffers(it->second.Dpy, it->second.Surface);
     }
 
     GLXDrawableHandle CreateWindow(Display*, GLXFBConfigHandle config, GLXDrawableHandle window,
@@ -988,7 +988,7 @@ namespace MobileGL::MG_Impl::GLXImpl {
         if (it == surfaces.end()) {
             return;
         }
-        EGLImpl::DestroySurface(it->second.Display, it->second.Surface);
+        EGLImpl::DestroySurface(it->second.Dpy, it->second.Surface);
         surfaces.erase(it);
     }
 

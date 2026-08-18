@@ -19,6 +19,7 @@ namespace MobileGL {
     enum class BackendType {
         DirectGLES,
         DirectVulkan,
+        DiligentVulkan,
         BackendTypeCount,
         Unknown = -1
     };

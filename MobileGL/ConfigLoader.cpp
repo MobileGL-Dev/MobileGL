@@ -202,6 +202,7 @@ namespace MobileGL::MG_ConfigLoader {
     }
         ENTRY(DirectGLES)
         ENTRY(DirectVulkan)
+        ENTRY(DiligentVulkan)
         ENTRY(Unknown)
         MG_Config::ActiveBackendType = BackendType::Unknown;
 #undef ENTRY

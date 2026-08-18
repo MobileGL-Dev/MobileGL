@@ -199,7 +199,6 @@ set(SPIRV_REFLECT_ENABLE_ASSERTS OFF CACHE BOOL  "Enable asserts for debugging" 
 set(SPIRV_REFLECT_ENABLE_ASAN    OFF CACHE BOOL "Use address sanitization" FORCE)
 set(SPIRV_REFLECT_INSTALL        OFF CACHE BOOL "Whether to install" FORCE)
 
-# add_subdirectory(3rdparty/DiligentCore)
 add_subdirectory(3rdparty/glslang)
 add_subdirectory(3rdparty/SPIRV-Cross)
 add_subdirectory(3rdparty/VulkanMemoryAllocator)
@@ -210,6 +209,23 @@ add_subdirectory(3rdparty/SPIRV-Reflect)
 set(XXHASH_BUILD_XXHSUM OFF)
 option(BUILD_SHARED_LIBS OFF)
 add_subdirectory(3rdparty/xxHash/build/cmake xxhash_build EXCLUDE_FROM_ALL)
+
+# Diligent-based backend. Enabled by default on local builds; only the Vulkan
+# engine from DiligentCore is built. Added after the other 3rdparty projects so
+# DiligentCore reuses the glslang / SPIRV-Cross / SPIRV-Tools / xxHash targets
+# already defined by MobileGL instead of building its bundled copies.
+option(MOBILEGL_ENABLE_DILIGENT "Enable the Diligent/Vulkan backend" ON)
+if(MOBILEGL_ENABLE_DILIGENT)
+    set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "Disable Direct3D11 backend" FORCE)
+    set(DILIGENT_NO_DIRECT3D12 ON CACHE BOOL "Disable Direct3D12 backend" FORCE)
+    set(DILIGENT_NO_OPENGL     ON CACHE BOOL "Disable OpenGL backend" FORCE)
+    set(DILIGENT_NO_METAL      ON CACHE BOOL "Disable Metal backend" FORCE)
+    set(DILIGENT_NO_WEBGPU     ON CACHE BOOL "Disable WebGPU backend" FORCE)
+    set(DILIGENT_NO_ARCHIVER   ON CACHE BOOL "Disable Archiver" FORCE)
+    set(DILIGENT_BUILD_TESTS   OFF CACHE BOOL "Build Diligent tests" FORCE)
+    set(DILIGENT_INSTALL_CORE  OFF CACHE BOOL "Install DiligentCore" FORCE)
+    add_subdirectory(3rdparty/DiligentCore)
+endif()
 
 set(TRACY_ENABLE ${MOBILEGL_ENABLE_TRACY} CACHE BOOL "Enable Tracy, this is an internal variable" FORCE)
 
@@ -396,6 +412,13 @@ set(SOURCE_FILES
     MobileGL/MG_State/GLState/RenderbufferState/RenderbufferState.cpp
 )
 
+if(MOBILEGL_ENABLE_DILIGENT)
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Backend/Diligent/BackendObject_Diligent.cpp
+        MobileGL/MG_Backend/Diligent/DiligentVulkan.cpp
+    )
+endif()
+
 if (APPLE AND NOT MOBILEGL_IOS)
     list(APPEND SOURCE_FILES
         MobileGL/MG_Impl/CGLImpl/CGLImpl.cpp
@@ -435,6 +458,21 @@ set(MOBILEGL_LINK_LIBRARIES
         spirv-reflect-static
         Threads::Threads
 )
+
+if(MOBILEGL_ENABLE_DILIGENT)
+    list(APPEND MOBILEGL_LINK_LIBRARIES
+        Diligent-GraphicsEngineVk-static
+        Diligent-GraphicsEngine
+        Diligent-GraphicsEngineNextGenBase
+        Diligent-GraphicsAccessories
+        Diligent-ShaderTools
+        Diligent-GraphicsTools
+        Diligent-Common
+        Diligent-Primitives
+        Diligent-TargetPlatform
+        Vulkan::Headers
+    )
+endif()
 
 set(MOBILEGL_COMPILE_DEF
         -DVMA_STATIC_VULKAN_FUNCTIONS=0
@@ -501,6 +539,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME}
         ${MOBILEGL_COMPILE_DEF}
         MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
         $<$<BOOL:${MOBILEGL_TRACE_ANGLE_VARIANTS}>:MOBILEGL_TRACE_ANGLE_VARIANTS=1>
+        $<$<BOOL:${MOBILEGL_ENABLE_DILIGENT}>:MOBILEGL_ENABLE_DILIGENT=1>
 )
 
 if(UNIX AND NOT APPLE AND NOT ANDROID)
@@ -559,6 +598,7 @@ if(NOT ANDROID)
             PUBLIC
             ${MOBILEGL_COMPILE_DEF}
             MOBILEGL_LOG_ACTIVE_LEVEL=${MOBILEGL_LOG_ACTIVE_LEVEL}
+            $<$<BOOL:${MOBILEGL_ENABLE_DILIGENT}>:MOBILEGL_ENABLE_DILIGENT=1>
     )
 endif()
 

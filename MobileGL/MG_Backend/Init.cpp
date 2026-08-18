@@ -10,6 +10,9 @@
 #include <Config.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
+#if defined(MOBILEGL_ENABLE_DILIGENT)
+#include <MG_Backend/Diligent/BackendObject_Diligent.h>
+#endif
 
 namespace MobileGL::MG_Backend {
     void LogBackendInfo() {
@@ -55,6 +58,11 @@ namespace MobileGL::MG_Backend {
         case BackendType::DirectVulkan:
             pActiveBackendObject = MakeUnique<DirectVulkan::BackendObject_DirectVulkan>();
             break;
+#if defined(MOBILEGL_ENABLE_DILIGENT)
+        case BackendType::DiligentVulkan:
+            pActiveBackendObject = MakeUnique<DiligentBackend::BackendObject_Diligent>();
+            break;
+#endif
         case BackendType::Unknown:
         default:
             MGLOG_W("Unknown backend type, defaulting to unknown backend");

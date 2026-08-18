@@ -1,4 +1,4 @@
-﻿################################################################################
+################################################################################
 # 此 .gitignore 文件已由 Microsoft(R) Visual Studio 自动创建。
 ################################################################################
 
@@ -16,6 +16,9 @@ MobileGLCodeManager
 MobileGL/MG_Test/build
 /build_*
 /cmake-build*
+/build-*/
+/local.properties
+/.jspace/
 .idea
 MobileGL/MG*/build*
 MobileGL/MG*/cmake-build*
