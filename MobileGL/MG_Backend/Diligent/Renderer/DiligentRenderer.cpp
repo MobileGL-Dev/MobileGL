@@ -109,6 +109,62 @@ void main()
                 return false;
             }
         }
+
+        ::Diligent::BLEND_FACTOR ConvertBlendFactor(BlendFactor factor) {
+            switch (factor) {
+            case BlendFactor::Zero: return ::Diligent::BLEND_FACTOR_ZERO;
+            case BlendFactor::One: return ::Diligent::BLEND_FACTOR_ONE;
+            case BlendFactor::SrcColor: return ::Diligent::BLEND_FACTOR_SRC_COLOR;
+            case BlendFactor::OneMinusSrcColor: return ::Diligent::BLEND_FACTOR_INV_SRC_COLOR;
+            case BlendFactor::DstColor: return ::Diligent::BLEND_FACTOR_DEST_COLOR;
+            case BlendFactor::OneMinusDstColor: return ::Diligent::BLEND_FACTOR_INV_DEST_COLOR;
+            case BlendFactor::SrcAlpha: return ::Diligent::BLEND_FACTOR_SRC_ALPHA;
+            case BlendFactor::OneMinusSrcAlpha: return ::Diligent::BLEND_FACTOR_INV_SRC_ALPHA;
+            case BlendFactor::DstAlpha: return ::Diligent::BLEND_FACTOR_DEST_ALPHA;
+            case BlendFactor::OneMinusDstAlpha: return ::Diligent::BLEND_FACTOR_INV_DEST_ALPHA;
+            case BlendFactor::ConstantColor: return ::Diligent::BLEND_FACTOR_BLEND_FACTOR;
+            case BlendFactor::OneMinusConstantColor: return ::Diligent::BLEND_FACTOR_INV_BLEND_FACTOR;
+            case BlendFactor::Src1Color: return ::Diligent::BLEND_FACTOR_SRC1_COLOR;
+            case BlendFactor::OneMinusSrc1Color: return ::Diligent::BLEND_FACTOR_INV_SRC1_COLOR;
+            case BlendFactor::Src1Alpha: return ::Diligent::BLEND_FACTOR_SRC1_ALPHA;
+            case BlendFactor::OneMinusSrc1Alpha: return ::Diligent::BLEND_FACTOR_INV_SRC1_ALPHA;
+            default: return ::Diligent::BLEND_FACTOR_ONE;
+            }
+        }
+
+        ::Diligent::BLEND_OPERATION ConvertBlendEquation(BlendEquation equation) {
+            switch (equation) {
+            case BlendEquation::Add: return ::Diligent::BLEND_OPERATION_ADD;
+            case BlendEquation::Subtract: return ::Diligent::BLEND_OPERATION_SUBTRACT;
+            case BlendEquation::ReverseSubtract: return ::Diligent::BLEND_OPERATION_REV_SUBTRACT;
+            case BlendEquation::Min: return ::Diligent::BLEND_OPERATION_MIN;
+            case BlendEquation::Max: return ::Diligent::BLEND_OPERATION_MAX;
+            default: return ::Diligent::BLEND_OPERATION_ADD;
+            }
+        }
+
+        ::Diligent::COMPARISON_FUNCTION ConvertDepthFunc(DepthTestFunc func) {
+            switch (func) {
+            case DepthTestFunc::Never: return ::Diligent::COMPARISON_FUNC_NEVER;
+            case DepthTestFunc::Less: return ::Diligent::COMPARISON_FUNC_LESS;
+            case DepthTestFunc::Equal: return ::Diligent::COMPARISON_FUNC_EQUAL;
+            case DepthTestFunc::LessEqual: return ::Diligent::COMPARISON_FUNC_LESS_EQUAL;
+            case DepthTestFunc::Greater: return ::Diligent::COMPARISON_FUNC_GREATER;
+            case DepthTestFunc::NotEqual: return ::Diligent::COMPARISON_FUNC_NOT_EQUAL;
+            case DepthTestFunc::GreaterEqual: return ::Diligent::COMPARISON_FUNC_GREATER_EQUAL;
+            case DepthTestFunc::Always: return ::Diligent::COMPARISON_FUNC_ALWAYS;
+            default: return ::Diligent::COMPARISON_FUNC_ALWAYS;
+            }
+        }
+
+        ::Diligent::CULL_MODE ConvertCullMode(CullFaceMode mode) {
+            switch (mode) {
+            case CullFaceMode::Front: return ::Diligent::CULL_MODE_FRONT;
+            case CullFaceMode::Back: return ::Diligent::CULL_MODE_BACK;
+            case CullFaceMode::FrontAndBack: return ::Diligent::CULL_MODE_NONE;
+            default: return ::Diligent::CULL_MODE_NONE;
+            }
+        }
     } // namespace
 
     DiligentRenderer::DiligentRenderer(::Diligent::IRenderDevice* device, ::Diligent::IDeviceContext* context)
@@ -446,8 +502,39 @@ void main()
             graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             break;
         }
-        graphicsPipeline.RasterizerDesc.CullMode = ::Diligent::CULL_MODE_NONE;
-        graphicsPipeline.DepthStencilDesc.DepthEnable = false;
+        const Bool blendEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Blend);
+        const Bool depthEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest);
+        const Bool cullEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace);
+        const Bool scissorEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest);
+        (void)scissorEnabled;
+
+        if (blendEnabled) {
+            BlendFactor srcRGB = BlendFactor::One;
+            BlendFactor dstRGB = BlendFactor::Zero;
+            BlendFactor srcAlpha = BlendFactor::One;
+            BlendFactor dstAlpha = BlendFactor::Zero;
+            BlendEquation eqRGB = BlendEquation::Add;
+            BlendEquation eqAlpha = BlendEquation::Add;
+            MG_State::pGLContext->GetBlendFunc(srcRGB, dstRGB, srcAlpha, dstAlpha);
+            MG_State::pGLContext->GetBlendEquation(eqRGB, eqAlpha);
+
+            auto& rtBlend = graphicsPipeline.BlendDesc.RenderTargets[0];
+            rtBlend.BlendEnable = true;
+            rtBlend.SrcBlend = ConvertBlendFactor(srcRGB);
+            rtBlend.DestBlend = ConvertBlendFactor(dstRGB);
+            rtBlend.BlendOp = ConvertBlendEquation(eqRGB);
+            rtBlend.SrcBlendAlpha = ConvertBlendFactor(srcAlpha);
+            rtBlend.DestBlendAlpha = ConvertBlendFactor(dstAlpha);
+            rtBlend.BlendOpAlpha = ConvertBlendEquation(eqAlpha);
+        }
+
+        graphicsPipeline.RasterizerDesc.CullMode = cullEnabled ? ConvertCullMode(MG_State::pGLContext->GetCullFaceMode())
+                                                               : ::Diligent::CULL_MODE_NONE;
+        graphicsPipeline.RasterizerDesc.FrontCounterClockwise =
+            MG_State::pGLContext->GetFrontFaceMode() == FrontFaceMode::CounterClockwise;
+        graphicsPipeline.DepthStencilDesc.DepthEnable = depthEnabled;
+        graphicsPipeline.DepthStencilDesc.DepthWriteEnable = MG_State::pGLContext->GetDepthMask();
+        graphicsPipeline.DepthStencilDesc.DepthFunc = ConvertDepthFunc(MG_State::pGLContext->GetDepthFunc());
         graphicsPipeline.InputLayout.LayoutElements = layoutElements.data();
         graphicsPipeline.InputLayout.NumElements = static_cast<::Diligent::Uint32>(layoutElements.size());
 
