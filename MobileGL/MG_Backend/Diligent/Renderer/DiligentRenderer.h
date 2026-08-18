@@ -27,6 +27,8 @@ namespace Diligent {
     struct ITextureView;
     struct IPipelineState;
     struct IBuffer;
+    struct ISampler;
+    struct IShaderResourceBinding;
 }
 
 namespace MobileGL::MG_Backend::DiligentBackend {
@@ -44,6 +46,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void ClearDepth(Float depth);
         void DrawTriangle();
         void DrawVertices(const Float* vertices, Uint32 vertexCount);
+        // Creates a simple 2D RGBA8 texture from CPU data and makes it available
+        // to state PSOs under the shader variable name "g_Texture".
+        Bool CreateTestTexture(const void* data, Uint32 width, Uint32 height);
         // Draws using the live MG_State GL context: current program, VAO and
         // bound buffers. This is the front-end emulation entry point.
         void DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
@@ -66,6 +71,10 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pColorRTV;
         ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pDepthTarget;
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pDepthDSV;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pTestTexture;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pTestSRV;
+        ::Diligent::RefCntAutoPtr<::Diligent::ISampler> m_pTestSampler;
+        ::Diligent::RefCntAutoPtr<::Diligent::IShaderResourceBinding> m_pStateSRB;
         ::Diligent::RefCntAutoPtr<::Diligent::IPipelineState> m_pPSO;
         ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pVertexBuffer;
         Uint32 m_width = 256;

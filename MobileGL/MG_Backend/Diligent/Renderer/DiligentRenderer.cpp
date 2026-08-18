@@ -13,6 +13,7 @@
 #include <Shader.h>
 #include <PipelineState.h>
 #include <InputLayout.h>
+#include <Sampler.h>
 
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
@@ -431,6 +432,46 @@ void main()
         m_pContext->Draw(drawAttrs);
     }
 
+    Bool DiligentRenderer::CreateTestTexture(const void* data, Uint32 width, Uint32 height) {
+        if (m_pDevice == nullptr || data == nullptr || width == 0 || height == 0) {
+            return false;
+        }
+
+        ::Diligent::TextureDesc texDesc;
+        texDesc.Name = "MobileGL Diligent test texture";
+        texDesc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
+        texDesc.Format = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+        texDesc.Width = width;
+        texDesc.Height = height;
+        texDesc.MipLevels = 1;
+        texDesc.BindFlags = ::Diligent::BIND_SHADER_RESOURCE;
+        texDesc.Usage = ::Diligent::USAGE_DEFAULT;
+
+        ::Diligent::TextureSubResData subResData;
+        subResData.pData = data;
+        subResData.Stride = static_cast<::Diligent::Uint64>(width) * 4;
+
+        ::Diligent::TextureData texData;
+        texData.pSubResources = &subResData;
+        texData.NumSubresources = 1;
+
+        m_pDevice->CreateTexture(texDesc, &texData, &m_pTestTexture);
+        if (!m_pTestTexture) {
+            return false;
+        }
+        m_pTestSRV = m_pTestTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_SHADER_RESOURCE);
+        if (!m_pTestSRV) {
+            return false;
+        }
+
+        ::Diligent::SamplerDesc samplerDesc;
+        m_pDevice->CreateSampler(samplerDesc, &m_pTestSampler);
+        if (m_pTestSampler) {
+            m_pTestSRV->SetSampler(m_pTestSampler);
+        }
+        return m_pTestSampler != nullptr;
+    }
+
     void DiligentRenderer::DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices) {
         if (!m_initialized || !m_pContext || MG_State::pGLContext == nullptr) {
             return;
@@ -479,6 +520,9 @@ void main()
         if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest)) {
             const auto& front = MG_State::pGLContext->GetStencilState(StencilFace::Front);
             m_pContext->SetStencilRef(static_cast<::Diligent::Uint32>(front.Ref));
+        }
+        if (m_pStateSRB) {
+            m_pContext->CommitShaderResources(m_pStateSRB, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         }
 
         ::Diligent::DrawAttribs drawAttrs;
@@ -648,6 +692,18 @@ void main()
         if (!m_pPSO) {
             MGLOG_E("DiligentRenderer: failed to create state pipeline");
             return false;
+        }
+
+        m_pStateSRB = nullptr;
+        if (m_pTestSRV) {
+            auto* staticVar = m_pPSO->GetStaticVariableByName(::Diligent::SHADER_TYPE_PIXEL, "g_Texture");
+            if (staticVar != nullptr) {
+                staticVar->Set(m_pTestSRV);
+            }
+            m_pPSO->CreateShaderResourceBinding(&m_pStateSRB, false);
+            if (m_pStateSRB) {
+                m_pPSO->InitializeStaticSRBResources(m_pStateSRB);
+            }
         }
         return true;
     }

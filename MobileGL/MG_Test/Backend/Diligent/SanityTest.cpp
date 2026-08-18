@@ -135,3 +135,77 @@ void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
     EXPECT_GT(corner[1], 200) << "corner should remain green after clear";
     EXPECT_LT(corner[0], 50) << "corner should not be red";
 }
+
+TEST(DiligentVulkanBackend, DrawsTexturedFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+layout(location = 1) in vec2 UV;
+out vec2 vUV;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); vUV = UV; }
+)";
+    const char* fsSrc = R"(#version 330 core
+uniform sampler2D g_Texture;
+in vec2 vUV;
+out vec4 Color;
+void main() { Color = texture(g_Texture, vUV); }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    UseProgram(program);
+    Viewport(0, 0, 256, 256);
+
+    // Position + UV interleaved.
+    const float vertices[] = {
+        -0.5f, -0.5f, 0.0f, 0.0f,
+         0.5f, -0.5f, 1.0f, 0.0f,
+         0.0f,  0.5f, 0.5f, 1.0f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, nullptr);
+    EnableVertexAttribArray(1);
+    VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, reinterpret_cast<const void*>(8));
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping textured state test";
+    }
+
+    // 2x2 solid red texture.
+    const std::uint8_t redTexture[2 * 2 * 4] = {
+        255, 0, 0, 255, 255, 0, 0, 255,
+        255, 0, 0, 255, 255, 0, 0, 255,
+    };
+    ASSERT_TRUE(renderer->CreateTestTexture(redTexture, 2, 2));
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_GT(center[0], 200) << "center should be red from textured triangle";
+    EXPECT_LT(center[1], 50) << "center should not be green";
+}
