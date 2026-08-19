@@ -1993,6 +1993,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         texture.GetExternalIndex(),
                         MG_Util::ConvertTextureUploadTargetToString(uploadTarget).c_str(),
                         static_cast<Int>(format), static_cast<Uint32>(imageInfo.usage));
+                // The preserved image was written by GPU work that may still be in flight
+                // (preserve requires layout != UNDEFINED); park it on the deferred ring
+                // like every other destruction path instead of letting the unique_ptr
+                // destroy it synchronously under the GPU.
+                if (preservedResource) {
+                    DeferResourceRelease(Move(*preservedResource));
+                }
                 return false;
             }
         }
@@ -2015,6 +2022,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     static_cast<Int>(imageInfo.samples), static_cast<Int>(imageInfo.format));
             resource.image = VK_NULL_HANDLE;
             resource.allocation = nullptr;
+            // Same as the probe failure above: the preserved live image must go through
+            // the deferred ring, never a synchronous destructor while frames that
+            // reference it are still in flight.
+            if (preservedResource) {
+                DeferResourceRelease(Move(*preservedResource));
+            }
             return false;
         }
         ++m_textureImageEpoch; // a new attachment image invalidates cached render passes

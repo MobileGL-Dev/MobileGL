@@ -831,6 +831,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // recreated since (texture + renderbuffer image epochs), and no pending clear (which alters
         // load ops). Any of these differing forces the full recompute below. Portable to VK 1.1.
         if (activeRenderPass != nullptr && m_rpFastValid && m_rpFastFbo == &fbo &&
+            m_rpFastFboLifetimeId == fbo.GetLifetimeId() &&
             m_rpFastFboVersion == fbo.GetObjectVersion() && m_rpFastSwapchainIndex == swapchainImageIndex &&
             m_rpFastTexEpoch == m_textureManager.GetTextureImageEpoch() &&
             m_rpFastRbEpoch == m_renderbufferImageEpoch &&
@@ -855,6 +856,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // epochs AFTER ComputeHash: its attachment SyncTexture can create an image (bump the epoch).
             m_rpFastValid = true;
             m_rpFastFbo = &fbo;
+            m_rpFastFboLifetimeId = fbo.GetLifetimeId();
             m_rpFastFboVersion = fbo.GetObjectVersion();
             m_rpFastSwapchainIndex = swapchainImageIndex;
             m_rpFastTexEpoch = m_textureManager.GetTextureImageEpoch();
@@ -1507,7 +1509,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ClearAttachmentPayload clearPayload{};
             SharedPtr<MG_State::GLState::ITextureObject> liveTexture;
             if (pending.hasInlinePayload) {
-                clearPayload = pending.inlinePayload;
+                // The inline payload was snapshotted when the entry was CREATED, but the
+                // clear VALUE is not part of the entry's hash - a cache hit with a newer
+                // glClear would replay the creation-time value and drop the new one (the
+                // texture path below is immune because it re-reads the live payload).
+                // Same defense as ClearAttachmentsOnActiveRenderPass: prefer the live
+                // pending clear, fall back to the snapshot only when none is queued.
+                if (s_renderPassManager != nullptr &&
+                    s_renderPassManager->GetPendingRenderbufferClear(pending.renderbuffer, clearPayload)) {
+                    if ((clearPayload.mask & GL_COLOR_BUFFER_BIT) != 0 && pending.renderbuffer != nullptr &&
+                        MG_Util::GetBaseInternalFormatComponentCount(pending.renderbuffer->GetInternalFormat()) ==
+                            3) {
+                        // RGB renderbuffers are backed by an RGBA image; the missing alpha reads as 1.
+                        ForceOpaqueClearAlpha(clearPayload);
+                    }
+                } else {
+                    clearPayload = pending.inlinePayload;
+                }
             } else {
                 if (pending.key.texture == nullptr ||
                     !s_clearManager->GetPendingClear(pending.key, clearPayload, liveTexture)) {

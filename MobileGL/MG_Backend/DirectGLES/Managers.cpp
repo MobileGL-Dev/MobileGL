@@ -577,6 +577,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // immutable storage, and any prior mutable store is replaced anyway.
                 if (resource->id != 0) {
                     NoteBufferIdDeleted(resource->id);
+                    // Driver VAOs may have this id baked into attribute/element bindings
+                    // keyed on frontend versions this re-mint does not move.
+                    ++g_bufferBackendIdGeneration;
                     g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                     resource->id = 0;
                     resource->immutableStorage = false;
@@ -833,6 +836,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_bufferMutationEpoch.fetch_add(1, std::memory_order_release);
         }
 
+        // See the declaration: re-mints of a live resource's driver id. Written only on
+        // the context thread (both re-mint sites run there), read only by the VAO sync.
+        Uint64 g_bufferBackendIdGeneration = 0;
+
         void RegisterBufferBackendOps() {
             MG_State::GLState::SetBufferBackendOps(&g_glesBufferBackendOps);
             // Frontend writes issued while ops were unregistered advanced change
@@ -960,6 +967,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // here, on the thread that can, and the id is re-minted below.
             if (resource->immutableStorage && !resource->persistentMapped && resource->id != 0) {
                 NoteBufferIdDeleted(resource->id);
+                // Same as the persistent-map re-mint: the dying id may be baked into
+                // driver VAO bindings whose frontend versions do not move for this.
+                ++g_bufferBackendIdGeneration;
                 g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                 resource->id = 0;
                 resource->immutableStorage = false;
@@ -1640,8 +1650,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // PrepareForDraw's BindCurrentVAO establishes the draw binding regardless.
             const Uint32 currentConfigVersion = stateVAOObject->GetConfigVersion();
             const Uint16 currentIndexBufferVersion = stateVAOObject->GetIndexBufferBindingSlot().GetVersion();
-            const Bool attributesDirty = !m_hasSyncedConfigVersion || m_syncedConfigVersion != currentConfigVersion;
-            const Bool indexBufferDirty = currentIndexBufferVersion != m_syncedIndexBufferVersion;
+            // A live buffer's driver id was re-minted since this twin's last emit
+            // (persistent-map adoption / immutable-store retire): every baked binding may
+            // hold the dead id while every frontend version still matches, so force a
+            // full re-emit. Read once; each buffer re-mints at most once per walk (its
+            // first EnsureBufferResource this draw), before its id is baked, so stamping
+            // the entry value at the end is exact - and a stale stamp only costs one
+            // extra full emit.
+            const Uint64 currentBufferIdGeneration = BufferImpl::g_bufferBackendIdGeneration;
+            const Bool bufferIdsRemitted = m_syncedBufferIdGeneration != currentBufferIdGeneration;
+            const Bool attributesDirty =
+                bufferIdsRemitted || !m_hasSyncedConfigVersion || m_syncedConfigVersion != currentConfigVersion;
+            // Identity joins the version compare: the slot version is a wrapping Uint16,
+            // so a wrapped-back count with a different buffer bound must still read dirty.
+            const MG_State::GLState::BufferObject* currentIndexBufferObject =
+                stateVAOObject->GetIndexBufferBindingSlot().GetBoundObject().get();
+            const Bool indexBufferDirty = bufferIdsRemitted ||
+                                          currentIndexBufferVersion != m_syncedIndexBufferVersion ||
+                                          currentIndexBufferObject != m_syncedIndexBufferObject;
 
             // The baseInstance shift lives in the attribute offsets the driver already holds, so
             // a change of baseInstance has to re-emit the divisor'd arrays even when the frontend
@@ -1675,10 +1701,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
 
-                Bool needsSyncFormat = allAttributeVersions[attribIndex].FormatVersion !=
-                                       m_syncedAttributeVersions[attribIndex].FormatVersion;
-                Bool needsSyncBuffer = allAttributeVersions[attribIndex].BufferVersion !=
-                                       m_syncedAttributeVersions[attribIndex].BufferVersion;
+                Bool needsSyncFormat = bufferIdsRemitted || allAttributeVersions[attribIndex].FormatVersion !=
+                                                               m_syncedAttributeVersions[attribIndex].FormatVersion;
+                Bool needsSyncBuffer = bufferIdsRemitted || allAttributeVersions[attribIndex].BufferVersion !=
+                                                               m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
                 // Defence in depth. The frontend already declines glVertexAttribLFormat on this
@@ -1798,6 +1824,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (indexBufferSynced) {
                     m_syncedIndexBufferVersion = currentIndexBufferVersion;
+                    m_syncedIndexBufferObject = currentIndexBufferObject;
                 }
             }
 
@@ -1809,6 +1836,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (emitAttributes) {
                 m_syncedFetchBaseInstance = fetchBaseInstance;
             }
+            m_syncedBufferIdGeneration = currentBufferIdGeneration;
         }
 
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
@@ -1946,6 +1974,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendTextureObject::RecreateBackendTexture() {
             if (m_backendTextureId != 0) {
                 ScratchFBOImpl::NoteTextureIdDeleted(m_backendTextureId);
+                // Application FBO twins that attached the dying id memoize on FRONTEND
+                // attachment versions, which this backend-side re-mint does not move;
+                // without this bump their driver FBOs would keep the deleted name
+                // attached forever (see g_attachmentBackendIdGeneration).
+                ++FramebufferImpl::g_attachmentBackendIdGeneration;
                 if (m_contextGeneration == g_backendContextGeneration) {
                     g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
                 }
@@ -3517,6 +3550,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_backendReadBuffer = GL_NONE;
             std::fill(m_syncedFrontendAttachmentVersions.begin(), m_syncedFrontendAttachmentVersions.end(),
                       static_cast<Uint16>(~0u));
+            // Every attachment version is invalidated above, so the next walk re-attaches
+            // everything regardless; stamp the generation so it does not re-arm twice.
+            m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
         }
 
         static Bool SyncAttachmentObject(GLenum glFBOTarget,
@@ -4005,6 +4041,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // -------------------- Attach texture to backend FBO -----------------------
+            // A backend texture id was re-minted since this twin's last walk
+            // (RecreateBackendTexture): any point here may still hold the dead id while
+            // its frontend attachment version is unchanged, so the memo below would skip
+            // exactly the attachment that needs repair. Re-arm every point first.
+            if (m_syncedBackendIdGeneration != g_attachmentBackendIdGeneration) {
+                std::fill(m_syncedFrontendAttachmentVersions.begin(), m_syncedFrontendAttachmentVersions.end(),
+                          static_cast<Uint16>(~0u));
+                m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
+            }
             const auto& attachments = stateFBOObject->GetAllAttachmentObjects();
             const auto& attachmentVersions = stateFBOObject->GetAllFramebufferAttachmentVersions();
             for (SizeT i = 0; i < attachments.size(); ++i) {
@@ -4093,6 +4138,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 #endif
             }
+
+            // The walk itself can re-mint an id (SyncAttachmentObject ->
+            // SyncMipmapsToBackend -> RecreateBackendTexture), invalidating points this
+            // walk already attached or version-skipped - e.g. one texture attached at two
+            // points. Re-enter until the generation is quiescent: every pass syncs each
+            // dirty texture clean, so each repeat finds strictly fewer re-mints and the
+            // common case (no re-mint) never takes a second pass. The head's draw/read-
+            // buffer syncs are memoized against their own shadows, so a repeat re-walks
+            // only the attachments.
+            if (m_syncedBackendIdGeneration != g_attachmentBackendIdGeneration) {
+                SyncToBackend(stateFBOObject, asTarget);
+            }
         }
 
         GLenum BackendFramebufferObject::GetBackendAttachmentType(FramebufferAttachmentType frontendAtt) const {
@@ -4119,6 +4176,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedObjectVersions = {0};
         Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
             g_fboSyncedObjects = {};
+        Uint64 g_attachmentBackendIdGeneration = 0;
+        Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedBackendIdGenerations = {0};
     } // namespace FramebufferImpl
 
     namespace ScratchFBOImpl {

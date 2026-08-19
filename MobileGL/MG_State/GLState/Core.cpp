@@ -646,9 +646,17 @@ namespace MobileGL::MG_State {
             for (SizeT stage = 0; stage < ProgramPipelineObject::kGraphicsStageCount; ++stage) {
                 const auto& stageProgram = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
                 if (!stageProgram) continue;
-                for (const auto& shader : stageProgram->GetAttachedShaders()) {
-                    if (!shader || static_cast<SizeT>(shader->GetShaderStage()) != stage) continue;
-                    composite->AttachShader(shader);
+                // The stage program contributes the shaders its LAST LINK consumed, never
+                // its live attach list: per GL 4.6 7.3/7.4 a pipeline stage executes the
+                // stage program as last linked - glAttachShader and glCompileShader take
+                // effect only at the program's next link - and neither of those moves the
+                // link version this cache keys on, so reading live state here would let a
+                // post-link attach or recompile leak into the composite while the signature
+                // still hits. The pinned (source, node) makes the composite's Link()
+                // consume the very inputs that link consumed.
+                for (const auto& ref : stageProgram->GetLinkedShaderSnapshot()) {
+                    if (!ref.shader || static_cast<SizeT>(ref.shader->GetShaderStage()) != stage) continue;
+                    composite->AttachShaderWithPinnedLinkInput(ref);
                     anyStage = true;
                 }
             }

@@ -140,6 +140,13 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void ShaderObject::Compile() {
+        // The compile-environment snapshot is taken HERE, on the GL thread, and handed to
+        // the job. Everything the pipeline needs to know about the device comes through it,
+        // never through pActiveBackendObject - that is what makes the body movable.
+        // Hoisted above the memo check because the memo must be env-disciplined too (below).
+        const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env =
+            MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
+
         // P0b layer 1, as a tri-state: the memo is "the node in m_compiled was built from
         // the string m_source still points at". SetShaderSource only swaps that pointer when
         // the text actually differs, so this is a pointer compare, and it covers Pending as
@@ -152,7 +159,18 @@ namespace MobileGL::MG_State::GLState {
         // ClaimParsedShader's on-demand re-parse needs - a real recompile would have handed
         // the next link a fresh parse, the no-op hands it a fresh re-parse of the identical
         // source instead. Same result, one parse either way.
-        if (HasMemoizedCompile()) return;
+        //
+        // The environment joins the check (ShaderSourceKey.h's memo-hazard rule: a memo
+        // must never be handed back under an environment other than the one it was
+        // computed against). Layers 2 and 3 key on the fingerprint, but this memo sits
+        // ABOVE both, so without this compare a node computed against a dead environment
+        // - e.g. a compute shader rejected against the pre-capability fallback limits -
+        // would keep answering forever while a fresh object with byte-identical source
+        // compiles fine. The fingerprint is a content hash, so a republish of identical
+        // capabilities still hits.
+        if (HasMemoizedCompile() && m_compiled->env != nullptr && m_compiled->env->fingerprint == env->fingerprint) {
+            return;
+        }
 
         // Two reasons to stay on this thread, one rule. Without the async flag the whole
         // path must be byte-identical to the synchronous implementation, and a cache-less
@@ -168,12 +186,6 @@ namespace MobileGL::MG_State::GLState {
         // glMaxShaderCompilerThreadsKHR(0) and a flag-off build both bypass sharing exactly
         // as they bypass the pool, and their behaviour stays byte-identical to pre-stage-6.
         const Bool runOnPool = m_preprocessCache && MG_Util::Async::AsyncShaderCompileActive();
-
-        // The compile-environment snapshot is taken HERE, on the GL thread, and handed to
-        // the job. Everything the pipeline needs to know about the device comes through it,
-        // never through pActiveBackendObject - that is what makes the body movable.
-        const SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env =
-            MG_Util::ShaderTranspiler::GetCurrentCompileEnv();
         const Uint64 sourceHash = ShaderPreprocessCache::HashSource(*m_source);
 
         // ---- P1 stage 6: adopt an equivalent compile instead of enqueueing a duplicate ----

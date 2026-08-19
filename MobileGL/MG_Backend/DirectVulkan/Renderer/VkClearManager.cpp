@@ -166,7 +166,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkClearManager::MergeClearPayload(ClearAttachmentPayload& dst, const ClearAttachmentPayload& src) {
         dst.mask |= src.mask;
         if ((src.mask & GL_COLOR_BUFFER_BIT) != 0) {
+            // The whole colour story travels together (same rule as
+            // VkRenderPassManager::QueueRenderbufferClear): a glClearBufferiv/uiv
+            // payload carries its value in colorInt/colorUint and its branch selector
+            // in colorEncoding - dropping them here would leave the pending clear
+            // reading as an all-zero float one.
             dst.color = src.color;
+            dst.colorEncoding = src.colorEncoding;
+            dst.colorInt = src.colorInt;
+            dst.colorUint = src.colorUint;
         }
         if ((src.mask & GL_DEPTH_BUFFER_BIT) != 0) {
             dst.depth = src.depth;

@@ -3986,7 +3986,7 @@ void main() {
             // Skips the per-draw GetBackendResource chase into a cold resource object.
             Bool sliceStillValid = false;
             const Uint64 frameSerial = m_bufferManager.GetFrameSerial();
-            if (indexMemo->indexFrameSerial == frameSerial &&
+            if (indexMemo->indexFrameSerial == frameSerial && !indexMemo->indexBufferMapped &&
                 indexMemo->indexSliceEpochCounter == m_bufferManager.GetSliceEpochCounter()) {
                 sliceStillValid = true;
             }
@@ -4049,6 +4049,9 @@ void main() {
                 indexMemo->indexVkBuffer = slice.buffer;
                 indexMemo->indexSliceOffset = slice.offset;
                 indexMemo->indexFrameSerial = m_bufferManager.GetFrameSerial();
+                // A host-mapped EBO can mutate its shadow with no epoch bump; the hit
+                // path declines on this flag (mirror of anyBufferMapped).
+                indexMemo->indexBufferMapped = indexBufferShared->IsMapped();
             }
         }
         const VkDeviceSize indexBindOffset =
@@ -5718,6 +5721,22 @@ void main() {
         if (program.GetBackendStateVersion() != snap.programVersion) {
             return false;
         }
+        // glBegin/EndTransformFeedback moves no key this fast path otherwise observes
+        // (the design makes capture a compile-option FLAG precisely because no version
+        // bumps, VulkanRenderer.h's pipeline-memo note) - but the snapshot bakes that
+        // flag into resolvedTransformFlags and the pipeline. Recompute the one dynamic
+        // bit (the full path's exact predicate) and decline on a mismatch, or the first
+        // captured draw after glBeginTransformFeedback would bind the undecorated
+        // variant and silently capture nothing while the CPU bookkeeping advances.
+        const Bool wantsXfbCapture = m_transformFeedbackFeatureEnabled &&
+                                     MG_State::pGLContext->IsTransformFeedbackActive() &&
+                                     program.GetTransformFeedbackVaryingCount() > 0;
+        const Bool snapHasXfbCapture =
+            static_cast<Bool>(ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags) &
+                              ProgramFactory::CompileOptionBit::XfbCapture);
+        if (wantsXfbCapture != snapHasXfbCapture) {
+            return false;
+        }
         // A changed VAO does NOT decline: the VAO only feeds the pipeline's vertex
         // input state (re-resolved below through the layout-keyed memo, so N VAOs
         // sharing one attribute layout share one pipeline) and the vertex/index
@@ -5731,6 +5750,7 @@ void main() {
         const auto& drawFbo =
             MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
+            drawFbo->GetLifetimeId() != snap.drawFboLifetimeId ||
             drawFbo->GetObjectVersion() != snap.fboVersion) {
             return false;
         }
@@ -5914,8 +5934,14 @@ void main() {
         }
         const Uint64 samplingResolutionGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
         if (samplingResolutionGeneration != snap.samplingResolutionGeneration) {
-            snap.samplingResolutionGeneration = samplingResolutionGeneration;
-            samplerDescriptorsUnchanged = false;
+            // Decline, not re-arm: snap.resolvedTransformFlags bakes the
+            // ExplicitLod0Sampling verdict, which reads the effective sampler's
+            // filters/aniso/LOD range - exactly the state this counter tracks.
+            // Re-arming the stamp here would rebuild the descriptors but keep the
+            // stale SPIR-V variant forever (every later draw compares equal again).
+            // Same shape as the erase-epoch declines above; costs one full-path draw
+            // per sampler/shape change, and the full path's LOD memo re-probes.
+            return false;
         }
 
         // Everything the full path would re-resolve is provably unchanged - or, for
@@ -6095,11 +6121,18 @@ void main() {
             const Uint64 lodProgramLifetimeId = program.GetLifetimeId();
             const Uint32 lodProgramVersion = program.GetBackendStateVersion();
             const Uint64 lodBindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            // The probe also reads the EFFECTIVE sampler's filters/aniso/LOD range
+            // (ProgramSamplesOnlySingleLevelTextures), and those setters bump ONLY the
+            // sampling-resolution generation - not the texture params version the sum
+            // below covers. Without this key a filter/aniso change would keep serving
+            // the stale verdict.
+            const Uint64 lodSamplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
             Bool lodMemoHit = false;
             if (m_lastLodDecisionValid && m_lastSampledSetValid &&
                 m_lastLodProgramLifetimeId == lodProgramLifetimeId &&
                 m_lastLodProgramVersion == lodProgramVersion &&
-                m_lastLodBindGeneration == lodBindGeneration && m_lastLodBaseFlags == transformFlags &&
+                m_lastLodBindGeneration == lodBindGeneration &&
+                m_lastLodSamplingGeneration == lodSamplingGeneration && m_lastLodBaseFlags == transformFlags &&
                 m_lastSampledSetProgramLifetimeId == lodProgramLifetimeId &&
                 m_lastSampledSetProgramVersion == lodProgramVersion &&
                 m_lastSampledSetBindGeneration == lodBindGeneration) {
@@ -6124,6 +6157,7 @@ void main() {
                 m_lastLodProgramLifetimeId = lodProgramLifetimeId;
                 m_lastLodProgramVersion = lodProgramVersion;
                 m_lastLodBindGeneration = lodBindGeneration;
+                m_lastLodSamplingGeneration = lodSamplingGeneration;
                 m_lastLodBaseFlags = baseFlags;
                 m_lastLodResultFlags = transformFlags;
                 m_lastLodParamsSum = 0;  // filled below once the sampled set is known
@@ -6467,6 +6501,7 @@ void main() {
                 snap.vaoLifetimeId = vao.GetLifetimeId();
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();
+                snap.drawFboLifetimeId = drawFbo->GetLifetimeId();
                 snap.fboVersion = drawFbo->GetObjectVersion();
                 snap.drawFboIsDefault = drawFboIsDefault;
                 snap.viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin);
@@ -13825,6 +13860,15 @@ void main() {
         VkPipeline pipeline = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline),
                   "GetOrCreateComputePipeline, vkCreateComputePipelines");
+        // A failed creation must never be memoized - same contract as
+        // PipelineFactory::GetOrCreatePipeline: caching the null would serve it back
+        // for the rest of the process and every dispatch of this program would be
+        // silently skipped. Retrying costs one failed vkCreateComputePipelines per
+        // dispatch, which is the correct price.
+        if (pipeline == VK_NULL_HANDLE) {
+            MGLOG_E("GetOrCreateComputePipeline: vkCreateComputePipelines failed; not caching the failure");
+            return VK_NULL_HANDLE;
+        }
         m_computePipelines.emplace(programObj.hash, pipeline);
         return pipeline;
     }

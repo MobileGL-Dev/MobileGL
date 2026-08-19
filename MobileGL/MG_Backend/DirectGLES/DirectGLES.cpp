@@ -1431,6 +1431,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_fboSyncedSlotVersions[SizeT(target)] = slotVersion;
             g_fboSyncedObjectVersions[SizeT(target)] = objectVersion;
             g_fboSyncedObjects[SizeT(target)] = fbo;
+            g_fboSyncedBackendIdGenerations[SizeT(target)] = g_attachmentBackendIdGeneration;
         }
 
         void SyncCurrentFBO() {
@@ -1461,9 +1462,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Uint16 slotVersion = slot.GetVersion();
                 const Uint16 objectVersion = currentFBO ? currentFBO->GetObjectVersion() : 0;
                 auto* currentPtr = currentFBO.get();
+                // The backend-id generation joins the triple: a backend texture re-mint
+                // (RecreateBackendTexture) moves no frontend version, so without it the
+                // early-out would keep the driver FBO on the deleted texture name.
                 if (slotVersion == g_fboSyncedSlotVersions[SizeT(target)] &&
                     objectVersion == g_fboSyncedObjectVersions[SizeT(target)] &&
-                    currentPtr == g_fboSyncedObjects[SizeT(target)]) {
+                    currentPtr == g_fboSyncedObjects[SizeT(target)] &&
+                    g_fboSyncedBackendIdGenerations[SizeT(target)] == g_attachmentBackendIdGeneration) {
                     lastUpdatedFBO = currentPtr;
                     continue;
                 }
@@ -2129,6 +2134,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool g_broadcastMemoValid = false;
         static Uint g_broadcastMemoCount = 1;
 
+        // The identity+version key above is only monotonic WITHIN one GLContext: a
+        // library teardown + re-init frees every FramebufferObject and restarts the
+        // draw slot's counter at zero, so a recycled FBO address with coinciding
+        // fresh versions would false-hit. Cleared at the same boundaries as the
+        // structurally identical SyncCurrentFBO trio (InvalidateFramebufferBindingCache).
+        void InvalidateBroadcastMemo() {
+            g_broadcastMemoValid = false;
+        }
+
         void SyncCurrentProgram(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -2312,6 +2326,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::g_fboSyncedSlotVersions[(SizeT)target] = slot.GetVersion();
         FramebufferImpl::g_fboSyncedObjectVersions[(SizeT)target] = fbo ? fbo->GetObjectVersion() : 0;
         FramebufferImpl::g_fboSyncedObjects[(SizeT)target] = fbo.get();
+        FramebufferImpl::g_fboSyncedBackendIdGenerations[(SizeT)target] =
+            FramebufferImpl::g_attachmentBackendIdGeneration;
     }
 
     static void BindCurrentProgramWithResources(
@@ -8304,6 +8320,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Conservatively drop the redundant-glUseProgram guard: re-issuing one bind
         // after a MakeCurrent is cheaper than trusting a possibly-reset context.
         PrgramImpl::g_lastUsedBackendProgramId = 0;
+        // The GLContext becoming current may be a fresh one whose slot versions
+        // restarted at zero; the broadcast memo's key is only monotonic within one.
+        PrgramImpl::InvalidateBroadcastMemo();
         BufferImpl::InvalidateIndexedBufferBindingCache();
         BufferImpl::InvalidatePixelBufferBindingCaches();
         FramebufferImpl::InvalidateFramebufferBindingCache();
@@ -8832,6 +8851,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::InvalidateFramebufferBindingCache();
         VertexArrayImpl::InvalidateVAOBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
+        PrgramImpl::InvalidateBroadcastMemo();
         // Texture ids belong to the dying context; wrappers destroyed later must
         // not glDeleteTextures a recycled name in a successor context.
         ++g_backendContextGeneration;

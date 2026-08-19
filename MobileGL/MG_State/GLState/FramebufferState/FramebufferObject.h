@@ -148,13 +148,25 @@ namespace MobileGL {
 
             Uint16 GetObjectVersion() const { return m_objectVersion; }
 
+            // Globally-unique, never-reused id for THIS object's lifetime - the same
+            // contract as VertexArrayObject::GetLifetimeId(), and needed for the same
+            // reason: neither the GL name nor the heap address can tell a
+            // deleted-and-recreated framebuffer from the original, and m_objectVersion
+            // starts at 0 for every new object, so a backend memo keyed on
+            // (pointer, version) alone would silently inherit the dead object's entry
+            // (see VkRenderPassManager's per-draw fast-path memo).
+            Uint64 GetLifetimeId() const { return m_lifetimeId; }
+
             Uint GetExternalIndex() const;
             Bool IsDefaultFramebuffer() const { return m_externalIndex == 0; }
 
         private:
+            static Uint64 AllocateLifetimeId();
+
             void BumpAttachmentVersion(FramebufferAttachmentType type);
 
             const Uint m_externalIndex = 0;
+            const Uint64 m_lifetimeId = AllocateLifetimeId();
             FramebufferAttachmentObjectArray m_attachmentObjects;
             FramebufferAttachmentVersionArray m_attachmentVersions;
 

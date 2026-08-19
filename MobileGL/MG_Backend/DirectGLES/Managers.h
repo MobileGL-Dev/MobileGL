@@ -346,6 +346,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // client-attribute staging buffers): scrub every buffer-binding shadow that
         // could false-skip when the name is recycled.
         void NoteBufferIdDeleted(Uint id);
+        // Bumped whenever a live GLESBufferResource's driver id is retired and re-minted
+        // while its frontend buffer stays alive (persistent-map adoption, immutable-store
+        // retire). The VAO twins' baked glVertexAttribPointer / element-array bindings
+        // key on FRONTEND versions, which a backend-side re-mint does not move - without
+        // this generation the driver VAO would keep fetching through the deleted id (or
+        // its retained store) forever. Compared and stamped by
+        // BackendVertexArrayObject::SyncToBackend.
+        extern Uint64 g_bufferBackendIdGeneration;
         // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
         // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER): skips the GL call when the
         // (id, range) already at that index matches, like the array-buffer/texture/
@@ -465,6 +473,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
             Bool m_isInitialized = false;
             Uint16 m_syncedIndexBufferVersion = 0;
+            // Identity of the buffer the version above was stamped against. Raw and never
+            // dereferenced: the slot version is a wrapping Uint16 (see the ResolvedDrawBuffers
+            // IBO memo and the packed_pixels postmortem at BindCurrentFBO), so the version
+            // alone would read a wrapped-back count with a different buffer bound as clean.
+            const MG_State::GLState::BufferObject* m_syncedIndexBufferObject = nullptr;
             // Aggregate gate over the per-attribute walk below: the frontend bumps its config
             // version on every per-attribute version bump (the three Bump*Version functions are
             // its only writers), so an unchanged config version proves every per-attribute
@@ -480,6 +493,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Kept here because it describes what was last EMITTED, which is what the next sync
             // has to correct.
             Uint32 m_syncedFetchBaseInstance = 0;
+            // BufferImpl::g_bufferBackendIdGeneration as of this twin's last emit. A
+            // mismatch means some live buffer's driver id was re-minted since; the ids
+            // baked into the driver VAO's attribute/element bindings may be dead even
+            // though every frontend version matches, so the next sync re-emits them all.
+            Uint64 m_syncedBufferIdGeneration = 0;
         };
 
         extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
@@ -799,6 +817,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             using FramebufferObject = MG_State::GLState::FramebufferObject;
             FramebufferObject::FramebufferAttachmentVersionArray m_syncedFrontendAttachmentVersions = {0};
+            // g_attachmentBackendIdGeneration as of this twin's last attachment walk. A
+            // mismatch means some backend texture id was re-minted since, and any of this
+            // twin's attachment points may still hold the dead id even though the frontend
+            // attachment versions match - so the walk re-attaches everything first.
+            Uint64 m_syncedBackendIdGeneration = 0;
         };
 
         extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
@@ -887,6 +910,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Which object was synced. Raw and never dereferenced: only compared for identity.
         extern Array<MG_State::GLState::FramebufferObject*, SizeT(FramebufferTarget::FramebufferTargetCount)>
             g_fboSyncedObjects;
+
+        // Bumped whenever a live backend texture's driver id is re-minted while its
+        // frontend texture may still be attached to application FBOs
+        // (BackendTextureObject::RecreateBackendTexture - e.g. a respecify of a texture
+        // whose backend storage went immutable). The FBO twins' attachment memos key on
+        // FRONTEND attachment versions, which a backend-side re-mint does not move, so
+        // the driver FBO would keep the deleted texture name attached forever. The
+        // SyncCurrentFBO gate compares this generation (below) to re-enter the sync,
+        // and each twin re-arms its per-attachment memo on a mismatch (SyncToBackend).
+        extern Uint64 g_attachmentBackendIdGeneration;
+        // What g_attachmentBackendIdGeneration was when SyncCurrentFBO last stamped each
+        // target; part of the synced tuple above.
+        extern Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedBackendIdGenerations;
 
         // Driver-level READ/DRAW framebuffer-binding shadow. Every backend
         // glBindFramebuffer routes through BindFramebufferId so scoped helpers can
