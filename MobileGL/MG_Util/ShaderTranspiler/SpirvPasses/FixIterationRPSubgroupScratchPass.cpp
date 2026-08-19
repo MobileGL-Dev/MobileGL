@@ -26,13 +26,13 @@ namespace MobileGL {
                 using spvtools::opt::Instruction;
                 using spvtools::opt::IRContext;
 
-                // iterationRP's reduction fingerprint, spelled out.
-                constexpr uint32_t kIterationRPLocalSizeX = 32u;
-                constexpr uint32_t kIterationRPLocalSizeY = 16u;
-                constexpr uint32_t kIterationRPLocalSizeZ = 1u;
-                constexpr uint32_t kIterationRPInvocations =
-                    kIterationRPLocalSizeX * kIterationRPLocalSizeY * kIterationRPLocalSizeZ;
-                constexpr uint32_t kIterationRPScratchLength = 32u;
+                // The Vulkan minimum for maxComputeSharedMemorySize, used when the caller
+                // could not tell us the device's real limit.
+                constexpr uint32_t kMinimumSharedMemoryBytes = 16384u;
+
+                // The narrowest subgroup width iterationRP's declarations are sized for.
+                // At or above it both shipped shapes fit and nothing may be rewritten.
+                constexpr uint32_t kPackAssumedSubgroupWidth = 16u;
 
                 Instruction* FindBuiltinDefinition(IRContext* context, spv::BuiltIn builtin) {
                     auto* defUseMgr = context->get_def_use_mgr();
@@ -73,18 +73,121 @@ namespace MobileGL {
                     return nullptr;
                 }
 
-                // vec2 of 32-bit float - the type of iterationRP's luminance/exposure
-                // accumulator and of its prefixSumCache entries.
-                bool IsVec2Float32(IRContext* context, uint32_t typeId) {
-                    const Instruction* type = context->get_def_use_mgr()->GetDef(typeId);
-                    if (type == nullptr || type->opcode() != spv::Op::OpTypeVector ||
-                        type->GetSingleWordInOperand(1) != 2u) {
+                // A 32-bit float scalar or vector - the shape of every accumulator the
+                // pack runs through its scans (float, vec2 and vec4 all appear). Returns
+                // the component count, or 0 for anything else.
+                uint32_t Float32ComponentCount(IRContext* context, uint32_t typeId) {
+                    auto* defUseMgr = context->get_def_use_mgr();
+                    const Instruction* type = defUseMgr->GetDef(typeId);
+                    if (type == nullptr) return 0u;
+                    uint32_t components = 1u;
+                    if (type->opcode() == spv::Op::OpTypeVector) {
+                        components = type->GetSingleWordInOperand(1);
+                        if (components < 2u || components > 4u) return 0u;
+                        type = defUseMgr->GetDef(type->GetSingleWordInOperand(0));
+                        if (type == nullptr) return 0u;
+                    }
+                    if (type->opcode() != spv::Op::OpTypeFloat ||
+                        type->GetSingleWordInOperand(0) != 32u) {
+                        return 0u;
+                    }
+                    return components;
+                }
+
+                uint32_t RoundUp(uint32_t value, uint32_t alignment) {
+                    return alignment == 0u ? value : ((value + alignment - 1u) / alignment) * alignment;
+                }
+
+                // Size AND alignment of a workgroup-storage type. Drivers lay shared
+                // memory out at natural alignment and the limit
+                // (VUID-RuntimeSpirv-Workgroup-06530) counts the padding that produces,
+                // so a model that sums unpadded sizes would under-count exactly where the
+                // budget check matters. Returns false for anything not modelled here,
+                // which the caller answers by declining to grow at all rather than by
+                // certifying growth against a total it knows is an underestimate.
+                bool WorkgroupTypeLayout(IRContext* context, uint32_t typeId, uint32_t* size,
+                                         uint32_t* alignment, uint32_t depth = 0u) {
+                    if (depth > 8u) return false;
+                    auto* defUseMgr = context->get_def_use_mgr();
+                    const Instruction* type = defUseMgr->GetDef(typeId);
+                    if (type == nullptr) return false;
+                    switch (type->opcode()) {
+                    case spv::Op::OpTypeBool:
+                        *size = 4u;
+                        *alignment = 4u;
+                        return true;
+                    case spv::Op::OpTypeInt:
+                    case spv::Op::OpTypeFloat: {
+                        const uint32_t width = type->GetSingleWordInOperand(0) / 8u;
+                        if (width == 0u) return false;
+                        *size = width;
+                        *alignment = width;
+                        return true;
+                    }
+                    case spv::Op::OpTypeVector: {
+                        uint32_t componentSize = 0u;
+                        uint32_t componentAlignment = 0u;
+                        if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(0),
+                                                 &componentSize, &componentAlignment, depth + 1u)) {
+                            return false;
+                        }
+                        const uint32_t components = type->GetSingleWordInOperand(1);
+                        if (components < 2u || components > 4u) return false;
+                        *size = componentSize * components;
+                        // A three-component vector aligns like a four-component one.
+                        *alignment = componentSize * (components == 3u ? 4u : components);
+                        return true;
+                    }
+                    case spv::Op::OpTypeMatrix:
+                    case spv::Op::OpTypeArray: {
+                        uint32_t elementSize = 0u;
+                        uint32_t elementAlignment = 0u;
+                        if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(0), &elementSize,
+                                                 &elementAlignment, depth + 1u)) {
+                            return false;
+                        }
+                        uint32_t count = 0u;
+                        if (type->opcode() == spv::Op::OpTypeMatrix) {
+                            count = type->GetSingleWordInOperand(1);
+                        } else {
+                            const Instruction* length =
+                                defUseMgr->GetDef(type->GetSingleWordInOperand(1));
+                            if (length == nullptr || length->opcode() != spv::Op::OpConstant) {
+                                return false;  // spec-constant length: not sizeable here
+                            }
+                            count = length->GetSingleWordInOperand(0);
+                        }
+                        *size = RoundUp(elementSize, elementAlignment) * count;
+                        *alignment = elementAlignment;
+                        return true;
+                    }
+                    case spv::Op::OpTypeStruct: {
+                        uint32_t offset = 0u;
+                        uint32_t structAlignment = 1u;
+                        for (uint32_t i = 0; i < type->NumInOperands(); ++i) {
+                            uint32_t memberSize = 0u;
+                            uint32_t memberAlignment = 0u;
+                            if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(i),
+                                                     &memberSize, &memberAlignment, depth + 1u)) {
+                                return false;
+                            }
+                            offset = RoundUp(offset, memberAlignment) + memberSize;
+                            if (memberAlignment > structAlignment) structAlignment = memberAlignment;
+                        }
+                        *size = RoundUp(offset, structAlignment);
+                        *alignment = structAlignment;
+                        return true;
+                    }
+                    default:
                         return false;
                     }
-                    const Instruction* component =
-                        context->get_def_use_mgr()->GetDef(type->GetSingleWordInOperand(0));
-                    return component != nullptr && component->opcode() == spv::Op::OpTypeFloat &&
-                           component->GetSingleWordInOperand(0) == 32u;
+                }
+
+                // The group operations the pack's prefix scans use.
+                bool IsScanOrReduce(spv::GroupOperation operation) {
+                    return operation == spv::GroupOperation::Reduce ||
+                           operation == spv::GroupOperation::InclusiveScan ||
+                           operation == spv::GroupOperation::ExclusiveScan;
                 }
             } // namespace
 
@@ -92,13 +195,15 @@ namespace MobileGL {
                 auto* irContext = context();
                 auto* defUseMgr = irContext->get_def_use_mgr();
 
-                // A device whose native width already satisfies the pack's assumption
-                // (>= 16 lanes -> at most 32 subgroups) needs no patch at all.
-                if (m_nativeSubgroupSize == 0u || m_nativeSubgroupSize >= 16u) {
+                // Without a known device width there is no topology to compare against;
+                // and a width the pack already assumed needs no patch at all. Both of
+                // iterationRP's shapes are sized for >= 16 lanes (512/16 = 32 entries,
+                // 1024/16 = 64), so every module on such a device - the pack's or anyone
+                // else's - must pass through byte-identical. The per-array length test
+                // further down is the second gate, not a replacement for this one.
+                if (m_nativeSubgroupSize == 0u || m_nativeSubgroupSize >= kPackAssumedSubgroupWidth) {
                     return Status::SuccessWithoutChange;
                 }
-                const uint32_t requiredLength =
-                    (kIterationRPInvocations + m_nativeSubgroupSize - 1u) / m_nativeSubgroupSize;
 
                 for (const Instruction& entryPoint : irContext->module()->entry_points()) {
                     if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) !=
@@ -107,7 +212,8 @@ namespace MobileGL {
                     }
                 }
 
-                // Fingerprint 1: the pack's exposure-pass workgroup shape, 32x16x1.
+                // Fingerprint 1: a literal workgroup size, so the subgroup count the
+                // dispatch actually partitions into is known here.
                 const auto resolveUintConstant = [&](uint32_t id, uint32_t* value) {
                     const Instruction* def = defUseMgr->GetDef(id);
                     if (def == nullptr || def->opcode() != spv::Op::OpConstant) return false;
@@ -139,26 +245,40 @@ namespace MobileGL {
                         }
                     }
                 }
-                if (!haveLocalSize || localSize[0] != kIterationRPLocalSizeX ||
-                    localSize[1] != kIterationRPLocalSizeY || localSize[2] != kIterationRPLocalSizeZ) {
+                if (!haveLocalSize || localSize[0] == 0u || localSize[1] == 0u || localSize[2] == 0u) {
                     return Status::SuccessWithoutChange;
                 }
+                const uint64_t totalInvocations =
+                    static_cast<uint64_t>(localSize[0]) * localSize[1] * localSize[2];
+                if (totalInvocations == 0u || totalInvocations > (1u << 20)) {
+                    return Status::SuccessWithoutChange;
+                }
+                const uint32_t requiredLength = static_cast<uint32_t>(
+                    (totalInvocations + m_nativeSubgroupSize - 1u) / m_nativeSubgroupSize);
 
-                // Fingerprint 2: the reduction's subgroupInclusiveAdd on a vec2.
-                bool sawVec2InclusiveAdd = false;
+                // Fingerprint 2: a subgroup scan over a 32-bit float value - the pack's
+                // prefix-sum reduction, and the reason its scratch is indexed per subgroup.
+                bool sawFloatSubgroupScan = false;
                 for (auto& function : *irContext->module()) {
                     for (auto& block : function) {
                         for (auto& inst : block) {
-                            if (inst.opcode() == spv::Op::OpGroupNonUniformFAdd &&
-                                static_cast<spv::GroupOperation>(inst.GetSingleWordInOperand(1)) ==
-                                    spv::GroupOperation::InclusiveScan &&
-                                IsVec2Float32(irContext, inst.type_id())) {
-                                sawVec2InclusiveAdd = true;
+                            if (inst.opcode() != spv::Op::OpGroupNonUniformFAdd &&
+                                inst.opcode() != spv::Op::OpGroupNonUniformFMin &&
+                                inst.opcode() != spv::Op::OpGroupNonUniformFMax) {
+                                continue;
+                            }
+                            if (inst.NumInOperands() < 2) continue;
+                            if (!IsScanOrReduce(static_cast<spv::GroupOperation>(
+                                    inst.GetSingleWordInOperand(1)))) {
+                                continue;
+                            }
+                            if (Float32ComponentCount(irContext, inst.type_id()) != 0u) {
+                                sawFloatSubgroupScan = true;
                             }
                         }
                     }
                 }
-                if (!sawVec2InclusiveAdd) {
+                if (!sawFloatSubgroupScan) {
                     return Status::SuccessWithoutChange;
                 }
 
@@ -171,60 +291,89 @@ namespace MobileGL {
                 }
                 const uint32_t subgroupIdVariableId = subgroupIdVariable->result_id();
 
-                // Conservative taint walk over values, and through Function/Private
-                // temporaries by variable (glslang routinely spills builtin loads into
-                // locals before they reach an index expression). Over-tainting is safe:
-                // the candidate filter below still demands the exact vec2[32] shape.
-                std::unordered_map<uint32_t, bool> valueTainted;   // result id -> tainted
-                std::unordered_map<uint32_t, bool> variableTainted; // variable id -> tainted
-                bool changedTaint = true;
-                while (changedTaint) {
-                    changedTaint = false;
+                // The pack indexes its scratch with gl_SubgroupID ITSELF, so only values
+                // that ARE that id qualify - not everything computed from it. An index
+                // that is masked or clamped (cache[gl_SubgroupID & 3u]) is bounded by
+                // construction and is none of this pass's business; accepting it would
+                // turn a targeted repair into a general array resizer. Identity survives
+                // OpCopyObject, a signedness OpBitcast, and the Function/Private spill
+                // glslang emits for a builtin load - and nothing else. A spill variable
+                // counts only when EVERY store into it is the id.
+                std::unordered_map<uint32_t, bool> subgroupIdValues;    // result id IS the id
+                std::unordered_map<uint32_t, bool> subgroupIdVariables; // spill holding only it
+                bool changedIdentity = true;
+                while (changedIdentity) {
+                    changedIdentity = false;
+
+                    std::unordered_map<uint32_t, uint32_t> totalStores;
+                    std::unordered_map<uint32_t, uint32_t> idStores;
                     for (auto& function : *irContext->module()) {
                         for (auto& block : function) {
                             for (auto& inst : block) {
-                                const spv::Op opcode = inst.opcode();
-                                if (opcode == spv::Op::OpStore) {
-                                    if (!valueTainted.count(inst.GetSingleWordInOperand(1))) continue;
-                                    const Instruction* root =
-                                        RootVariable(irContext, inst.GetSingleWordInOperand(0));
-                                    if (root == nullptr) continue;
-                                    if (!variableTainted.count(root->result_id())) {
-                                        variableTainted[root->result_id()] = true;
-                                        changedTaint = true;
-                                    }
+                                if (inst.opcode() != spv::Op::OpStore) continue;
+                                const uint32_t pointerId = inst.GetSingleWordInOperand(0);
+                                const Instruction* target = defUseMgr->GetDef(pointerId);
+                                if (target == nullptr || target->opcode() != spv::Op::OpVariable) {
                                     continue;
                                 }
-                                if (inst.result_id() == 0 || valueTainted.count(inst.result_id())) {
+                                const auto storageClass = static_cast<spv::StorageClass>(
+                                    target->GetSingleWordInOperand(0));
+                                if (storageClass != spv::StorageClass::Function &&
+                                    storageClass != spv::StorageClass::Private) {
                                     continue;
                                 }
-                                bool tainted = false;
-                                if (opcode == spv::Op::OpLoad) {
+                                totalStores[pointerId] += 1u;
+                                if (subgroupIdValues.count(inst.GetSingleWordInOperand(1))) {
+                                    idStores[pointerId] += 1u;
+                                }
+                            }
+                        }
+                    }
+                    for (const auto& entry : totalStores) {
+                        if (entry.second != 0u && idStores[entry.first] == entry.second &&
+                            !subgroupIdVariables.count(entry.first)) {
+                            subgroupIdVariables[entry.first] = true;
+                            changedIdentity = true;
+                        }
+                    }
+
+                    for (auto& function : *irContext->module()) {
+                        for (auto& block : function) {
+                            for (auto& inst : block) {
+                                if (inst.result_id() == 0 ||
+                                    subgroupIdValues.count(inst.result_id())) {
+                                    continue;
+                                }
+                                bool isSubgroupId = false;
+                                switch (inst.opcode()) {
+                                case spv::Op::OpLoad: {
                                     const uint32_t pointerId = inst.GetSingleWordInOperand(0);
-                                    if (pointerId == subgroupIdVariableId) tainted = true;
-                                    const Instruction* root = RootVariable(irContext, pointerId);
-                                    if (root != nullptr && variableTainted.count(root->result_id())) {
-                                        tainted = true;
-                                    }
-                                } else {
-                                    inst.ForEachInId([&](const uint32_t* operandId) {
-                                        if (valueTainted.count(*operandId)) tainted = true;
-                                    });
+                                    isSubgroupId = pointerId == subgroupIdVariableId ||
+                                                   subgroupIdVariables.count(pointerId) != 0u;
+                                    break;
                                 }
-                                if (tainted) {
-                                    valueTainted[inst.result_id()] = true;
-                                    changedTaint = true;
+                                case spv::Op::OpCopyObject:
+                                case spv::Op::OpBitcast:
+                                    isSubgroupId =
+                                        subgroupIdValues.count(inst.GetSingleWordInOperand(0)) != 0u;
+                                    break;
+                                default:
+                                    break;
+                                }
+                                if (isSubgroupId) {
+                                    subgroupIdValues[inst.result_id()] = true;
+                                    changedIdentity = true;
                                 }
                             }
                         }
                     }
                 }
-                if (valueTainted.empty()) {
+                if (subgroupIdValues.empty()) {
                     return Status::SuccessWithoutChange;
                 }
 
-                // Fingerprint 3: workgroup-shared vec2[32] arrays whose access-chain
-                // index depends on gl_SubgroupID - the under-declared prefixSumCache.
+                // Fingerprint 3: workgroup-shared float arrays indexed by gl_SubgroupID
+                // itself - the under-declared prefixSumCache.
                 std::map<uint32_t, Instruction*> candidates;
                 for (auto& function : *irContext->module()) {
                     for (auto& block : function) {
@@ -234,7 +383,7 @@ namespace MobileGL {
                                 continue;
                             }
                             if (inst.NumInOperands() < 2) continue;
-                            if (!valueTainted.count(inst.GetSingleWordInOperand(1))) continue;
+                            if (!subgroupIdValues.count(inst.GetSingleWordInOperand(1))) continue;
                             Instruction* baseVariable =
                                 defUseMgr->GetDef(inst.GetSingleWordInOperand(0));
                             if (baseVariable == nullptr ||
@@ -252,7 +401,16 @@ namespace MobileGL {
                     return Status::SuccessWithoutChange;
                 }
 
-                bool changedModule = false;
+                // Everything that survives the filter, with the bytes each grown array
+                // will need. Nothing is mutated until the whole set fits the device's
+                // shared-memory budget, so a module is never left half-grown.
+                struct Growth {
+                    Instruction* variable = nullptr;
+                    uint32_t elementTypeId = 0;
+                    uint32_t lengthTypeId = 0;
+                    uint32_t addedBytes = 0;
+                };
+                std::vector<Growth> growths;
                 for (auto& entry : candidates) {
                     Instruction* variable = entry.second;
 
@@ -290,18 +448,70 @@ namespace MobileGL {
                         continue;
                     }
                     const uint32_t elementTypeId = arrayType->GetSingleWordInOperand(0);
-                    if (!IsVec2Float32(irContext, elementTypeId)) continue;
+                    const uint32_t components = Float32ComponentCount(irContext, elementTypeId);
+                    if (components == 0u) continue;
                     const Instruction* lengthConstant =
                         defUseMgr->GetDef(arrayType->GetSingleWordInOperand(1));
-                    uint32_t currentLength = 0;
-                    if (lengthConstant == nullptr ||
-                        lengthConstant->opcode() != spv::Op::OpConstant ||
-                        !((currentLength = lengthConstant->GetSingleWordInOperand(0),
-                           currentLength == kIterationRPScratchLength))) {
+                    if (lengthConstant == nullptr || lengthConstant->opcode() != spv::Op::OpConstant) {
                         continue;
                     }
+                    const uint32_t currentLength = lengthConstant->GetSingleWordInOperand(0);
+
+                    // The pack's own assumption holds on this device: the declared array
+                    // already covers every subgroup the workgroup partitions into. That is
+                    // every >= 16-lane device for the shapes iterationRP ships, and those
+                    // modules must pass through byte-identical.
                     if (currentLength >= requiredLength) continue;
 
+                    // vec3 strides at its 16-byte alignment, so charge the padded stride.
+                    const uint32_t elementStride = (components == 3u ? 4u : components) * 4u;
+                    growths.push_back(Growth{variable, elementTypeId, lengthConstant->type_id(),
+                                             (requiredLength - currentLength) * elementStride});
+                }
+                if (growths.empty()) {
+                    return Status::SuccessWithoutChange;
+                }
+
+                // Growing must not push the module past what the device can launch: a
+                // pipeline that fails to create is worse than the pack's own overrun.
+                {
+                    uint64_t declaredBytes = 0;
+                    bool sawUnsizeable = false;
+                    for (auto& global : irContext->module()->types_values()) {
+                        if (global.opcode() != spv::Op::OpVariable ||
+                            static_cast<spv::StorageClass>(global.GetSingleWordInOperand(0)) !=
+                                spv::StorageClass::Workgroup) {
+                            continue;
+                        }
+                        const Instruction* pointerType = defUseMgr->GetDef(global.type_id());
+                        uint32_t bytes = 0u;
+                        uint32_t alignment = 0u;
+                        if (pointerType == nullptr ||
+                            pointerType->opcode() != spv::Op::OpTypePointer ||
+                            !WorkgroupTypeLayout(irContext, pointerType->GetSingleWordInOperand(1),
+                                                 &bytes, &alignment)) {
+                            sawUnsizeable = true;
+                            break;
+                        }
+                        declaredBytes = RoundUp(static_cast<uint32_t>(declaredBytes), alignment) + bytes;
+                    }
+                    // A declaration this pass cannot size leaves the total an
+                    // underestimate, so the growth cannot be certified against the device
+                    // limit at all - decline rather than guess.
+                    if (sawUnsizeable) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    for (const Growth& growth : growths) declaredBytes += growth.addedBytes;
+
+                    const uint32_t deviceBudget = m_maxWorkgroupScratchBytes != 0u
+                                                      ? m_maxWorkgroupScratchBytes
+                                                      : kMinimumSharedMemoryBytes;
+                    if (declaredBytes > deviceBudget) {
+                        return Status::SuccessWithoutChange;
+                    }
+                }
+
+                for (const Growth& growth : growths) {
                     // Build the grown array type. All three new instructions are inserted
                     // immediately BEFORE the variable so definition-before-use holds in the
                     // module's global section (manager-created instructions append to its
@@ -310,17 +520,17 @@ namespace MobileGL {
                     // scalar constant is legal SPIR-V); the fresh array type makes the
                     // pointer type unique by construction, so neither collides with an
                     // existing declaration.
-                    const uint32_t lengthTypeId = lengthConstant->type_id();
+                    Instruction* variable = growth.variable;
                     const uint32_t newLengthId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpConstant, lengthTypeId, newLengthId,
+                        irContext, spv::Op::OpConstant, growth.lengthTypeId, newLengthId,
                         Instruction::OperandList{{SPV_OPERAND_TYPE_TYPED_LITERAL_NUMBER,
                                                   {requiredLength}}}));
                     const uint32_t newArrayTypeId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpTypeArray, 0, newArrayTypeId,
                         Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_ID, {elementTypeId}},
+                            {SPV_OPERAND_TYPE_ID, {growth.elementTypeId}},
                             {SPV_OPERAND_TYPE_ID, {newLengthId}}}));
                     const uint32_t newPointerTypeId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
@@ -331,21 +541,17 @@ namespace MobileGL {
                             {SPV_OPERAND_TYPE_ID, {newArrayTypeId}}}));
 
                     variable->SetResultType(newPointerTypeId);
-                    changedModule = true;
                 }
 
-                if (!changedModule) {
-                    return Status::SuccessWithoutChange;
-                }
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
                 return Status::SuccessWithChange;
             }
 
             spvtools::Optimizer::PassToken
             FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
-                const Uint32 nativeSubgroupSize) {
-                return spvtools::Optimizer::PassToken(
-                    MakeUnique<FixIterationRPSubgroupScratchPass>(nativeSubgroupSize));
+                const Uint32 nativeSubgroupSize, const Uint32 maxWorkgroupScratchBytes) {
+                return spvtools::Optimizer::PassToken(MakeUnique<FixIterationRPSubgroupScratchPass>(
+                    nativeSubgroupSize, maxWorkgroupScratchBytes));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

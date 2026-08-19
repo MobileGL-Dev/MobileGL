@@ -8,11 +8,13 @@
 //
 // Scenario - THE FIXTURE-SHAPED SUBGROUP REDUCTION, ON WHATEVER WIDTH THE DEVICE HAS.
 //
-// iterationRP's auto-exposure pass declares `shared vec2 prefixSumCache[32]` for a
-// 512-invocation workgroup and combines per-subgroup subtotals through
-// prefixSumCache[gl_SubgroupID]. The algorithm is width-agnostic; only the static 32
-// bakes in "at most 32 subgroups", which every desktop capture satisfies and an 8-lane
-// device (lavapipe: 64 subgroups) does not. DirectVulkan patches exactly that with
+// iterationRP hard-sizes the scratch its subgroup prefix scans write through
+// prefixSumCache[gl_SubgroupID], and ships that idiom twice: the auto-exposure pass
+// declares `shared vec2 prefixSumCache[32]` for a 512-invocation workgroup, and the
+// RTW importance warp declares `shared float prefixSumCache[64]` for a 1024-invocation
+// one. Both algorithms are width-agnostic; only the static lengths bake in "at most 32
+// (respectively 64) subgroups", which every desktop capture satisfies and an 8-lane
+// device (lavapipe: 64 and 128 subgroups) does not. DirectVulkan patches exactly that with
 // FixIterationRPSubgroupScratchPass, growing the array to ceil(invocations / native
 // width) on the modules that match the pack's reduction fingerprint.
 //
@@ -47,6 +49,10 @@ namespace MGITest {
         constexpr std::uint32_t kInvocationCount = 512u;
         // sum of 0..511, exactly representable and associativity-proof in fp32.
         constexpr float kExpectedTotal = 130816.0f;
+        // The RTW warp's shape: 1024 invocations into a 64-entry float scratch.
+        constexpr std::uint32_t kWideInvocationCount = 1024u;
+        // sum of 0..1023, likewise exact in fp32.
+        constexpr float kWideExpectedTotal = 523776.0f;
 
         constexpr const char* kComputeSource = R"(#version 430 core
 #extension GL_KHR_shader_subgroup_basic : require
@@ -83,6 +89,50 @@ void main() {
 
     if (gl_LocalInvocationIndex == 511u) {
         outputData.total = sampleLuminance.x;
+        outputData.numSubgroups = gl_NumSubgroups;
+    }
+    atomicMax(outputData.maxSubgroupId, gl_SubgroupID);
+}
+)";
+
+        // The RTW importance warp's shape: a plain float scan over 1024 invocations
+        // into a 64-entry scratch. Same idiom, different dimensions - which is exactly
+        // what a fingerprint pinned to the exposure pass's shape walks past.
+        constexpr const char* kWideComputeSource = R"(#version 430 core
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+
+layout(local_size_x = 1024) in;
+
+layout(std430, binding = 0) buffer Output {
+    float total;
+    uint numSubgroups;
+    uint maxSubgroupId;
+} outputData;
+
+shared float prefixSumCache[64];
+
+void main() {
+    float importance = float(gl_LocalInvocationID.x);
+    float prefixSum = subgroupInclusiveAdd(importance);
+    if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+        prefixSumCache[gl_SubgroupID] = prefixSum;
+    barrier();
+
+    uint loopLength = uint(findMSB(gl_NumSubgroups));
+    loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+
+    for (uint scanStage = 0u; scanStage < loopLength; ++scanStage) {
+        if ((gl_SubgroupID & (1u << scanStage)) > 0u) {
+            prefixSum += prefixSumCache[(gl_SubgroupID >> scanStage << scanStage) - 1u];
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+                prefixSumCache[gl_SubgroupID] = prefixSum;
+        }
+        barrier();
+    }
+
+    if (gl_LocalInvocationID.x == 1023u) {
+        outputData.total = prefixSum;
         outputData.numSubgroups = gl_NumSubgroups;
     }
     atomicMax(outputData.maxSubgroupId, gl_SubgroupID);
@@ -130,8 +180,7 @@ void main() {
                                     "512-invocation workgroup";
                 }
 
-                m_program = CompileComputeProgram(kComputeSource);
-                ASSERT_NE(m_program, 0u) << m_buildLog;
+                m_maxInvocations = static_cast<std::uint32_t>(invocations);
 
                 glGenBuffers(1, &m_output);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_output);
@@ -181,7 +230,14 @@ void main() {
                 return program;
             }
 
-            OutputBlock Dispatch() {
+            // Re-poisons the block, compiles the shape under test and runs it once.
+            OutputBlock Dispatch(const char* source) {
+                const OutputBlock poison{-1.0f, 0xa5a5a5a5u, 0u};
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_output);
+                glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(OutputBlock), &poison);
+                m_program = CompileComputeProgram(source);
+                EXPECT_NE(m_program, 0u) << m_buildLog;
+                if (m_program == 0u) return OutputBlock{};
                 glUseProgram(m_program);
                 glDispatchCompute(1, 1, 1);
                 glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
@@ -193,12 +249,13 @@ void main() {
 
             GLuint m_program = 0;
             GLuint m_output = 0;
+            std::uint32_t m_maxInvocations = 0;
             std::string m_buildLog;
         };
     } // namespace
 
     TEST_F(IterationRPScratchFixScenario, FixtureShapedReductionSumsEveryInvocation) {
-        const OutputBlock block = Dispatch();
+        const OutputBlock block = Dispatch(kComputeSource);
         EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
 
         // The topology diagnostics catch the failure modes by name before the sum does:
@@ -216,6 +273,29 @@ void main() {
         // average is built from; without FixIterationRPSubgroupScratchPass an 8-lane
         // device writes prefixSumCache[32..63] out of bounds and this comparison fails.
         EXPECT_EQ(block.total, kExpectedTotal)
+            << "workgroup reduction produced " << block.total << " with gl_NumSubgroups="
+            << block.numSubgroups;
+    }
+
+    // The pack's second instance of the same bug, and the one that kept the CI
+    // retrace red after the exposure pass alone was patched.
+    TEST_F(IterationRPScratchFixScenario, WideFixtureShapedReductionSumsEveryInvocation) {
+        if (m_maxInvocations < kWideInvocationCount) {
+            GTEST_SKIP() << "needs a " << kWideInvocationCount << "-invocation workgroup";
+        }
+        const OutputBlock block = Dispatch(kWideComputeSource);
+        EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+        ASSERT_NE(block.numSubgroups, 0xa5a5a5a5u) << "invocation 1023 never reached its store";
+        EXPECT_GE(block.numSubgroups, 1u);
+        EXPECT_LE(block.numSubgroups, kWideInvocationCount);
+        EXPECT_LT(block.maxSubgroupId, block.numSubgroups)
+            << "gl_SubgroupID exceeds gl_NumSubgroups - the inconsistency "
+               "DeriveNumSubgroupsPass exists to repair";
+
+        // Without the patch an 8-lane device writes prefixSumCache[64..127] out of
+        // bounds and this comparison fails.
+        EXPECT_EQ(block.total, kWideExpectedTotal)
             << "workgroup reduction produced " << block.total << " with gl_NumSubgroups="
             << block.numSubgroups;
     }

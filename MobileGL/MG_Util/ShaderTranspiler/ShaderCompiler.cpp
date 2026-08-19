@@ -912,12 +912,13 @@ namespace MobileGL {
 
             bool ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
                 const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const Uint32 nativeSubgroupSize, const bool enableSpirvValidation) {
+                const Uint32 nativeSubgroupSize, const Uint32 maxWorkgroupScratchBytes,
+                const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(
                     FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
-                        nativeSubgroupSize));
+                        nativeSubgroupSize, maxWorkgroupScratchBytes));
 
                 return RunOptimizerChecked("FixIterationRPSubgroupScratchForVulkan", optimizer,
                                            inputBinary, outputBinary, true, enableSpirvValidation);

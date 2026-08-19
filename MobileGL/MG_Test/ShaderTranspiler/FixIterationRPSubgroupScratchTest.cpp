@@ -109,10 +109,11 @@ namespace {
         return tools.Validate(spirv);
     }
 
-    // iterationRP's reduction fingerprint: 32x16x1, subgroupInclusiveAdd on a
-    // vec2, and the pack's own 32-entry gl_SubgroupID-indexed scratch. A second,
-    // plainly indexed array rides along to prove the patch is surgical.
-    constexpr const char* kIterationRPShapedSource = R"(#version 450 core
+    // iterationRP's exposure reduction, as the pack ships it: 32x16 (512
+    // invocations), subgroupInclusiveAdd on a vec2, and a 32-entry
+    // gl_SubgroupID-indexed scratch. A second, plainly indexed array rides along
+    // to prove the patch is surgical.
+    constexpr const char* kExposureShapedSource = R"(#version 450 core
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
@@ -141,85 +142,195 @@ void main() {
 }
 )";
 
-    // Same scratch idiom, different workgroup shape - NOT iterationRP, so the
-    // fingerprint must refuse it even though it would break identically.
-    constexpr const char* kWrongWorkgroupShapeSource = R"(#version 450 core
+    // The pack's OTHER instance of the same bug, which a fingerprint pinned to the
+    // exposure pass's dimensions walks straight past: the RTW importance warp
+    // scans a plain float across 1024 invocations into a 64-entry scratch.
+    constexpr const char* kRtwWarpShapedSource = R"(#version 450 core
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
-layout(local_size_x = 64, local_size_y = 8, local_size_z = 1) in;
+layout(local_size_x = 1024) in;
 layout(std430, binding = 0) buffer Output { float value; } outputData;
-shared vec2 prefixSumCache[32];
+shared float prefixSumCache[64];
 void main() {
-    vec2 v = subgroupInclusiveAdd(vec2(1.0, 0.0));
+    float importance = float(gl_LocalInvocationID.x) * 0.5;
+    float prefixSum = subgroupInclusiveAdd(importance);
     if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
-        prefixSumCache[gl_SubgroupID] = v;
+        prefixSumCache[gl_SubgroupID] = prefixSum;
     barrier();
-    if (gl_LocalInvocationIndex == 0u)
-        outputData.value = prefixSumCache[0].x;
+    uint loopLength = uint(findMSB(gl_NumSubgroups));
+    loopLength += uint(gl_NumSubgroups - (1u << (loopLength - 1u)) > 0u);
+    for (uint scanStage = 0u; scanStage < loopLength; ++scanStage) {
+        if ((gl_SubgroupID & (1u << scanStage)) > 0u) {
+            prefixSum += prefixSumCache[(gl_SubgroupID >> scanStage << scanStage) - 1u];
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
+                prefixSumCache[gl_SubgroupID] = prefixSum;
+        }
+        barrier();
+    }
+    if (gl_LocalInvocationID.x == 1023u) outputData.value = prefixSumCache[0];
 }
 )";
 
-    // Right shape, but a float scan and a float[32] scratch - not the pack's
-    // vec2 accumulator signature.
-    constexpr const char* kWrongElementTypeSource = R"(#version 450 core
+    // A subgroup scan, but the scratch is indexed per invocation rather than per
+    // subgroup: its size is not a subgroup-count assumption, so it is not ours.
+    constexpr const char* kInvocationIndexedSource = R"(#version 450 core
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
 layout(std430, binding = 0) buffer Output { float value; } outputData;
-shared float cache[32];
+shared vec2 perInvocation[32];
 void main() {
-    float v = subgroupInclusiveAdd(float(gl_LocalInvocationIndex));
-    if (gl_SubgroupInvocationID == gl_SubgroupSize - 1u)
-        cache[gl_SubgroupID] = v;
+    vec2 v = subgroupInclusiveAdd(vec2(float(gl_LocalInvocationIndex), 0.0));
+    perInvocation[gl_LocalInvocationIndex & 31u] = v;
     barrier();
-    if (gl_LocalInvocationIndex == 0u)
-        outputData.value = cache[0];
+    if (gl_LocalInvocationIndex == 0u) outputData.value = perInvocation[0].x;
+}
+)";
+
+    // gl_SubgroupID-indexed, but no subgroup scan feeds it and the element type is
+    // not the pack's float accumulator.
+    constexpr const char* kNonFloatScratchSource = R"(#version 450 core
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
+layout(std430, binding = 0) buffer Output { uint value; } outputData;
+shared uint tally[32];
+void main() {
+    float scan = subgroupInclusiveAdd(float(gl_LocalInvocationIndex));
+    tally[gl_SubgroupID] = uint(scan);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) outputData.value = tally[0];
+}
+)";
+
+    // gl_SubgroupID-indexed, but masked into range: the declaration is bounded by
+    // construction, not a subgroup-count assumption, so it is not the pack's bug.
+    constexpr const char* kMaskedSubgroupIndexSource = R"(#version 450 core
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
+layout(std430, binding = 0) buffer Output { float value; } outputData;
+shared vec2 bounded[8];
+void main() {
+    vec2 v = subgroupInclusiveAdd(vec2(float(gl_LocalInvocationIndex), 0.0));
+    bounded[gl_SubgroupID & 7u] = v;
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) outputData.value = bounded[0].x;
+}
+)";
+
+    // Neither of the pack's shapes: a small per-subgroup array in a 256-invocation
+    // workgroup, used to prove the width gate keeps EVERY module inert at >= 16 lanes.
+    constexpr const char* kForeignShapeSource = R"(#version 450 core
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer Output { float value; } outputData;
+shared float partial[4];
+void main() {
+    float v = subgroupInclusiveAdd(float(gl_LocalInvocationID.x));
+    if (gl_SubgroupID < 4u) partial[gl_SubgroupID] = v;
+    barrier();
+    if (gl_LocalInvocationID.x == 0u) outputData.value = partial[0];
+}
+)";
+
+    // No subgroup construct at all.
+    constexpr const char* kSubgroupFreeSource = R"(#version 450 core
+layout(local_size_x = 32, local_size_y = 16, local_size_z = 1) in;
+layout(std430, binding = 0) buffer Output { float value; } outputData;
+shared vec2 scratch[32];
+void main() {
+    scratch[gl_LocalInvocationIndex & 31u] = vec2(float(gl_LocalInvocationIndex), 0.0);
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) outputData.value = scratch[0].x;
 }
 )";
 } // namespace
 
-TEST(FixIterationRPSubgroupScratchPass, GrowsThePacksScratchForNarrowSubgroups) {
-    const Vector<Uint32> input = CompileCompute(kIterationRPShapedSource);
+TEST(FixIterationRPSubgroupScratchPass, GrowsTheExposureScratchForNarrowSubgroups) {
+    const Vector<Uint32> input = CompileCompute(kExposureShapedSource);
     ASSERT_FALSE(input.empty());
     ASSERT_EQ(WorkgroupArrayLengths(input), (std::vector<Uint32>{4u, 32u}));
 
     // lavapipe: 8-lane subgroups over 512 invocations need 64 entries; the
     // plainly indexed neighbour must keep its 4.
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, true));
+    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, 32768u, true));
     EXPECT_EQ(WorkgroupArrayLengths(output), (std::vector<Uint32>{4u, 64u}));
     EXPECT_TRUE(Validates(output));
 }
 
-TEST(FixIterationRPSubgroupScratchPass, LeavesPackWidthAssumptionsAloneOnWideDevices) {
-    const Vector<Uint32> input = CompileCompute(kIterationRPShapedSource);
+// The regression the CI retrace caught: patching only the exposure pass leaves
+// this one writing 128 subgroups into 64 entries, and the frame stays wrong.
+TEST(FixIterationRPSubgroupScratchPass, GrowsTheRtwWarpScratchForNarrowSubgroups) {
+    const Vector<Uint32> input = CompileCompute(kRtwWarpShapedSource);
     ASSERT_FALSE(input.empty());
+    ASSERT_EQ(WorkgroupArrayLengths(input), (std::vector<Uint32>{64u}));
 
-    // >= 16 lanes means at most 32 subgroups: the pack's declared size holds and
-    // the module must pass through byte-identical.
-    for (const Uint32 nativeSize : {16u, 32u, 64u, 128u}) {
-        Vector<Uint32> output;
-        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, nativeSize, true));
-        EXPECT_EQ(output, input) << "native width " << nativeSize;
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, 32768u, true));
+    EXPECT_EQ(WorkgroupArrayLengths(output), (std::vector<Uint32>{128u}));
+    EXPECT_TRUE(Validates(output));
+}
+
+TEST(FixIterationRPSubgroupScratchPass, LeavesPackWidthAssumptionsAloneOnWideDevices) {
+    // Both shapes are sized for >= 16 lanes (512/16 = 32, 1024/16 = 64), so on
+    // every such device the modules must pass through byte-identical.
+    for (const char* source : {kExposureShapedSource, kRtwWarpShapedSource}) {
+        const Vector<Uint32> input = CompileCompute(source);
+        ASSERT_FALSE(input.empty());
+        for (const Uint32 nativeSize : {16u, 32u, 64u, 128u}) {
+            Vector<Uint32> output;
+            ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
+                input, output, nativeSize, 32768u, true));
+            EXPECT_EQ(output, input) << "native width " << nativeSize;
+        }
     }
 }
 
-TEST(FixIterationRPSubgroupScratchPass, RefusesAModuleOutsideTheFingerprint) {
-    for (const char* source : {kWrongWorkgroupShapeSource, kWrongElementTypeSource}) {
+TEST(FixIterationRPSubgroupScratchPass, RefusesAModuleOutsideTheIdiom) {
+    for (const char* source : {kInvocationIndexedSource, kNonFloatScratchSource,
+                               kSubgroupFreeSource, kMaskedSubgroupIndexSource}) {
         const Vector<Uint32> input = CompileCompute(source);
         ASSERT_FALSE(input.empty());
         Vector<Uint32> output;
-        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, true));
+        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, 32768u, true));
         EXPECT_EQ(output, input);
     }
 }
 
-TEST(FixIterationRPSubgroupScratchPass, IsIdempotent) {
-    const Vector<Uint32> input = CompileCompute(kIterationRPShapedSource);
+// A grown array that would not fit the device's shared memory is left alone:
+// a pipeline that cannot be created is worse than the pack's own overrun.
+// The width gate is what keeps unrelated shaders untouched on the devices the pack
+// was written for: at >= 16 lanes nothing is rewritten, whatever its shape.
+TEST(FixIterationRPSubgroupScratchPass, LeavesEveryModuleAloneAtThePacksAssumedWidth) {
+    const Vector<Uint32> input = CompileCompute(kForeignShapeSource);
     ASSERT_FALSE(input.empty());
-    Vector<Uint32> once;
-    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, once, 8u, true));
-    Vector<Uint32> twice;
-    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(once, twice, 8u, true));
-    EXPECT_EQ(twice, once);
+    for (const Uint32 nativeSize : {16u, 32u, 64u}) {
+        Vector<Uint32> output;
+        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
+            input, output, nativeSize, 32768u, true));
+        EXPECT_EQ(output, input) << "native width " << nativeSize;
+    }
+}
+
+TEST(FixIterationRPSubgroupScratchPass, RefusesGrowthThatWouldNotFitSharedMemory) {
+    const Vector<Uint32> input = CompileCompute(kRtwWarpShapedSource);
+    ASSERT_FALSE(input.empty());
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, 8u, 256u, true));
+    EXPECT_EQ(output, input);
+}
+
+TEST(FixIterationRPSubgroupScratchPass, IsIdempotent) {
+    for (const char* source : {kExposureShapedSource, kRtwWarpShapedSource}) {
+        const Vector<Uint32> input = CompileCompute(source);
+        ASSERT_FALSE(input.empty());
+        Vector<Uint32> once;
+        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, once, 8u, 32768u, true));
+        Vector<Uint32> twice;
+        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(once, twice, 8u, 32768u, true));
+        EXPECT_EQ(twice, once);
+    }
 }

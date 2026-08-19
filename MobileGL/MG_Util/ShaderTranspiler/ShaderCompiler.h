@@ -167,12 +167,17 @@ namespace MobileGL {
                                                       Vector<uint32_t>& outputBinary,
                                                       Uint32 maxWorkgroupScratchBytes,
                                                       bool enableSpirvValidation = false);
-                // Patches iterationRP's under-declared prefixSumCache[32] on sub-16-lane
-                // devices, fingerprint-gated to that pack's reduction; every other module
-                // passes through byte-identical. See FixIterationRPSubgroupScratchPass.
+                // Grows iterationRP's under-declared gl_SubgroupID-indexed scratch to the
+                // subgroup count the device actually partitions into, fingerprint-gated to
+                // that pack's reduction idiom; every other module - and every device whose
+                // width the pack already assumed - passes through byte-identical.
+                // maxWorkgroupScratchBytes bounds the growth (pass the device's
+                // maxComputeSharedMemorySize; 0 falls back to the 16384-byte Vulkan
+                // minimum). See FixIterationRPSubgroupScratchPass.
                 static bool FixIterationRPSubgroupScratchForVulkan(const Vector<Uint32>& inputBinary,
                                                                    Vector<uint32_t>& outputBinary,
                                                                    Uint32 nativeSubgroupSize,
+                                                                   Uint32 maxWorkgroupScratchBytes,
                                                                    bool enableSpirvValidation = false);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no

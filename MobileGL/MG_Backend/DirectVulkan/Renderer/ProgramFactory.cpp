@@ -3213,6 +3213,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         Vector<Uint> patchedSpirv;
                         if (MG_Util::ShaderTranspiler::ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
                                 moduleSpirvs[i], patchedSpirv, m_subgroupPolicy.nativeSubgroupSize,
+                                m_subgroupPolicy.maxComputeSharedMemoryBytes,
                                 enableSpirvValidation)) {
                             moduleSpirvs[i] = std::move(patchedSpirv);
                         } else {
