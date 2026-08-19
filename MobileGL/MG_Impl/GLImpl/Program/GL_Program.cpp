@@ -1057,21 +1057,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        static Bool allowVSOnlyPrograms;
-        static Bool initialized = false;
-        if (!initialized) {
-            const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
-            if (!activeBackendObject) {
-                MGLOG_E_ONCE("activeBackendObject is not initialized!");
-                return;
-            }
-            const auto& rendererInfo = activeBackendObject->GetRendererInfo();
-            allowVSOnlyPrograms = (Int)rendererInfo.StaticBackendCapability.AllowVSOnlyPrograms;
-        }
+        // Read fresh every link, never latched in a static: the capability is
+        // per-backend, and a latch would freeze it across a backend teardown +
+        // re-initialization (the previous function-static memo here never even set
+        // its own initialized flag, so it re-read every call anyway - this makes
+        // the always-fresh behavior the stated one). A struct-field read per
+        // glLinkProgram costs nothing.
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
-        if (activeBackendObject) {
-            programObject->SetMaxFragmentOutputColorNumber(activeBackendObject->GetDynamicParameters().MaxDrawBuffers);
+        if (!activeBackendObject) {
+            MGLOG_E_ONCE("activeBackendObject is not initialized!");
+            return;
         }
+        const Bool allowVSOnlyPrograms =
+            activeBackendObject->GetRendererInfo().StaticBackendCapability.AllowVSOnlyPrograms;
+        programObject->SetMaxFragmentOutputColorNumber(activeBackendObject->GetDynamicParameters().MaxDrawBuffers);
         programObject->Link(!allowVSOnlyPrograms);
     }
 

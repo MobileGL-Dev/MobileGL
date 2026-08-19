@@ -15,6 +15,7 @@
 #include <MG_Impl/GLImpl/Texture/ProxyTexture.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
+#include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
@@ -51,6 +52,11 @@ namespace MobileGL {
             // before a re-initialized library could pair them with the wrong
             // backend's DeleteSync).
             MG_Impl::GLImpl::DestroyAllSyncObjects();
+            // Queries die with their contexts for the same reason, and their registry
+            // is the same shape of process-global map: drain it here too, while the
+            // function table can still pair each backend handle with the backend that
+            // minted it.
+            MG_Impl::GLImpl::DestroyAllQueryObjects();
             MG_Backend::pActiveBackendObject.reset();
             MG_State::pGLContext.reset();
             MG_State::pEGLContext.reset();

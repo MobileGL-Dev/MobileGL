@@ -648,4 +648,39 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateQueryStreamIndex(__FUNCTION__, target, index)) return;
         GetQueryiv(target, pname, params);
     }
+
+    void DestroyAllQueryObjects() {
+        // Detach the registry under the lock, release outside it - same discipline
+        // (and the same accepted teardown race) as DestroyAllSyncObjects. Without
+        // this drain, every query the app left undeleted survived full library
+        // teardown in the process-global registry: the objects and their backend
+        // wrappers leaked across Destroy/Initialize cycles, stale ids kept
+        // answering IsQuery == GL_TRUE in the re-initialized library, and a later
+        // glDeleteQueries could hand the OLD backend's handle to a DIFFERENT
+        // backend's DeleteBackendQuery, which casts it to the wrong wrapper type.
+        UnorderedMap<GLuint, QueryObject*> orphans;
+        {
+            const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
+            orphans.swap(g_liveQueryObjects);
+            g_activeTimeElapsedQueryId = 0;
+            g_activePrimitivesWrittenQueryId = 0;
+            g_activePrimitivesGeneratedQueryId = 0;
+            g_activeSamplesPassedQueryId = 0;
+        }
+        if (orphans.empty()) {
+            return;
+        }
+        // Backend handles must be released by the backend that created them, so
+        // this runs while the function table is still populated. Both backends'
+        // DeleteBackendQuery are generation-guarded, so a handle whose renderer
+        // or ES context is already gone frees only the wrapper.
+        const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery;
+        for (const auto& [_, queryObject] : orphans) {
+            if (deleteBackendQuery && queryObject->backendHandle) {
+                deleteBackendQuery(queryObject->backendHandle);
+            }
+            delete queryObject;
+        }
+        MGLOG_D("DestroyAllQueryObjects: reclaimed %zu query object(s) the app left undeleted", orphans.size());
+    }
 } // namespace MobileGL::MG_Impl::GLImpl
