@@ -179,8 +179,14 @@ namespace MobileGL {
                     : SynthesizeSubgroupSizeVariable(irContext, numSubgroupsVar->type_id());
                 const uint32_t workgroupSizeId = workgroupSize->result_id();
 
-                // The pipeline never enables ALLOW_VARYING_SUBGROUP_SIZE, so Vulkan's fixed
-                // subgroup partition is exactly ceil(local invocation count / SubgroupSize).
+                // ceil(local invocation count / SubgroupSize): the subgroup count of a
+                // full-subgroup launch. Vulkan only guarantees that partition under
+                // REQUIRE_FULL_SUBGROUPS - which ProgramFactory requests whenever
+                // local_size_x is a multiple of the subgroup size makes it legal
+                // (VUID-VkPipelineShaderStageCreateInfo-flags-02759) - and calls the
+                // tighter behaviour "encouraged" everywhere else; the DriverPost witness
+                // verifies it per device where the flag cannot be set. The absence of
+                // ALLOW_VARYING_SUBGROUP_SIZE pins only the SubgroupSize builtin itself.
                 // `(count - 1) / size + 1` avoids an addition overflow at count + size - 1.
                 for (Instruction* load : numSubgroupsLoads) {
                     const uint32_t localSizeXId = irContext->TakeNextId();

@@ -68,7 +68,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/DoublePrecisionScenario.cpp
     Scenarios/UniformInitializerScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
-    Scenarios/Program203FirstReductionScenario.cpp
+    Scenarios/IterationRPFirstReductionScenario.cpp
+    Scenarios/IterationRPScratchFixScenario.cpp
     Scenarios/ProgramPipelineScenario.cpp
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/ImageTargetKindScenario.cpp

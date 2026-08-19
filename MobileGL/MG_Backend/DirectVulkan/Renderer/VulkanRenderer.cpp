@@ -8,6 +8,7 @@
 
 #include "VulkanRenderer.h"
 
+#include "MG_Backend/DirectVulkan/SubgroupSupportPolicy.h"
 #include "MG_Backend/DirectGLES/Utils.h"
 #include "VertexInputStateFactory.h"
 #include "VertexInputStateBuilder.h"
@@ -3058,11 +3059,22 @@ void main() {
             }
             PipelineFactory::SetSuppressBlendedDepthWrite(suppressBlendedDepthWrite);
         }
+        ProgramFactory::SubgroupLoweringPolicy subgroupPolicy{};
+        subgroupPolicy.emulateSubgroups = ShouldEmulateSubgroups(m_nativeSubgroupSupported);
+        subgroupPolicy.fixIterationRPSubgroupScratch =
+            m_nativeSubgroupSupported && ShouldFixIterationRPSubgroupScratch();
+        subgroupPolicy.deriveNumSubgroups =
+            m_nativeSubgroupSupported && ShouldDeriveNumSubgroups();
+        subgroupPolicy.requireFullSubgroups = m_computeFullSubgroupsFeatureEnabled;
+        subgroupPolicy.nativeSubgroupSize = m_nativeSubgroupSize;
+        subgroupPolicy.maxComputeWorkgroupSubgroups = m_maxComputeWorkgroupSubgroups;
+        subgroupPolicy.maxComputeSharedMemoryBytes =
+            m_physicalDevice.properties.limits.maxComputeSharedMemorySize;
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
                                                       m_shaderDrawParametersFeatureEnabled,
                                                       m_unformattedFloatStorageImagesEnabled,
                                                       MG_Config::Features.EnableSpirvValidation,
-                                                      m_updateAfterBindLimits);
+                                                      m_updateAfterBindLimits, subgroupPolicy);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
         // The swapchain already exists at this point (Initialize creates it first), so seed the
         // height the factory could not be told about from CreateSwapchain.
@@ -12737,6 +12749,73 @@ void main() {
                 m_primitiveTopologyListRestartFeatureEnabled = true;
                 MGLOG_I("Enabled optional device extension: %s",
                         VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+            }
+        }
+
+        // Native subgroup topology, and VK_EXT_subgroup_size_control's
+        // computeFullSubgroups feature. REQUIRE_FULL_SUBGROUPS on a compute stage is what
+        // turns the derived gl_NumSubgroups (DeriveNumSubgroupsPass) from
+        // encouraged-but-unspecified driver behaviour into a spec guarantee: with the bit
+        // set and local_size_x a multiple of the subgroup size, every subgroup launches
+        // full, so the subgroup count is exactly invocations / size ("Full Subgroups",
+        // VUID-VkPipelineShaderStageCreateInfo-flags-02759/-02785).
+        m_nativeSubgroupSize = 0;
+        m_nativeSubgroupSupported = false;
+        m_computeFullSubgroupsFeatureEnabled = false;
+        if (getPhysicalDeviceProperties2 != nullptr) {
+            VkPhysicalDeviceSubgroupProperties subgroupProperties{};
+            subgroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+            VkPhysicalDeviceProperties2 subgroupPropertyQuery{};
+            subgroupPropertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            subgroupPropertyQuery.pNext = &subgroupProperties;
+            getPhysicalDeviceProperties2(m_physicalDevice.handle, &subgroupPropertyQuery);
+            // Mirrors the loader's HasUsableShaderSubgroupSupport gate, including the
+            // MOBILEGL_DISABLE_SUBGROUP escape hatch, so the module lowerings can never
+            // disagree with the advertised capabilities.
+            const Bool usableSubgroups =
+                subgroupProperties.subgroupSize > 0 &&
+                (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
+            if (usableSubgroups && !MG_Config::Features.DisableSubgroup) {
+                m_nativeSubgroupSize = subgroupProperties.subgroupSize;
+                m_nativeSubgroupSupported = true;
+            }
+        }
+        VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControlFeatures{};
+        subgroupSizeControlFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+        m_maxComputeWorkgroupSubgroups = 0;
+        if (m_nativeSubgroupSupported &&
+            IsExtensionSupported(availableExtensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &subgroupSizeControlFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (getPhysicalDeviceProperties2 != nullptr) {
+                VkPhysicalDeviceSubgroupSizeControlPropertiesEXT subgroupSizeControlProperties{};
+                subgroupSizeControlProperties.sType =
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES_EXT;
+                VkPhysicalDeviceProperties2 propertyQuery{};
+                propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                propertyQuery.pNext = &subgroupSizeControlProperties;
+                getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+                m_maxComputeWorkgroupSubgroups =
+                    subgroupSizeControlProperties.maxComputeWorkgroupSubgroups;
+            }
+            if (subgroupSizeControlFeatures.computeFullSubgroups == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
+                                               VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+                }
+                // Only the full-subgroups guarantee is wanted; required/varying subgroup
+                // sizes stay unrequested.
+                subgroupSizeControlFeatures.subgroupSizeControl = VK_FALSE;
+                subgroupSizeControlFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &subgroupSizeControlFeatures;
+                m_computeFullSubgroupsFeatureEnabled = true;
+                MGLOG_I("Enabled optional device extension: %s (computeFullSubgroups)",
+                        VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
             }
         }
 

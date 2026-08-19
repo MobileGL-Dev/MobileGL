@@ -435,9 +435,6 @@ jobs:
           if [ "${{ matrix.case.coherent_as_flush || false }}" = "true" ]; then
             extra_retrace_args+=(--coherent-as-flush)
           fi
-          if [ "${{ matrix.case.num_subgroups_quirk || false }}" = "true" ]; then
-            extra_retrace_args+=(--num-subgroups-quirk)
-          fi
 
           run_retrace() {
             timeout "$(( ${{ matrix.case.timeout_seconds }} + 300 ))" sh android-plugin/trace-replay-ci.sh \

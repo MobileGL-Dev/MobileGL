@@ -44,7 +44,6 @@ struct Request {
     bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
     bool avoidAngleLlvmpipeExplicitLodBias = false;
     bool coherentAsFlush = false;
-    bool numSubgroupsQuirk = false;
     int holdMs = 0;
 };
 

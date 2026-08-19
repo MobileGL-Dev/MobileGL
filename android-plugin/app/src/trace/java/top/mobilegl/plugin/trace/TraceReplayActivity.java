@@ -116,7 +116,6 @@ public final class TraceReplayActivity extends Activity {
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 request.avoidAngleLlvmpipeExplicitLodBias,
                 request.coherentAsFlush,
-                request.numSubgroupsQuirk,
                 request.texture2dDumps
         );
         Log.i(TAG, result.toString());
@@ -150,7 +149,6 @@ public final class TraceReplayActivity extends Activity {
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
             boolean avoidAngleLlvmpipeExplicitLodBias,
             boolean coherentAsFlush,
-            boolean numSubgroupsQuirk,
             String texture2dDumps
     );
 
@@ -176,7 +174,6 @@ public final class TraceReplayActivity extends Activity {
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
         final boolean avoidAngleLlvmpipeExplicitLodBias;
         final boolean coherentAsFlush;
-        final boolean numSubgroupsQuirk;
         final String texture2dDumps;
 
         private TraceReplayRequest(
@@ -201,8 +198,7 @@ public final class TraceReplayActivity extends Activity {
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 boolean avoidAngleLlvmpipeExplicitLodBias,
                 boolean coherentAsFlush,
-                boolean numSubgroupsQuirk,
-                String texture2dDumps
+                    String texture2dDumps
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -225,7 +221,6 @@ public final class TraceReplayActivity extends Activity {
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
             this.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias;
             this.coherentAsFlush = coherentAsFlush;
-            this.numSubgroupsQuirk = numSubgroupsQuirk;
             this.texture2dDumps = texture2dDumps;
         }
 
@@ -254,7 +249,6 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_explicit_lod_bias", false),
                     intent.getBooleanExtra("coherent_as_flush", false),
-                    intent.getBooleanExtra("num_subgroups_quirk", false),
                     readString(intent, "texture_2d_dumps", "")
             );
         }

@@ -31,7 +31,6 @@ Usage:
     [--avoid-angle-llvmpipe-sampler-mipmap-min-filter] \
     [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
-    [--num-subgroups-quirk] \
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
     --timeout-seconds N
 
@@ -48,8 +47,6 @@ sample with an explicit LOD that ANGLE llvmpipe cannot take a LOD bias on
 (MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1).
 Pass --coherent-as-flush for traces whose engine writes persistent
 GL_MAP_FLUSH_EXPLICIT_BIT maps it never flushes (MOBILEGL_COHERENT_AS_FLUSH=1).
-Pass --num-subgroups-quirk to derive compute gl_NumSubgroups instead of reading
-the Vulkan builtin (MOBILEGL_NUM_SUBGROUPS_QUIRK=1).
 EOF
 }
 
@@ -108,7 +105,6 @@ use_pbuffer=0
 avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
 avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
-num_subgroups_quirk=0
 texture_2d_dumps=""
 timeout_seconds=""
 
@@ -150,7 +146,6 @@ while [ "$#" -gt 0 ]; do
       shift 1
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
-    --num-subgroups-quirk) num_subgroups_quirk=1; shift 1 ;;
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -367,9 +362,6 @@ run_retrace() {
   fi
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true
-  fi
-  if [ "${num_subgroups_quirk}" -eq 1 ]; then
-    set -- "$@" --ez num_subgroups_quirk true
   fi
   if [ -n "${texture_2d_dumps}" ]; then
     set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"

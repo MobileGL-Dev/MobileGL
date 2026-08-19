@@ -26,6 +26,8 @@
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/DeriveNumSubgroupsPass.h"
+#include "SpirvPasses/EmulateSubgroupsPass.h"
+#include "SpirvPasses/FixIterationRPSubgroupScratchPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
@@ -893,6 +895,32 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("DeriveNumSubgroupsForVulkan", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::EmulateSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary,
+                                                           const Uint32 maxWorkgroupScratchBytes,
+                                                           const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(
+                    EmulateSubgroupsPass::CreateEmulateSubgroupsPass(maxWorkgroupScratchBytes));
+
+                return RunOptimizerChecked("EmulateSubgroupsForVulkan", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const Uint32 nativeSubgroupSize, const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(
+                    FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
+                        nativeSubgroupSize));
+
+                return RunOptimizerChecked("FixIterationRPSubgroupScratchForVulkan", optimizer,
+                                           inputBinary, outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,

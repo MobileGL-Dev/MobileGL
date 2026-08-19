@@ -145,13 +145,35 @@ namespace MobileGL {
                 static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
                                                     Vector<uint32_t>& outputBinary,
                                                     bool enableSpirvValidation = false);
-                // Replaces compute gl_NumSubgroups loads with the value derived from the local
-                // workgroup dimensions and gl_SubgroupSize. DirectVulkan only; this avoids a
-                // driver builtin that can disagree with the subgroup IDs the same dispatch emits.
-                // See DeriveNumSubgroupsPass.
+                // Replaces compute gl_NumSubgroups loads with ceil(workgroup invocations /
+                // gl_SubgroupSize). DirectVulkan only; this repairs drivers whose builtin
+                // disagrees with the subgroup IDs the same dispatch emits (Adreno reports 1
+                // while emitting IDs 0..7). The ceil() partition is only spec-guaranteed
+                // under VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT, which
+                // the caller requests whenever it is legal for the workgroup shape; see
+                // DeriveNumSubgroupsPass.
                 static bool DeriveNumSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
                                                         Vector<uint32_t>& outputBinary,
                                                         bool enableSpirvValidation = false);
+                // Lowers every GL_KHR_shader_subgroup construct in a compute module onto a
+                // 32-lane virtual subgroup built from workgroup-shared memory. Last-resort
+                // path for devices with NO native subgroup support, opt-in via
+                // MOBILEGL_MAGMA_EMULATE_SUBGROUP=1; a device with native subgroup
+                // operations always uses them. maxWorkgroupScratchBytes bounds the shared
+                // scratch the lowering may add (pass the device's
+                // maxComputeSharedMemorySize; 0 falls back to the 16384-byte Vulkan
+                // minimum). See EmulateSubgroupsPass.
+                static bool EmulateSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary,
+                                                      Uint32 maxWorkgroupScratchBytes,
+                                                      bool enableSpirvValidation = false);
+                // Patches iterationRP's under-declared prefixSumCache[32] on sub-16-lane
+                // devices, fingerprint-gated to that pack's reduction; every other module
+                // passes through byte-identical. See FixIterationRPSubgroupScratchPass.
+                static bool FixIterationRPSubgroupScratchForVulkan(const Vector<Uint32>& inputBinary,
+                                                                   Vector<uint32_t>& outputBinary,
+                                                                   Uint32 nativeSubgroupSize,
+                                                                   bool enableSpirvValidation = false);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
                 // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex

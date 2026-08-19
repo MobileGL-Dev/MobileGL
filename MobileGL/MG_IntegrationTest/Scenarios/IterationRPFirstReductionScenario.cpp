@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_IntegrationTest/Scenarios/Program203FirstReductionScenario.cpp
+// MobileGL - MobileGL/MG_IntegrationTest/Scenarios/IterationRPFirstReductionScenario.cpp
 // Copyright (c) 2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,9 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - PROGRAM 203'S FIRST SUBGROUP REDUCTION.
+// Scenario - ITERATIONRP'S FIRST SUBGROUP REDUCTION.
 //
-// Program 203 reduces a 32 x 16 exposure tile with a vector subgroup inclusive add,
+// iterationRP reduces a 32 x 16 exposure tile with a vector subgroup inclusive add,
 // then a shared-memory scan of subgroup totals.  The source assumes that every
 // subgroup has a last lane, that there are 2..32 subgroups, and that local index
 // 511 belongs to the last subgroup and its last lane.  Those are source assumptions,
@@ -133,6 +133,17 @@ namespace MGITest {
             std::array<GLint, 3> maxWorkGroupSize{};
             bool queryHadError = false;
 
+            // iterationRP's source contract needs gl_NumSubgroups in [2, 32] for its 512
+            // invocations, i.e. an advertised subgroup width in [16, 256]. A device
+            // outside that window (lavapipe's 8-lane subgroups give 64 subgroups) cannot
+            // run the fixture's verbatim reduction at all, so the scenario SKIPS there -
+            // the pack itself replays through the FixIterationRPSubgroupScratch patch, which
+            // this probe deliberately does not model. The width only gates the domain;
+            // lane placement and group counts still come from observed values alone.
+            bool SubgroupWidthInSourceDomain() const {
+                return subgroupSize >= 16 && subgroupSize <= 256;
+            }
+
             bool SupportsProbe() const {
                 const auto stages = static_cast<GLbitfield>(supportedStages);
                 const auto features = static_cast<GLbitfield>(supportedFeatures);
@@ -140,6 +151,7 @@ namespace MGITest {
                        (stages & GL_COMPUTE_SHADER_BIT) != 0 &&
                        (features & (GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR)) ==
                            (GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR) &&
+                       SubgroupWidthInSourceDomain() &&
                        maxComputeStorageBlocks >= 2 && maxStorageBindings >= 2 &&
                        maxWorkGroupInvocations >= static_cast<GLint>(kInvocationCount) && maxWorkGroupSize[0] >= 32 &&
                        maxWorkGroupSize[1] >= 16 && maxWorkGroupSize[2] >= 1;
@@ -158,6 +170,12 @@ namespace MGITest {
                     GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR;
                 if ((features & requiredFeatures) != requiredFeatures) {
                     missing.emplace_back("basic|arithmetic in GL_SUBGROUP_SUPPORTED_FEATURES_KHR");
+                }
+                if (!SubgroupWidthInSourceDomain()) {
+                    missing.emplace_back(
+                        "GL_SUBGROUP_SIZE_KHR in [16, 256] (iterationRP's source contract needs "
+                        "gl_NumSubgroups in [2, 32] for 512 invocations; width " +
+                        std::to_string(subgroupSize) + " is outside the fixture's domain)");
                 }
                 if (maxComputeStorageBlocks < 2 || maxStorageBindings < 2) {
                     missing.emplace_back("two compute SSBO bindings");
@@ -194,7 +212,7 @@ namespace MGITest {
         }
 
         void PrintMetadata(const CapabilityInfo& info, std::ostream& output) {
-            output << "Program203FirstReductionScenario metadata: "
+            output << "IterationRPFirstReductionScenario metadata: "
                    << "GL_SUBGROUP_SIZE_KHR=" << info.subgroupSize
                    << ", GL_SUBGROUP_SUPPORTED_STAGES_KHR=0x" << std::hex
                    << static_cast<GLbitfield>(info.supportedStages)
@@ -243,7 +261,7 @@ layout(std430, binding = 0) readonly buffer Input {
 )";
 
         // Only the expression producing tileExposure differs between the two
-        // tests. The remainder is the program-203 first reduction, with stores
+        // tests. The remainder is the iterationRP first reduction, with stores
         // placed after its existing barriers to expose each handoff.
         constexpr const char* kSampledTileExposure = R"(
     vec2 texCoord = (vec2(gl_GlobalInvocationID.xy) + 0.5) *
@@ -506,7 +524,7 @@ layout(std430, binding = 0) readonly buffer Input {
                     if (!IsQuietNanSentinel(reduction.z) || !IsQuietNanSentinel(reduction.w) ||
                         !IsQuietNanSentinel(output.finalAverage[slot])) {
                         std::ostringstream message;
-                        message << "program 203 source reduction has no valid contract for gl_NumSubgroups="
+                        message << "iterationRP source reduction has no valid contract for gl_NumSubgroups="
                                 << reportedNumSubgroups << "; localIndex " << localIndex
                                 << " did not preserve its qNaN source-reduction sentinel";
                         return Failure("source domain", message.str());
@@ -514,7 +532,7 @@ layout(std430, binding = 0) readonly buffer Input {
                     for (std::size_t stage = 0; stage < kScanStageCount; ++stage) {
                         if (!IsQuietNanSentinel(output.scanAfter[stage][slot])) {
                             std::ostringstream message;
-                            message << "program 203 source reduction has no valid contract for gl_NumSubgroups="
+                            message << "iterationRP source reduction has no valid contract for gl_NumSubgroups="
                                     << reportedNumSubgroups << "; localIndex " << localIndex << ", scan stage " << stage
                                     << " did not preserve its qNaN source-reduction sentinel";
                             return Failure("source domain", message.str());
@@ -522,12 +540,12 @@ layout(std430, binding = 0) readonly buffer Input {
                     }
                 }
                 std::ostringstream message;
-                message << "program 203 source reduction has no valid contract for observed gl_NumSubgroups="
+                message << "iterationRP source reduction has no valid contract for observed gl_NumSubgroups="
                         << reportedNumSubgroups << " (requires 2..32); native subgroup results were recorded";
                 return Failure("source domain", message.str());
             }
 
-            // 4. Program-203 source writer and first shared-memory handoff.
+            // 4. iterationRP source writer and first shared-memory handoff.
             std::vector<std::size_t> sourceWriter(reportedNumSubgroups, kNoSlot);
             for (std::uint32_t subgroupID = 0; subgroupID < reportedNumSubgroups; ++subgroupID) {
                 std::size_t writerCount = 0;
@@ -541,7 +559,7 @@ layout(std430, binding = 0) readonly buffer Input {
                 if (writerCount != 1u) {
                     std::ostringstream message;
                     message << "subgroupID " << subgroupID << " has " << writerCount
-                            << " recorded lane(s) where laneID == subgroupSize - 1; program 203 leaves that "
+                            << " recorded lane(s) where laneID == subgroupSize - 1; iterationRP leaves that "
                                "shared-cache entry unwritten";
                     return Failure("source writer", message.str());
                 }
@@ -633,7 +651,7 @@ layout(std430, binding = 0) readonly buffer Input {
                 index511Subgroup.z == ownerResult.highestObservedSubgroup;
             if (!ownerResult.index511IsSourceLastLaneWriter || !ownerResult.index511IsHighestSubgroupMember) {
                 std::ostringstream message;
-                message << "program 203 topology incompatibility: localIndex 511 is sourceLastLaneWriter="
+                message << "iterationRP topology incompatibility: localIndex 511 is sourceLastLaneWriter="
                         << ownerResult.index511IsSourceLastLaneWriter << ", highestSubgroupMember="
                         << ownerResult.index511IsHighestSubgroupMember << " (subgroupID=" << index511Subgroup.z
                         << ", highest observed subgroupID=" << ownerResult.highestObservedSubgroup << ')';
@@ -650,7 +668,7 @@ layout(std430, binding = 0) readonly buffer Input {
             const float expectedTotal = mode == InputMode::IndexedSsbo ? 131328.0f : sampledExpectedTotal;
             if (!SameBits(total, expectedTotal) || !SameBits(mergedPrefix[index511Slot], expectedTotal)) {
                 std::ostringstream message;
-                message << "program 203 source total was " << FormatFloat(mergedPrefix[index511Slot])
+                message << "iterationRP source total was " << FormatFloat(mergedPrefix[index511Slot])
                         << " (native total " << FormatFloat(total) << "), expected " << FormatFloat(expectedTotal);
                 ownerResult.ok = false;
                 ownerResult.phase = "final average";
@@ -675,9 +693,9 @@ layout(std430, binding = 0) readonly buffer Input {
                        bool includeScanStages) {
             PrintMetadata(capabilities, std::cout);
             if (validation.ok) {
-                std::cout << "Program203FirstReductionScenario firstFailure=none\n";
+                std::cout << "IterationRPFirstReductionScenario firstFailure=none\n";
             } else {
-                std::cout << "Program203FirstReductionScenario firstFailure=" << validation.phase << ": "
+                std::cout << "IterationRPFirstReductionScenario firstFailure=" << validation.phase << ": "
                           << validation.message << '\n';
             }
             std::cout << "localIndex,localX,localY,localZ,subgroupSize,numSubgroups,subgroupID,laneID,input,"
@@ -702,17 +720,19 @@ layout(std430, binding = 0) readonly buffer Input {
             }
         }
 
-        class Program203FirstReductionScenario : public ScenarioTest {
+        class IterationRPFirstReductionScenario : public ScenarioTest {
         protected:
             void SetUp() override {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
 
                 m_capabilities = QueryCapabilities();
-                // GL_SUBGROUP_SIZE_KHR is diagnostic only. It is deliberately
-                // never used to infer lane placement or an expected group count.
+                // GL_SUBGROUP_SIZE_KHR gates only whether the fixture's source contract
+                // can hold on this device (SubgroupWidthInSourceDomain); it is
+                // deliberately never used to infer lane placement or an expected group
+                // count - those come from observed values alone.
                 PrintMetadata(m_capabilities, std::cout);
-                RecordProperty("program203_gl_subgroup_size_khr", std::to_string(m_capabilities.subgroupSize));
+                RecordProperty("iterationrp_gl_subgroup_size_khr", std::to_string(m_capabilities.subgroupSize));
                 if (!m_capabilities.SupportsProbe()) {
                     GTEST_SKIP() << "subgroup probe requires " << m_capabilities.MissingRequirements();
                 }
@@ -839,13 +859,13 @@ layout(std430, binding = 0) readonly buffer Input {
 
                 const ValidationResult validation = ValidateProbe(output, mode);
                 if (validation.ownerEvaluated) {
-                    RecordProperty("program203_index511_source_last_lane_writer",
+                    RecordProperty("iterationrp_index511_source_last_lane_writer",
                                    validation.index511IsSourceLastLaneWriter ? "true" : "false");
-                    RecordProperty("program203_index511_highest_subgroup_member",
+                    RecordProperty("iterationrp_index511_highest_subgroup_member",
                                    validation.index511IsHighestSubgroupMember ? "true" : "false");
-                    RecordProperty("program203_highest_observed_subgroup",
+                    RecordProperty("iterationrp_highest_observed_subgroup",
                                    std::to_string(validation.highestObservedSubgroup));
-                    std::cout << "Program203FirstReductionScenario owner: localIndex511 sourceLastLaneWriter="
+                    std::cout << "IterationRPFirstReductionScenario owner: localIndex511 sourceLastLaneWriter="
                               << validation.index511IsSourceLastLaneWriter << ", highestSubgroupMember="
                               << validation.index511IsHighestSubgroupMember << ", highestObservedSubgroup="
                               << validation.highestObservedSubgroup << '\n';
@@ -865,12 +885,12 @@ layout(std430, binding = 0) readonly buffer Input {
 
     } // namespace
 
-    TEST_F(Program203FirstReductionScenario, SampledRgba32fFirstAverage) {
+    TEST_F(IterationRPFirstReductionScenario, SampledRgba32fFirstAverage) {
         if (!Ready() || IsSkipped()) return;
         RunAndValidate(InputMode::SampledRgba32f);
     }
 
-    TEST_F(Program203FirstReductionScenario, IndexedInputTopologyAndReduction) {
+    TEST_F(IterationRPFirstReductionScenario, IndexedInputTopologyAndReduction) {
         if (!Ready() || IsSkipped()) return;
         RunAndValidate(InputMode::IndexedSsbo);
     }

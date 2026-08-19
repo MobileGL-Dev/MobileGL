@@ -7,8 +7,8 @@
 // End of Source File Header
 
 #include "DriverPost.h"
-#include "DriverPostProgram203Witness.h"
-#include "DriverPostProgram203WitnessSpv.h"
+#include "DriverPostIterationRPWitness.h"
+#include "DriverPostIterationRPWitnessSpv.h"
 #include "MG_Util/BackendLoaders/OpenGL/Loader.h"
 #include <Config.h>
 #include <MGGitHash.h>
@@ -1458,11 +1458,11 @@ namespace MobileGL::MG_Util::SelfTest {
                              disabledNote);
         }
 
-        // Native Program-203 compute witness. This deliberately uses a separate
+        // Native iterationRP compute witness. This deliberately uses a separate
         // throwaway Vulkan device rather than the real renderer's queues, and it
         // treats MOBILEGL_DISABLE_SUBGROUP as irrelevant: the row reports what the
         // driver does, not what MobileGL elects to advertise to applications.
-        void ProbeVulkanProgram203Witness(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
+        void ProbeVulkanIterationRPWitness(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                            VkInstance instance, VkPhysicalDevice physicalDevice,
                                            Uint32 computeQueueFamilyIndex,
                                            const VkPhysicalDeviceProperties& properties,
@@ -1476,7 +1476,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
 
-            Program203WitnessLimits limits{};
+            IterationRPWitnessLimits limits{};
             limits.computeStageSupported =
                 (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
             limits.basicSubgroupSupported =
@@ -1494,12 +1494,12 @@ namespace MobileGL::MG_Util::SelfTest {
             limits.maxBoundDescriptorSets = properties.limits.maxBoundDescriptorSets;
             limits.maxStorageBufferRange = properties.limits.maxStorageBufferRange;
 
-            const Program203WitnessEligibilityResult eligibility = EvaluateProgram203WitnessEligibility(limits);
-            if (eligibility.eligibility == Program203WitnessEligibility::SkipUnsupportedNativeFeatureSet) {
+            const IterationRPWitnessEligibilityResult eligibility = EvaluateIterationRPWitnessEligibility(limits);
+            if (eligibility.eligibility == IterationRPWitnessEligibility::SkipUnsupportedNativeFeatureSet) {
                 builder.Info(RowName, eligibility.detail);
                 return;
             }
-            if (eligibility.eligibility == Program203WitnessEligibility::FailInadequateLimits) {
+            if (eligibility.eligibility == IterationRPWitnessEligibility::FailInadequateLimits) {
                 fail(eligibility.detail);
                 return;
             }
@@ -1668,7 +1668,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
             VkBufferCreateInfo bufferInfo{};
             bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bufferInfo.size = sizeof(Program203WitnessOutput);
+            bufferInfo.size = sizeof(IterationRPWitnessOutput);
             bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
             bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             result = vkCreateBufferFn(device, &bufferInfo, nullptr, &outputBuffer);
@@ -1710,12 +1710,12 @@ namespace MobileGL::MG_Util::SelfTest {
                 fail(format("vkBindBufferMemory(output SSBO) failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
-            result = vkMapMemoryFn(device, outputMemory, 0, sizeof(Program203WitnessOutput), 0, &mappedOutput);
+            result = vkMapMemoryFn(device, outputMemory, 0, sizeof(IterationRPWitnessOutput), 0, &mappedOutput);
             if (result != VK_SUCCESS || mappedOutput == nullptr) {
                 fail(format("vkMapMemory(output SSBO) failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
-            std::memset(mappedOutput, 0xa5, sizeof(Program203WitnessOutput));
+            std::memset(mappedOutput, 0xa5, sizeof(IterationRPWitnessOutput));
 
             VkDescriptorSetLayoutBinding outputBinding{};
             outputBinding.binding = 0;
@@ -1760,7 +1760,7 @@ namespace MobileGL::MG_Util::SelfTest {
             VkDescriptorBufferInfo outputDescriptor{};
             outputDescriptor.buffer = outputBuffer;
             outputDescriptor.offset = 0;
-            outputDescriptor.range = sizeof(Program203WitnessOutput);
+            outputDescriptor.range = sizeof(IterationRPWitnessOutput);
             VkWriteDescriptorSet descriptorWrite{};
             descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             descriptorWrite.dstSet = descriptorSet;
@@ -1772,8 +1772,8 @@ namespace MobileGL::MG_Util::SelfTest {
 
             VkShaderModuleCreateInfo shaderModuleInfo{};
             shaderModuleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            shaderModuleInfo.codeSize = sizeof(kDriverPostProgram203WitnessSpv);
-            shaderModuleInfo.pCode = kDriverPostProgram203WitnessSpv;
+            shaderModuleInfo.codeSize = sizeof(kDriverPostIterationRPWitnessSpv);
+            shaderModuleInfo.pCode = kDriverPostIterationRPWitnessSpv;
             result = vkCreateShaderModuleFn(device, &shaderModuleInfo, nullptr, &shaderModule);
             if (result != VK_SUCCESS) {
                 fail(format("vkCreateShaderModule failed (VkResult = {})", static_cast<Int>(result)));
@@ -1845,7 +1845,7 @@ namespace MobileGL::MG_Util::SelfTest {
             hostReadBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             hostReadBarrier.buffer = outputBuffer;
             hostReadBarrier.offset = 0;
-            hostReadBarrier.size = sizeof(Program203WitnessOutput);
+            hostReadBarrier.size = sizeof(IterationRPWitnessOutput);
             vkCmdPipelineBarrierFn(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
                                    0, nullptr, 1, &hostReadBarrier, 0, nullptr);
             result = vkEndCommandBufferFn(commandBuffer);
@@ -1879,9 +1879,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
 
-            Program203WitnessOutput output{};
+            IterationRPWitnessOutput output{};
             std::memcpy(&output, mappedOutput, sizeof(output));
-            const Program203WitnessValidationResult validation = ValidateProgram203Witness(output);
+            const IterationRPWitnessValidationResult validation = ValidateIterationRPWitness(output);
             if (!validation.ok) {
                 fail(validation.detail);
                 return;
@@ -2491,7 +2491,7 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Warn("Compute shader subgroup", "subgroup properties could not be queried");
         }
 
-        ProbeVulkanProgram203Witness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,
+        ProbeVulkanIterationRPWitness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,
                                      properties, subgroupPropertiesAvailable, subgroupProperties);
 
         if (HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) {

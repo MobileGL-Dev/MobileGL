@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Util/SelfTest/DriverPostProgram203WitnessSpv.h
+// MobileGL - MobileGL/MG_Util/SelfTest/DriverPostIterationRPWitnessSpv.h
 // Copyright (c) 2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,9 +6,15 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Generated from DriverPostProgram203Witness.comp with:
-// glslangValidator --target-env vulkan1.1 -V DriverPostProgram203Witness.comp
+// Generated from DriverPostIterationRPWitness.comp with:
+// glslangValidator --target-env vulkan1.1 -V DriverPostIterationRPWitness.comp
 // Validated with spirv-val --target-env vulkan1.1. Do not edit words by hand.
+//
+// The stored words predate the Program203 -> IterationRP source rename, so their
+// embedded OpName debug strings still spell the old identifiers; regeneration from
+// the renamed source produces semantically identical code differing only in those
+// strings. The witness magic stays 0x50323033 ("P203" - the trace's program id) so
+// these words remain valid without regeneration.
 
 #pragma once
 
@@ -16,7 +22,7 @@
 #include <cstdint>
 
 namespace MobileGL::MG_Util::SelfTest {
-    inline constexpr std::uint32_t kDriverPostProgram203WitnessSpv[] = {
+    inline constexpr std::uint32_t kDriverPostIterationRPWitnessSpv[] = {
         0x07230203u, 0x00010300u, 0x0008000bu, 0x00000145u, 0x00000000u, 0x00020011u, 0x00000001u, 0x00020011u,
         0x0000003du, 0x00020011u, 0x0000003fu, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu,
         0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u, 0x000a000fu, 0x00000005u, 0x00000004u, 0x6e69616du,
@@ -286,6 +292,6 @@ namespace MobileGL::MG_Util::SelfTest {
         0x00050041u, 0x0000003bu, 0x00000141u, 0x00000037u, 0x00000124u, 0x0003003eu, 0x00000141u, 0x00000140u,
         0x000200f9u, 0x0000013du, 0x000200f8u, 0x0000013du, 0x000100fdu, 0x00010038u,
     };
-    inline constexpr std::size_t kDriverPostProgram203WitnessSpvWordCount =
-        sizeof(kDriverPostProgram203WitnessSpv) / sizeof(kDriverPostProgram203WitnessSpv[0]);
+    inline constexpr std::size_t kDriverPostIterationRPWitnessSpvWordCount =
+        sizeof(kDriverPostIterationRPWitnessSpv) / sizeof(kDriverPostIterationRPWitnessSpv[0]);
 } // namespace MobileGL::MG_Util::SelfTest

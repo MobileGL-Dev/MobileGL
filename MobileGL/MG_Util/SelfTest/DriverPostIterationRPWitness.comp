@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Util/SelfTest/DriverPostProgram203Witness.comp
+// MobileGL - MobileGL/MG_Util/SelfTest/DriverPostIterationRPWitness.comp
 // Copyright (c) 2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,9 +6,9 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Native Vulkan GLSL 450 witness for Program 203's first subgroup reduction.
+// Native Vulkan GLSL 450 witness for iterationRP's first subgroup reduction.
 // It is intentionally independent of the GL 430 integration scenario. The body
-// below preserves Program 203's source reduction; the surrounding diagnostics
+// below preserves iterationRP's source reduction; the surrounding diagnostics
 // only observe its topology and cache handoffs.
 
 #version 450
@@ -23,7 +23,7 @@ const uint kTopologyInvalidSubgroupId = 1u << 2u;
 const uint kTopologyInvalidSubgroupLane = 1u << 3u;
 const uint kWitnessMagic = 0x50323033u;
 
-layout(std430, set = 0, binding = 0) buffer Program203WitnessOutput {
+layout(std430, set = 0, binding = 0) buffer IterationRPWitnessOutput {
     uint magic;
     uint topologyFlags;
     uint numSubgroups;
@@ -40,7 +40,7 @@ layout(std430, set = 0, binding = 0) buffer Program203WitnessOutput {
     vec2 finalAverage;
 } outWitness;
 
-// Program 203's cache stays separate from all diagnostic shared state. In
+// iterationRP's cache stays separate from all diagnostic shared state. In
 // particular, no instrumentation stores through prefixSumCache except source
 // writes retained below.
 shared vec2 prefixSumCache[32];
@@ -108,7 +108,7 @@ void main() {
     }
 
     // This branch is uniform after collection and is solely a safety guard for
-    // broken topology reports. The valid side retains Program 203 verbatim.
+    // broken topology reports. The valid side retains iterationRP verbatim.
     const bool sourceDomain = canonicalDomain && topologyFlagsShared == 0u;
     if (sourceDomain) {
         vec2 sampleLuminance = vec2(float(gl_LocalInvocationIndex + 1u), 0.0);

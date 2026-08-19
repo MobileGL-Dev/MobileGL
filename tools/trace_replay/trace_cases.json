@@ -284,8 +284,7 @@
       "golden": "minecraft-1.21.4-fabric-iris-iterationrp-in-world.0000202020.png",
       "target_call": 202020,
       "timeout_seconds": 1800,
-      "ssim_threshold": 0.98,
-      "num_subgroups_quirk": true
+      "ssim_threshold": 0.98
     },
     {
       "name": "minecraft-1.21.4-fabric-iris-bsl-esc-menu-854",

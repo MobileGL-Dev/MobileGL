@@ -4,6 +4,8 @@ add_executable(
         SpirvPassTest
         SpirvPassTest.cpp
         DeriveNumSubgroupsTest.cpp
+        FixIterationRPSubgroupScratchTest.cpp
+        EmulateSubgroupsTest.cpp
         DemoteFloat64Test.cpp
         FlattenXfbInterfaceBlocksTest.cpp
 )

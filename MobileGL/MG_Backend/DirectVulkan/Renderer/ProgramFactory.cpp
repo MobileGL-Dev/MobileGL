@@ -8,7 +8,6 @@
 
 #include "ProgramFactory.h"
 
-#include "Config.h"
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
@@ -33,6 +32,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using ShaderObject = MG_State::GLState::ShaderObject;
         using SpvcSession = MG_Util::ShaderTranspiler::SpvcSession;
         using SessionUsageBit = MG_Util::ShaderTranspiler::SessionUsageBit;
+
+        // Local size of a compute module, read from OpExecutionMode LocalSize; all-zero
+        // when absent. The compile chain pins SPIR-V 1.3, where a literal local size
+        // always reaches the module as this execution mode (LocalSizeId does not exist
+        // yet).
+        struct ComputeLocalSize {
+            Uint32 x = 0;
+            Uint32 y = 0;
+            Uint32 z = 0;
+            Uint64 Total() const { return static_cast<Uint64>(x) * y * z; }
+        };
+        ComputeLocalSize TryGetComputeLocalSize(const Vector<Uint>& spirv) {
+            constexpr SizeT kHeaderWords = 5;
+            constexpr Uint32 kOpExecutionMode = 16;
+            constexpr Uint32 kModeLocalSize = 17;
+            for (SizeT offset = kHeaderWords; offset < spirv.size();) {
+                const Uint32 wordCount = spirv[offset] >> 16u;
+                const Uint32 opcode = spirv[offset] & 0xffffu;
+                if (wordCount == 0 || offset + wordCount > spirv.size()) break;
+                if (opcode == kOpExecutionMode && wordCount >= 6 && spirv[offset + 2] == kModeLocalSize) {
+                    return {spirv[offset + 3], spirv[offset + 4], spirv[offset + 5]};
+                }
+                offset += wordCount;
+            }
+            return {};
+        }
 
         struct DescriptorKey {
             ProgramFactory::DescriptorBindingKind kind = ProgramFactory::DescriptorBindingKind::None;
@@ -3164,20 +3189,56 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
-            // NumSubgroups is defined by the local workgroup dimensions and SubgroupSize. Derive
-            // it in SPIR-V instead of trusting a driver builtin that can disagree with the
-            // SubgroupId topology produced by the same compute dispatch (Adreno reports 1 while
-            // emitting IDs 0..7 for a 512-invocation, 64-wide workgroup).
-            if (MG_Config::Features.NumSubgroupsQuirk && shaders[i] &&
-                shaders[i]->GetShaderStage() == ShaderStage::Compute) {
-                Vector<Uint> derivedNumSubgroupsSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::DeriveNumSubgroupsForVulkan(
-                        moduleSpirvs[i], derivedNumSubgroupsSpirv, enableSpirvValidation)) {
-                    moduleSpirvs[i] = std::move(derivedNumSubgroupsSpirv);
+            // GL_KHR_shader_subgroup handling (SubgroupSupportPolicy.h). Native subgroup
+            // operations execute natively; two module repairs keep the GL contract intact
+            // around them. The opt-in emulation path replaces them only on devices with no
+            // subgroup support at all (MOBILEGL_MAGMA_EMULATE_SUBGROUP).
+            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Compute) {
+                if (m_subgroupPolicy.emulateSubgroups) {
+                    Vector<Uint> emulatedSpirv;
+                    if (MG_Util::ShaderTranspiler::ShaderCompiler::EmulateSubgroupsForVulkan(
+                            moduleSpirvs[i], emulatedSpirv,
+                            m_subgroupPolicy.maxComputeSharedMemoryBytes, enableSpirvValidation)) {
+                        moduleSpirvs[i] = std::move(emulatedSpirv);
+                    } else {
+                        MGLOG_E("ProgramFactory: subgroup emulation failed for program %u; the "
+                                "module keeps subgroup operations the device cannot execute",
+                                program.GetExternalIndex());
+                    }
                 } else {
-                    MGLOG_E("ProgramFactory: failed to derive gl_NumSubgroups for program %u; "
-                            "compute shaders may observe a driver-inconsistent subgroup count",
-                            program.GetExternalIndex());
+                    // iterationRP under-declares its cross-subgroup scratch
+                    // (prefixSumCache[32] for 512 invocations); on a sub-16-lane device
+                    // grow that one fingerprinted array to what the topology needs.
+                    if (m_subgroupPolicy.fixIterationRPSubgroupScratch) {
+                        Vector<Uint> patchedSpirv;
+                        if (MG_Util::ShaderTranspiler::ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
+                                moduleSpirvs[i], patchedSpirv, m_subgroupPolicy.nativeSubgroupSize,
+                                enableSpirvValidation)) {
+                            moduleSpirvs[i] = std::move(patchedSpirv);
+                        } else {
+                            MGLOG_E("ProgramFactory: iterationRP subgroup scratch patch failed for "
+                                    "program %u; the pack's declared array sizes stay in effect",
+                                    program.GetExternalIndex());
+                        }
+                    }
+                    // gl_NumSubgroups must agree with the gl_SubgroupID range GL promises;
+                    // derive it from the workgroup dimensions and gl_SubgroupSize instead of
+                    // trusting a driver builtin that can disagree with the topology the same
+                    // dispatch emits (Adreno reports 1 while emitting IDs 0..7 for a
+                    // 512-invocation, 64-wide workgroup). The ceil() partition this derives
+                    // is pinned by REQUIRE_FULL_SUBGROUPS at pipeline creation whenever the
+                    // workgroup shape makes that flag legal (see the stage setup below).
+                    if (m_subgroupPolicy.deriveNumSubgroups) {
+                        Vector<Uint> derivedNumSubgroupsSpirv;
+                        if (MG_Util::ShaderTranspiler::ShaderCompiler::DeriveNumSubgroupsForVulkan(
+                                moduleSpirvs[i], derivedNumSubgroupsSpirv, enableSpirvValidation)) {
+                            moduleSpirvs[i] = std::move(derivedNumSubgroupsSpirv);
+                        } else {
+                            MGLOG_E("ProgramFactory: failed to derive gl_NumSubgroups for program %u; "
+                                    "compute shaders may observe a driver-inconsistent subgroup count",
+                                    program.GetExternalIndex());
+                        }
+                    }
                 }
             }
 
@@ -3326,6 +3387,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stage.stage = ToVkStage(shaderStage);
             stage.module = module;
             stage.pName = "main";
+            // Pin the full-subgroup launch the derived gl_NumSubgroups assumes. Legal
+            // exactly when the computeFullSubgroups feature is enabled and local_size_x is
+            // a multiple of the subgroup size (VUID-VkPipelineShaderStageCreateInfo-
+            // flags-02759/-02785), and only worth requesting while the resulting subgroup
+            // count fits the device's maxComputeWorkgroupSubgroups (lavapipe caps it at
+            // 32, below a 512-invocation dispatch's 64). With the bit set, "Full
+            // Subgroups" guarantees every subgroup launches with all invocations active,
+            // making the subgroup count exactly invocations / size. Shapes the flag
+            // cannot cover (e.g. 32x16 on a 64-wide device) fall back to the driver's
+            // own - spec-encouraged - tight partitioning, which the DriverPost witness
+            // verifies per device.
+            if (shaderStage == ShaderStage::Compute && m_subgroupPolicy.requireFullSubgroups &&
+                !m_subgroupPolicy.emulateSubgroups && m_subgroupPolicy.nativeSubgroupSize != 0) {
+                const ComputeLocalSize localSize = TryGetComputeLocalSize(moduleSpv);
+                const Uint64 fullSubgroupCount =
+                    localSize.Total() / m_subgroupPolicy.nativeSubgroupSize;
+                if (localSize.x != 0 && localSize.x % m_subgroupPolicy.nativeSubgroupSize == 0 &&
+                    fullSubgroupCount <= m_subgroupPolicy.maxComputeWorkgroupSubgroups) {
+                    stage.flags |= VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;
+                }
+            }
 
             entry.modules.push_back(module);
             entry.stages.push_back(stage);

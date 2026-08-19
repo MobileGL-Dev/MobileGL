@@ -372,16 +372,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             virtual void OnProgramEvicted(HashType programHash, VkDescriptorSetLayout descriptorSetLayout) = 0;
         };
 
+        // How this factory's compute modules implement GL_KHR_shader_subgroup. Computed
+        // once at renderer initialization (SubgroupSupportPolicy.h + the device's
+        // subgroup properties) so lowering can never disagree with the advertised
+        // capabilities. Native subgroup operations always execute natively; the two
+        // repair passes patch modules AROUND them, and the emulation only replaces them
+        // on opted-in devices with no subgroup support at all.
+        struct SubgroupLoweringPolicy {
+            Bool emulateSubgroups = false;      // MOBILEGL_MAGMA_EMULATE_SUBGROUP, no-native-support devices
+            Bool fixIterationRPSubgroupScratch = false; // patch iterationRP's under-declared scratch
+            Bool deriveNumSubgroups = false;    // repair the NumSubgroups builtin
+            Bool requireFullSubgroups = false;  // computeFullSubgroups enabled on the device
+            Uint32 nativeSubgroupSize = 0;
+            // Full-subgroup launches are bounded by this device limit; a dispatch whose
+            // workgroup needs more subgroups than this cannot request the flag.
+            Uint32 maxComputeWorkgroupSubgroups = 0;
+            // VkPhysicalDeviceLimits::maxComputeSharedMemorySize; bounds the scratch the
+            // emulation pass may add (0 falls back to the Vulkan minimum, 16384).
+            Uint32 maxComputeSharedMemoryBytes = 0;
+        };
+
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
                                 Bool shaderDrawParametersEnabled,
                                 Bool unformattedFloatStorageImagesEnabled,
                                 Bool enableSpirvValidation,
-                                UpdateAfterBindLimits updateAfterBindLimits)
+                                UpdateAfterBindLimits updateAfterBindLimits,
+                                SubgroupLoweringPolicy subgroupPolicy)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
               m_enableSpirvValidation(enableSpirvValidation),
-              m_updateAfterBindLimits(updateAfterBindLimits) {
+              m_updateAfterBindLimits(updateAfterBindLimits),
+              m_subgroupPolicy(subgroupPolicy) {
             VkProgramObject::s_device = device;
         }
         // Destroys the pass-through tessellation control modules. Runs while the device is
@@ -511,6 +533,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the factory lets each reflected layout choose ordinary descriptors when its
         // own counts would exceed the update-after-bind budget.
         UpdateAfterBindLimits m_updateAfterBindLimits{};
+        SubgroupLoweringPolicy m_subgroupPolicy{};
         // See SetDefaultFramebufferHeight. 0 means "not known yet"; the FragCoordYFlip bit is
         // never set before the swapchain exists, so no variant can be compiled against it.
         Uint32 m_defaultFramebufferHeight = 0;

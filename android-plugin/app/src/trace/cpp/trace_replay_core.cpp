@@ -164,11 +164,6 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
-    if (request.numSubgroupsQuirk) {
-        setenv("MOBILEGL_NUM_SUBGROUPS_QUIRK", "1", 1);
-    } else {
-        unsetenv("MOBILEGL_NUM_SUBGROUPS_QUIRK");
-    }
     if (request.fboAttachmentDumps.empty()) {
         unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");
     } else {
@@ -823,7 +818,6 @@ bool WriteResultJson(const Request& request, const Result& result) {
          << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
     file << "  \"avoidAngleLlvmpipeExplicitLodBias\": "
          << (request.avoidAngleLlvmpipeExplicitLodBias ? "true" : "false") << ",\n";
-    file << "  \"numSubgroupsQuirk\": " << (request.numSubgroupsQuirk ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";

@@ -9,6 +9,7 @@
 #include "BackendObject_DirectVulkan.h"
 #include "MG_Backend/BackendObject.h"
 #include "DirectVulkan.h"
+#include "SubgroupSupportPolicy.h"
 #include "MG_State/GLState/FramebufferState/FramebufferObject.h"
 #include "MG_State/GLState/Core.h"
 #include "MG_State/GLState/TextureState/TextureState.h"
@@ -704,8 +705,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // real device timestamp support. ApplyVulkanCapabilitiesForTesting may
         // run without a renderer; no timer query is advertised then. Rebuilding
         // the whole list keeps re-runs idempotent.
+        // The opt-in emulated compute path (SubgroupSupportPolicy.h) carries the
+        // extension by itself on devices with no native subgroup support at all; a
+        // device with native subgroups always advertises - and uses - those.
+        const Bool subgroupSupportAdvertised =
+            m_vulkanCaps.SupportsShaderSubgroup ||
+            ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup);
         m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
-            m_vulkanCaps.SupportsShaderSubgroup, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
+            subgroupSupportAdvertised, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported());
     }
@@ -941,6 +948,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_dynamicParameters.SubgroupSupportedFeatures =
                 mapSubgroupFeatures(m_vulkanCaps.SubgroupSupportedOperations);
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = m_vulkanCaps.SubgroupQuadOperationsInAllStages;
+        } else if (ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup)) {
+            // MOBILEGL_MAGMA_EMULATE_SUBGROUP on a device with no native subgroups: the
+            // advertised values describe the 32-lane virtual subgroup the compute
+            // lowering implements (SubgroupSupportPolicy.h / EmulateSubgroupsPass).
+            // GL requires the advertisement and the execution to agree, and on this
+            // path the emulation is what executes; only the compute stage is offered.
+            m_dynamicParameters.SubgroupSize = kEmulatedSubgroupSize;
+            m_dynamicParameters.SubgroupSupportedStages = kEmulatedSubgroupStages;
+            m_dynamicParameters.SubgroupSupportedFeatures = kEmulatedSubgroupFeatures;
+            m_dynamicParameters.SubgroupQuadOperationsInAllStages = false;
+            MGLOG_I("DirectVulkan: emulating 32-lane compute subgroups "
+                    "(MOBILEGL_MAGMA_EMULATE_SUBGROUP, no native subgroup support)");
         } else {
             m_dynamicParameters.SubgroupSize = 0;
             m_dynamicParameters.SubgroupSupportedStages = 0;

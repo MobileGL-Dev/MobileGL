@@ -554,6 +554,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_samplerAnisotropyFeatureEnabled = false;
         Bool m_shaderDrawParametersExtensionEnabled = false;
         Bool m_shaderDrawParametersFeatureEnabled = false;
+        // Native subgroup topology, queried at device creation for the compute-module
+        // subgroup repairs (SubgroupSupportPolicy.h) and the REQUIRE_FULL_SUBGROUPS
+        // stage flag; 0 / false when the device has no usable compute subgroups or
+        // MOBILEGL_DISABLE_SUBGROUP forced them off.
+        Uint32 m_nativeSubgroupSize = 0;
+        Bool m_nativeSubgroupSupported = false;
+        Bool m_computeFullSubgroupsFeatureEnabled = false;
+        // VkPhysicalDeviceSubgroupSizeControlProperties::maxComputeWorkgroupSubgroups;
+        // 0 when the extension (and therefore the full-subgroups flag) is unavailable.
+        Uint32 m_maxComputeWorkgroupSubgroups = 0;
         Bool m_unformattedFloatStorageImagesEnabled = false;
         // Set only after descriptor-indexing feature AND property queries prove that
         // update-after-bind is legal for every descriptor category this renderer emits.

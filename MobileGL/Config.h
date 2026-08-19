@@ -78,13 +78,37 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_TRACE_ANGLE_VARIANT: signed trace-APK ANGLE build short hash.
         String TraceAngleVariant;
 #endif
-        // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
+        // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support,
+        // including the opt-in emulated compute path below.
         Bool DisableSubgroup = false;
-        // MOBILEGL_NUM_SUBGROUPS_QUIRK: derive compute gl_NumSubgroups from the local
-        // workgroup dimensions and gl_SubgroupSize instead of reading Vulkan's
-        // NumSubgroups builtin. Off by default; enable only for drivers whose builtin
-        // disagrees with the SubgroupId topology emitted by the same dispatch.
-        Bool NumSubgroupsQuirk = false;
+        // MOBILEGL_MAGMA_EMULATE_SUBGROUP: implement GL_KHR_shader_subgroup's compute
+        // stage on a 32-lane VIRTUAL subgroup lowered to workgroup-shared memory
+        // (ShaderTranspiler::EmulateSubgroupsPass). Strictly a last resort: it only ever
+        // engages when this flag is set AND the device has no native subgroup support at
+        // all - a device with real subgroup operations always uses them natively,
+        // whatever their width (the known iterationRP defect is patched by
+        // FixIterationRPSubgroupScratch below instead). Off by default.
+        Bool MagmaEmulateSubgroup = false;
+        // MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH: patch iterationRP's own bug - the
+        // pack declares `shared vec2 prefixSumCache[32]` for a 512-invocation exposure
+        // reduction and indexes it by gl_SubgroupID, so any device with sub-16-lane
+        // subgroups (8-lane lavapipe -> 64 subgroups) writes shared memory out of
+        // bounds. The pass grows that one array to what the device's topology needs and
+        // touches nothing else; it only rewrites modules positively matching the pack's
+        // reduction fingerprint (ShaderTranspiler::FixIterationRPSubgroupScratchPass),
+        // so every other shader passes through byte-identical - as does iterationRP
+        // itself on >= 16-lane devices. Auto is ON; ForceOff replays the pack's bug
+        // verbatim.
+        QuirkOverride FixIterationRPSubgroupScratch = QuirkOverride::Auto;
+        // MOBILEGL_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
+        // ceil(workgroup invocations / gl_SubgroupSize) on the NATIVE subgroup path
+        // (ShaderTranspiler::DeriveNumSubgroupsPass). Auto is ON: GL requires
+        // gl_SubgroupID < gl_NumSubgroups, Adreno's builtin reports 1 while the same
+        // dispatch emits IDs 0..7, and the derived value is the one Vulkan guarantees
+        // whenever the pipeline can request REQUIRE_FULL_SUBGROUPS (which the renderer
+        // does whenever local_size_x is a multiple of the native width). ForceOff returns
+        // to the raw driver builtin.
+        QuirkOverride DeriveNumSubgroups = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension

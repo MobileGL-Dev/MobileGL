@@ -19,12 +19,14 @@ namespace MobileGL {
             // Replaces compute-stage NumSubgroups builtin loads with
             // ceil(WorkgroupSize.x * WorkgroupSize.y * WorkgroupSize.z / SubgroupSize).
             //
-            // That is the value Vulkan defines for NumSubgroups when the pipeline does not
-            // enable varying subgroup sizes, which MobileGL never does. Deriving it avoids
-            // drivers that expose the real SubgroupId topology but return an inconsistent
-            // NumSubgroups value. This is a DirectVulkan semantic repair, not a source-shader
-            // rewrite; the application's subgroup arithmetic and shared-memory logic remain
-            // unchanged.
+            // That is the subgroup count of a full-subgroup launch - guaranteed by Vulkan
+            // under REQUIRE_FULL_SUBGROUPS (which ProgramFactory requests whenever the
+            // workgroup shape makes it legal), spec-"encouraged" and witness-verified
+            // (DriverPost) elsewhere. Deriving it repairs drivers that expose the real
+            // SubgroupId topology but return an inconsistent NumSubgroups value, breaking
+            // GL's gl_SubgroupID < gl_NumSubgroups contract. This is a DirectVulkan
+            // semantic repair, not a source-shader rewrite; the application's subgroup
+            // arithmetic and shared-memory logic remain unchanged.
             class DeriveNumSubgroupsPass : public spvtools::opt::Pass {
             public:
                 const char* name() const override { return "derive-num-subgroups"; }
