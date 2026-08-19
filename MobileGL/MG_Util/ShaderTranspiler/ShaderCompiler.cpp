@@ -25,6 +25,7 @@
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
+#include "SpirvPasses/DeriveNumSubgroupsPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
@@ -881,6 +882,17 @@ namespace MobileGL {
                 optimizer.RegisterPass(ZeroBaseVertexPass::CreateZeroBaseVertexPass());
 
                 return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeriveNumSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary,
+                                                             const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(DeriveNumSubgroupsPass::CreateDeriveNumSubgroupsPass());
+
+                return RunOptimizerChecked("DeriveNumSubgroupsForVulkan", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,

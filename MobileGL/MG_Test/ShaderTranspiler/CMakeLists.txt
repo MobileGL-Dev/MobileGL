@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.14)
 add_executable(
         SpirvPassTest
         SpirvPassTest.cpp
+        DeriveNumSubgroupsTest.cpp
         DemoteFloat64Test.cpp
         FlattenXfbInterfaceBlocksTest.cpp
 )

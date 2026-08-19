@@ -8,6 +8,7 @@
 
 #include "ProgramFactory.h"
 
+#include "Config.h"
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
@@ -3160,6 +3161,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Vector<Uint> fragCoordSpirv;
                 if (TransformSpirvForFragCoordYFlip(moduleSpirvs[i], fragCoordSpirv, m_defaultFramebufferHeight)) {
                     moduleSpirvs[i] = Move(fragCoordSpirv);
+                }
+            }
+
+            // NumSubgroups is defined by the local workgroup dimensions and SubgroupSize. Derive
+            // it in SPIR-V instead of trusting a driver builtin that can disagree with the
+            // SubgroupId topology produced by the same compute dispatch (Adreno reports 1 while
+            // emitting IDs 0..7 for a 512-invocation, 64-wide workgroup).
+            if (MG_Config::Features.NumSubgroupsQuirk && shaders[i] &&
+                shaders[i]->GetShaderStage() == ShaderStage::Compute) {
+                Vector<Uint> derivedNumSubgroupsSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::DeriveNumSubgroupsForVulkan(
+                        moduleSpirvs[i], derivedNumSubgroupsSpirv, enableSpirvValidation)) {
+                    moduleSpirvs[i] = std::move(derivedNumSubgroupsSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to derive gl_NumSubgroups for program %u; "
+                            "compute shaders may observe a driver-inconsistent subgroup count",
+                            program.GetExternalIndex());
                 }
             }
 

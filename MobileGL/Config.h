@@ -80,6 +80,11 @@ namespace MobileGL::MG_Config {
 #endif
         // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support.
         Bool DisableSubgroup = false;
+        // MOBILEGL_NUM_SUBGROUPS_QUIRK: derive compute gl_NumSubgroups from the local
+        // workgroup dimensions and gl_SubgroupSize instead of reading Vulkan's
+        // NumSubgroups builtin. Off by default; enable only for drivers whose builtin
+        // disagrees with the SubgroupId topology emitted by the same dispatch.
+        Bool NumSubgroupsQuirk = false;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension

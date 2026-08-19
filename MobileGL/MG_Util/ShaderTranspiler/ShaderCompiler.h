@@ -145,6 +145,13 @@ namespace MobileGL {
                 static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
                                                     Vector<uint32_t>& outputBinary,
                                                     bool enableSpirvValidation = false);
+                // Replaces compute gl_NumSubgroups loads with the value derived from the local
+                // workgroup dimensions and gl_SubgroupSize. DirectVulkan only; this avoids a
+                // driver builtin that can disagree with the subgroup IDs the same dispatch emits.
+                // See DeriveNumSubgroupsPass.
+                static bool DeriveNumSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary,
+                                                        bool enableSpirvValidation = false);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
                 // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex
