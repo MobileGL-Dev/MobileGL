@@ -69,6 +69,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // slot's ownership unambiguous.
             Uint64 programLifetimeId = 0;
             Uint32 backendStateVersion = 0;
+            // glShaderStorageBlockBinding deliberately does NOT bump the backend state
+            // version, and the pipeline composite is unnamed so the in-place patch in
+            // DirectVulkan::ShaderStorageBlockBinding can never reach its slot - the
+            // mirror replay bumps only the program's block-binding version. Without this
+            // key the composite's slot kept serving the pre-rebind block.binding.
+            Uint32 blockBindingVersion = 0;
             Vector<StorageBlockResource> storageBlocks;
             Vector<BufferVariableResource> bufferVariables;
             GLint computeWorkGroupSize[3] = {1, 1, 1};
@@ -156,18 +162,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto& cache = g_programResourceCaches[program.GetExternalIndex()];
             const Uint64 programLifetimeId = program.GetLifetimeId();
             const Uint32 backendStateVersion = program.GetBackendStateVersion();
+            const Uint32 blockBindingVersion = program.GetBlockBindingVersion();
             // The lifetime id must match too: a new program that reuses a deleted
             // program's name and happens to land on the same backendStateVersion (both
             // count from zero) would otherwise be served the dead program's reflection.
             if (cache.programLifetimeId == programLifetimeId &&
                 cache.backendStateVersion == backendStateVersion &&
                 (!cache.storageBlocks.empty() || !cache.bufferVariables.empty())) {
+                if (cache.blockBindingVersion != blockBindingVersion) {
+                    // Only the block bindings moved (glShaderStorageBlockBinding, or the
+                    // pipeline composite's mirror replay - neither touches the backend
+                    // state version): the reflection itself is unchanged, so re-apply the
+                    // overrides by name instead of re-running spirv-reflect. Overrides
+                    // only ever accumulate, so a block without one still holds its
+                    // declared binding.
+                    for (auto& block : cache.storageBlocks) {
+                        const Int rebound = program.GetShaderStorageBlockBindingOverride(block.name);
+                        if (rebound >= 0) block.binding = static_cast<Uint32>(rebound);
+                    }
+                    cache.blockBindingVersion = blockBindingVersion;
+                }
                 return cache;
             }
 
             cache = {};
             cache.programLifetimeId = programLifetimeId;
             cache.backendStateVersion = backendStateVersion;
+            cache.blockBindingVersion = blockBindingVersion;
 
             Vector<SpvReflectShaderModule> modules;
             Vector<Bool> validModules;

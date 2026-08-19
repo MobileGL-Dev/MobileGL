@@ -3323,6 +3323,11 @@ void main() {
                 indexView.indexByteSize > bufferSize - indexView.indexByteOffset) {
                 return false;
             }
+            // Recorded-but-unexecuted GPU writes (XFB capture, SSBO, storage texel
+            // buffer) land in the coherent mapping this scan is about to read;
+            // submit-and-wait first, exactly like the restart-index rewrite does.
+            // A no-op unless the gpu-write flag is set.
+            indexBufferShared->SyncGpuWrites();
             indexBufferShared->SyncPersistentMappedRange();
             indexBytes = indexBufferShared->MappedData() + indexView.indexByteOffset;
         } else {
@@ -3560,6 +3565,16 @@ void main() {
                                          const Uint8* sourceData, SizeT sourceStride,
                                          SizeT elementSize, SizeT elementCount,
                                          BufferSlice& outSlice) -> Bool {
+            // A resolved stride of 0 is the binding model's "never advance" (see the
+            // factory's layout notes): exactly one element is converted and every vertex
+            // reads it. That single element is read at offset 0, so the stride is never
+            // actually used - but both converters reject 0 as a degenerate input, which
+            // made the documented single-element conversion unreachable and silently
+            // dropped every draw using such a binding. Substitute the element's own
+            // size; the caller's cache key still carries the distinct stride 0.
+            if (sourceStride == 0 && elementCount == 1) {
+                sourceStride = elementSize;
+            }
             const void* uploadData = nullptr;
             VkDeviceSize uploadSize = 0;
             switch (conversion) {
@@ -3693,6 +3708,12 @@ void main() {
                     return false;
                 }
 
+                // A GPU-written source (XFB capture, SSBO, storage texel buffer) has its
+                // bytes produced by commands that are merely RECORDED at this point, and
+                // MappedData() aliases the coherent GPU memory they will write into -
+                // converting now would read pre-write garbage. Submit-and-wait first,
+                // mirroring the restart-index rewrite; a flag-test no-op otherwise.
+                sourceBufferShared->SyncGpuWrites();
                 sourceBufferShared->SyncPersistentMappedRange();
                 const SizeT availableElementCount =
                     sourceStride == 0 ? 1 : 1 + (sourceSize - baseOffset - elementSize) / sourceStride;

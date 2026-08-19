@@ -91,9 +91,15 @@ namespace MobileGL {
                     BlockRelayout(IRContext* irContext, Bool std140)
                         : m_irContext(irContext), m_std140(std140) {}
 
-                    // Size and alignment of `typeId`, applying every stride decoration it implies
-                    // on the way down. Zero size means "not a type this layout knows how to
-                    // describe"; the caller then leaves the block alone rather than guessing.
+                    // Size and alignment of `typeId`, QUEUING every offset/stride decoration it
+                    // implies on the way down. Zero size means "not a type this layout knows how
+                    // to describe"; the caller then leaves the block alone rather than guessing.
+                    // The queue is what makes that fallback honest: measurement must be
+                    // side-effect-free until it is known to succeed, or a mid-struct failure
+                    // would leave the block half-relaid-out - members before the failing one at
+                    // compacted 32-bit offsets, members after it at the original 64-bit ones, a
+                    // layout matching neither convention. Commit() flushes the queue and is
+                    // called only on a successful Measure of the whole block.
                     struct Extent {
                         Uint32 size = 0;
                         Uint32 alignment = 0;
@@ -108,7 +114,29 @@ namespace MobileGL {
                         return extent;
                     }
 
+                    // Flushes the decoration writes a successful Measure queued. Call exactly
+                    // once, only when Measure returned a non-zero size; a failed measurement's
+                    // queue dies with this per-block instance, leaving the module untouched.
+                    void Commit() {
+                        for (const PendingDecoration& pending : m_pendingWrites) {
+                            if (pending.member) {
+                                ApplyMemberDecoration(pending.targetId, pending.memberIndex, pending.decoration,
+                                                      pending.value);
+                            } else {
+                                ApplyTypeDecoration(pending.targetId, pending.decoration, pending.value);
+                            }
+                        }
+                        m_pendingWrites.clear();
+                    }
+
                 private:
+                    struct PendingDecoration {
+                        Bool member = false;
+                        Uint32 targetId = 0;
+                        Uint32 memberIndex = 0;
+                        spv::Decoration decoration = spv::Decoration::Offset;
+                        Uint32 value = 0;
+                    };
                     Extent MeasureUncached(Uint32 typeId) {
                         const Instruction* type = m_irContext->get_def_use_mgr()->GetDef(typeId);
                         if (type == nullptr) return {};
@@ -204,7 +232,17 @@ namespace MobileGL {
                         return length->GetSingleWordInOperand(0);
                     }
 
+                    // Queue-only during measurement; the module is mutated in Commit().
                     void SetTypeDecoration(Uint32 targetId, spv::Decoration decoration, Uint32 value) {
+                        m_pendingWrites.push_back({false, targetId, 0, decoration, value});
+                    }
+
+                    void SetMemberDecoration(Uint32 structId, Uint32 member, spv::Decoration decoration,
+                                             Uint32 value) {
+                        m_pendingWrites.push_back({true, structId, member, decoration, value});
+                    }
+
+                    void ApplyTypeDecoration(Uint32 targetId, spv::Decoration decoration, Uint32 value) {
                         for (Instruction& annotation : m_irContext->annotations()) {
                             if (annotation.opcode() != spv::Op::OpDecorate) continue;
                             if (annotation.GetSingleWordInOperand(0) != targetId) continue;
@@ -216,8 +254,8 @@ namespace MobileGL {
                         }
                     }
 
-                    void SetMemberDecoration(Uint32 structId, Uint32 member, spv::Decoration decoration,
-                                             Uint32 value) {
+                    void ApplyMemberDecoration(Uint32 structId, Uint32 member, spv::Decoration decoration,
+                                               Uint32 value) {
                         for (Instruction& annotation : m_irContext->annotations()) {
                             if (annotation.opcode() != spv::Op::OpMemberDecorate) continue;
                             if (annotation.GetSingleWordInOperand(0) != structId) continue;
@@ -233,6 +271,7 @@ namespace MobileGL {
                     IRContext* m_irContext = nullptr;
                     Bool m_std140 = true;
                     std::unordered_map<Uint32, Extent> m_extents;
+                    std::vector<PendingDecoration> m_pendingWrites;
                 };
             } // namespace
 
@@ -529,9 +568,12 @@ namespace MobileGL {
                         // A member shape the layout rules here do not describe. Leaving the block
                         // at its 64-bit offsets keeps the module valid for Vulkan; SPIRV-Cross will
                         // decline it for ESSL, which is the same outcome as before the demotion.
+                        // Nothing was written: Measure only queues, and the queue dies here.
                         MGLOG_D("DemoteFloat64Pass: block %%%u contains a member this pass cannot lay "
                                 "out; its 64-bit offsets are left in place",
                                 blockType->result_id());
+                    } else {
+                        relayout.Commit();
                     }
                 }
 

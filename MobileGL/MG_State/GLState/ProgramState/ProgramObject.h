@@ -806,6 +806,13 @@ namespace MobileGL::MG_State::GLState {
         // order - and the name is the only coordinate all three agree on. Absent from the map
         // means "never rebound", and the shader's declared binding still stands.
         void SetShaderStorageBlockBinding(const String& blockName, Uint binding) {
+            // Equality bail-out like SetUniformBlockBinding's: the pipeline composite
+            // mirror replays every override each draw, and without this every replay
+            // would churn m_blockBindingVersion and rebuild whatever keys on it.
+            const auto it = Artifacts().shaderStorageBlockBinding.find(blockName);
+            if (it != Artifacts().shaderStorageBlockBinding.end() && it->second == static_cast<Int>(binding)) {
+                return;
+            }
             Artifacts().shaderStorageBlockBinding[blockName] = static_cast<Int>(binding);
             // Deliberately NOT m_backendStateVersion: Espryt's entry point never forces a
             // program build off this, and bumping that version would start doing so. The
