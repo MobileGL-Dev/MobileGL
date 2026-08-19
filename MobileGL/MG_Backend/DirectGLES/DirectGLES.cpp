@@ -3966,8 +3966,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool resolved = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
         if (resolved) {
             DrainBlitErrors();
+            // A blit is scissored like a draw (the replicate path's guard documents the
+            // same rule): the application's box would clip this resolve into the
+            // scratch, and the second blit would then copy never-written scratch texels
+            // into the destination - silently, since scissor clipping raises no GL
+            // error. Disable for the staging blit only; the caller-visible blit below
+            // keeps the blit's native scissor semantics. Tracked via the render-state
+            // shadow, exactly like ScopedScissorDisable.
+            const Bool scissorWasEnabled =
+                (RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+            if (scissorWasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
             g_GLESFuncs.glBlitFramebuffer(left, bottom, right, top, 0, 0, width, height, GL_COLOR_BUFFER_BIT,
                                           GL_NEAREST);
+            if (scissorWasEnabled) g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
             resolved = g_GLESFuncs.glGetError() == GL_NO_ERROR;
         }
         if (resolved) {
@@ -4113,13 +4124,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
             // The per-draw-buffer colour masks are not covered by the non-indexed
-            // glColorMask above.
-            for (Uint index = 0; index < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++index) {
-                const BoolVec4& colorMask = RenderStateImpl::g_syncedRenderStateParameters.ColorMasks[index];
-                if (g_GLESFuncs.glColorMaski) {
-                    g_GLESFuncs.glColorMaski(index, colorMask.x() ? GL_TRUE : GL_FALSE,
-                                             colorMask.y() ? GL_TRUE : GL_FALSE, colorMask.z() ? GL_TRUE : GL_FALSE,
-                                             colorMask.w() ? GL_TRUE : GL_FALSE);
+            // glColorMask above. Restore what the SYNC actually pushed, not the raw
+            // application masks: a widened attachment's alpha write is forced off by
+            // SyncRenderState and memoized in g_syncedColorMaskAlphaWidenMask, and the
+            // next sync early-outs on an unchanged version - restoring the undoctored
+            // mask here would leave alpha writes enabled on the widened buffer with
+            // nothing left to repair it. Same three-way pointer fallback as
+            // SyncRenderState's push: gating on the core name alone left EXT/OES-only
+            // devices holding buffer 0's mask broadcast across every buffer.
+            const auto colorMaskiFn = g_GLESFuncs.glColorMaski      ? g_GLESFuncs.glColorMaski
+                                      : g_GLESFuncs.glColorMaskiEXT ? g_GLESFuncs.glColorMaskiEXT
+                                                                    : g_GLESFuncs.glColorMaskiOES;
+            if (colorMaskiFn) {
+                for (Uint index = 0; index < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++index) {
+                    BoolVec4 colorMask = RenderStateImpl::g_syncedRenderStateParameters.ColorMasks[index];
+                    if (index < 32 && (RenderStateImpl::g_syncedColorMaskAlphaWidenMask & (1u << index)) != 0) {
+                        colorMask.w() = false;
+                    }
+                    colorMaskiFn(index, colorMask.x() ? GL_TRUE : GL_FALSE, colorMask.y() ? GL_TRUE : GL_FALSE,
+                                 colorMask.z() ? GL_TRUE : GL_FALSE, colorMask.w() ? GL_TRUE : GL_FALSE);
                 }
             }
             if (m_pausedTransformFeedback && g_GLESFuncs.glResumeTransformFeedback) {
