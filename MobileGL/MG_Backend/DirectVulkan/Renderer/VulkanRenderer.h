@@ -807,6 +807,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_lastLodProgramVersion = 0;
         Uint64 m_lastLodBindGeneration = 0;
         Uint64 m_lastLodParamsSum = 0;
+        // Sampling-resolution generation at probe time. The probe reads the effective
+        // sampler's filters/aniso/LOD range, whose setters bump only this counter -
+        // the params-version sum above never moves for them.
+        Uint64 m_lastLodSamplingGeneration = 0;
         ProgramFactory::CompileOptionFlags m_lastLodBaseFlags = {};
         ProgramFactory::CompileOptionFlags m_lastLodResultFlags = {};
 
@@ -844,6 +848,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 vaoLifetimeId = 0;
             Uint32 vaoConfigVersion = 0;
             const void* drawFbo = nullptr;
+            // Never-reused lifetime id beside the raw pointer + Uint16 version: a
+            // deleted FBO recycled at the same address with the same fresh version
+            // count would otherwise compare equal (same ABA as the render-pass
+            // manager's fast-path memo).
+            Uint64 drawFboLifetimeId = 0;
             Uint16 fboVersion = 0;
             Bool drawFboIsDefault = false;
             Uint renderStateVersion = 0;
@@ -1067,6 +1076,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkBuffer indexVkBuffer = VK_NULL_HANDLE;
             VkDeviceSize indexSliceOffset = 0;
             Uint64 indexFrameSerial = 0;
+            // The EBO carried a host map when the slice was recorded - the mirror of
+            // anyBufferMapped on the vertex half. A shadow-backed (non-adopted)
+            // persistent map mutates its shadow with no API call and no epoch bump, so
+            // the one-compare rescue must decline and re-run the acquire, whose
+            // SyncPersistentMappedRange is the push-down. A map taken AFTER the record
+            // is already covered: AcquirePersistentMap bumps the slice epoch for the
+            // request itself, adopted or declined.
+            Bool indexBufferMapped = false;
 
             // Bound per draw (first bindingCount elements).
             VkBuffer vkBuffers[kMaxBindings] = {};

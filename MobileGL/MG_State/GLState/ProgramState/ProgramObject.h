@@ -60,6 +60,26 @@ namespace MobileGL::MG_State::GLState {
 
         Vector<SharedPtr<ShaderObject>>& GetAttachedShaders();
         const Vector<SharedPtr<ShaderObject>>& GetAttachedShaders() const;
+
+        // One shader exactly as this program's last Link() consumed it: the object, the
+        // source snapshot, and the compile node taken at that link's enqueue. GL 4.6 7.3/7.4
+        // makes this triple - not the live attach list, not the shader's current compile -
+        // what a program pipeline stage executes ("as last linked"): glAttachShader and
+        // glCompileShader take effect only at the program's next link, yet neither moves
+        // m_linkVersion, so anything keyed on the link generation must consume this
+        // snapshot rather than re-read the live state.
+        struct LinkedShaderRef {
+            SharedPtr<ShaderObject> shader;
+            SharedPtr<const String> source;
+            SharedPtr<ShaderCompileTask> node;
+        };
+        // The last link's full input set; empty when this program has never linked (or its
+        // last link had no shaders attached). GL-thread-owned, rebuilt in Link()'s prologue.
+        const Vector<LinkedShaderRef>& GetLinkedShaderSnapshot() const { return m_linkedShaderSnapshot; }
+        // Pipeline-composite attach: AttachShader plus a pin that makes THIS program's
+        // Link() consume ref's (source, node) instead of the shader's current ones, so a
+        // post-link recompile of the stage program's shader cannot leak into the composite.
+        bool AttachShaderWithPinnedLinkInput(const LinkedShaderRef& ref);
         const String& GetInfoLog() const { return Artifacts().infoLog; }
         // glCreateShaderProgramv folds the shader's compile log into the program's log, which
         // is the only place a caller can read it from once the shader name is gone.
@@ -1223,6 +1243,13 @@ namespace MobileGL::MG_State::GLState {
         // glGetAttachedShaders / GL_ATTACHED_SHADERS / the orphan-shader sweep need no join.
         Vector<SharedPtr<ShaderObject>> m_shaders;
         Vector<SharedPtr<ShaderObject>> m_detachedShaders; // Store detached shaders and remove on next link
+        // See GetLinkedShaderSnapshot. Holding the SharedPtrs here is deliberate: the
+        // "as last linked" set must survive detach-and-delete of its shaders (the
+        // glCreateShaderProgramv shape) until the next link replaces it.
+        Vector<LinkedShaderRef> m_linkedShaderSnapshot;
+        // See AttachShaderWithPinnedLinkInput. Populated only on pipeline composites,
+        // which never detach, so entries need no removal path. GL-thread-owned.
+        UnorderedMap<const ShaderObject*, LinkedShaderRef> m_pinnedLinkInputs;
 
         // Link INPUTS (all "take effect at the next link" per GL): glBindAttribLocation,
         // glBindFragDataLocation(Indexed), glTransformFeedbackVaryings, and the draw-buffer

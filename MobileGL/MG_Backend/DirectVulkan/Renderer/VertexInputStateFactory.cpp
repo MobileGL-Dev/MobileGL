@@ -287,8 +287,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (m_frameBoundaryCounter - it->second->lastUsedFrameBoundary > kRetireAgeBoundaries) {
                 it = m_cache.erase(it);
                 // Invalidate every VAO's state-pointer memo: the erased node's
-                // address may be reused by a future insert.
-                ++m_evictionEpoch;
+                // address may be reused by a future insert. Advance through the
+                // process-wide source so the value stays unique across factory
+                // instances (see the member comment).
+                m_evictionEpoch = ++s_evictionEpochSource;
             } else {
                 ++it;
             }

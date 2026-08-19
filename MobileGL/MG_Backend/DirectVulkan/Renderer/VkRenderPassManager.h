@@ -289,6 +289,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // or a pending clear. Portable to Vulkan 1.1 (no dynamic_rendering / imageless FB needed).
         Bool m_rpFastValid = false;
         const MG_State::GLState::FramebufferObject* m_rpFastFbo = nullptr;
+        // The FBO's never-reused lifetime id joins the raw pointer + Uint16 version:
+        // a deleted FBO reallocated at the same address whose fresh setup performed
+        // the same number of version bumps would otherwise compare equal (both count
+        // from 0), serving the dead framebuffer's pass to the new object.
+        Uint64 m_rpFastFboLifetimeId = 0;
         Uint16 m_rpFastFboVersion = 0;
         Uint32 m_rpFastSwapchainIndex = 0;
         Uint64 m_rpFastTexEpoch = 0;

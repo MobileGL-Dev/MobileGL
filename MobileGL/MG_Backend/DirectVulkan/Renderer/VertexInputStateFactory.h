@@ -125,7 +125,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // construction); a memo is honored only while its recorded epoch
         // matches, so an evicted entry can never be dereferenced through a
         // stale memo.
-        Uint64 m_evictionEpoch = 1;
+        //
+        // Drawn from a process-wide source, never a per-instance counter: the VAO
+        // memos outlive this factory (they live on pGLContext's VAOs, the renderer
+        // is destroyed and recreated on EGL surface release/re-create), so a fresh
+        // factory restarting at a dead factory's epoch value would honor its
+        // dangling entry pointers. The constructor takes a value strictly greater
+        // than anything a predecessor ever stamped, so a dead factory's memo can
+        // never compare equal here - the same never-reused idiom as the lifetime ids.
+        // Single-threaded like the rest of the factory (renderer-thread only).
+        static inline Uint64 s_evictionEpochSource = 0;
+        Uint64 m_evictionEpoch = ++s_evictionEpochSource;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

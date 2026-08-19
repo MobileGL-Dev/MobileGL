@@ -9,7 +9,18 @@
 #include "FramebufferObject.h"
 #include "MG_Util/Types.h"
 
+#include <atomic>
+
 namespace MobileGL::MG_State::GLState {
+    // Starts at 1 so a zero-initialized memo slot can never carry a live object's id.
+    // Atomic for the same reason as the VAO counter: it costs nothing, and a duplicate
+    // id would resurrect exactly the ABA this id exists to kill.
+    static std::atomic<Uint64> s_nextFramebufferLifetimeId{1};
+
+    Uint64 FramebufferObject::AllocateLifetimeId() {
+        return s_nextFramebufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
+    }
+
     // FramebufferAttachmentObject
     FramebufferAttachmentObject::FramebufferAttachmentObject(
         const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level,

@@ -393,6 +393,14 @@ namespace MobileGL::MG_State::GLState {
         return true;
     }
 
+    bool ProgramObject::AttachShaderWithPinnedLinkInput(const LinkedShaderRef& ref) {
+        if (!AttachShader(ref.shader)) {
+            return false;
+        }
+        m_pinnedLinkInputs[ref.shader.get()] = ref;
+        return true;
+    }
+
     SizeT ProgramObject::DetachShader(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("DetachShader called for shader %p from ProgramObject %u", shader.get(), m_externalIndex);
         if (!ShaderIsAttached(shader)) {
@@ -475,6 +483,8 @@ namespace MobileGL::MG_State::GLState {
             AddDefaultFragmentShaderIfMissing();
         }
         if (m_shaders.empty()) {
+            // This IS the last link now, and it consumed nothing.
+            m_linkedShaderSnapshot.clear();
             m_artifacts.infoLog = "No shader objects are attached to program.";
             MGLOG_E("ProgramObject %u: Link failed - no shader objects attached.", m_externalIndex);
             return;
@@ -505,8 +515,19 @@ namespace MobileGL::MG_State::GLState {
         Vector<SharedPtr<ShaderCompileTask>> deps;
         deps.reserve(m_shaders.size());
         task->in.shaders.reserve(m_shaders.size());
+        m_linkedShaderSnapshot.clear();
+        m_linkedShaderSnapshot.reserve(m_shaders.size());
         for (const auto& shader : m_shaders) {
-            const SharedPtr<ShaderCompileTask>& node = shader->CompiledNodeForLink();
+            // A pipeline composite pins the (source, node) each stage program's LAST link
+            // consumed (AttachShaderWithPinnedLinkInput); an ordinary program takes the
+            // shader's current ones. Without the pin a post-link recompile would leak a
+            // shader the stage program never linked into the composite.
+            SharedPtr<const String> sourcePtr = shader->GetShaderSourcePtr();
+            SharedPtr<ShaderCompileTask> node = shader->CompiledNodeForLink();
+            if (const auto pinned = m_pinnedLinkInputs.find(shader.get()); pinned != m_pinnedLinkInputs.end()) {
+                sourcePtr = pinned->second.source;
+                node = pinned->second.node;
+            }
             if (node) {
                 // This link is now an observer of that node's result, and the ShaderObject is
                 // no longer the only route to it: without the marker, the ordinary
@@ -515,7 +536,10 @@ namespace MobileGL::MG_State::GLState {
                 node->MarkLinkReferenced();
                 if (!node->IsTerminal()) deps.push_back(node);
             }
-            task->in.shaders.push_back({shader->GetShaderStage(), shader->GetShaderSourcePtr(), node});
+            task->in.shaders.push_back({shader->GetShaderStage(), sourcePtr, node});
+            // What "as last linked" will mean for this program from now on - the pipeline
+            // composite cache rebuilds from exactly this set (GetProgramForDraw).
+            m_linkedShaderSnapshot.push_back({shader, sourcePtr, node});
         }
 
         // Phase B of the same link: SPIR-V generation, spirv-opt and the global-UBO routing
