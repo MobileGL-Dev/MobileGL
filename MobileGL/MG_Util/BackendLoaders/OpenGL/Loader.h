@@ -1182,6 +1182,21 @@ namespace MobileGL {
             // compile and the per-distance enables have nowhere to go - clipping silently never
             // happens, which is exactly what KHR-GLxx.clip_distance.functional catches.
             Bool SupportsClipDistance = false;
+            // GL_OES_viewport_array is present: the driver knows gl_ViewportIndex in ESSL - and
+            // only then. ESSL has no core spelling for it at ANY version, while SPIRV-Cross prints
+            // the identifier bare and requests nothing for it (contrast gl_Layer, which it backs
+            // with GL_NV_viewport_array2 on ES), so the `#extension GL_OES_viewport_array :
+            // require` line has to be inserted into the emitted source - see
+            // RequestViewportArrayExtension. Without the extension the stage does not compile at
+            // all and the whole program becomes unusable, which on DirectGLES means every draw
+            // using it silently renders nothing; LowerViewportIndexPass is the fallback that
+            // demotes the builtin so the program still links and degrades to viewport 0.
+            //
+            // Extension string only, deliberately: DirectGLES does not call any of the indexed
+            // OES entry points yet, so there is no pointer to require. When that forwarding lands
+            // this must gain the pointer check as well - the rule everywhere else in this struct,
+            // because eglGetProcAddress can hand back a stub that silently drops every call.
+            Bool SupportsViewportArray = false;
             // GL_RENDERER contains "ANGLE".
             Bool IsAngleRenderer = false;
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".

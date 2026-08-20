@@ -932,6 +932,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_clip_cull_distance") == 0) {
                     caps.SupportsClipDistance = true;
                 }
+                if (std::strcmp(extension, "GL_OES_viewport_array") == 0) {
+                    caps.SupportsViewportArray = true;
+                }
             }
         }
         // The pointer check on top of the extension check makes each flag sufficient on its own
@@ -989,6 +992,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    base instance (EXT_base_instance; emulated by attribute offsets when absent): %s",
                 caps.SupportsBaseInstance ? "yes" : "no");
         MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");
+        MGLOG_I("    viewport array (OES_viewport_array; gl_ViewportIndex collapses to viewport 0 when absent): %s",
+                caps.SupportsViewportArray ? "yes" : "no");
 
         // LOAD-BEARING STRING, not just a banner. android-plugin/trace-replay-ci.sh's
         // is_angle_surface_lost() greps mobilegl.log for exactly "OpenGL ES capabilities:" to
