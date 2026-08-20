@@ -4200,8 +4200,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        // For a cube map this is exactly cube completeness: IsComplete() wants all six faces.
-        if (!textureObject->IsComplete()) {
+        // GL 4.6 core 8.11.4 names cube completeness as the only completeness a readback requires,
+        // and for a cube map that is exactly what IsComplete() answers (all six faces defined at
+        // every level). It must not speak for any other target: on a mip chain it also rejects
+        // "level N defined, the levels below it not", which is a perfectly readable texture at
+        // level N - and the shape glClearTexImage's conformance cases build, since they define
+        // only the level they clear. The requested level's own existence is checked below.
+        if ((target == TextureTarget::TextureCubeMap || target == TextureTarget::TextureCubeMapArray) &&
+            !textureObject->IsComplete()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture is incomplete"));
@@ -4260,32 +4266,47 @@ namespace MobileGL::MG_Impl::GLImpl {
             const auto* textureMipmapObject =
                 static_cast<const MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
             const auto& uploadTargets = textureObject->GetUploadTargets();
-            if (!uploadTargets.empty() && static_cast<Uint>(level) < textureMipmapObject->GetMipmapLevelCount()) {
-                // Tightly packed, and summed over every face because a cube map query returns all
-                // six. Pack pixel-store state only ever grows this, so a request rejected here
-                // could not have fit under any packing.
-                const auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTargets[0], level);
-                const SizeT required = MG_Util::CalculateInputTextureImageSize(textureInputFormat,
-                                                                               texturePixelDataType, texelSize) *
-                                       uploadTargets.size();
+            // The half of the completeness gate above that GL does keep: the REQUESTED level has
+            // to hold an image. A name that was never given one carries no levels at all (which is
+            // also what an Unknown internal format answers), and a chain grown to reach level N
+            // leaves every level below it at {0, 0, 0}.
+            if (uploadTargets.empty() || static_cast<Uint>(level) >= textureMipmapObject->GetMipmapLevelCount()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture level has no image to read back."));
+                return false;
+            }
+            const auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTargets[0], level);
+            if (texelSize.x() <= 0 || texelSize.y() <= 0 || texelSize.z() <= 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture level has no image to read back."));
+                return false;
+            }
 
-                if (bufSize >= 0 && static_cast<SizeT>(bufSize) < required) {
+            // Tightly packed, and summed over every face because a cube map query returns all
+            // six. Pack pixel-store state only ever grows this, so a request rejected here
+            // could not have fit under any packing.
+            const SizeT required = MG_Util::CalculateInputTextureImageSize(textureInputFormat,
+                                                                           texturePixelDataType, texelSize) *
+                                   uploadTargets.size();
+
+            if (bufSize >= 0 && static_cast<SizeT>(bufSize) < required) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Destination buffer is too small."));
+                return false;
+            }
+
+            if (pixelPackBufferObject) {
+                const SizeT bufferSize = pixelPackBufferObject->GetSize();
+                const SizeT offset = reinterpret_cast<SizeT>(pixels);
+                if (offset > bufferSize || required > bufferSize - offset) {
                     MG_State::pGLContext->RecordError(
                         ErrorCode::InvalidOperation,
-                        MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Destination buffer is too small."));
+                        MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                     "Packing would write past the end of the pixel pack buffer."));
                     return false;
-                }
-
-                if (pixelPackBufferObject) {
-                    const SizeT bufferSize = pixelPackBufferObject->GetSize();
-                    const SizeT offset = reinterpret_cast<SizeT>(pixels);
-                    if (offset > bufferSize || required > bufferSize - offset) {
-                        MG_State::pGLContext->RecordError(
-                            ErrorCode::InvalidOperation,
-                            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                         "Packing would write past the end of the pixel pack buffer."));
-                        return false;
-                    }
                 }
             }
         }

@@ -1317,6 +1317,56 @@ TEST_F(TextureTest, GetTextureImageReadsNamedObjectWithoutBinding) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core 8.11.4 asks a readback for cube completeness and nothing else, so a mip chain whose
+// levels BELOW the requested one were never defined is still readable at that level - which is
+// exactly the shape ARB_clear_texture's conformance cases build (they define only the level they
+// clear). The whole-chain completeness gate used to answer INVALID_OPERATION here.
+TEST_F(TextureTest, GetTexImageReadsALevelWhoseLowerLevelsWereNeverDefined) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    const Uint8 pixels[] = {
+        61, 62, 63, 64,
+        71, 72, 73, 74,
+    };
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 2, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 output[sizeof(pixels)] = {};
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 2, GL_RGBA, GL_UNSIGNED_BYTE, output);
+
+    EXPECT_EQ(std::memcmp(output, pixels, sizeof(pixels)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The other half of the same rule: loosening the chain-wide check must not let a level that holds
+// no image at all through. Level 0 exists as a chain slot once level 2 is defined, but nothing ever
+// gave it an image, so it stays INVALID_OPERATION - as does a level past the end of the chain and a
+// texture that was never given any image whatsoever.
+TEST_F(TextureTest, GetTexImageStillRejectsALevelThatHoldsNoImage) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+
+    Uint8 output[4] = {};
+
+    // No image at all yet: the chain carries no levels.
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, output);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Inside the chain, but never defined.
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, output);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // Past the end of the chain.
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 3, GL_RGBA, GL_UNSIGNED_BYTE, output);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
 TEST_F(TextureTest, GetTextureSubImageReadsFullNamedLevelWithoutBinding) {
     GLuint texture = 0;
     GLuint boundTexture = 0;
