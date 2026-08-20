@@ -1718,14 +1718,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
-                // Defence in depth. The frontend already declines glVertexAttribLFormat on this
-                // backend (SupportsFloat64VertexAttributes is false - ES has no GL_DOUBLE vertex
-                // format and ESSL has no fp64 type), so IsLong should never arrive here; if it ever
-                // did, passing GL_DOUBLE to glVertexAttribPointer would only raise GL_INVALID_ENUM on
-                // the real driver. Disabling rather than merely skipping matters: becoming long bumps
-                // FormatVersion, not SwitchVersion, so the enable/disable block above will not run
-                // again and an already-enabled array would stay enabled with no pointer and no
-                // ARRAY_BUFFER binding - which ES 3.1+ makes an INVALID_OPERATION at draw.
+                // This is where a 64-bit array actually stops. glVertexAttribLFormat is a legal call
+                // in a GL 4.3 context and the frontend RECORDS its format (the state queries have to
+                // answer), so IsLong does arrive here - what this backend cannot do is FEED it:
+                // SupportsFloat64VertexAttributes is false because ES has no GL_DOUBLE vertex format
+                // and ESSL has no fp64 type, and passing GL_DOUBLE to glVertexAttribPointer would
+                // only raise GL_INVALID_ENUM on the real driver. Disabling rather than merely
+                // skipping matters: becoming long bumps FormatVersion, not SwitchVersion, so the
+                // enable/disable block above will not run again and an already-enabled array would
+                // stay enabled with no pointer and no ARRAY_BUFFER binding - which ES 3.1+ makes an
+                // INVALID_OPERATION at draw.
                 //
                 // IsLong is not the only way a 64-bit array gets here: glVertexAttribFormat
                 // with GL_DOUBLE asks for doubles in memory CONVERTED to float, so it is not
