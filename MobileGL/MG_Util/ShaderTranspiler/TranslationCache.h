@@ -428,6 +428,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //     derived from LIVE glBindImageTexture state and is the one genuinely
     //     per-draw-state input in here;
     //   * the storage-block binding overrides handed to SPIRV-Cross;
+    //   * the atomic-counter binding top, which SetAtomicCounterBlockBindings turns into the
+    //     layout(binding=) qualifier every synthesized counter block is printed with;
     //   * the ESSL version SPIRV-Cross targets (ResolveBackendEsslVersion, i.e. the
     //     driver's GLES version) - the remaining two SPIRV-Cross options are
     //     compile-time constants (GLSL_ES true, VULKAN_SEMANTICS false);
@@ -442,6 +444,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // feedback capture list follows them, so a payload that dropped them would
         // silently un-rename every capture on a cache hit.
         std::set<String> flattenedXfbBlockNames;
+        // Which GL atomic-counter binding points THIS stage's synthesized
+        // gl_AtomicCounterBlock_<N> blocks named, as SetAtomicCounterBlockBindings reported
+        // them. Same contract as the XFB names above and here for the same reason: the draw
+        // path re-issues exactly these as storage-buffer bindings, so a payload that dropped
+        // them would leave every counter buffer unbound on a hit - a program that renders but
+        // never increments a counter, which is far harder to notice than a broken shader.
+        Vector<Int> atomicCounterGlBindings;
     };
     using EsslTranslationResultPtr = SharedPtr<const EsslTranslationResult>;
 
@@ -461,6 +470,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         const std::set<String>* xfbCaptureBlockNames = nullptr;
         const UnorderedMap<String, Uint>* glFormatByUniformName = nullptr;
         const UnorderedMap<String, Int>* storageBlockBindingOverrides = nullptr;
+
+        // The top of the reserved storage-block window atomic-counter blocks are moved into
+        // (`top - N` for GL binding N). Derived from the driver's
+        // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, so it differs per driver, and it is PRINTED
+        // INTO the emitted ESSL as a layout(binding=) qualifier - which makes it key material,
+        // not just a caller's bookkeeping.
+        Int atomicCounterEsslBindingTop = -1;
 
         // --- SPIRV-Cross options ---
         Uint esslVersion = 300;

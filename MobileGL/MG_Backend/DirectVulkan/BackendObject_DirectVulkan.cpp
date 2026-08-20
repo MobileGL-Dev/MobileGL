@@ -847,6 +847,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxShaderStorageBufferBindings =
             clampLimit("GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", m_vulkanCaps.MaxShaderStorageBufferBindings,
                        kMaxAdvertisedBufferBlocks);
+        // Per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS. Vulkan has one descriptor limit for every
+        // stage (maxPerStageDescriptorStorageBuffers, which is what MaxComputeShaderStorageBlocks
+        // carries), so the stage limits differ only by whether the stage can have blocks at all.
+        //
+        // Deliberately NOT gated on vertexPipelineStoresAndAtomics, unlike the per-stage image
+        // uniforms below. That gate reads as the obvious one and is wrong here in practice: a
+        // Mali-G925-Immortalis reports vertexPipelineStoresAndAtomics=false (supported AND
+        // enabled) and yet runs all 433 KHR-GL43.constant_expressions.*_tess_* cases correctly
+        // through this backend - those write their result through a storage block declared in a
+        // tessellation stage. Gating would report 0 and turn 433 passing cases into
+        // "unsupported", removing function that demonstrably works.
+        //
+        // The asymmetry with DirectGLES is real and is the point. There, 0 prevents a program
+        // the driver refuses outright at link time; the honest limit converts a silent
+        // wrong-render into a capability an application can route around. Here there is no such
+        // failure to prevent, so the limit stays at what the device can address. If a Vulkan
+        // device is ever found that genuinely rejects such a pipeline, the gate belongs at
+        // pipeline creation where the rejection is observable, not on a feature bit this driver
+        // reports inaccurately.
+        {
+            const Int maxPerStageStorageBlocks =
+                std::min(std::max(m_dynamicParameters.MaxComputeShaderStorageBlocks, 0),
+                         std::min(std::max(m_dynamicParameters.MaxCombinedShaderStorageBlocks, 0),
+                                  std::max(m_dynamicParameters.MaxShaderStorageBufferBindings, 0)));
+            m_dynamicParameters.MaxVertexShaderStorageBlocks = maxPerStageStorageBlocks;
+            m_dynamicParameters.MaxTessControlShaderStorageBlocks = maxPerStageStorageBlocks;
+            m_dynamicParameters.MaxTessEvaluationShaderStorageBlocks = maxPerStageStorageBlocks;
+            // The one hard capability in the set: no geometry stage means no blocks in it.
+            m_dynamicParameters.MaxGeometryShaderStorageBlocks =
+                m_vulkanCaps.SupportsGeometryShader ? maxPerStageStorageBlocks : 0;
+            m_dynamicParameters.MaxFragmentShaderStorageBlocks = maxPerStageStorageBlocks;
+        }
         m_dynamicParameters.MaxTextureBufferSize = clampLimit(
             "GL_MAX_TEXTURE_BUFFER_SIZE", m_vulkanCaps.MaxTextureBufferSize, kMaxAdvertisedTextureBufferSize);
         m_dynamicParameters.TextureBufferOffsetAlignment = m_vulkanCaps.TextureBufferOffsetAlignment;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <initializer_list>
@@ -818,6 +819,116 @@ namespace {
         ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
     }
 
+    // GLSL 4.30 4.1.9 allows an interface-block member array to be left unsized when it is NOT the
+    // last member; it is then implicitly sized by the largest constant index the shader uses.
+    // glslang implements the SIZING - adoptImplicitArraySizes, at link - but computes the block's
+    // member OFFSETS at DECLARATION time (fixBlockUniformOffsets), where the array is still
+    // unsized and so contributes zero bytes. Every member after it is therefore laid out on top of
+    // it: `vec4 a[]; vec4 b;` puts BOTH at offset 0, and a shader reading `b` gets `a[0]`
+    // (KHR-GL43.shader_storage_buffer_object.basic-syntax iteration 6, whose degenerate triangle
+    // rasterizes nothing at all).
+    //
+    // The source level is the only place the two can be reconciled, because the offset pass runs
+    // before a single statement has been parsed. Deliberately narrow: it fires only on a `buffer`
+    // block (no other block kind may hold an unsized member at all), only on a member that is not
+    // the last one, and only when every subscript of that member's name in the source is a decimal
+    // literal. Anything outside that shape is left exactly as it was - and the shape itself has no
+    // correct behaviour today, so the rewrite cannot take a working case away.
+    void SizeNonFinalUnsizedBufferBlockMembers(MobileGL::String& source) {
+        // Both tokens must be present for the shape to exist, and "[]" is absent from essentially
+        // every real shader source, so this is the whole cost for them.
+        if (source.find("[]") == MobileGL::String::npos || source.find("buffer") == MobileGL::String::npos) {
+            return;
+        }
+
+        const auto isDecimalInteger = [](const String& text) {
+            return !text.empty() && std::all_of(text.begin(), text.end(), [](char ch) {
+                       return ch >= '0' && ch <= '9';
+                   });
+        };
+
+        const Vector<CodeToken> tokens = TokenizeCode(source);
+        const SizeT count = tokens.size();
+
+        // Pass 1: for every identifier, the largest literal index it is subscripted with (as a
+        // count, i.e. index + 1), or -1 once it is subscripted with anything that is not a literal.
+        // The declaration's own empty `[]` is neither.
+        MobileGL::UnorderedMap<String, long long> subscriptExtent;
+        for (SizeT i = 1; i < count; ++i) {
+            if (tokens[i].text != "[" || !IsIdentifierToken(tokens[i - 1])) continue;
+            if (i + 1 < count && tokens[i + 1].text == "]") continue; // the unsized declarator itself
+            long long& extent = subscriptExtent[tokens[i - 1].text];
+            if (i + 2 < count && isDecimalInteger(tokens[i + 1].text) && tokens[i + 2].text == "]") {
+                if (extent >= 0) {
+                    extent = std::max(extent, std::strtoll(tokens[i + 1].text.c_str(), nullptr, 10) + 1);
+                }
+            } else {
+                extent = -1;
+            }
+        }
+
+        // Pass 2: one edit per repairable member, applied back to front so earlier offsets stand.
+        struct SizeEdit {
+            SizeT pos;
+            String text;
+        };
+        Vector<SizeEdit> edits;
+        for (SizeT i = 0; i < count; ++i) {
+            if (tokens[i].text != "buffer") continue;
+            SizeT cursor = i + 1;
+            // `buffer` is also a member MEMORY qualifier ("buffer vec4 position0;"), which is why
+            // the block body has to be found rather than assumed.
+            if (cursor < count && IsIdentifierToken(tokens[cursor])) ++cursor;
+            if (cursor >= count || tokens[cursor].text != "{") continue;
+
+            const SizeT bodyBegin = cursor + 1;
+            SizeT bodyEnd = bodyBegin;
+            int depth = 1;
+            while (bodyEnd < count) {
+                if (tokens[bodyEnd].text == "{") {
+                    ++depth;
+                } else if (tokens[bodyEnd].text == "}") {
+                    --depth;
+                    if (depth == 0) break;
+                }
+                ++bodyEnd;
+            }
+            if (depth != 0) continue; // unterminated; glslang will have the last word
+
+            Vector<std::pair<SizeT, SizeT>> members; // [begin, end) of each member, ';' excluded
+            SizeT memberBegin = bodyBegin;
+            for (SizeT m = bodyBegin; m < bodyEnd; ++m) {
+                if (tokens[m].text != ";") continue;
+                members.emplace_back(memberBegin, m);
+                memberBegin = m + 1;
+            }
+
+            // The LAST member is deliberately untouched: an unsized array there is a run-time
+            // sized array, which is both legal and correctly laid out already.
+            for (SizeT index = 0; index + 1 < members.size(); ++index) {
+                const SizeT begin = members[index].first;
+                const SizeT end = members[index].second;
+                if (end < begin + 3) continue;
+                if (tokens[end - 1].text != "]" || tokens[end - 2].text != "[") continue;
+                if (!IsIdentifierToken(tokens[end - 3])) continue;
+                // A multi-declarator member would need one size per declarator; out of scope.
+                bool multipleDeclarators = false;
+                for (SizeT t = begin; t < end; ++t) {
+                    if (tokens[t].text == ",") multipleDeclarators = true;
+                }
+                if (multipleDeclarators) continue;
+                const auto known = subscriptExtent.find(tokens[end - 3].text);
+                if (known == subscriptExtent.end() || known->second <= 0) continue;
+                edits.push_back({tokens[end - 1].begin, std::to_string(known->second)});
+            }
+            i = bodyEnd;
+        }
+
+        for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
+            source.insert(it->pos, it->text);
+        }
+    }
+
     // Rewrite the `packed` / `shared` block-packing qualifiers inside layout(...) declarations to
     // `std140`. Desktop GL leaves the memory layout of such blocks to the implementation and the
     // app must query member offsets; MobileGL's SPIR-V pipeline always lays uniform blocks out as
@@ -962,6 +1073,11 @@ namespace MobileGL {
 
                 FilterUnsupportedGpuShaderInt64(env, source);
                 CoerceUniformBlockPackingToStd140(source);
+                // After the packing coercion: that one rewrites `packed`/`shared` in place and so
+                // cannot move an offset this pass depends on, and reading the block declarations
+                // once both qualifiers are normalized keeps the two passes' notions of a block
+                // declaration identical.
+                SizeNonFinalUnsizedBufferBlockMembers(source);
 
                 RenameBuiltinShadowingFunctions(source);
 
@@ -1113,10 +1229,65 @@ namespace MobileGL {
                     return false;
                 }
 
-                bool IsDecimalIntegerToken(const String& text) {
-                    if (text.empty()) return false;
-                    return std::all_of(text.begin(), text.end(),
-                                       [](char ch) { return ch >= '0' && ch <= '9'; });
+                // One GLSL integer literal, spelled the C way: "0x"/"0X" is hexadecimal, a leading
+                // '0' is OCTAL, everything else decimal, and a single trailing 'u'/'U' is legal.
+                // strtoll with base 0 already implements exactly that detection, so the only work
+                // here is deciding what the tail is allowed to be.
+                //
+                // Never guesses, which is the discipline every caller depends on: a float ("1.0"),
+                // an unknown suffix ("3f"), an out-of-range run and a negative value all return
+                // false, and the caller skips the declaration rather than recording a wrong number.
+                bool ParseGlslIntegerLiteral(const String& text, long long& out) {
+                    if (text.empty() || text.front() < '0' || text.front() > '9') return false;
+                    errno = 0;
+                    char* tail = nullptr;
+                    const long long value = std::strtoll(text.c_str(), &tail, 0);
+                    if (tail == text.c_str() || errno == ERANGE || value < 0) return false;
+                    const String suffix = text.substr(static_cast<SizeT>(tail - text.c_str()));
+                    if (!suffix.empty() && suffix != "u" && suffix != "U") return false;
+                    out = value;
+                    return true;
+                }
+
+                // glslang reflects an array-of-arrays default-block uniform as ONE RECORD PER
+                // outer-index tuple, carrying the innermost array type: `float u[2][3]` becomes
+                // "u[0][0]" and "u[1][0]" (that last "[0]" is EShReflectionBasicArraySuffix). The
+                // linker resolves such a name by stripping the single trailing "[0]", so it looks
+                // up "u[1]" - a key the root entry alone cannot answer, and the whole declaration
+                // silently loses its explicit location.
+                //
+                // Emit those pre-flattened keys here, next to the root, so the result is
+                // order-independent: each carries the location its own element starts at (element
+                // i of `float u[2][3]` at location L starts at L + i*3). Identifiers cannot
+                // contain brackets, so a synthesized key never collides with a real uniform name,
+                // and a 1-D array needs none of this - stripping "[0]" already reaches the root.
+                void RecordArrayOfArraysElementLocations(const String& name, const Vector<long long>& dimensions,
+                                                         long long baseLocation,
+                                                         MobileGL::UnorderedMap<String, MobileGL::Int>& locations) {
+                    if (dimensions.size() < 2) return;
+                    // A pathological declaration must not be able to blow up the map; past the cap
+                    // only the root entry stands, which is what every case used to get.
+                    constexpr long long kMaxSynthesizedKeys = 4096;
+                    const long long innerSpan = dimensions.back();
+                    const SizeT outerDimensions = dimensions.size() - 1;
+                    long long elementCount = 1;
+                    for (SizeT d = 0; d < outerDimensions; ++d) {
+                        elementCount *= dimensions[d];
+                        if (elementCount > kMaxSynthesizedKeys) return;
+                    }
+                    for (long long element = 0; element < elementCount; ++element) {
+                        String key = name;
+                        long long remainder = element;
+                        for (SizeT d = 0; d < outerDimensions; ++d) {
+                            long long stride = 1;
+                            for (SizeT inner = d + 1; inner < outerDimensions; ++inner) stride *= dimensions[inner];
+                            key += "[" + std::to_string(remainder / stride) + "]";
+                            remainder %= stride;
+                        }
+                        locations.emplace(key, static_cast<MobileGL::Int>(
+                                                   std::min(baseLocation + element * innerSpan,
+                                                            static_cast<long long>(INT_MAX / 2))));
+                    }
                 }
 
                 // Parses one brace-free depth-0 statement [begin, end) and records its
@@ -1129,6 +1300,7 @@ namespace MobileGL {
                                                        MobileGL::UnorderedMap<String, MobileGL::Int>& locations) {
                     using MobileGL::Int;
                     long long location = -1;
+                    long long literal = 0;
                     bool sawUniform = false;
                     SizeT declaratorBegin = end;
 
@@ -1144,9 +1316,9 @@ namespace MobileGL {
                                 } else if (layoutToken == ")") {
                                     --parenDepth;
                                 } else if (parenDepth == 1 && layoutToken == "location" && j + 2 < end &&
-                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
-                                    location = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
-                                                        static_cast<long long>(INT_MAX / 2));
+                                           tokens[j + 1].text == "=" &&
+                                           ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                    location = std::min(literal, static_cast<long long>(INT_MAX / 2));
                                     j += 2;
                                 }
                                 ++j;
@@ -1175,21 +1347,25 @@ namespace MobileGL {
                         const String& name = tokens[k].text;
                         ++k;
                         long long span = 1;
+                        Vector<long long> dimensions;
                         while (k < end && tokens[k].text == "[") {
                             ++k;
                             long long dimension = 1;
-                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) {
-                                dimension = std::strtoll(tokens[k].text.c_str(), nullptr, 10);
+                            if (k < end && ParseGlslIntegerLiteral(tokens[k].text, literal)) {
+                                dimension = literal;
                                 ++k;
                             }
                             if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
                             ++k;
-                            span *= std::max(1ll, std::min(dimension, static_cast<long long>(INT_MAX / 2)));
+                            dimensions.push_back(
+                                std::max(1ll, std::min(dimension, static_cast<long long>(INT_MAX / 2))));
+                            span *= dimensions.back();
                         }
                         // Keep the first sighting: a duplicate can only come from alternative
                         // preprocessor branches declaring the same name.
                         locations.emplace(name, static_cast<Int>(std::min(
                                                     nextLocation, static_cast<long long>(INT_MAX / 2))));
+                        RecordArrayOfArraysElementLocations(name, dimensions, nextLocation, locations);
                         nextLocation += span;
                         if (k >= end) break;
                         if (tokens[k].text == "=") { // skip an initializer up to the declarator comma
@@ -1225,6 +1401,7 @@ namespace MobileGL {
                                                      MobileGL::UnorderedMap<String, MobileGL::Uint>& bindings) {
                     using MobileGL::Int;
                     long long binding = -1;
+                    long long literal = 0;
                     bool sawUniform = false;
                     SizeT declaratorBegin = end;
 
@@ -1240,9 +1417,9 @@ namespace MobileGL {
                                 } else if (layoutToken == ")") {
                                     --parenDepth;
                                 } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < end &&
-                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
-                                    binding = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
-                                                       static_cast<long long>(INT_MAX / 2));
+                                           tokens[j + 1].text == "=" &&
+                                           ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                    binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
                                     j += 2;
                                 }
                                 ++j;
@@ -1275,7 +1452,7 @@ namespace MobileGL {
                         ++k;
                         while (k < end && tokens[k].text == "[") {
                             ++k;
-                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) ++k;
+                            if (k < end && ParseGlslIntegerLiteral(tokens[k].text, literal)) ++k;
                             if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
                             ++k;
                         }
@@ -1330,6 +1507,100 @@ namespace MobileGL {
                     pos = statementEnd + 1;
                 }
                 return bindings;
+            }
+
+            namespace {
+                // Binding points a storage-block declaration starting at `bufferPos` occupies.
+                // One for a scalar instance (and for the "layout(...) buffer;" default-qualifier
+                // form, which declares no block at all); the element count for an instance array,
+                // whose elements take base, base+1, ... (GLSL 4.30 4.4.5). -1 means "the grammar
+                // here is outside this scanner's narrow subset", i.e. do not judge this one.
+                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos,
+                                                        SizeT count) {
+                    SizeT k = bufferPos + 1;
+                    if (k < count && IsIdentifierToken(tokens[k])) ++k; // block type name
+                    if (k >= count || tokens[k].text != "{") return 1;
+
+                    MobileGL::Int braceDepth = 0;
+                    while (k < count) {
+                        if (tokens[k].text == "{") {
+                            ++braceDepth;
+                        } else if (tokens[k].text == "}") {
+                            --braceDepth;
+                            if (braceDepth == 0) {
+                                ++k;
+                                break;
+                            }
+                        }
+                        ++k;
+                    }
+                    if (braceDepth != 0) return -1; // unterminated block: not this scanner's business
+
+                    if (k < count && IsIdentifierToken(tokens[k])) ++k; // instance name
+                    if (k >= count || tokens[k].text != "[") return 1;
+                    long long elementCount = 0;
+                    if (k + 2 < count && ParseGlslIntegerLiteral(tokens[k + 1].text, elementCount) &&
+                        tokens[k + 2].text == "]") {
+                        return std::max<long long>(1, elementCount);
+                    }
+                    return -1; // sized by an expression, or unsized
+                }
+            } // namespace
+
+            std::optional<String> FindShaderStorageBindingViolation(const String& source, Int maxBindings) {
+                // A backend that advertises nothing has no ceiling to enforce.
+                if (maxBindings <= 0) return std::nullopt;
+                // Fast path: no storage block, nothing to check. Both keywords are required for a
+                // violation to exist, and the pair is absent from almost every shader-pack source.
+                if (source.find("buffer") == String::npos || source.find("binding") == String::npos) {
+                    return std::nullopt;
+                }
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                // The binding the qualifier run currently being scanned declared, -1 for none.
+                // Several layout(...) lists may precede one declaration and the later one wins,
+                // which is the same accumulate-then-consume shape the extractors above use.
+                long long binding = -1;
+                long long literal = 0;
+                for (SizeT pos = 0; pos < count; ++pos) {
+                    const String& text = tokens[pos].text;
+                    if (text == "layout" && pos + 1 < count && tokens[pos + 1].text == "(") {
+                        SizeT j = pos + 2;
+                        Int parenDepth = 1;
+                        while (j < count && parenDepth > 0) {
+                            const String& layoutToken = tokens[j].text;
+                            if (layoutToken == "(") {
+                                ++parenDepth;
+                            } else if (layoutToken == ")") {
+                                --parenDepth;
+                            } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < count &&
+                                       tokens[j + 1].text == "=" &&
+                                       ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
+                                j += 2;
+                            }
+                            ++j;
+                        }
+                        pos = j - 1;
+                        continue;
+                    }
+                    if (text == "buffer") {
+                        const long long points = binding >= 0 ? StorageBlockBindingPointCount(tokens, pos, count) : -1;
+                        if (points > 0 && binding + points > static_cast<long long>(maxBindings)) {
+                            return "ERROR: invalid value " + std::to_string(binding) +
+                                   " for layout specifier 'binding': a shader storage block occupying " +
+                                   std::to_string(points) + " binding point(s) from there passes " +
+                                   "GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS (" + std::to_string(maxBindings) + ").";
+                        }
+                        binding = -1;
+                        continue;
+                    }
+                    // Qualifiers may sit between the layout list and the `buffer` keyword; anything
+                    // else ends the run, so a binding never leaks onto an unrelated declaration.
+                    if (!IsNonLayoutQualifierKeyword(text)) binding = -1;
+                }
+                return std::nullopt;
             }
 
             UnorderedMap<String, Int> ExtractExplicitUniformLocations(const String& source) {

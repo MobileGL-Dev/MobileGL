@@ -615,15 +615,22 @@ namespace MobileGL::MG_State::GLState {
 
 
     Int ProgramObject::GetFragmentDataLocation(const char* name) {
-        if (!Artifacts().program || !name) return -1;
+        // Answered from the OWNED pipe-output snapshot, not from Artifacts().program. The live
+        // TProgram is null on a translation-cache L1 hit - that is the entire point of the memo
+        // - and it is also null for any program that never linked. The old `if
+        // (!Artifacts().program) return -1` guard silently produced the never-linked answer for
+        // a perfectly good cached program, so glGetFragDataLocation returned -1 for every
+        // fragment output of it. The empty snapshot gives the never-linked case the same -1
+        // without needing the guard at all.
+        if (!name) return -1;
 
         const auto explicitLocation = Artifacts().linkedFragDataLocation.find(name);
-        const Int outputCount = Artifacts().program->getNumPipeOutputs();
-        for (Int index = 0; index < outputCount; ++index) {
-            const auto& output = Artifacts().program->getPipeOutput(index);
+        for (const PipeOutputReflection& output : Artifacts().pipeOutputReflection) {
             if (output.name != name) continue;
-            if (explicitLocation != Artifacts().linkedFragDataLocation.end()) return static_cast<Int>(explicitLocation->second);
-            return static_cast<Int>(output.layoutLocation());
+            if (explicitLocation != Artifacts().linkedFragDataLocation.end()) {
+                return static_cast<Int>(explicitLocation->second);
+            }
+            return output.location;
         }
         return -1;
     }

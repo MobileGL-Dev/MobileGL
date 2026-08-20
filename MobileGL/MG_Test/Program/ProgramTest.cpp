@@ -3239,3 +3239,76 @@ TEST_F(ProgramTest, CreateShaderAndCreateShaderProgramvReportTheRightErrorClasse
     EXPECT_NE(program, 0u);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// ARB_explicit_uniform_location / GL 4.6 core 7.6.1: a `layout(location = N)` uniform reserves N
+// EVEN WHEN IT IS INACTIVE. Dead default-block uniforms are correctly filtered off the GL surface
+// (glGetUniformLocation must answer -1 for them), but the implicit allocator used to walk straight
+// over the location they claimed and hand it to a uniform that never asked for it
+// (KHR-GL43.explicit_uniform_location.uniform-loc-mix-with-implicit3).
+TEST_F(ProgramTest, InactiveExplicitUniformLocationIsStillReserved) {
+    const char* vsSource = R"(#version 430 core
+layout(location = 2) uniform vec4 uDeadAtTwo;
+uniform vec4 uA;
+uniform vec4 uB;
+uniform vec4 uC;
+uniform vec4 uD;
+void main() { gl_Position = uA + uB + uC + uD; }
+)";
+    const char* fsSource = R"(#version 430 core
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+    const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    const GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    const GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    // Reserving a location must not resurrect the uniform: it is still inactive to GL.
+    EXPECT_EQ(GetUniformLocation(program, "uDeadAtTwo"), -1);
+
+    for (const char* name : {"uA", "uB", "uC", "uD"}) {
+        const GLint location = GetUniformLocation(program, name);
+        EXPECT_GE(location, 0) << name << " lost its implicit location";
+        EXPECT_NE(location, 2) << name << " was handed the location uDeadAtTwo reserved";
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The GL_MAX_UNIFORM_LOCATIONS boundary, from both sides. MAX_UNIFORM_LOCATIONS - 1 is the LAST
+// LEGAL location: it has to link and read back verbatim
+// (KHR-GL43.explicit_uniform_location.uniform-loc-max), which is only true while the advertised
+// value and what the link accepts are the SAME number - the getter used to advertise one more
+// location than any shader could name.
+//
+// The over-the-ceiling half is asserted through an ARRAY, because that is the only spelling the
+// link gets to judge: a bare `layout(location = MAX)` is already a compile error inside glslang
+// ("location is too large"), while an array's base compiles fine and only its last element passes
+// the ceiling (...uniform-loc-negative-link-max-num-of-locations).
+TEST_F(ProgramTest, ExplicitUniformLocationsHonourMaxUniformLocations) {
+    GLint maxLocations = 0;
+    GetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &maxLocations);
+    ASSERT_GE(maxLocations, 1024) << "GL 4.3 requires at least 1024 uniform locations";
+
+    const char* fsSource = R"(#version 430 core
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+    const GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+
+    {
+        const String source = String("#version 430 core\nlayout(location = ") +
+                              std::to_string(maxLocations - 1) +
+                              ") uniform vec4 uAtLimit;\nvoid main() { gl_Position = uAtLimit; }\n";
+        const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, source.c_str());
+        const GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+        EXPECT_EQ(GetUniformLocation(program, "uAtLimit"), maxLocations - 1)
+            << "the last location in the pool is legal and must come back verbatim";
+    }
+    {
+        const String source = String("#version 430 core\nlayout(location = ") +
+                              std::to_string(maxLocations - 4) +
+                              ") uniform vec4 uSpill[8];\nvoid main() { gl_Position = uSpill[0]; }\n";
+        const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, source.c_str());
+        (void)LinkVsFs(vs, fs, GL_FALSE);
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

@@ -105,6 +105,21 @@ namespace MobileGL {
                 // arrayed block's elements are separate GL resources spelled "B[0]", "B[1]").
                 // Entries with a negative value mean "never rebound" and are skipped.
                 spvc_result SetShaderStorageBlockBinding(const UnorderedMap<String, Int>& bindings);
+                // Points every synthesized atomic-counter block at a RESERVED storage-block
+                // binding and reports which GL atomic-counter bindings the module declares.
+                //
+                // glslang's relaxed parse rewrote each atomic_uint into a member of
+                // gl_AtomicCounterBlock_<N>, where N is the GL binding the application declared;
+                // the block itself was then auto-mapped to whatever storage-block binding was
+                // free, which has no relation to N and can collide with an SSBO the application
+                // binds itself. Slot N is taken from the TOP of the driver's range downwards
+                // (`topBinding - N`) so the reserved window never overlaps the low bindings
+                // applications use, and a block whose slot would be negative is left alone and
+                // NOT reported - the caller binds nothing there rather than aliasing.
+                //
+                // `outGlBindings` is appended to, so one vector can collect a whole program's
+                // stages; it may repeat a binding declared by several of them.
+                spvc_result SetAtomicCounterBlockBindings(Int topBinding, Vector<Int>& outGlBindings);
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;
                 const char* GetLastErrorString() const;

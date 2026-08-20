@@ -716,6 +716,177 @@ void main() {
         EXPECT_EQ(TakeError(), GL_INVALID_ENUM);
     }
 
+    // Two counters that share a binding AND an offset must fail to link. glslang's own check
+    // lives in fixOffset(), which the Vulkan-relaxed parse never reaches - it folds the
+    // atomic_uint into a storage block and returns from declareVariable() first - so the pair
+    // used to link cleanly and then increment the same four bytes.
+    TEST_F(ProgramInterfaceTest, OverlappingAtomicCounterOffsetsFailToLink) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout (binding = 0, offset = 0) uniform atomic_uint a;
+layout (binding = 0, offset = 0) uniform atomic_uint b;
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b))); }
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        GLint status = -1;
+        GetProgramiv(p, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(p, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("overlap"), std::string::npos) << "info log was: " << log;
+        ClearErrors();
+
+        // Distinct offsets at one binding, and the same offset at two different bindings, are
+        // both legal and must still link - a check keyed any wider would reject them.
+        const char* legalFs = R"(#version 430
+out vec4 color;
+layout (binding = 0, offset = 0) uniform atomic_uint a;
+layout (binding = 0, offset = 4) uniform atomic_uint b;
+layout (binding = 1, offset = 0) uniform atomic_uint c;
+void main() {
+   color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b) + atomicCounterIncrement(c)));
+}
+)";
+        const GLuint legal = MakeProgram(kSimpleVs, legalFs);
+        LinkProgram(legal);
+        ExpectLinked(legal);
+        ClearErrors();
+    }
+
+    // GL 4.6 core 7.6 fails the link when a stage's active image uniforms exceed
+    // GL_MAX_*_IMAGE_UNIFORMS, or when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing
+    // counted them - glslang keeps those numbers only so gl_Max*ImageUniforms can expand from
+    // them - so every deliberately-oversized program in
+    // KHR-GL4x.shader_image_load_store.uniform-limits linked cleanly and then rendered nothing.
+    //
+    // Sized off the ADVERTISED limits rather than a constant, because the numbers come from the
+    // active backend and the whole point of the check is that the two agree.
+    TEST_F(ProgramInterfaceTest, ImageUniformsOverAStageLimitFailToLink) {
+        GLint maxFragmentImages = 0;
+        GLint maxCombinedImages = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImages);
+        GetIntegerv(GL_MAX_COMBINED_IMAGE_UNIFORMS, &maxCombinedImages);
+        ClearErrors();
+        ASSERT_GT(maxFragmentImages, 0);
+
+        // The fragment stage is compiled explicitly so a COMPILE failure can never be mistaken
+        // for the link failure under test.
+        const auto linkWithFragmentImages = [](GLint count) {
+            const std::string n = std::to_string(count);
+            const std::string source = std::string(R"(#version 430
+out vec4 color;
+layout(r32i) uniform iimage2D u_image[)") + n + R"(];
+void main() {
+    int value = 1;
+    for (int i = 0; i < )" + n + R"(; ++i) {
+        value = imageAtomicAdd(u_image[i], ivec2(0), value);
+    }
+    color = vec4(float(value));
+}
+)";
+            const char* sourcePtr = source.c_str();
+            const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+            ShaderSource(fs, 1, &sourcePtr, nullptr);
+            CompileShader(fs);
+            GLint compiled = 0;
+            GetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+            EXPECT_EQ(compiled, GL_TRUE) << "the fragment stage with " << count << " image uniforms must compile";
+
+            const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+            ShaderSource(vs, 1, &kSimpleVs, nullptr);
+            CompileShader(vs);
+
+            const GLuint program = CreateProgram();
+            AttachShader(program, vs);
+            AttachShader(program, fs);
+            LinkProgram(program);
+            return program;
+        };
+
+        const GLuint over = linkWithFragmentImages(maxFragmentImages + 1);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_IMAGE_UNIFORMS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        // Exactly AT the limit is legal and must still link: the comparison is strictly
+        // greater-than, and the conformance suite's combined-stage subcase builds a program that
+        // fills every stage to its own limit and expects it to link whenever the combined limit
+        // can hold them.
+        if (maxFragmentImages <= maxCombinedImages) {
+            const GLuint atLimit = linkWithFragmentImages(maxFragmentImages);
+            ExpectLinked(atLimit);
+            ClearErrors();
+        }
+    }
+
+    // glGetProgramiv(GL_ACTIVE_ATOMIC_COUNTER_BUFFERS) and glGetActiveAtomicCounterBufferiv are
+    // the pre-4.3 spelling of the interface above, and the spec requires the two to agree.
+    // Neither did: the first counted glslang's atomic counter UNIFORMS - zero, because the
+    // relaxed parse folds every atomic_uint into a storage block before reflection runs - and
+    // the second was a stub that wrote nothing and raised nothing.
+    TEST_F(ProgramInterfaceTest, ActiveAtomicCounterBufferQueriesMatchTheInterface) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout (binding = 1, offset = 0) uniform atomic_uint a;
+layout (binding = 2, offset = 0) uniform atomic_uint b;
+layout (binding = 2, offset = 4) uniform atomic_uint c;
+void main() {
+   color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b) + atomicCounterIncrement(c)));
+}
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        GLint bufferCount = -12345;
+        GetProgramiv(p, GL_ACTIVE_ATOMIC_COUNTER_BUFFERS, &bufferCount);
+        EXPECT_EQ(bufferCount, Interfaceiv(p, GL_ATOMIC_COUNTER_BUFFER, GL_ACTIVE_RESOURCES));
+        ASSERT_EQ(bufferCount, 2);
+
+        const auto activeBufferiv = [p](GLuint index, GLenum pname) {
+            GLint value = -12345;
+            GetActiveAtomicCounterBufferiv(p, index, pname, &value);
+            return value;
+        };
+        for (GLuint index = 0; index < static_cast<GLuint>(bufferCount); ++index) {
+            const std::vector<GLint> viaInterface =
+                Props(p, GL_ATOMIC_COUNTER_BUFFER, index,
+                      {GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES,
+                       GL_REFERENCED_BY_VERTEX_SHADER, GL_REFERENCED_BY_FRAGMENT_SHADER});
+            ASSERT_EQ(viaInterface.size(), 5u);
+            EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_BINDING), viaInterface[0]);
+            EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_DATA_SIZE), viaInterface[1]);
+            EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTERS), viaInterface[2]);
+            EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_VERTEX_SHADER), viaInterface[3]);
+            EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_FRAGMENT_SHADER), viaInterface[4]);
+
+            // The counter indices are the GL_UNIFORM indices, in the same order.
+            const std::vector<GLint> expectedIndices = Props(p, GL_ATOMIC_COUNTER_BUFFER, index, {GL_ACTIVE_VARIABLES});
+            ASSERT_FALSE(expectedIndices.empty());
+            std::vector<GLint> indices(expectedIndices.size(), -12345);
+            GetActiveAtomicCounterBufferiv(p, index, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES,
+                                           indices.data());
+            EXPECT_EQ(indices, expectedIndices);
+        }
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+
+        GLint sink = -12345;
+        GetActiveAtomicCounterBufferiv(p, static_cast<GLuint>(bufferCount), GL_ATOMIC_COUNTER_BUFFER_BINDING, &sink);
+        EXPECT_EQ(TakeError(), GL_INVALID_VALUE);
+        EXPECT_EQ(sink, -12345) << "a rejected query must not write the caller's output";
+        // The interface-query spelling of the same property is NOT accepted here.
+        GetActiveAtomicCounterBufferiv(p, 0, GL_BUFFER_BINDING, &sink);
+        EXPECT_EQ(TakeError(), GL_INVALID_ENUM);
+        EXPECT_EQ(sink, -12345);
+    }
+
     // --------------------------------------------------------- transform-feedback ------
     TEST_F(ProgramInterfaceTest, TransformFeedbackVaryingTypes) {
         const char* vs = R"(#version 430

@@ -21,6 +21,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType);
 
+    // Whether a vertex shader may declare a storage block at all, given what the host driver
+    // reports for GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS. Pure, and separated from the capability
+    // global purely so the decision can be tested without one.
+    //
+    // The indirect half of the gl_BaseInstance lowering in PromoteDrawParameterGlobalsToUniforms
+    // is the only thing that needs this, and it needs exactly one block. A driver reporting 0 is
+    // conformant - the minimum is 0 in GL 4.6 table 23.64 and ES 3.2 table 21.44 - and ARM's
+    // GLES driver does report 0, so this is a live path, not a defensive one.
+    Bool VertexStageStorageBlockUsable(Int maxVertexShaderStorageBlocks);
+
     // True once the process has entered exit(): past that point the EGL library and
     // the driver may already be unloaded, so a backend twin's destructor must not
     // call into g_GLESFuncs (the observed crash is a jump through an unmapped driver
@@ -386,6 +396,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id);
         void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size);
         void InvalidateIndexedBufferBindingCache();
+        // Re-issues the GL_ATOMIC_COUNTER_BUFFER binding points a program's shaders declare as
+        // GL_SHADER_STORAGE_BUFFER bindings at the reserved slots the transpiled ESSL was built
+        // against (BackendProgramObjectImpl::GetAtomicCounterBindings /
+        // GetAtomicCounterEsslBindingTop). ES has no counter-buffer target at all, so without
+        // this the shader reads a storage block nobody ever bound a buffer to and the buffer the
+        // application bound never reaches the driver.
+        void SyncAtomicCounterBuffers(const Vector<Int>& glBindings, Int esslBindingTop);
         // Buffer-storage pool maintenance. TrimBufferPool evicts over-budget entries
         // (called once per frame from Present); ClearBufferPool drops all pooled ids
         // without glDeleteBuffers (called when the ES context is going away).
@@ -1164,6 +1181,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // qualifier, so the overrides are baked into the source). A mismatch means the
             // program is stale exactly like the clamp masks above.
             Uint64 GetShaderStorageBlockBindingSignature() const { return m_shaderStorageBlockBindingSignature; }
+            // GL atomic-counter binding points the transpiled stages declare (sorted, unique),
+            // and the top of the reserved shader-storage range their counter blocks were
+            // transpiled against - the slot for GL binding N is `top - N`. Empty for every
+            // program that uses no atomic counter, which is what keeps the per-draw cost of the
+            // counter sync at one empty-vector test.
+            const Vector<Int>& GetAtomicCounterBindings() const { return m_atomicCounterGlBindings; }
+            Int GetAtomicCounterEsslBindingTop() const { return m_atomicCounterEsslBindingTop; }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -1222,9 +1246,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const std::set<String>& xfbCaptureBlockNames,
                                       const ImageFormatBakeInputs& imageFormatBake,
                                       const UnorderedMap<String, Int>& storageBlockBindingOverrides,
-                                      Bool enableSpirvValidation, String& outSource,
+                                      Int atomicCounterEsslBindingTop, Bool enableSpirvValidation,
+                                      String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,
-                                      String& outError) const;
+                                      Vector<Int>& outAtomicCounterGlBindings, String& outError) const;
 
             Uint m_backendProgramId = 0;
             // GL name of the frontend program this was last synced from; diagnostics only, so
@@ -1244,6 +1269,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint m_fragColorBroadcastCount = 1;
             // 0 is the signature of an empty override set, i.e. what almost every program has.
             Uint64 m_shaderStorageBlockBindingSignature = 0;
+            Vector<Int> m_atomicCounterGlBindings;
+            Int m_atomicCounterEsslBindingTop = -1;
             Bool m_isInitialized = false;
             Bool m_backendProgramUsable = false;
 

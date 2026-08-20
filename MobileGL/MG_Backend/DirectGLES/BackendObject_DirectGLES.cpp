@@ -1251,9 +1251,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                      static_cast<Int>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS));
         m_dynamicParameters.MaxComputeShaderStorageBlocks = m_GLESCapabilities.MaxComputeShaderStorageBlocks;
         m_dynamicParameters.MaxCombinedShaderStorageBlocks = m_GLESCapabilities.MaxCombinedShaderStorageBlocks;
+        // Per-stage storage-block counts, forwarded from the host driver rather than invented.
+        // A stage the driver cannot serve reports 0, which is a legal answer everywhere these
+        // limits appear (GL 4.6 table 23.64, ES 3.2 table 21.44 - the minimum is 0 for every
+        // graphics stage except fragment) and is the only answer that lets an application take
+        // its own fallback instead of building a program the driver will refuse to link. The
+        // stage limit cannot exceed the combined limit or the number of binding points there
+        // are to bind buffers to, so clamp to both.
+        const auto clampStageStorageBlocks = [this](Int stageLimit) {
+            return std::min({std::max(stageLimit, 0), std::max(m_dynamicParameters.MaxCombinedShaderStorageBlocks, 0),
+                             std::max(m_dynamicParameters.MaxShaderStorageBufferBindings, 0)});
+        };
+        m_dynamicParameters.MaxShaderStorageBufferBindings = m_GLESCapabilities.MaxShaderStorageBufferBindings;
+        m_dynamicParameters.MaxVertexShaderStorageBlocks =
+            clampStageStorageBlocks(m_GLESCapabilities.MaxVertexShaderStorageBlocks);
+        m_dynamicParameters.MaxTessControlShaderStorageBlocks =
+            clampStageStorageBlocks(m_GLESCapabilities.MaxTessControlShaderStorageBlocks);
+        m_dynamicParameters.MaxTessEvaluationShaderStorageBlocks =
+            clampStageStorageBlocks(m_GLESCapabilities.MaxTessEvaluationShaderStorageBlocks);
+        m_dynamicParameters.MaxGeometryShaderStorageBlocks =
+            clampStageStorageBlocks(m_GLESCapabilities.MaxGeometryShaderStorageBlocks);
+        m_dynamicParameters.MaxFragmentShaderStorageBlocks =
+            clampStageStorageBlocks(m_GLESCapabilities.MaxFragmentShaderStorageBlocks);
         m_dynamicParameters.MaxComputeUniformBlocks = m_GLESCapabilities.MaxComputeUniformBlocks;
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_GLESCapabilities.MaxComputeWorkGroupInvocations;
-        m_dynamicParameters.MaxShaderStorageBufferBindings = m_GLESCapabilities.MaxShaderStorageBufferBindings;
+        // (MaxShaderStorageBufferBindings is assigned above, before the per-stage clamp reads it.)
         // This is the number glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE) hands the application, and
         // on a host without buffer textures it is knowingly a floor MobileGL cannot honour rather
         // than a driver answer (m_GLESCapabilities.MaxTextureBufferSizeIsDriverReported says

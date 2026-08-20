@@ -544,14 +544,16 @@ namespace {
         // (2) the advertised extension vector, including the fp64 flag's own extension
         a.advertisedExtensions = {E_GL_ARB_gpu_shader_fp64, E_GL_KHR_debug};
         b.advertisedExtensions = {};
-        // (3) the compute limits (ValidateComputeLocalSizeLimits only)
-        a.maxComputeWorkGroupSize[0] = 1024;
-        a.maxComputeWorkGroupSize[1] = 1024;
-        a.maxComputeWorkGroupSize[2] = 64;
+        // (3) the compute INVOCATION limit, and deliberately not the work-group size or
+        // count any more. Those two used to sit here on the grounds that
+        // ValidateComputeLocalSizeLimits was their only consumer; wave3 (cb155c5b) made
+        // BuildTBuiltInResource read them, and glslang expands both into built-in constants
+        // (gl_MaxComputeWorkGroupSize / gl_MaxComputeWorkGroupCount), so they are now
+        // front-end inputs and belong in TheFrontendFingerprintMovesWithEveryFrontendLimit
+        // instead - which is where they moved. The invocation limit is the one that really
+        // still stops at the pre-parse gate: glslang has no built-in constant for it and
+        // BuildTBuiltInResource does not read it.
         a.maxComputeWorkGroupInvocations = 128;
-        b.maxComputeWorkGroupSize[0] = 2048;
-        b.maxComputeWorkGroupSize[1] = 2048;
-        b.maxComputeWorkGroupSize[2] = 1024;
         b.maxComputeWorkGroupInvocations = 2048;
         // (4) a spread of DynamicBackendParameters fields the front end never reads
         a.params.MaxColorTextureSamples = 1;
@@ -598,8 +600,11 @@ TEST_F(TranslationCacheTest, TwoBackendsCompilingTheSameGlslShareOneL1Entry) {
 }
 
 // The other direction, one case per input that was KEPT. Each is a limit the front end
-// really consumes - the seven BuildTBuiltInResource copies into TBuiltInResource, plus the
+// really consumes - everything BuildTBuiltInResource copies into TBuiltInResource, plus the
 // two inputs to the reflection vertex-attrib limit - so each must still split the key.
+// KEEP THIS LIST IN STEP WITH BuildTBuiltInResource: a limit that becomes env-derived there
+// and is not added here is a silent miscompile with no failing test to catch it, which is
+// precisely how the compute work-group cases below arrived.
 TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) {
     const CompileEnv base;
     const Uint64 baseline = ComputeFrontendCompileEnvFingerprint(base);
@@ -613,6 +618,21 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
         {"params.MaxComputeImageUniforms", [](CompileEnv& e) { e.params.MaxComputeImageUniforms += 1; }},
         {"params.MaxCombinedImageUniforms", [](CompileEnv& e) { e.params.MaxCombinedImageUniforms += 1; }},
         {"params.MaxVertexAttribs", [](CompileEnv& e) { e.params.MaxVertexAttribs += 1; }},
+        // Env-derived since wave3's cb155c5b: BuildTBuiltInResource copies all seven of
+        // these into TBuiltInResource, and glslang expands each into a built-in constant a
+        // compute shader can read (gl_MaxComputeTextureImageUnits,
+        // gl_MaxComputeWorkGroupSize, gl_MaxComputeWorkGroupCount). A module that reads one
+        // compiles to different SPIR-V under two different values, so each must split the
+        // key - one case per COMPONENT, because a per-axis difference is exactly the shape
+        // real drivers produce (z = 64 on ES against 1024 elsewhere).
+        {"params.MaxComputeTextureImageUnits",
+         [](CompileEnv& e) { e.params.MaxComputeTextureImageUnits += 1; }},
+        {"maxComputeWorkGroupSize[0]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[0] += 1; }},
+        {"maxComputeWorkGroupSize[1]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[1] += 1; }},
+        {"maxComputeWorkGroupSize[2]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[2] += 1; }},
+        {"maxComputeWorkGroupCount[0]", [](CompileEnv& e) { e.maxComputeWorkGroupCount[0] += 1; }},
+        {"maxComputeWorkGroupCount[1]", [](CompileEnv& e) { e.maxComputeWorkGroupCount[1] += 1; }},
+        {"maxComputeWorkGroupCount[2]", [](CompileEnv& e) { e.maxComputeWorkGroupCount[2] += 1; }},
         // HasBackend(): with no backend the reflection attrib limit falls back to the
         // storage capacity rather than the driver's number, so the bit is load-bearing.
         {"HasBackend", [](CompileEnv& e) { e.backend = BackendType::DirectGLES; }},
@@ -702,6 +722,44 @@ TEST_F(TranslationCacheTest, AProgramServedFromTheMemoAnswersTheWholeQuerySurfac
         EXPECT_EQ(parsedObject->GetUniformOffset(location), memoObject->GetUniformOffset(location))
             << "uniform offset at location " << location;
     }
+}
+
+// glGetFragDataLocation on a program served from the memo.
+//
+// Split out from the case above because it caught a REAL bug that case did not: every
+// accessor it checks had already been moved onto the owned reflection snapshot, but
+// GetFragmentDataLocation still opened with `if (!Artifacts().program) return -1` and then
+// walked the live TProgram's pipe outputs. On a hit there is no TProgram - that is the whole
+// point of the memo - so the guard fired and the function reported "this program has no such
+// fragment output" for an output that plainly exists. The failure mode was silent and
+// asymmetric: the FIRST program with a given source answered correctly and every later one
+// answered -1, so nothing that linked a program once could see it.
+//
+// Both the explicit-request path (glBindFragDataLocation, answered from
+// linkedFragDataLocation) and the shader-declared path (layout(location = 0), answered from
+// the pipe-output snapshot) are checked, because only the second one reads the field that
+// used to come off the TProgram.
+TEST_F(TranslationCacheTest, AProgramServedFromTheMemoStillAnswersGetFragDataLocation) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOn(true);
+    const String fs = SwizzleLikeFragment("");
+
+    const GLuint parsed = LinkProgramFromSources(kVertexSource, fs);
+    const TranslationCacheStats afterFirst = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const GLuint fromMemo = LinkProgramFromSources(kVertexSource, fs);
+    const TranslationCacheStats afterSecond = MG_State::GLState::GetProgramTranslationCache().Stats();
+    ASSERT_EQ(afterSecond.hits - afterFirst.hits, 1u) << "the second link was not a hit";
+
+    const Int parsedLocation = MG_Impl::GLImpl::GetFragDataLocation(parsed, "fragColor");
+    const Int memoLocation = MG_Impl::GLImpl::GetFragDataLocation(fromMemo, "fragColor");
+    EXPECT_EQ(parsedLocation, 0) << "the parsed program's own answer moved; this case is testing "
+                                    "the wrong thing";
+    EXPECT_EQ(memoLocation, parsedLocation)
+        << "a program served from the L1 memo lost its fragment output location";
+
+    // A name that is not an output must still be -1 from both, so the case cannot pass by
+    // making the accessor answer everything.
+    EXPECT_EQ(MG_Impl::GLImpl::GetFragDataLocation(fromMemo, "notAnOutput"), -1);
 }
 
 // The modules a hit hands out must be the modules a from-scratch translation would have

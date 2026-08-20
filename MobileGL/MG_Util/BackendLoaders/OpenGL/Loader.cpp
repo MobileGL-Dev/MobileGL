@@ -692,8 +692,12 @@ namespace MobileGL::MG_Util::BackendLoader {
             !f.glUnmapBuffer || !f.glMemoryBarrier || !f.glCreateShader || !f.glCreateProgram) {
             return false;
         }
-        GLint maxVertexSsboBlocks = 0;
-        f.glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &maxVertexSsboBlocks);
+        // Read from caps, not re-queried: the per-stage limits are resolved (and their query
+        // errors drained) before this probe runs, so asking the driver again would be a second
+        // round trip that can disagree with the number MobileGL actually advertises - and, on
+        // the early return below, would leave its own GL_INVALID_ENUM in the queue for the
+        // application's first glGetError to find.
+        const GLint maxVertexSsboBlocks = caps.MaxVertexShaderStorageBlocks;
         if (maxVertexSsboBlocks < 1) {
             // The native indirect machinery cannot read the command buffer from the vertex
             // stage on this driver anyway; assume conforming zero-based gl_InstanceID.
@@ -1036,6 +1040,15 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxVertexAttribs = 16;
         GLint maxComputeShaderStorageBlocks = 8;
         GLint maxCombinedShaderStorageBlocks = 32;
+        // ES 3.2 table 21.44 minimums. Zero for the four graphics stages below fragment is not a
+        // placeholder - it is what the spec permits and what ARM's GLES driver actually reports,
+        // so a probe that never runs (pre-ES 3.2, unsupported pname) leaves behind the truthful
+        // answer rather than an optimistic one.
+        GLint maxVertexShaderStorageBlocks = 0;
+        GLint maxTessControlShaderStorageBlocks = 0;
+        GLint maxTessEvaluationShaderStorageBlocks = 0;
+        GLint maxGeometryShaderStorageBlocks = 0;
+        GLint maxFragmentShaderStorageBlocks = 4;
         GLint maxComputeUniformBlocks = 12;
         GLint maxComputeWorkGroupInvocations = 128;
         GLint maxShaderStorageBufferBindings = 8;
@@ -1126,6 +1139,59 @@ namespace MobileGL::MG_Util::BackendLoader {
         if (caps.GLESVersion.Major > 3 ||
             (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
             glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &maxGeometryImageUniforms);
+        }
+        // Per-stage storage-block counts. Deliberately NOT batched with the unconditional probes
+        // above, for the reason GL_MAX_TEXTURE_BUFFER_SIZE is not: the vertex and fragment pnames
+        // are ES 3.1, but the tessellation and geometry ones only exist from ES 3.2 on (or under
+        // EXT_tessellation_shader / EXT_geometry_shader), so on an older context they raise
+        // GL_INVALID_ENUM, leave the local untouched, and - with nothing draining the queue until
+        // some later probe - let that error be misattributed to an unrelated query in between, or
+        // leak into the application's first glGetError.
+        //
+        // A stage whose probe does not run keeps the spec minimum, which for all four graphics
+        // stages is 0. That is the honest answer: DirectGLES emits ESSL 3.10 on an ES 3.1 context,
+        // where those stages do not exist at all.
+        {
+            const auto drainErrors = [&glesFuncs]() {
+                Bool hadError = false;
+                if (glesFuncs.glGetError) {
+                    while (glesFuncs.glGetError() != GL_NO_ERROR) hadError = true;
+                }
+                return hadError;
+            };
+
+            // Isolate from errors raised by the preceding probes so the drain below reports on
+            // these queries only.
+            drainErrors();
+            glesFuncs.glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &maxVertexShaderStorageBlocks);
+            glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &maxFragmentShaderStorageBlocks);
+            if (drainErrors()) {
+                MGLOG_W("Per-stage shader storage block query failed for the vertex/fragment "
+                        "stages; assuming the ES minimums (vertex 0, fragment 4)");
+                maxVertexShaderStorageBlocks = 0;
+                maxFragmentShaderStorageBlocks = 4;
+            }
+            if (esAtLeast32) {
+                glesFuncs.glGetIntegerv(GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS,
+                                        &maxTessControlShaderStorageBlocks);
+                glesFuncs.glGetIntegerv(GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS,
+                                        &maxTessEvaluationShaderStorageBlocks);
+                glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS, &maxGeometryShaderStorageBlocks);
+                if (drainErrors()) {
+                    MGLOG_W("Per-stage shader storage block query failed for the tessellation/"
+                            "geometry stages; assuming the ES minimum of 0");
+                    maxTessControlShaderStorageBlocks = 0;
+                    maxTessEvaluationShaderStorageBlocks = 0;
+                    maxGeometryShaderStorageBlocks = 0;
+                }
+            }
+            // A driver is free to report a negative or nonsensical count into an untouched
+            // out-param; clamp before anything downstream treats it as a capacity.
+            maxVertexShaderStorageBlocks = std::max(maxVertexShaderStorageBlocks, 0);
+            maxTessControlShaderStorageBlocks = std::max(maxTessControlShaderStorageBlocks, 0);
+            maxTessEvaluationShaderStorageBlocks = std::max(maxTessEvaluationShaderStorageBlocks, 0);
+            maxGeometryShaderStorageBlocks = std::max(maxGeometryShaderStorageBlocks, 0);
+            maxFragmentShaderStorageBlocks = std::max(maxFragmentShaderStorageBlocks, 0);
         }
         glesFuncs.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
         glesFuncs.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttachments);
@@ -1271,6 +1337,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxVertexAttribs = maxVertexAttribs;
         caps.MaxComputeShaderStorageBlocks = maxComputeShaderStorageBlocks;
         caps.MaxCombinedShaderStorageBlocks = maxCombinedShaderStorageBlocks;
+        caps.MaxVertexShaderStorageBlocks = maxVertexShaderStorageBlocks;
+        caps.MaxTessControlShaderStorageBlocks = maxTessControlShaderStorageBlocks;
+        caps.MaxTessEvaluationShaderStorageBlocks = maxTessEvaluationShaderStorageBlocks;
+        caps.MaxGeometryShaderStorageBlocks = maxGeometryShaderStorageBlocks;
+        caps.MaxFragmentShaderStorageBlocks = maxFragmentShaderStorageBlocks;
         caps.MaxComputeUniformBlocks = maxComputeUniformBlocks;
         caps.MaxComputeWorkGroupInvocations = maxComputeWorkGroupInvocations;
         caps.MaxShaderStorageBufferBindings = maxShaderStorageBufferBindings;
@@ -1348,6 +1419,14 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_VERTEX_ATTRIBS: %d", caps.MaxVertexAttribs);
         MGLOG_I("    GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS: %d", caps.MaxComputeShaderStorageBlocks);
         MGLOG_I("    GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS: %d", caps.MaxCombinedShaderStorageBlocks);
+        // Worth a line each: a zero here is what stops an application's storage block from ever
+        // working in that stage, and reading it back from an artifact is the difference between
+        // "MobileGL dropped my draw" and "this driver has no SSBOs outside compute".
+        MGLOG_I("    GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS: %d", caps.MaxVertexShaderStorageBlocks);
+        MGLOG_I("    GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS: %d", caps.MaxTessControlShaderStorageBlocks);
+        MGLOG_I("    GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS: %d", caps.MaxTessEvaluationShaderStorageBlocks);
+        MGLOG_I("    GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS: %d", caps.MaxGeometryShaderStorageBlocks);
+        MGLOG_I("    GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS: %d", caps.MaxFragmentShaderStorageBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_UNIFORM_BLOCKS: %d", caps.MaxComputeUniformBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: %d", caps.MaxComputeWorkGroupInvocations);
         MGLOG_I("    GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: %d", caps.MaxShaderStorageBufferBindings);

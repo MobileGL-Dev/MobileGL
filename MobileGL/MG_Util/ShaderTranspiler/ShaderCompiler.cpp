@@ -83,23 +83,11 @@ namespace MobileGL {
                 Resources.minProgramTexelOffset = -8;
                 Resources.maxProgramTexelOffset = 7;
                 Resources.maxClipDistances = 8;
-                Resources.maxComputeWorkGroupCountX = 65535;
-                Resources.maxComputeWorkGroupCountY = 65535;
-                Resources.maxComputeWorkGroupCountZ = 65535;
-                Resources.maxComputeWorkGroupSizeX = 1024;
-                Resources.maxComputeWorkGroupSizeY = 1024;
-                // TODO: Drive glslang compute resource limits from the active backend instead of this permissive cap.
-                // WHEN THAT IS DONE: CompileEnv::maxComputeWorkGroupSize and
-                // maxComputeWorkGroupInvocations must also be added to
-                // ComputeFrontendCompileEnvFingerprint(). They are out of the L1 memo key today
-                // ONLY because these maxima are hardcoded here - see the classification comment
-                // on CompileEnv::frontendFingerprint.
-                Resources.maxComputeWorkGroupSizeZ = 1024;
-                Resources.maxComputeUniformComponents = 1024;
+                Resources.maxComputeUniformComponents = MAX_COMPUTE_UNIFORM_COMPONENTS;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
-                Resources.maxComputeAtomicCounters = 8;
-                Resources.maxComputeAtomicCounterBuffers = 1;
+                Resources.maxComputeAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                Resources.maxComputeAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
                 Resources.maxVaryingComponents = 60;
                 Resources.maxVertexOutputComponents = 64;
                 Resources.maxGeometryInputComponents = 64;
@@ -137,16 +125,22 @@ namespace MobileGL {
                 Resources.maxTessControlAtomicCounters = 0;
                 Resources.maxTessEvaluationAtomicCounters = 0;
                 Resources.maxGeometryAtomicCounters = 0;
-                Resources.maxFragmentAtomicCounters = 8;
-                Resources.maxCombinedAtomicCounters = 8;
-                Resources.maxAtomicCounterBindings = 1;
+                Resources.maxFragmentAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                Resources.maxCombinedAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                // Every atomic-counter limit below is the one glGetIntegerv answers; the shared
+                // constants in Types.h are what keeps the two sides from drifting apart again.
+                // gl_MaxAtomicCounterBindings and gl_MaxAtomicCounterBufferSize expand from these
+                // (Initialize.cpp), and the binding count is also the ceiling glslang checks a
+                // `layout(binding = N) uniform atomic_uint` against - it was 1, so every counter
+                // outside binding 0 failed to compile.
+                Resources.maxAtomicCounterBindings = MAX_ATOMIC_COUNTER_BUFFER_BINDINGS;
                 Resources.maxVertexAtomicCounterBuffers = 0;
                 Resources.maxTessControlAtomicCounterBuffers = 0;
                 Resources.maxTessEvaluationAtomicCounterBuffers = 0;
                 Resources.maxGeometryAtomicCounterBuffers = 0;
-                Resources.maxFragmentAtomicCounterBuffers = 1;
-                Resources.maxCombinedAtomicCounterBuffers = 1;
-                Resources.maxAtomicCounterBufferSize = 16384;
+                Resources.maxFragmentAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
+                Resources.maxCombinedAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
+                Resources.maxAtomicCounterBufferSize = MAX_ATOMIC_COUNTER_BUFFER_SIZE;
                 Resources.maxTransformFeedbackBuffers = 4;
                 Resources.maxTransformFeedbackInterleavedComponents = 64;
                 Resources.maxCullDistances = 8;
@@ -165,6 +159,14 @@ namespace MobileGL {
                 // Resource checking must describe the same backend contract exposed through
                 // glGetIntegerv. Keeping this copy local also avoids racing on a process-global
                 // TBuiltInResource when Iris compiles shaders concurrently.
+                //
+                // MEMO-HAZARD RULE FOR THIS BLOCK. Everything below is an env-derived value that
+                // glslang enforces at parse AND expands into a built-in constant, so every one of
+                // them can change the SPIR-V a module generates. EVERY LINE BELOW MUST BE HASHED
+                // BY ComputeFrontendCompileEnvFingerprint(), which is the L1 shader-translation
+                // memo's environment key - adding a read here without adding it there is a silent
+                // miscompile, not a slow path. See the classification on
+                // CompileEnv::frontendFingerprint.
                 const MG_Backend::DynamicBackendParameters fallbackParameters{};
                 const auto& activeBackend = MG_Backend::pActiveBackendObject;
                 const auto& dynamicParameters =
@@ -178,6 +180,25 @@ namespace MobileGL {
                 Resources.maxFragmentImageUniforms = dynamicParameters.MaxFragmentImageUniforms;
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
                 Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
+                Resources.maxComputeTextureImageUnits = dynamicParameters.MaxComputeTextureImageUnits;
+
+                // The compute work-group limits are the env's, not the backend parameters': they
+                // are the only ones that come from a REAL indexed driver query, which
+                // CaptureCompileEnv already issued once on the GL thread and floored at the core
+                // minimum exactly as GL_Getter does. Reading the same snapshot here is what makes
+                // gl_MaxComputeWorkGroupSize and glGetIntegeri_v agree by construction
+                // (KHR-GL43.compute_shader.max compares them); the z component was 1024 here
+                // against the 64 every ES driver reports. A null env is the standalone/test entry
+                // point, which has no context to have queried one - the core minimums stand, which
+                // is what a default-constructed CompileEnv carries anyway.
+                const Uint* maxWorkGroupSize = env ? env->maxComputeWorkGroupSize : MIN_COMPUTE_WORK_GROUP_SIZE;
+                const Uint* maxWorkGroupCount = env ? env->maxComputeWorkGroupCount : MIN_COMPUTE_WORK_GROUP_COUNT;
+                Resources.maxComputeWorkGroupSizeX = static_cast<int>(maxWorkGroupSize[0]);
+                Resources.maxComputeWorkGroupSizeY = static_cast<int>(maxWorkGroupSize[1]);
+                Resources.maxComputeWorkGroupSizeZ = static_cast<int>(maxWorkGroupSize[2]);
+                Resources.maxComputeWorkGroupCountX = static_cast<int>(maxWorkGroupCount[0]);
+                Resources.maxComputeWorkGroupCountY = static_cast<int>(maxWorkGroupCount[1]);
+                Resources.maxComputeWorkGroupCountZ = static_cast<int>(maxWorkGroupCount[2]);
 
                 Resources.limits.nonInductiveForLoops = true;
                 Resources.limits.whileLoops = true;

@@ -44,6 +44,17 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
     Bool IsRawPackedPixelTransfer(TextureInternalFormat internalFormat, TextureInputFormat clientFormat,
                                   TexturePixelDataType clientType);
 
+    // True when a packed internal format has REDUNDANT encodings, so decoding a texel and
+    // re-encoding it keeps the VALUE but not the BITS. Only RGB9_E5 does: its shared exponent can
+    // be lowered with the mantissas shifted up to match, and the spec's encoder always emits the
+    // canonical form. RGB10_A2, RGB10_A2UI and R11F_G11F_B10F round-trip through float32
+    // bit-exactly, so a GPU readback can answer for them.
+    //
+    // This is what decides whether the CPU shadow has to stay authoritative for a format: a
+    // readback of an RGB9_E5 level through a colour attachment cannot return the stored words, no
+    // matter how well behaved the driver is.
+    Bool HasRedundantPackedEncoding(TextureInternalFormat internalFormat);
+
     // Decodes the canonical shadow-mip storage of `internalFormat` into wide RGBA texels for CPU
     // readback (GetTexImage of non-renderable formats). Non-integer formats fill outWide with
     // 4 Floats per texel; integer formats fill it with 4 Uint32/Int32 per texel and set

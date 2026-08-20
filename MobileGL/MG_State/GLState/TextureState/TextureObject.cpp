@@ -250,6 +250,10 @@ namespace MobileGL {
                 return m_contentVersion;
             }
 
+            Uint64 TextureObjectBase::GetShapeVersion() const {
+                return m_shapeVersion;
+            }
+
             Bool TextureObjectBase::IsMipmapCompleteForFilterCached(Bool mipmapped) const {
                 const int slot = mipmapped ? 1 : 0;
                 if (m_completeMemoShapeVersion[slot] == m_shapeVersion) {
@@ -371,6 +375,18 @@ namespace MobileGL {
             const void* TextureObjectWithOneMipmap::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
                                                                        Uint mipmapLevel) const {
                 return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
+            }
+
+            void TextureObjectWithOneMipmap::SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
+                                                                       Uint mipmapLevel, GLenum internalFormat) {
+                m_textureStorage.SetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
+                                                              internalFormat);
+            }
+
+            GLenum TextureObjectWithOneMipmap::GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
+                                                                       Uint mipmapLevel) const {
+                return m_textureStorage.GetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget),
+                                                                     mipmapLevel);
             }
 
             IntVec3 TextureObjectWithOneMipmap::GetBaseSize() const {

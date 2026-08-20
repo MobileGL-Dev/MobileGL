@@ -24,6 +24,20 @@ namespace MobileGL::MG_State::GLState {
 
     class ProgramObject {
     public:
+        // GL_MAX_UNIFORM_LOCATIONS: locations 0 .. MAX_UNIFORM_LOCATIONS-1 are the whole legal
+        // range (GL 4.6 core 7.6.1 / ARB_explicit_uniform_location). Shared with GL_Getter rather
+        // than spelled twice, because the link and the query must agree exactly - the CTS declares
+        // a uniform at the advertised value minus one and expects it to link
+        // (KHR-GL43.explicit_uniform_location.uniform-loc-max).
+        //
+        // Tied to glslang's own ceiling and NOT raisable past it: ParseHelper rejects
+        // `layout(location = N)` for N >= TQualifier::layoutLocationEnd at COMPILE time, so
+        // layoutLocationEnd - 1 is the largest location any shader in this stack can declare -
+        // which makes exactly layoutLocationEnd locations, 0 .. layoutLocationEnd - 1, the pool.
+        // Advertising more would promise a location no shader could name. Comfortably above the
+        // 1024 GL 4.3 requires.
+        static constexpr Int MAX_UNIFORM_LOCATIONS = static_cast<Int>(glslang::TQualifier::layoutLocationEnd);
+
         // Everything the query surface ever asked a glslang::TType, flattened. Twenty
         // predicates, no recursion: nothing post-link ever walks a struct, a type name or the
         // AST, so a POD covers the whole surface exactly.
@@ -761,9 +775,6 @@ namespace MobileGL::MG_State::GLState {
         // SIGSEGV inside glslang::TProgram::getNumPipeInputs - KHR-GL30.api.coverage does exactly
         // this after a failed glGetAttribLocation, and reached it as soon as the CopyTexImage2D
         // throw ahead of it stopped killing the run first.
-        Int GetActiveAtomicCounterCount() const {
-            return Artifacts().atomicCounterCount;
-        }
         Int GetActiveAttributesCount() const {
             return static_cast<Int>(Artifacts().pipeInputReflection.size());
         }
@@ -1002,7 +1013,6 @@ namespace MobileGL::MG_State::GLState {
             // outputs are varyings and must report -1 (KHR-GL43.program_interface_query.
             // separate-programs-tess-control).
             Bool lastStageIsFragment = false;
-            Int atomicCounterCount = 0;
             Array<GLuint, 3> computeLocalSize{};
             // Replaces program->getUniformIndex(name). Maps the reflected name to its
             // TProgram uniform index.

@@ -14,6 +14,7 @@ namespace MobileGL {
     namespace MG_State::GLState {
         class FramebufferObject;
         class ITextureObject;
+        class RenderbufferObject;
     }
 
     enum class BackendType {
@@ -24,6 +25,19 @@ namespace MobileGL {
     };
 
     namespace MG_Backend {
+        // One endpoint of a glCopyImageSubData. GL 4.6 core 18.3.2 accepts GL_RENDERBUFFER
+        // alongside the ten whole-image texture targets, and a renderbuffer name lives in a
+        // namespace of its own - so an endpoint is a sum type, not an ITextureObject. At most
+        // one of the two pointers is set; neither is set when the name named nothing, which is
+        // the INVALID_VALUE the frontend validator reports.
+        struct CopyImageEndpoint {
+            SharedPtr<MG_State::GLState::ITextureObject> Texture;
+            SharedPtr<MG_State::GLState::RenderbufferObject> Renderbuffer;
+
+            Bool IsRenderbuffer() const { return Renderbuffer != nullptr; }
+            Bool Exists() const { return Texture != nullptr || Renderbuffer != nullptr; }
+        };
+
         enum class FormatCapability : Uint64 {
             Creatable = 1ull << 0,
 
@@ -160,9 +174,9 @@ namespace MobileGL {
                                    GLsizei height, GLint border);
             void (*CopyTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                       GLsizei width, GLsizei height);
-            void (*CopyImageSubData)(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+            void (*CopyImageSubData)(const CopyImageEndpoint& src,
                                      GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                     const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                     const CopyImageEndpoint& dst,
                                      GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                      GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
             void (*GenerateMipmap)(GLenum target);
@@ -326,6 +340,22 @@ namespace MobileGL {
             Int MaxVertexAttribs = 16;
             Int MaxComputeShaderStorageBlocks = 8;
             Int MaxCombinedShaderStorageBlocks = 32;
+            // Per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS. Zero is a legal answer for the four
+            // non-compute, non-fragment stages and these defaults are the spec minimums, not
+            // placeholders: GL 4.6 table 23.64 and ES 3.2 table 21.44 both set the minimum for
+            // vertex, tessellation control, tessellation evaluation and geometry at 0, and only
+            // fragment (8 in GL, 4 in ES) and compute are guaranteed to have any. Every real ARM
+            // GLES driver takes that allowance - a Mali-G925 reports 0 for all four - so a
+            // backend that cannot honour a graphics-stage storage block MUST report 0 here
+            // rather than a hopeful number. Advertising a non-zero count the driver will refuse
+            // does not make the block work; it only moves the failure from an honest
+            // "unsupported" at query time to a backend link error the frontend never surfaces,
+            // after which every draw with that program silently renders nothing.
+            Int MaxVertexShaderStorageBlocks = 0;
+            Int MaxTessControlShaderStorageBlocks = 0;
+            Int MaxTessEvaluationShaderStorageBlocks = 0;
+            Int MaxGeometryShaderStorageBlocks = 0;
+            Int MaxFragmentShaderStorageBlocks = 8;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
             Int MaxShaderStorageBufferBindings = 8;

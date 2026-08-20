@@ -34,6 +34,17 @@ namespace {
         GLint maxFragmentImageUniforms = 4;
         GLint maxComputeImageUniforms = 5;
         bool maxGeometryImageUniformsQueried = false;
+        // Per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS. The vertex and fragment pnames are ES 3.1,
+        // but the tessellation and geometry ones only exist from ES 3.2 on, so asking for them
+        // on an older context raises GL_INVALID_ENUM - the same shape as the buffer-texture and
+        // anisotropy probes. The "queried" flags are what pin that gating; the "raises error"
+        // knob is what pins the drain.
+        GLint maxTessControlSsboBlocks = 6;
+        GLint maxTessEvaluationSsboBlocks = 7;
+        GLint maxGeometrySsboBlocks = 8;
+        GLint maxFragmentSsboBlocks = 9;
+        bool tessAndGeometrySsboBlocksQueried = false;
+        bool perStageSsboBlockQueryRaisesError = false;
         GLfloat minFragmentInterpolationOffset = -0.75f;
         GLfloat maxFragmentInterpolationOffset = 0.625f;
         GLint fragmentInterpolationOffsetBits = 6;
@@ -111,7 +122,30 @@ namespace {
         funcs.glGetIntegerv = [](GLenum pname, GLint* data) {
             switch (pname) {
             case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
-                *data = g_fake.maxVertexSsboBlocks;
+                if (g_fake.perStageSsboBlockQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    *data = g_fake.maxVertexSsboBlocks;
+                }
+                break;
+            case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
+                if (g_fake.perStageSsboBlockQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    *data = g_fake.maxFragmentSsboBlocks;
+                }
+                break;
+            case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
+                g_fake.tessAndGeometrySsboBlocksQueried = true;
+                *data = g_fake.maxTessControlSsboBlocks;
+                break;
+            case GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS:
+                g_fake.tessAndGeometrySsboBlocksQueried = true;
+                *data = g_fake.maxTessEvaluationSsboBlocks;
+                break;
+            case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
+                g_fake.tessAndGeometrySsboBlocksQueried = true;
+                *data = g_fake.maxGeometrySsboBlocks;
                 break;
             case GL_MAX_VERTEX_IMAGE_UNIFORMS:
                 *data = g_fake.maxVertexImageUniforms;
@@ -400,6 +434,10 @@ namespace {
     MobileGL::MG_External::GLESCapabilities MakeEs31Capabilities() {
         MobileGL::MG_External::GLESCapabilities caps;
         caps.GLESVersion = {3, 1, 0};
+        // The probe reads its vertex storage-block gate from caps rather than re-querying the
+        // driver (FillInGLESCapabilities resolves the per-stage limits before calling it), so a
+        // caps struct handed to the probe directly has to carry what the fake reports.
+        caps.MaxVertexShaderStorageBlocks = g_fake.maxVertexSsboBlocks;
         return caps;
     }
 
@@ -525,6 +563,83 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     EXPECT_EQ(es32Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es32Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_TRUE(g_fake.maxGeometryImageUniformsQueried);
+}
+
+// The per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS probes. These decide whether an application is
+// told it may declare a storage block in a graphics stage, and on a driver that cannot serve one
+// a wrong answer is not a cosmetic mis-report: the program is built, the driver refuses it at
+// link time, the frontend reports LINK_STATUS true anyway, and every draw with it renders
+// nothing. A Mali-G925-Immortalis reports 0 for vertex, both tessellation stages and geometry.
+TEST(PerStageStorageBlockCapabilities, TakesTheDriverValuesAndGatesTessAndGeometryOnEs32) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    // ES 3.1: the tessellation and geometry pnames do not exist, so they must not be asked for
+    // and the stages must report the spec minimum of 0 rather than a hopeful driver number.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 3;
+    MobileGL::MG_External::GLESCapabilities es31Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Caps, funcs));
+    EXPECT_EQ(es31Caps.MaxVertexShaderStorageBlocks, 3);
+    EXPECT_EQ(es31Caps.MaxFragmentShaderStorageBlocks, g_fake.maxFragmentSsboBlocks);
+    EXPECT_EQ(es31Caps.MaxTessControlShaderStorageBlocks, 0);
+    EXPECT_EQ(es31Caps.MaxTessEvaluationShaderStorageBlocks, 0);
+    EXPECT_EQ(es31Caps.MaxGeometryShaderStorageBlocks, 0);
+    EXPECT_FALSE(g_fake.tessAndGeometrySsboBlocksQueried);
+
+    // ES 3.2: all five are real pnames and all five driver values must come through verbatim.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 3;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32Caps, funcs));
+    EXPECT_EQ(es32Caps.MaxVertexShaderStorageBlocks, 3);
+    EXPECT_EQ(es32Caps.MaxTessControlShaderStorageBlocks, g_fake.maxTessControlSsboBlocks);
+    EXPECT_EQ(es32Caps.MaxTessEvaluationShaderStorageBlocks, g_fake.maxTessEvaluationSsboBlocks);
+    EXPECT_EQ(es32Caps.MaxGeometryShaderStorageBlocks, g_fake.maxGeometrySsboBlocks);
+    EXPECT_EQ(es32Caps.MaxFragmentShaderStorageBlocks, g_fake.maxFragmentSsboBlocks);
+    EXPECT_TRUE(g_fake.tessAndGeometrySsboBlocksQueried);
+}
+
+// Zero has to survive the round trip intact. It is the answer that matters most - it is what
+// ARM's driver actually reports - so a probe that silently substituted a floor would put the
+// bug straight back.
+TEST(PerStageStorageBlockCapabilities, AZeroFromTheDriverIsReportedAsZero) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.maxTessControlSsboBlocks = 0;
+    g_fake.maxTessEvaluationSsboBlocks = 0;
+    g_fake.maxGeometrySsboBlocks = 0;
+    g_fake.maxFragmentSsboBlocks = 16;
+
+    MobileGL::MG_External::GLESCapabilities maliLikeCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(maliLikeCaps, funcs));
+
+    EXPECT_EQ(maliLikeCaps.MaxVertexShaderStorageBlocks, 0);
+    EXPECT_EQ(maliLikeCaps.MaxTessControlShaderStorageBlocks, 0);
+    EXPECT_EQ(maliLikeCaps.MaxTessEvaluationShaderStorageBlocks, 0);
+    EXPECT_EQ(maliLikeCaps.MaxGeometryShaderStorageBlocks, 0);
+    EXPECT_EQ(maliLikeCaps.MaxFragmentShaderStorageBlocks, 16);
+}
+
+// A rejected query must leave no error behind for the application's first glGetError to find,
+// and must fall back to the spec minimums rather than to whatever the untouched out-param held.
+TEST(PerStageStorageBlockCapabilities, ARejectedQueryIsDrainedAndFallsBackToTheSpecMinimums) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    ResetFakeDriver();
+    g_fake.perStageSsboBlockQueryRaisesError = true;
+    g_fake.maxVertexSsboBlocks = 12;
+    g_fake.maxFragmentSsboBlocks = 12;
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_EQ(caps.MaxVertexShaderStorageBlocks, 0);
+    EXPECT_EQ(caps.MaxFragmentShaderStorageBlocks, 4);
+    EXPECT_EQ(g_fake.pendingError, static_cast<GLenum>(GL_NO_ERROR));
 }
 
 TEST(FragmentInterpolationCapabilities, QueriesOnlyWhenSupportedAndPreservesDriverLimits) {

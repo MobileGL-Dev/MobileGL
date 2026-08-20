@@ -8,6 +8,7 @@
 
 #include "ShaderCompileTask.h"
 
+#include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
@@ -15,6 +16,7 @@
 
 #include <glslang/Include/PoolAlloc.h>
 
+#include <algorithm>
 #include <charconv>
 
 namespace {
@@ -137,8 +139,21 @@ namespace {
         return std::nullopt;
     }
 
+    // What glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS) answers, recomputed rather than
+    // queried: the compile runs on a worker with no context, and the pname is not a plain backend
+    // parameter - the getter caps the backend's count by the state layer's fixed binding-point
+    // array (GL_Getter's GetIndexedBufferQueryPointCount). A shader must be judged against the
+    // number the application was told, not against either half of it.
+    static MobileGL::Int MaxShaderStorageBufferBindings(
+        const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        const MobileGL::Int frontendPoints =
+            static_cast<MobileGL::Int>(MobileGL::MG_State::GLState::BufferBindingPointCount);
+        if (!env.HasBackend()) return frontendPoints;
+        return std::min<MobileGL::Int>(frontendPoints, std::max<MobileGL::Int>(env.params.MaxShaderStorageBufferBindings, 0));
+    }
+
     // The half of a compile that depends on nothing but the source text, the stage and the
-    // environment snapshot: preprocessing, the two lexical rejections, and the two lexical
+    // environment snapshot: preprocessing, the three lexical rejections, and the two lexical
     // side-channel extractions. Split out so P0b layer 2 can memoize exactly this and
     // nothing else - the glslang parse stays per-object because its TShader is consume-once.
     // Deliberately free of any per-object state so the memo is sound.
@@ -169,6 +184,13 @@ namespace {
         if (const std::optional<String> reservedError = FindReservedIdentifierViolation(result.preprocessedSource)) {
             result.outcome = ShaderPreprocessOutcome::ReservedIdentifierRejected;
             result.infoLog = *reservedError;
+            return result;
+        }
+
+        if (const std::optional<String> bindingError = FindShaderStorageBindingViolation(
+                result.preprocessedSource, MaxShaderStorageBufferBindings(env))) {
+            result.outcome = ShaderPreprocessOutcome::ResourceBindingRejected;
+            result.infoLog = *bindingError;
             return result;
         }
 

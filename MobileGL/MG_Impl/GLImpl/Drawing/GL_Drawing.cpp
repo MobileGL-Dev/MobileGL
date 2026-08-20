@@ -326,10 +326,23 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL 4.6 core 10.9: inside a conditional block whose predicate did not pass, the drawing
+    // commands, Clear, ClearBuffer* and the compute dispatches are DISCARDED. The gate sits on the
+    // wrappers that ISSUE the backend call rather than at the top of each entry point, so that
+    // everything a real driver would still do inside the block - argument validation and the
+    // errors it raises - happens exactly as it does outside one, and only the command itself is
+    // dropped. It is deliberately not on the frontend's transform-feedback accounting either:
+    // that mirrors what the capture stage would have written, and a conditional block around a
+    // capturing draw has no test coverage in either direction.
+    static Bool ConditionalRenderDiscardsCommand() {
+        return MG_State::pGLContext->ConditionalRenderDiscardsCommands();
+    }
+
     void Clear_Backend(GLbitfield mask) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.Clear(mask);
     }
 
@@ -337,6 +350,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElements(mode, count, type, indices);
     }
 
@@ -345,6 +359,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElements(mode, count, type, indices, drawcount);
     }
 
@@ -353,6 +368,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsBaseVertex(mode, count, type, indices, drawcount,
                                                                           basevertex);
     }
@@ -361,6 +377,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawArrays(mode, first, count);
     }
 
@@ -368,6 +385,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArrays(mode, first, count, drawcount);
     }
 
@@ -376,6 +394,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsBaseVertex(mode, count, type, indices, basevertex);
     }
 
@@ -384,6 +403,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
 
@@ -391,6 +411,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
     }
 
@@ -399,6 +420,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount(mode, type, indirect, drawcount,
                                                                              maxdrawcount, stride);
     }
@@ -408,6 +430,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirectCount(mode, indirect, drawcount, maxdrawcount,
                                                                            stride);
     }
@@ -417,6 +440,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawRangeElementsBaseVertex(mode, start, end, count, type, indices,
                                                                           basevertex);
     }
@@ -426,6 +450,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawRangeElements(mode, start, end, count, type, indices);
     }
 
@@ -435,6 +460,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertexBaseInstance(
             mode, count, type, indices, instancecount, basevertex, baseinstance);
     }
@@ -444,6 +470,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount,
                                                                               basevertex);
     }
@@ -453,6 +480,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseInstance(mode, count, type, indices,
                                                                                 instancecount, baseinstance);
     }
@@ -462,6 +490,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstanced(mode, count, type, indices, instancecount);
     }
 
@@ -469,6 +498,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsIndirect(mode, type, indirect);
     }
     void DrawArraysInstancedBaseInstance_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
@@ -476,6 +506,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstancedBaseInstance(mode, first, count, instancecount,
                                                                               baseinstance);
     }
@@ -484,6 +515,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstanced(mode, first, count, instancecount);
     }
 
@@ -491,6 +523,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+        if (ConditionalRenderDiscardsCommand()) return;
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysIndirect(mode, indirect);
     }
 
@@ -519,6 +552,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
         }
+        // GL 4.3 added both dispatches to the conditional-render set (GL 4.6 core 10.9), which is
+        // exactly what KHR-GL43.compute_shader.conditional-dispatching checks.
+        if (ConditionalRenderDiscardsCommand()) return;
         dispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -570,6 +606,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
+        if (ConditionalRenderDiscardsCommand()) return;
         dispatchComputeIndirect(indirect);
     }
 

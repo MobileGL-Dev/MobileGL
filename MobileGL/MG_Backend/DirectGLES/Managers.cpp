@@ -46,6 +46,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
     constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
 
+    // ES has no atomic-counter buffers: glslang lowers every atomic_uint onto a synthesized
+    // storage block, so one GL counter BUFFER costs one of the driver's shader-storage binding
+    // points. Those slots are taken from the TOP of the range downwards - below the one
+    // mg_IndirectParams already reserves - so an application binding its own SSBOs from 0 upwards
+    // never meets them, and the slot for GL binding N is `this - N` in every stage of the
+    // program without any shared state. Negative when the driver has no room left at all.
+    static Int AtomicCounterEsslBindingTop() {
+        return g_GLESCapabilities.MaxShaderStorageBufferBindings - 2;
+    }
+
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.IsAngleLlvmpipeRenderer;
     }
@@ -145,6 +155,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        [] { std::atexit(+[] { g_processTeardown = true; }); });
     }
 
+    Bool VertexStageStorageBlockUsable(Int maxVertexShaderStorageBlocks) {
+        // One block is all the indirect-params view needs, so this is a >= 1 test and not a
+        // budget calculation. Negative is treated as unusable rather than clamped: a driver
+        // that leaves the out-param untouched is telling us nothing, and guessing "yes" here
+        // is what produces an unlinkable program.
+        return maxVertexShaderStorageBlocks >= 1;
+    }
+
+    static Bool CanUseVertexStageStorageBlock() {
+        return VertexStageStorageBlockUsable(g_GLESCapabilities.MaxVertexShaderStorageBlocks);
+    }
+
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType) {
         if (shaderType != GL_VERTEX_SHADER || source.find("gl_BaseInstance") == String::npos) {
             return source;
@@ -217,9 +239,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int paramsBinding = g_GLESCapabilities.MaxShaderStorageBufferBindings > 0
                                           ? g_GLESCapabilities.MaxShaderStorageBufferBindings - 1
                                           : 0;
+            // The whole indirect half of this machinery is a storage block read from the VERTEX
+            // stage, and a storage block in the vertex stage is optional in both APIs: the
+            // minimum for GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS is 0 (GL 4.6 table 23.64, ES 3.2
+            // table 21.44) and ARM's GLES driver takes that allowance - a Mali-G925 reports 0.
+            // Emitting the block anyway does not make it work; it makes the program UNLINKABLE
+            // ("The number of vertex shader storage blocks (1) is greater than the maximum
+            // number allowed (0)"), and because the frontend's LINK_STATUS is glslang's and not
+            // the driver's, the application never learns: every draw with that program silently
+            // renders nothing. Dropping just the indirect half costs strictly less.
+            const Bool canReadIndirectParamsFromVertexStage = CanUseVertexStageStorageBlock();
             String machinery;
             if (source.find(String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";") == String::npos) {
                 machinery += String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";\n";
+            }
+            if (!canReadIndirectParamsFromVertexStage) {
+                // Degraded, but contained and loud. gl_BaseInstance collapses to the plain
+                // mg_BaseInstance uniform, which the non-indirect draw entry points do set
+                // correctly - so ordinary instanced draws are unaffected. What is lost is the
+                // per-command baseInstance of an INDIRECT draw, which lives in the (possibly
+                // GPU-written) command buffer and can only be read through this block: those
+                // draws now see the last uniform value rather than their own command's. No
+                // alternative path is attempted, deliberately - there is nowhere else in the
+                // vertex stage to read a GPU-written buffer from.
+                //
+                // MGLOG_E_ONCE, not _D: this silently changes rendering for exactly the
+                // workloads (Create/Flywheel indirect instancing) whose bug reports are
+                // impossible to read without it, and once per process is bounded.
+                MGLOG_E_ONCE("gl_BaseInstance: this driver reports GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = %d, so the "
+                             "%s storage block an indirect draw's baseInstance must be read through cannot be "
+                             "declared in the vertex stage. Dropping indirect baseInstance support: non-indirect "
+                             "draws are correct, indirect draws will see a stale per-command baseInstance.",
+                             g_GLESCapabilities.MaxVertexShaderStorageBlocks, INDIRECT_PARAMS_BLOCK_NAME);
+                if (rebaseInstanceId) {
+                    // Without the block there is no per-command baseInstance to subtract, and
+                    // the uniform is the same value the define below resolves to, so rebasing
+                    // by it would cancel the base out of gl_InstanceID twice.
+                    machinery += String("#define ") + ZERO_BASED_INSTANCE_ID_NAME + " gl_InstanceID\n";
+                }
+                machinery += String("#define ") + BASE_INSTANCE_LOWERED_NAME + " (" + BASE_INSTANCE_UNIFORM_NAME + ")";
+                source.replace(pos, declaration.size(), machinery);
+                break;
             }
             machinery += String("uniform highp int ") + BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ";\n";
             machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) +
@@ -1718,14 +1778,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
-                // Defence in depth. The frontend already declines glVertexAttribLFormat on this
-                // backend (SupportsFloat64VertexAttributes is false - ES has no GL_DOUBLE vertex
-                // format and ESSL has no fp64 type), so IsLong should never arrive here; if it ever
-                // did, passing GL_DOUBLE to glVertexAttribPointer would only raise GL_INVALID_ENUM on
-                // the real driver. Disabling rather than merely skipping matters: becoming long bumps
-                // FormatVersion, not SwitchVersion, so the enable/disable block above will not run
-                // again and an already-enabled array would stay enabled with no pointer and no
-                // ARRAY_BUFFER binding - which ES 3.1+ makes an INVALID_OPERATION at draw.
+                // This is where a 64-bit array actually stops. glVertexAttribLFormat is a legal call
+                // in a GL 4.3 context and the frontend RECORDS its format (the state queries have to
+                // answer), so IsLong does arrive here - what this backend cannot do is FEED it:
+                // SupportsFloat64VertexAttributes is false because ES has no GL_DOUBLE vertex format
+                // and ESSL has no fp64 type, and passing GL_DOUBLE to glVertexAttribPointer would
+                // only raise GL_INVALID_ENUM on the real driver. Disabling rather than merely
+                // skipping matters: becoming long bumps FormatVersion, not SwitchVersion, so the
+                // enable/disable block above will not run again and an already-enabled array would
+                // stay enabled with no pointer and no ARRAY_BUFFER binding - which ES 3.1+ makes an
+                // INVALID_OPERATION at draw.
                 //
                 // IsLong is not the only way a 64-bit array gets here: glVertexAttribFormat
                 // with GL_DOUBLE asks for doubles in memory CONVERTED to float, so it is not
@@ -2437,6 +2499,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return packedData.data();
         }
 
+        // "Some level of this texture holds an image", which is all the sync gate below actually
+        // needs to know. Deliberately weaker than ITextureObject::IsComplete(): that predicate also
+        // answers whether the texture SAMPLES as complete, so it must keep rejecting a chain with
+        // undefined lower levels - but such a texture still has to be uploaded, or the level that
+        // IS defined never reaches the driver at all.
+        static Bool HasAnyDefinedMipmapLevel(const MG_State::GLState::ITextureObject* stateTextureObject) {
+            const auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject);
+            if (mipmapObject == nullptr) return false;
+            const auto levelCount = mipmapObject->GetMipmapLevelCount();
+            for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
+                for (Uint level = 0; level < levelCount; ++level) {
+                    const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                    if (levelTexelSize.x() > 0 && levelTexelSize.y() > 0 && levelTexelSize.z() > 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
@@ -2484,8 +2566,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // 3. Size changed
             // 4. Mipmap levels changed
 
-            if (!stateTextureObject->IsComplete()) {
-                MGLOG_D("Texture object with ID: %u is not complete, skipping sync.",
+            // IsComplete() is the sampling predicate, and it calls a chain whose lower levels are
+            // undefined incomplete - which is what a top-down build (upload level N, then level 0)
+            // and ARB_clear_texture's conformance cases both produce. Bailing out on that shape
+            // left the backend name with no levels whatsoever, so the level that WAS defined could
+            // never be sampled or read back. Sync whenever some level holds an image; the per-level
+            // loops below skip the degenerate ones individually.
+            if (!stateTextureObject->IsComplete() && !HasAnyDefinedMipmapLevel(stateTextureObject.get())) {
+                MGLOG_D("Texture object with ID: %u has no defined image level, skipping sync.",
                         stateTextureObject->GetExternalIndex());
                 return;
             }
@@ -2587,6 +2675,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     for (auto& uploadTarget : uploadTargets) {
                         for (SizeT level = m_prevTextureInfo.mipmapLevels; level < mipmapCount; ++level) {
                             auto levelTexelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                            // A level the application never defined reads back as {0, 0, 0}; now that a
+                            // sparse chain is synced rather than skipped whole, leave those undefined on
+                            // the driver instead of giving the name a 0x0 image at that index.
+                            if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 || levelTexelSize.z() <= 0) {
+                                textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                                continue;
+                            }
                             auto levelByteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
                             bool levelDirty = textureMipmapObject->IsStorageDirty(uploadTarget, level);
                             auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
@@ -2814,6 +2909,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         for (auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 auto levelTexelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                                // See the append-mips loop: an undefined level stays undefined on the
+                                // driver rather than becoming a 0x0 image.
+                                if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 ||
+                                    levelTexelSize.z() <= 0) {
+                                    textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                                    continue;
+                                }
                                 auto levelByteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
                                 bool levelDirty = textureMipmapObject->IsStorageDirty(uploadTarget, level);
                                 auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
@@ -4665,6 +4767,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject) {
             ImageFormatBakeInputs inputs;
+            // A format GLSL ES cannot spell on a driver with no GL_NV_image_formats to spell it
+            // with. There is no legal ESSL for such a shader at all, so the stage will not
+            // compile and the program is lost - a failure that used to leave nothing behind but
+            // a draw that rendered nothing. Recorded and reported ONCE per program build rather
+            // than per uniform: an image array reaches this decision once per element.
+            String unspellableUniform;
+            String unspellableFormat;
+            Uint unspellableCount = 0;
+            const auto recordUnspellableFormat = [&](const String& uniformName, String formatSpelling) {
+                if (unspellableCount == 0) {
+                    unspellableUniform = uniformName;
+                    unspellableFormat = Move(formatSpelling);
+                }
+                ++unspellableCount;
+            };
+
             const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
                 const auto& name = stateProgramObject.GetUniformName(loc);
@@ -4676,6 +4794,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // still needs the extension directive to survive the ES compiler.
                     if (!IsCoreEsslLayoutFormat(static_cast<glslang::TLayoutFormat>(type.layoutFormat))) {
                         inputs.needsExtendedImageFormats = true;
+                        if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                            // From the OWNED TypeFacts, not from a live TType: the reflection
+                            // snapshot already carries the declared layout format, and there is
+                            // no glslang object to ask on a translation-cache L1 hit.
+                            recordUnspellableFormat(
+                                name, glslang::TQualifier::getLayoutFormatString(
+                                          static_cast<glslang::TLayoutFormat>(type.layoutFormat)));
+                        }
                     }
                     continue;
                 }
@@ -4701,6 +4827,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
                                 "core cannot spell and this driver has no GL_NV_image_formats for.",
                                 name.c_str(), unit, boundFormat);
+                        recordUnspellableFormat(
+                            name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
                         continue;
                     }
                     inputs.needsExtendedImageFormats = true;
@@ -4742,6 +4870,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (const auto& name : textCompleted) {
                 inputs.glFormatByUniformName.erase(name);
+            }
+            // Unlatched MGLOG_E, like the transpile- and link-failure diagnostics in SyncToBackend:
+            // one line per failing program build, and naming the uniform and the format is the
+            // whole diagnostic value. Left as a log rather than a link failure on purpose - the
+            // frontend has already reported LINK_STATUS = true and GL cannot retract it, and the
+            // program stays queryable exactly as the "linked but not drawable" exit leaves it.
+            if (unspellableCount != 0) {
+                MGLOG_E("Image format '%s' on uniform '%s' has no GLSL ES spelling and this driver does not expose "
+                        "GL_NV_image_formats%s; the stage using it cannot compile and the program will draw "
+                        "nothing.",
+                        unspellableFormat.empty() ? "(none)" : unspellableFormat.c_str(), unspellableUniform.c_str(),
+                        unspellableCount > 1 ? " (and it is not the only image uniform affected)" : "");
             }
             return inputs;
         }
@@ -4789,8 +4929,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Vector<unsigned int>& spirvCode, const GLenum glShaderType,
             const std::set<String>& xfbCaptureBlockNames, const ImageFormatBakeInputs& imageFormatBake,
             const UnorderedMap<String, Int>& storageBlockBindingOverrides,
-            const Bool enableSpirvValidation, String& outSource,
-            std::set<String>& outFlattenedXfbBlockNames, String& outError) const {
+            const Int atomicCounterEsslBindingTop, const Bool enableSpirvValidation, String& outSource,
+            std::set<String>& outFlattenedXfbBlockNames, Vector<Int>& outAtomicCounterGlBindings,
+            String& outError) const {
             // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
             // plain globals (mg_*) before handing the module to SPIRV-Cross.
             Vector<unsigned int> loweredSpirv;
@@ -5021,6 +5162,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
             }
 
+            // Atomic counters, same mechanism for the same reason. glslang already turned
+            // every atomic_uint into a member of gl_AtomicCounterBlock_<N> and let the IO
+            // mapper pick that block's binding, which has no relation to the GL binding point
+            // N the application bound its counter buffer to - and can alias an SSBO the
+            // application binds itself. Move each block to its reserved slot and record N, so
+            // the draw path knows which GL_ATOMIC_COUNTER_BUFFER points to re-issue as
+            // storage-buffer bindings.
+            //
+            // BOTH HALVES ARE MEMO STATE. `atomicCounterEsslBindingTop` decides the binding
+            // this prints into the ESSL, so it is in the L2 key; `outAtomicCounterGlBindings`
+            // is an OUTPUT this stage produces and the draw path consumes, so it is in the L2
+            // payload. A hit that replayed only the text would leave the bindings empty and
+            // every counter buffer unbound - the same class of silent loss the flattened XFB
+            // block names would have been.
+            spvcSession.SetAtomicCounterBlockBindings(atomicCounterEsslBindingTop,
+                                                      outAtomicCounterGlBindings);
+
             const char* result = nullptr;
             spvcSession.Compile(&result);
 
@@ -5077,6 +5235,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this build current - the draw path compares the signature and rebuilds on a change.
             const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
             m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
+            // Rebuilt by the transpile loop below, one entry per atomic-counter block it finds.
+            // The top is snapshotted here so every stage of this program - and the draw path
+            // reading it afterwards - resolves the same slot for the same GL binding.
+            m_atomicCounterGlBindings.clear();
+            m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
@@ -5195,6 +5358,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 esslKeyInputs.glFormatByUniformName = &imageFormatBake.glFormatByUniformName;
                 esslKeyInputs.storageBlockBindingOverrides = &storageBlockBindingOverrides;
                 esslKeyInputs.esslVersion = ResolveBackendEsslVersion();
+                esslKeyInputs.atomicCounterEsslBindingTop = m_atomicCounterEsslBindingTop;
                 esslKeyInputs.enableSpirvValidation = enableSpirvValidation;
 
                 auto& esslCache = MG_Util::ShaderTranspiler::GetEsslTranslationCache();
@@ -5204,17 +5368,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 std::set<String> stageFlattenedXfbBlockNames;
+                // Per stage, and NOT m_atomicCounterGlBindings directly: on a miss the
+                // transpile appends to this, on a hit the payload supplies it, and only then
+                // is it folded into the program-wide vector. Pointing the transpile straight
+                // at the member would have made the miss path and the hit path disagree about
+                // who owns the append.
+                Vector<Int> stageAtomicCounterGlBindings;
                 const MG_Util::ShaderTranspiler::EsslTranslationResultPtr esslHit =
                     esslCacheKey.Valid() ? esslCache.Find(esslCacheKey) : nullptr;
                 if (esslHit) {
                     source = esslHit->essl;
                     stageFlattenedXfbBlockNames = esslHit->flattenedXfbBlockNames;
+                    stageAtomicCounterGlBindings = esslHit->atomicCounterGlBindings;
                 } else {
                     String transpileError;
                     if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames,
                                               imageFormatBake, storageBlockBindingOverrides,
+                                              m_atomicCounterEsslBindingTop,
                                               enableSpirvValidation, source,
-                                              stageFlattenedXfbBlockNames, transpileError)) {
+                                              stageFlattenedXfbBlockNames,
+                                              stageAtomicCounterGlBindings, transpileError)) {
                         // MGLOG_E, unlatched, like the compile- and link-failure diagnostics
                         // below: one line per failing stage is bounded by program count and
                         // naming the stage is the entire diagnostic value. A stage that never
@@ -5234,6 +5407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         auto payload = MakeShared<MG_Util::ShaderTranspiler::EsslTranslationResult>();
                         payload->essl = source;
                         payload->flattenedXfbBlockNames = stageFlattenedXfbBlockNames;
+                        payload->atomicCounterGlBindings = stageAtomicCounterGlBindings;
                         const SizeT payloadBytes =
                             MG_Util::ShaderTranspiler::EsslTranslationResultBytes(*payload);
                         esslCache.Insert(
@@ -5248,6 +5422,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // the transpile so a cache HIT contributes its names too.
                 flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
                                               stageFlattenedXfbBlockNames.end());
+                // Same rule for the atomic-counter bindings this stage declared, and for the
+                // same reason: the loop below de-duplicates across stages, so a hit that
+                // contributed nothing would silently drop a counter buffer the draw path has
+                // to bind.
+                m_atomicCounterGlBindings.insert(m_atomicCounterGlBindings.end(),
+                                                 stageAtomicCounterGlBindings.begin(),
+                                                 stageAtomicCounterGlBindings.end());
 
                 // Position in the chain is arbitrary: this is the only header-level rewrite, it
                 // edits #extension directives and never the body, and the replacement is the
@@ -5372,6 +5553,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glDeleteShader(backendShaderId);
 
                 MGLOG_D("Processed shader source length: %zu", source.length());
+            }
+
+            // A counter buffer declared by several stages was recorded once per stage; the draw
+            // path binds per GL binding point, so collapse the duplicates here rather than
+            // re-issuing the same glBindBufferBase two or three times every draw.
+            if (!m_atomicCounterGlBindings.empty()) {
+                std::sort(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end());
+                m_atomicCounterGlBindings.erase(
+                    std::unique(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end()),
+                    m_atomicCounterGlBindings.end());
             }
 
             // Transform feedback capture runs on the real driver (see XfbImpl in

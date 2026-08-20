@@ -1248,6 +1248,17 @@ namespace MobileGL {
             Int MaxVertexAttribs = 16;
             Int MaxComputeShaderStorageBlocks = 8;
             Int MaxCombinedShaderStorageBlocks = 32;
+            // Per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS as the host GLES driver reports them.
+            // The defaults are the ES 3.2 minimums (table 21.44): 0 for every graphics stage
+            // except fragment, which is 4. ES only gained the tessellation and geometry pnames
+            // in 3.2 (or with EXT_tessellation_shader / EXT_geometry_shader), so those two are
+            // queried behind a support check and left at the default otherwise - see
+            // FillInGLESCapabilities.
+            Int MaxVertexShaderStorageBlocks = 0;
+            Int MaxTessControlShaderStorageBlocks = 0;
+            Int MaxTessEvaluationShaderStorageBlocks = 0;
+            Int MaxGeometryShaderStorageBlocks = 0;
+            Int MaxFragmentShaderStorageBlocks = 4;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
             Int MaxShaderStorageBufferBindings = 8;

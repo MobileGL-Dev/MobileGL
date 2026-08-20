@@ -196,11 +196,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //  * loaded only            -> add `readonly`
         //  * stored only            -> add `writeonly`
         //  * both                   -> emit TWO declarations on the same binding and of the
-        //                              same type, `readonly <name>` and `writeonly
-        //                              <IMAGE_WRITE_ALIAS_PREFIX><name>`, and point every
-        //                              imageStore at the second one. Several image variables
-        //                              may share an image unit as long as they have the same
-        //                              type and format, which is exactly what the pair is.
+        //                              same type, `coherent readonly <name>` and `coherent
+        //                              writeonly <IMAGE_WRITE_ALIAS_PREFIX><name>`, and point
+        //                              every imageStore at the second one. Several image
+        //                              variables may share an image unit as long as they have
+        //                              the same type and format, which is exactly what the pair
+        //                              is.
+        //
+        // The `coherent` on both halves of the pair is load-bearing, not decoration: GLSL only
+        // guarantees a write through one image variable is visible to a read through a DIFFERENT
+        // one when both are coherent, and the split is what makes a same-variable
+        // read-after-write cross-variable. The single-declaration repairs above do not get it -
+        // nothing aliases them.
         //
         // Budget note: the split DOUBLES the image-uniform count of the stage it fires in, so
         // a driver advertising a tight GL_MAX_{FRAGMENT,VERTEX,...}_IMAGE_UNIFORMS can turn a

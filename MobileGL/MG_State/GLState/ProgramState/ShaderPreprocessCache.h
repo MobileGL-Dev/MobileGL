@@ -26,6 +26,9 @@ namespace MobileGL::MG_State::GLState {
         ComputeLocalSizeRejected,
         // FindReservedIdentifierViolation rejected it.
         ReservedIdentifierRejected,
+        // FindShaderStorageBindingViolation rejected it: a storage block declared a binding at or
+        // past GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS.
+        ResourceBindingRejected,
         // The source-only half was clean but glslang rejected the preprocessed source.
         // Memoizing this saves the parse itself on every later object with that source.
         ParseFailed,

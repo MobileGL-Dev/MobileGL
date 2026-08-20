@@ -13,6 +13,7 @@
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/BufferEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/BufferEnumConverter.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
 
 namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
     Bool ValidateBufferTarget(BufferTarget target) {
@@ -66,6 +67,13 @@ namespace MobileGL::MG_Impl::GLImpl::BufferImpl {
                 // GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS bounds the indexed capture
                 // binding points in GL 3.3 (no ARB_transform_feedback3).
                 pointCount = std::min<SizeT>(pointCount, 4);
+            }
+            if (target == BufferTarget::AtomicCounter) {
+                // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, which is NOT the state layer's array
+                // size: a counter buffer reaches a shader only as a lowered storage block, so the
+                // reserved range is the ceiling, and glGetIntegerv advertises the same number.
+                pointCount = std::min<SizeT>(
+                    pointCount, static_cast<SizeT>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS));
             }
             return pointCount;
         }

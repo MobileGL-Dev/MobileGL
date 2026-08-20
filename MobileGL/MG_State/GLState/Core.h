@@ -368,6 +368,31 @@ namespace MobileGL {
                     return m_transformFeedbackGeometryCaptureDraws;
                 }
 
+                // Conditional rendering (GL 4.6 core 10.9). `discard` is the verdict already
+                // resolved from the query object at glBeginConditionalRender - the predicate is
+                // read ONCE there, not per command, because GL specifies the block against the
+                // result available at Begin and re-reading it would let a query that is still
+                // being written change the answer mid-block.
+                void BeginConditionalRender(GLuint queryId, GLenum mode, Bool discard) {
+                    m_conditionalRenderActive = true;
+                    m_conditionalRenderQuery = queryId;
+                    m_conditionalRenderMode = mode;
+                    m_conditionalRenderDiscards = discard;
+                }
+                void EndConditionalRender() {
+                    m_conditionalRenderActive = false;
+                    m_conditionalRenderQuery = 0;
+                    m_conditionalRenderMode = GL_NONE;
+                    m_conditionalRenderDiscards = false;
+                }
+                Bool IsConditionalRenderActive() const { return m_conditionalRenderActive; }
+                GLuint GetConditionalRenderQuery() const { return m_conditionalRenderQuery; }
+                // Whether the commands GL 4.6 core 10.9 makes conditional are being discarded
+                // right now. False whenever no block is open, so a caller needs no second test.
+                Bool ConditionalRenderDiscardsCommands() const {
+                    return m_conditionalRenderActive && m_conditionalRenderDiscards;
+                }
+
                 // Transform feedback objects (ARB_transform_feedback2 / GL 4.0 core).
                 // The capture state above and the indexed GL_TRANSFORM_FEEDBACK_BUFFER
                 // binding points are object state, but the context keeps exactly one live
@@ -465,6 +490,13 @@ namespace MobileGL {
                 Uint64 m_transformFeedbackGeneratedPrimitiveCounter = 0;
                 Uint64 m_transformFeedbackAccountedCaptureDraws = 0;
                 Uint64 m_transformFeedbackGeometryCaptureDraws = 0;
+
+                // Conditional rendering. Context state, not object state: GL 4.6 core 10.9 allows
+                // exactly one block open at a time and no object owns it.
+                Bool m_conditionalRenderActive = false;
+                Bool m_conditionalRenderDiscards = false;
+                GLuint m_conditionalRenderQuery = 0;
+                GLenum m_conditionalRenderMode = GL_NONE;
 
                 // Everything a transform feedback object owns while it is NOT the bound one.
                 struct TransformFeedbackObjectState {

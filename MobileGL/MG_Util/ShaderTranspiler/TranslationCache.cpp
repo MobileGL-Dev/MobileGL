@@ -119,6 +119,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         builder.Value(inputs.maxDepthTextureSamples);
         builder.Value(inputs.advertisedMaxSamples);
         builder.Value(static_cast<Uint32>(inputs.esslVersion));
+        builder.Value(inputs.atomicCounterEsslBindingTop);
         builder.Value(static_cast<Uint8>(inputs.enableSpirvValidation));
         static const std::set<String> kEmptySet;
         builder.NameSet(inputs.xfbCaptureBlockNames ? *inputs.xfbCaptureBlockNames : kEmptySet);
@@ -135,6 +136,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     SizeT EsslTranslationResultBytes(const EsslTranslationResult& result) {
         SizeT bytes = result.essl.size();
         for (const String& name : result.flattenedXfbBlockNames) bytes += name.size();
+        bytes += result.atomicCounterGlBindings.size() * sizeof(Int);
         return bytes;
     }
 

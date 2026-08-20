@@ -8,6 +8,7 @@
 
 #include "VertexInputStateFactory.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
+#include <MG_Backend/BackendObjects.h>
 #include <utility>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
@@ -330,6 +331,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // for every R64 float format, so a native 64-bit vertex fetch is simply unavailable there
             // while shaderFloat64 is not. Both halves key off nothing but the attribute being long,
             // so they always agree without extra plumbing.
+            //
+            // ... as long as the shader half still runs. It does not when the backend has declared
+            // no 64-bit vertex attribute support: DemoteFloat64Pass has already narrowed every
+            // `dvec` input to a `vec` by then, so PackDoubleVertexInputsPass finds nothing to pack
+            // and a UINT-formatted attribute would be fed to a float input - garbage with no
+            // diagnostic anywhere. Declining here drops the array instead (the caller skips
+            // UNDEFINED attributes and reports them through unsupportedAttribMask), which is what
+            // DirectGLES does for the same state. The frontend RECORDS the format either way, so
+            // this gate is the only thing standing between a legal glVertexAttribLFormat and a
+            // mismatched pipeline.
+            if (MG_Backend::pActiveBackendObject == nullptr ||
+                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+                return VK_FORMAT_UNDEFINED;
+            }
             if (!isLong || isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
             case 1: return VK_FORMAT_R32G32_UINT;

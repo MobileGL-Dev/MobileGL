@@ -59,9 +59,11 @@ void main()
     const String out = SplitReadWriteImageUniforms(source);
 
     // Both halves: same binding, same format, same type - which is what makes two image
-    // variables on one image unit legal.
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform readonly highp image2D goku;"));
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " + WriteAlias("goku") + ";"));
+    // variables on one image unit legal - and both `coherent`, which is what makes the store
+    // through one of them visible to the load through the other.
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D goku;"));
+    EXPECT_TRUE(Contains(
+        out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";"));
 
     // The load keeps the original name, the store moves to the writeonly half.
     EXPECT_TRUE(Contains(out, "imageLoad(goku,"));
@@ -152,9 +154,9 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform readonly highp image2D gohan[3];"));
-    EXPECT_TRUE(Contains(out,
-                         "layout(binding = 6, rgba8) uniform writeonly highp image2D " + WriteAlias("gohan") + "[3];"));
+    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D gohan[3];"));
+    EXPECT_TRUE(Contains(
+        out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("gohan") + "[3];"));
     EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("gohan") + "[1],"));
     EXPECT_TRUE(Contains(out, "imageLoad(gohan[2],"));
 }
@@ -174,9 +176,11 @@ void main()
 )";
     const String out = SplitReadWriteImageUniforms(source);
 
-    // goku is read+write -> split; goku_hd is write-only -> qualified in place, not split.
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform readonly highp image2D goku;"));
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " + WriteAlias("goku") + ";"));
+    // goku is read+write -> split (and coherent with it); goku_hd is write-only -> qualified in
+    // place, not split, and left non-coherent because nothing aliases it.
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D goku;"));
+    EXPECT_TRUE(Contains(
+        out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";"));
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D goku_hd;"));
     EXPECT_TRUE(Contains(out, "imageStore(goku_hd,"));
     EXPECT_FALSE(Contains(out, WriteAlias("goku") + "_hd"));
@@ -197,6 +201,36 @@ void main()
     EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D goku;"));
     EXPECT_TRUE(
         Contains(out, "uniform writeonly coherent restrict highp image2D " + WriteAlias("goku") + ";"));
+    // ...and the coherent the split adds is not a SECOND one: a repeated memory qualifier is a
+    // compile error in ESSL, so the source's own has to be recognized.
+    EXPECT_EQ(CountOf(out, "coherent"), 2u);
+}
+
+// The visibility half of the split, and the reason it is not cosmetic: GLSL orders a
+// same-variable read-after-write within one invocation by construction, but once the store goes
+// through `mg_imageWrite_goku` and the load through `goku` the two are DIFFERENT variables, and
+// the ordering only holds if both are coherent. Desktop sources almost never say so - they had
+// no reason to - which is how KHR-GL4x.shader_image_load_store.advanced-memory-order's
+// store/load/compare loop started reading back the value it had not stored yet.
+TEST(SplitReadWriteImageUniformsTest, SplitPairIsMadeCoherentEvenWhenTheSourceIsNot) {
+    const String source = R"(#version 320 es
+layout(binding = 2, rgba8) uniform highp image2D goku;
+layout(binding = 3, rgba8) uniform highp image2D storeOnly;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    imageStore(goku, ivec2(0), vec4(1.0));
+    mg_FragColor = imageLoad(goku, ivec2(0));
+    imageStore(storeOnly, ivec2(0), vec4(2.0));
+}
+)";
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D goku;")) << out;
+    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";")) << out;
+    // Exactly the two halves of the pair, and nothing else: the store-only image is repaired in
+    // place, has no alias to stay visible to, and must not pay for uncached access.
+    EXPECT_EQ(CountOf(out, "coherent"), 2u);
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D storeOnly;")) << out;
 }
 
 // imageSize reads no texels and writes none, so it decides nothing; readonly is what keeps

@@ -48,6 +48,7 @@ namespace MobileGL {
                     m_dirtyRects.resize(requiredLevelCount);
                     m_compressedData.resize(requiredLevelCount);
                     m_compressedFormats.resize(requiredLevelCount, GL_NONE);
+                    m_requestedCompressedFormats.resize(requiredLevelCount, GL_NONE);
                 }
 
                 m_texelSizes[level] = input.texelSize;
@@ -79,6 +80,9 @@ namespace MobileGL {
                 m_compressedFormats[level] = GL_NONE;
                 m_compressedData[level].clear();
                 m_compressedData[level].shrink_to_fit();
+                // Same story for the requested-format tag: a respecified level is whatever this
+                // call asked for, and the compressed entry points re-arm it right afterwards.
+                m_requestedCompressedFormats[level] = GL_NONE;
             }
 
             void MipmapStorage::SetCompressedImage(Uint level, GLenum internalFormat, const void* data, SizeT size) {
@@ -110,6 +114,16 @@ namespace MobileGL {
                 return m_compressedData[level].data();
             }
 
+            void MipmapStorage::SetRequestedCompressedFormat(Uint level, GLenum internalFormat) {
+                if (level >= m_requestedCompressedFormats.size()) return;
+                m_requestedCompressedFormats[level] = internalFormat;
+            }
+
+            GLenum MipmapStorage::GetRequestedCompressedFormat(Uint level) const {
+                if (level >= m_requestedCompressedFormats.size()) return GL_NONE;
+                return m_requestedCompressedFormats[level];
+            }
+
             void MipmapStorage::TruncateToLevelCount(SizeT levelCount) {
                 if (levelCount >= m_data.size()) return;
 
@@ -120,6 +134,7 @@ namespace MobileGL {
                 m_dirtyRects.resize(levelCount);
                 m_compressedData.resize(levelCount);
                 m_compressedFormats.resize(levelCount);
+                m_requestedCompressedFormats.resize(levelCount);
             }
 
             void MipmapStorage::UpdateSubData(Uint level, DataPtr input) {
