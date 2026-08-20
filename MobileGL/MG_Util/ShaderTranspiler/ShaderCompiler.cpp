@@ -20,6 +20,7 @@
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/DemoteFloat64Pass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
+#include "SpirvPasses/LowerViewportIndexPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/FlattenXfbInterfaceBlocksPass.h"
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
@@ -633,6 +634,21 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary,
+                                                           const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(LowerViewportIndexPass::CreateLowerViewportIndexPass());
+
+                return RunOptimizerChecked("LowerViewportIndexForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary) {
+                return LowerViewportIndexPass::DeclaresViewportIndexBuiltin(binary);
             }
 
             bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,

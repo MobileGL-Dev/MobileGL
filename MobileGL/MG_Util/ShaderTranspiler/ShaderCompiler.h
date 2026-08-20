@@ -32,6 +32,20 @@ namespace MobileGL {
                 static bool LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
                                                        Vector<uint32_t>& outputBinary,
                                                        bool enableSpirvValidation = false);
+                // Demotes the gl_ViewportIndex OUTPUT builtin to a plain Private global named
+                // mg_ViewportIndex, so SPIRV-Cross emits an ordinary declaration instead of a bare
+                // gl_ViewportIndex that ESSL has no core spelling for. Multi-viewport routing is
+                // lost (everything lands in viewport 0) but the stage compiles and the program
+                // runs, instead of every draw made with it becoming a silent no-op. Only for the
+                // DirectGLES transpile path on a driver WITHOUT GL_OES_viewport_array; gl_Layer is
+                // deliberately left alone, being core in ESSL 3.20 geometry shaders.
+                static bool LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
+                // Whether the module declares an output decorated BuiltIn ViewportIndex, i.e.
+                // whether the pass above has anything to do. The gate that keeps every other
+                // stage off an optimizer round trip it does not need.
+                static bool DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
                 // locations, seeding a Private copy of the array so indexed reads still work.
                 // GLSL ES has no array vertex inputs and SPIRV-Cross refuses the whole module
