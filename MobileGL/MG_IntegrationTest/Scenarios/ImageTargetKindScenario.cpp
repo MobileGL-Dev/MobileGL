@@ -374,6 +374,86 @@ namespace MGITest {
                 glUseProgram(0);
             }
 
+            // The same texture, bound four times over, varying nothing but `layered` and `layer`.
+            //
+            // GL 4.6 core 8.26 (and ES 3.2 8.22, word for word): "If the texture identified by
+            // texture does not have multiple layers or faces, the entire texture level is bound,
+            // regardless of the values of layered and layer." REGARDLESS means ignored - not
+            // clamped, and not an error - so every one of the four rows has to read the same texel
+            // out of a target that has no layers, including the two rows that name layer 1 on a
+            // texture whose only layer is 0. DirectGLES used to normalize `layered` and forward
+            // `layer` verbatim; Adreno honours the bogus layer by leaving the image unit reading
+            // zero, which is exactly the two rows KHR-GL42.bind_image_texture.single_layer failed.
+            //
+            // The bindings are checked back as well, because the fix depends on WHERE the
+            // normalization happens: the frontend shadow must keep echoing the application's own
+            // values (gl4cShaderImageLoadStoreTests' CheckBinding compares them exactly), and only
+            // the backend's driver call may drop the layer.
+            void RunNonLayerableLayerSweepCase(const TargetKind& kind) {
+                const GLuint program = MakeComputeProgram(SingleLoadSource(kind));
+                if (program == 0) return;
+                const GLuint texture = MakeTexture(kind, true);
+                if (texture == 0) return;
+
+                // A multisample texture has no TexSubImage, so MakeTexture leaves it unwritten and
+                // it is seeded the way the store cases do it - through a dispatch of its own.
+                const GLuint expected = kind.multisample ? kStoredValue : kFilledValue;
+                if (kind.multisample) {
+                    const GLuint storeProgram = MakeComputeProgram(SingleStoreSource(kind));
+                    if (storeProgram == 0) return;
+                    glBindImageTexture(0, texture, 0, GL_TRUE, 0, GL_READ_WRITE, GL_R32UI);
+                    glUseProgram(storeProgram);
+                    glUniform1i(0, 0);
+                    glDispatchCompute(1, 1, 1);
+                    glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                    ASSERT_EQ(FirstGLError(), 0u) << kind.name << ": seeding the multisample texture errored";
+                }
+
+                const GLuint ssbo = MakeResultBuffer();
+                glUseProgram(program);
+                glUniform1i(0, 0);
+                ASSERT_EQ(FirstGLError(), 0u) << kind.name << ": assigning the image unit errored";
+
+                // glcBindImageTextureTests' own four rows, in its own order.
+                struct LayerRow {
+                    GLboolean layered;
+                    GLint layer;
+                };
+                static constexpr LayerRow kRows[] = {{GL_TRUE, 1}, {GL_TRUE, 0}, {GL_FALSE, 1}, {GL_FALSE, 0}};
+
+                for (const LayerRow& row : kRows) {
+                    const std::string where = std::string(kind.name) +
+                                              ": layered=" + (row.layered == GL_TRUE ? "TRUE" : "FALSE") +
+                                              " layer=" + std::to_string(row.layer);
+                    // Re-zeroed per row, so a row whose binding reads nothing cannot pass on the
+                    // previous row's answer.
+                    const GLuint zero = 0u;
+                    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+                    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &zero);
+
+                    glBindImageTexture(0, texture, 0, row.layered, row.layer, GL_READ_ONLY, GL_R32UI);
+                    EXPECT_EQ(FirstGLError(), 0u) << where << ": glBindImageTexture errored";
+
+                    GLint reportedLayered = -1;
+                    GLint reportedLayer = -1;
+                    glGetIntegeri_v(GL_IMAGE_BINDING_LAYERED, 0, &reportedLayered);
+                    glGetIntegeri_v(GL_IMAGE_BINDING_LAYER, 0, &reportedLayer);
+                    EXPECT_EQ(reportedLayered, row.layered == GL_TRUE ? 1 : 0)
+                        << where << ": GL_IMAGE_BINDING_LAYERED stopped reporting the application's value";
+                    EXPECT_EQ(reportedLayer, row.layer)
+                        << where << ": GL_IMAGE_BINDING_LAYER stopped reporting the application's value";
+
+                    glDispatchCompute(1, 1, 1);
+                    glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                    EXPECT_EQ(FirstGLError(), 0u) << where << ": the dispatch leaked a GL error";
+                    EXPECT_EQ(ReadResult(ssbo), expected)
+                        << where
+                        << ": the texel did not come back, so the binding named a layer the texture "
+                           "does not have instead of the whole level";
+                }
+                glUseProgram(0);
+            }
+
             std::vector<GLuint> m_programs;
             std::vector<GLuint> m_textures;
             std::vector<GLuint> m_buffers;
@@ -434,6 +514,31 @@ namespace MGITest {
 
 #undef MGL_DEFINE_LOAD_CASE
 #undef MGL_DEFINE_STORE_CASE
+
+    // ---- and the same texture bound four times, varying only layered/layer ---
+    //
+    // KHR-GL42.bind_image_texture.single_layer's sweep, on the kinds whose backend target has
+    // neither layers nor faces. Two of its four rows name layer 1 on a single-layer texture,
+    // which the spec says is to be ignored outright rather than honoured or rejected - and
+    // which DirectGLES used to forward to the ES driver as written.
+
+#define MGL_DEFINE_LAYER_SWEEP_CASE(CaseName, Kind)                                                             \
+    TEST_F(ImageTargetKindScenario, IgnoresLayerFor##CaseName) {                                                \
+        if (!Ready()) return;                                                                                   \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
+        if ((Kind).multisample && !MultisampleImagesAreUsable()) {                                              \
+            GTEST_SKIP() << "GL_MAX_IMAGE_SAMPLES is 0, so the conformance case substitutes a plain 2D image "  \
+                            "here and never asks for a multisample one";                                        \
+        }                                                                                                       \
+        RunNonLayerableLayerSweepCase(Kind);                                                                    \
+    }
+
+    MGL_DEFINE_LAYER_SWEEP_CASE(Texture2D, kKind2D)
+    MGL_DEFINE_LAYER_SWEEP_CASE(Texture1D, kKind1D)
+    MGL_DEFINE_LAYER_SWEEP_CASE(TextureRectangle, kKindRect)
+    MGL_DEFINE_LAYER_SWEEP_CASE(Texture2DMultisample, kKind2DMS)
+
+#undef MGL_DEFINE_LAYER_SWEEP_CASE
 
     // ---- and all of them at once -------------------------------------------
     //

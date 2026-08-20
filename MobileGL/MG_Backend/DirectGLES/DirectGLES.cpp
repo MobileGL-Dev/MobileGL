@@ -1341,6 +1341,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is stored as an ES 2D array (MapToBackendTextureTarget), and so is layerable; asking
         // the state target instead answered "no" for it and pinned every 1D-array image binding
         // to layer 0, whatever the application passed.
+        //
+        // `layer` travels with the answer, because GL 4.6 core 8.26 (and ES 3.2 8.22, word for
+        // word) makes them one rule: "If the texture identified by texture does not have
+        // multiple layers or faces, the entire texture level is bound, regardless of the values
+        // of layered and layer." REGARDLESS means ignored - not clamped, and not an error - so
+        // the driver must not be handed a layer index the texture has no room for. Adreno takes
+        // such a request literally and leaves the image unit reading zero, which is what failed
+        // KHR-GL42.bind_image_texture.single_layer's layer:1 rows on GL_TEXTURE_2D and on the
+        // GL_TEXTURE_1D that is stored as one. Normalizing here and not in the frontend shadow
+        // is deliberate: GL_IMAGE_BINDING_LAYER must keep echoing what the application passed.
         static Bool SupportsLayeredImageBinding(TextureTarget target) {
             const TextureTarget backendTarget = TextureImpl::MapToBackendTextureTarget(target);
             return backendTarget == TextureTarget::Texture3D || backendTarget == TextureTarget::TextureCubeMap ||
@@ -1396,10 +1406,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             auto& backendTexture = SyncTextureObjectToBackend(imageBinding.Texture, true);
-            const GLboolean layered =
-                SupportsLayeredImageBinding(imageBinding.Texture->GetTarget()) ? imageBinding.Layered : GL_FALSE;
+            const Bool layerable = SupportsLayeredImageBinding(imageBinding.Texture->GetTarget());
+            const GLboolean layered = layerable ? imageBinding.Layered : GL_FALSE;
+            const GLint layer = layerable ? imageBinding.Layer : 0;
             g_GLESFuncs.glBindImageTexture(unit, backendTexture->GetBackendTextureId(), imageBinding.Level,
-                                           layered, imageBinding.Layer, imageBinding.Access, imageBinding.Format);
+                                           layered, layer, imageBinding.Access, imageBinding.Format);
         }
 
         // A buffer texture bound to a WRITABLE image unit is a buffer the shader is about to
