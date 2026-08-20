@@ -1280,6 +1280,11 @@ namespace MobileGL {
             // in FillInGLESCapabilities.
             Int MaxClipDistances = 0;
             Int MaxViewports = 16;
+            // GL_LAYER_PROVOKING_VERTEX (ES 3.2 core) and GL_VIEWPORT_INDEX_PROVOKING_VERTEX
+            // (GL_OES_viewport_array). GL_UNDEFINED_VERTEX is a legal answer for both and is what
+            // a driver that has neither is honestly saying.
+            GLenum LayerProvokingVertex = GL_UNDEFINED_VERTEX;
+            GLenum ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
             Int MaxViewportWidth = 16384;
             Int MaxViewportHeight = 16384;
             Float ViewportBoundsRangeMin = 0.0f;

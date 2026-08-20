@@ -57,6 +57,12 @@ namespace {
         GLint maxViewports = 32;
         GLint viewportSubpixelBits = 8;
         bool viewportArrayLimitsQueried = false;
+        // GL_LAYER_PROVOKING_VERTEX is ES 3.2 core; GL_VIEWPORT_INDEX_PROVOKING_VERTEX comes with
+        // GL_OES_viewport_array. Both must go unasked where they do not exist, and a driver answer
+        // outside the four legal conventions must not be forwarded as one.
+        GLint layerProvokingVertex = GL_FIRST_VERTEX_CONVENTION;
+        GLint viewportIndexProvokingVertex = GL_LAST_VERTEX_CONVENTION;
+        bool layerProvokingVertexQueried = false;
         // A driver rejecting one of the UNCONDITIONAL probes. GL_SMOOTH_LINE_WIDTH_RANGE is the
         // realistic one - it is desktop-only state that every GLES driver refuses - and it stands
         // in for the whole run: whatever it leaves behind must not reach the application.
@@ -194,6 +200,14 @@ namespace {
             case GL_VIEWPORT_SUBPIXEL_BITS:
                 g_fake.viewportArrayLimitsQueried = true;
                 *data = g_fake.viewportSubpixelBits;
+                break;
+            case GL_VIEWPORT_INDEX_PROVOKING_VERTEX:
+                g_fake.viewportArrayLimitsQueried = true;
+                *data = g_fake.viewportIndexProvokingVertex;
+                break;
+            case GL_LAYER_PROVOKING_VERTEX:
+                g_fake.layerProvokingVertexQueried = true;
+                *data = g_fake.layerProvokingVertex;
                 break;
             case GL_MAX_COLOR_TEXTURE_SAMPLES:
             case GL_MAX_DEPTH_TEXTURE_SAMPLES:
@@ -780,6 +794,62 @@ TEST(ViewportArrayCapabilities, TheLimitsAreOnlyAskedForWhenTheExtensionIsPresen
     EXPECT_TRUE(g_fake.viewportArrayLimitsQueried);
     EXPECT_EQ(withCaps.MaxViewports, g_fake.maxViewports);
     EXPECT_EQ(withCaps.ViewportSubpixelBits, g_fake.viewportSubpixelBits);
+}
+
+// GL_LAYER_PROVOKING_VERTEX and GL_VIEWPORT_INDEX_PROVOKING_VERTEX name which vertex of a
+// primitive supplies gl_Layer and gl_ViewportIndex. MobileGL used to answer a hard-coded
+// GL_LAST_VERTEX_CONVENTION for both, derived from nothing, and got it wrong on both test devices
+// in OPPOSITE directions. GL_UNDEFINED_VERTEX is a legal answer (GL 4.6 table 23.65) and it is
+// the honest one wherever the capability that would give the convention meaning is absent.
+TEST(ProvokingVertexConventions, AreTakenFromTheDriverOnlyWhereThePnameExists) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    // ES 3.1, no viewport array: neither pname exists, so neither is asked for.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities es31Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Caps, funcs));
+    EXPECT_FALSE(g_fake.layerProvokingVertexQueried);
+    EXPECT_EQ(es31Caps.LayerProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+    EXPECT_EQ(es31Caps.ViewportIndexProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+
+    // ES 3.2 with the viewport array: both exist and both driver answers come through verbatim.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    g_fake.extensions.emplace_back("GL_OES_viewport_array");
+    MobileGL::MG_External::GLESCapabilities es32Caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32Caps, funcs));
+    EXPECT_TRUE(g_fake.layerProvokingVertexQueried);
+    EXPECT_EQ(es32Caps.LayerProvokingVertex, static_cast<GLenum>(GL_FIRST_VERTEX_CONVENTION));
+    EXPECT_EQ(es32Caps.ViewportIndexProvokingVertex, static_cast<GLenum>(GL_LAST_VERTEX_CONVENTION));
+
+    // ES 3.2 WITHOUT the viewport array - the shape of both test devices. The layer convention is
+    // real and comes from the driver; the viewport-index one describes a selection that never
+    // happens, because only viewport 0 is ever rasterized, and stays undefined.
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities deviceLikeCaps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(deviceLikeCaps, funcs));
+    EXPECT_EQ(deviceLikeCaps.LayerProvokingVertex, static_cast<GLenum>(GL_FIRST_VERTEX_CONVENTION));
+    EXPECT_EQ(deviceLikeCaps.ViewportIndexProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+}
+
+// A driver answering something that is not one of the four legal conventions must not have it
+// forwarded as one: GL_UNDEFINED_VERTEX describes "MobileGL cannot tell you" exactly.
+TEST(ProvokingVertexConventions, AnIllegalDriverAnswerBecomesUndefined) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    g_fake.layerProvokingVertex = 0x1234;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_TRUE(g_fake.layerProvokingVertexQueried);
+    EXPECT_EQ(caps.LayerProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
 }
 
 // The multisample ceilings are ES 3.1 state; a driver that answers zero - or an older context

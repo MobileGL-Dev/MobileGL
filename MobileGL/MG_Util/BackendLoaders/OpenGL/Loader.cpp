@@ -831,6 +831,35 @@ namespace MobileGL::MG_Util::BackendLoader {
         return includesBase;
     }
 
+    // GL 4.6 table 23.65 admits exactly four answers for GL_LAYER_PROVOKING_VERTEX and
+    // GL_VIEWPORT_INDEX_PROVOKING_VERTEX. Anything else means the driver wrote something MobileGL
+    // cannot forward as a convention, and GL_UNDEFINED_VERTEX - a legal answer, not a placeholder
+    // - is the accurate thing to say about it.
+    static GLenum NormalizeProvokingVertexConvention(GLint driverValue) {
+        switch (static_cast<GLenum>(driverValue)) {
+        case GL_FIRST_VERTEX_CONVENTION:
+        case GL_LAST_VERTEX_CONVENTION:
+        case GL_PROVOKING_VERTEX:
+        case GL_UNDEFINED_VERTEX:
+            return static_cast<GLenum>(driverValue);
+        default:
+            return GL_UNDEFINED_VERTEX;
+        }
+    }
+
+    static const char* ProvokingVertexConventionName(GLenum convention) {
+        switch (convention) {
+        case GL_FIRST_VERTEX_CONVENTION:
+            return "GL_FIRST_VERTEX_CONVENTION";
+        case GL_LAST_VERTEX_CONVENTION:
+            return "GL_LAST_VERTEX_CONVENTION";
+        case GL_PROVOKING_VERTEX:
+            return "GL_PROVOKING_VERTEX";
+        default:
+            return "GL_UNDEFINED_VERTEX";
+        }
+    }
+
     Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs) {
         if (!glesFuncs.glGetString || !glesFuncs.glGetIntegerv) {
             MGLOG_E("Required GLES functions are not loaded, cannot query capabilities");
@@ -1073,6 +1102,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         // clipping program silently rendered nothing. The guarded probe below only ever widens it.
         GLint maxClipDistances = 0;
         GLint maxViewports = 16;
+        // GL_UNDEFINED_VERTEX is what stands when the probes below cannot run, and it is a legal
+        // answer rather than a placeholder: with neither geometry shaders nor a viewport array
+        // there is no layered or multi-viewport draw for a convention to describe.
+        GLenum layerProvokingVertex = GL_UNDEFINED_VERTEX;
+        GLenum viewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
         GLfloat minFragmentInterpolationOffset = -0.5f;
         GLfloat maxFragmentInterpolationOffset = 0.4375f;
         GLint fragmentInterpolationOffsetBits = 4;
@@ -1263,6 +1297,21 @@ namespace MobileGL::MG_Util::BackendLoader {
             }
         }
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxViewportDims);
+        // GL_LAYER_PROVOKING_VERTEX is ES 3.2 core (it arrives with geometry shaders, which is
+        // what gl_Layer needs). Ask the driver where the pname exists rather than asserting a
+        // convention: it is a statement about which vertex of a primitive supplies gl_Layer, and
+        // MobileGL forwards the geometry stage to the driver rather than implementing the
+        // selection itself, so the driver's answer IS MobileGL's answer. Below ES 3.2 there are
+        // no layered draws to have a convention for and GL_UNDEFINED_VERTEX stands, which GL 4.6
+        // table 23.65 explicitly permits.
+        if (esAtLeast32) {
+            GLint driverLayerConvention = static_cast<GLint>(GL_UNDEFINED_VERTEX);
+            drainErrors();
+            glesFuncs.glGetIntegerv(GL_LAYER_PROVOKING_VERTEX, &driverLayerConvention);
+            if (!drainErrors()) {
+                layerProvokingVertex = NormalizeProvokingVertexConvention(driverLayerConvention);
+            }
+        }
         // GL_MAX_VIEWPORTS (0x825B), GL_VIEWPORT_SUBPIXEL_BITS (0x825C) and GL_VIEWPORT_BOUNDS_RANGE
         // (0x825D) all arrive with GL_OES_viewport_array and exist nowhere in ES core, so on the
         // drivers DirectGLES actually runs on all three raise GL_INVALID_ENUM. The values MobileGL
@@ -1272,9 +1321,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         // hold), floors GL_SUBPIXEL_BITS at its own 4, and the bounds range is clamped to the core
         // minimum below. What changes is that the errors stop being manufactured.
         if (caps.SupportsViewportArray) {
+            GLint driverViewportIndexConvention = static_cast<GLint>(GL_UNDEFINED_VERTEX);
             drainErrors();
             glesFuncs.glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
             glesFuncs.glGetIntegerv(GL_VIEWPORT_SUBPIXEL_BITS, &viewportSubpixelBits);
+            glesFuncs.glGetIntegerv(GL_VIEWPORT_INDEX_PROVOKING_VERTEX, &driverViewportIndexConvention);
             if (glesFuncs.glGetFloatv) {
                 glesFuncs.glGetFloatv(GL_VIEWPORT_BOUNDS_RANGE, viewportBoundsRange);
             }
@@ -1285,6 +1336,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 viewportSubpixelBits = 0;
                 viewportBoundsRange[0] = -32768.0f;
                 viewportBoundsRange[1] = 32767.0f;
+            } else {
+                viewportIndexProvokingVertex =
+                    NormalizeProvokingVertexConvention(driverViewportIndexConvention);
             }
         }
         if (caps.SupportsShaderMultisampleInterpolation && glesFuncs.glGetFloatv) {
@@ -1452,6 +1506,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         // extension the probe above never ran at all - so the flag, not the local, decides.
         caps.MaxClipDistances = caps.SupportsClipDistance ? std::max(maxClipDistances, 0) : 0;
         caps.MaxViewports = maxViewports;
+        caps.LayerProvokingVertex = layerProvokingVertex;
+        caps.ViewportIndexProvokingVertex = viewportIndexProvokingVertex;
         caps.MaxViewportWidth = maxViewportDims[0];
         caps.MaxViewportHeight = maxViewportDims[1];
         // Only ever WIDER than the core minimum: a driver that answered the query is allowed to
@@ -1543,6 +1599,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin,
                 caps.ViewportBoundsRangeMax);
         MGLOG_I("    GL_VIEWPORT_SUBPIXEL_BITS: %d", caps.ViewportSubpixelBits);
+        MGLOG_I("    GL_LAYER_PROVOKING_VERTEX: %s", ProvokingVertexConventionName(caps.LayerProvokingVertex));
+        MGLOG_I("    GL_VIEWPORT_INDEX_PROVOKING_VERTEX: %s",
+                ProvokingVertexConventionName(caps.ViewportIndexProvokingVertex));
 
         caps.IndirectDrawInstanceIdIncludesBaseInstance =
             ProbeIndirectInstanceIdIncludesBaseInstance(caps, glesFuncs);
