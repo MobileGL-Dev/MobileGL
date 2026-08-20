@@ -365,6 +365,13 @@ TEST(DirectGLESSanity, RebasesInstanceIdWhenIndirectDrawsLeakBaseInstance) {
     // MaxShaderStorageBufferBindings - 1 = 12, so a regression that stops reading the
     // probed cap and falls back to the struct default would surface as "binding = 7".
     caps.MaxShaderStorageBufferBindings = 13;
+    // The indirect lowering reads its baseInstance through a storage block declared in the
+    // VERTEX stage, which is optional in both APIs and which the GLESCapabilities default
+    // (0, the spec minimum) therefore denies. This suite is pinning the shape of that
+    // lowering, so it has to describe a driver that can actually have it - see
+    // VertexStageStorageBlockUsable and the BaseInstanceInjectionGate suite for the
+    // zero case.
+    caps.MaxVertexShaderStorageBlocks = 1;
 
     const MobileGL::String source = R"(#version 310 es
 highp int mg_BaseInstanceLowered;
@@ -403,6 +410,9 @@ TEST(DirectGLESSanity, TheIndirectWordIndexIsOneBasedSoItsUnwrittenValueMeansNot
     auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
     caps.IndirectDrawInstanceIdIncludesBaseInstance = false;
     caps.MaxShaderStorageBufferBindings = 13;
+    // See RebasesInstanceIdWhenIndirectDrawsLeakBaseInstance: without a vertex-stage
+    // storage block there is no word index to be one-based about.
+    caps.MaxVertexShaderStorageBlocks = 1;
 
     const MobileGL::String source = R"(#version 310 es
 highp int mg_BaseInstanceLowered;
@@ -428,6 +438,10 @@ TEST(DirectGLESSanity, KeepsInstanceIdWhenIndirectDrawsAreConforming) {
     auto& caps = MobileGL::MG_Backend::DirectGLES::g_GLESCapabilities;
     caps.IndirectDrawInstanceIdIncludesBaseInstance = false;
     caps.MaxShaderStorageBufferBindings = 13;
+    // Set explicitly even though the assertions below would also hold on the degraded path:
+    // this case is about a CONFORMING driver leaving gl_InstanceID alone, and it would be a
+    // silent weakening for it to be exercising the no-storage-block fallback instead.
+    caps.MaxVertexShaderStorageBlocks = 1;
 
     const MobileGL::String source = R"(#version 310 es
 highp int mg_BaseInstanceLowered;
@@ -442,6 +456,8 @@ void main() {
 
     EXPECT_EQ(rewritten.find("mg_ZeroBasedInstanceID"), MobileGL::String::npos);
     EXPECT_NE(rewritten.find("int instance = gl_InstanceID + mg_BaseInstanceLowered;"), MobileGL::String::npos);
+    // The indirect view is present on this driver, so the fallback must NOT have fired.
+    EXPECT_NE(rewritten.find("buffer mg_IndirectParams"), MobileGL::String::npos);
 }
 
 TEST(DirectGLESSanity, LeavesDrawParameterGlobalsAloneOutsideVertexShaders) {
