@@ -1438,12 +1438,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        // Highest image unit that has ever been given a texture, plus one. Maintained by the
+        // single funnel below, so it is a sound "no draw in this context can be reading an image"
+        // test: nothing reaches an image unit without going through SyncImageTextureBinding.
+        // Almost every program (every Minecraft draw) leaves it at zero, which is what keeps the
+        // draw-path staleness check below at one integer test.
+        static Uint g_imageUnitHighWaterMark = 0;
+
         void SyncImageTextureBinding(Uint unit) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
             TrackWritableImageBufferUnit(unit, IsWritableImageBufferTexture(imageBinding));
+            if (imageBinding.Texture && unit + 1 > g_imageUnitHighWaterMark) {
+                g_imageUnitHighWaterMark = unit + 1;
+            }
             if (!imageBinding.Texture) {
                 g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
                 return;
@@ -1496,6 +1506,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
             }
+        }
+
+        // What the draw path last swept the image units against. A draw never swept them at all:
+        // an image unit was established once, eagerly, by glBindImageTexture and never revisited.
+        // That is stale the moment the texture behind it is re-specified with a new size or
+        // format, because ES 3.1 only allows IMMUTABLE storage on an image unit
+        // (SyncTextureObjectToBackend's imageBindableStorageRequired), immutable storage cannot be
+        // redefined, and so the re-spec MINTS A NEW ES TEXTURE NAME - leaving the unit pointing at
+        // the deleted one and imageSize() reporting the old dimensions
+        // (KHR-GL43.shader_image_size.advanced-changeSize).
+        static Uint64 g_imageSweepContextId = 0;
+        static Uint64 g_imageSweepSamplingGeneration = 0;
+        static Uint g_imageSweepBackendContextGeneration = 0;
+        static Bool g_imageSweepValid = false;
+
+        // The sweep is a glBindImageTexture per unit, so it must not run per draw: the gate is the
+        // frontend's sampling-resolution generation, which TextureObjectBase::BumpShapeVersion
+        // moves on exactly the shape and format changes that can force the re-mint. Deliberately
+        // NOT the backend-side re-mint counter (g_attachmentBackendIdGeneration's sibling would be
+        // the obvious choice): a texture that is bound ONLY to an image unit is re-minted inside
+        // this very sweep, so a backend-side trigger would be bumped after the gate had already
+        // declined to run it.
+        void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
+            if (g_imageUnitHighWaterMark == 0) return;
+            if (g_imageSweepValid && g_imageSweepContextId == keys.contextId &&
+                g_imageSweepSamplingGeneration == keys.samplingGeneration &&
+                g_imageSweepBackendContextGeneration == g_backendContextGeneration) {
+                return;
+            }
+            SyncImageTextureBindings();
+            g_imageSweepContextId = keys.contextId;
+            g_imageSweepSamplingGeneration = keys.samplingGeneration;
+            g_imageSweepBackendContextGeneration = g_backendContextGeneration;
+            g_imageSweepValid = true;
         }
     } // namespace TextureImpl
 
@@ -2440,6 +2484,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           syncBit & DrawSyncBit::IndirectBuffer);
         VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
+        // A draw reads and writes through its image units too, so the unit bindings have to be
+        // as current as the sampled ones. Gated (see the sweep): a program with no image binding
+        // pays one integer test, and one with images re-issues them only when a texture shape
+        // moved under them.
+        TextureImpl::SyncImageTextureBindingsForDraw(textureKeys);
         // A draw writes through its image units too - the conformance case that found this
         // stores into a buffer texture from the FRAGMENT stage, not from a dispatch.
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
