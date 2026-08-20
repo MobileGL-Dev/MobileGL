@@ -23,6 +23,7 @@
 #include "VkTimerQueryManager.h"
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
+#include <MG_Backend/BackendObject.h>
 #include <vk_mem_alloc.h>
 
 #include "../VkIncludes.h"
@@ -197,9 +198,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                   GLbitfield mask, GLenum filter);
         void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                        GLint x, GLint y, GLsizei width, GLsizei height);
-        void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+        void CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
                               GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                              const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                              const CopyImageEndpoint& dstEndpoint,
                               GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                               GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
         void GenerateMipmap(GLenum target);

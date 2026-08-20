@@ -3412,9 +3412,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
 
-    void CopyImageSubData_Backend(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+    void CopyImageSubData_Backend(const MG_Backend::CopyImageEndpoint& src,
                                   GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                  const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                  const MG_Backend::CopyImageEndpoint& dst,
                                   GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                   GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         auto copyImageSubData = MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData;
@@ -3425,7 +3425,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support image-to-image copies."));
             return;
         }
-        copyImageSubData(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ, dstTexture, dstTarget, dstLevel, dstX,
+        copyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX,
                          dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
 
@@ -3472,9 +3472,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the ~30 entry points that reach it through a BOUND object (where the name was never
         // in question and the fault is the binding), so this is a local rule rather than a
         // change to the helper.
-        Bool ValidateCopyImageObjectExists(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+        Bool ValidateCopyImageObjectExists(const MG_Backend::CopyImageEndpoint& endpoint,
                                            const char* endpointName) {
-            if (textureObject) return true;
+            if (endpoint.Exists()) return true;
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
@@ -3498,21 +3498,75 @@ namespace MobileGL::MG_Impl::GLImpl {
                                 MG_Util::ConvertTextureTargetToString(textureObject->GetTarget()))));
             return false;
         }
-    } // namespace
 
-    Bool ValidateCopyImageSubData_State(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
-                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
-                                        const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
-                                        GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY,
-                                        GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        if (!ValidateCopyImageObjectExists(srcTexture, "source") ||
-            !ValidateCopyImageObjectExists(dstTexture, "destination")) {
+        // ---- The questions ValidateCopyImageSubData_State asks of one endpoint. ---------------
+        // A renderbuffer answers all of them directly: it has exactly one image, no mip chain and
+        // no sampler state, and it carries its own internal format and extent.
+
+        Int GetCopyImageEndpointSamples(const MG_Backend::CopyImageEndpoint& endpoint) {
+            if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetSamples();
+            return endpoint.Texture->GetSamples();
+        }
+
+        TextureInternalFormat GetCopyImageEndpointFormat(const MG_Backend::CopyImageEndpoint& endpoint) {
+            if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetInternalFormat();
+            return endpoint.Texture->GetFormat();
+        }
+
+        // A renderbuffer has level 0 and nothing else, and the failure is the same INVALID_VALUE
+        // ValidateTextureLevelExists records for a level a texture does not have.
+        Bool ValidateCopyImageEndpointLevelExists(const MG_Backend::CopyImageEndpoint& endpoint, GLint level,
+                                                  const char* caller) {
+            if (!endpoint.IsRenderbuffer()) {
+                return TextureImpl::ValidateTextureLevelExists(endpoint.Texture, level, caller);
+            }
+            if (level == 0) return true;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "A renderbuffer has only level 0."));
             return false;
         }
-        const auto srcTextureTarget = MG_Util::ConvertGLEnumToTextureTarget(srcTarget);
-        const auto dstTextureTarget = MG_Util::ConvertGLEnumToTextureTarget(dstTarget);
-        if (!TextureImpl::ValidateTextureTarget(srcTextureTarget) ||
-            !TextureImpl::ValidateTextureTarget(dstTextureTarget)) {
+
+        Bool IsCopyImageEndpointComplete(const MG_Backend::CopyImageEndpoint& endpoint) {
+            // A renderbuffer is complete exactly when it has storage - there is nothing else it
+            // could be missing.
+            if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->IsAllocated();
+            return endpoint.Texture && endpoint.Texture->IsComplete();
+        }
+
+        GLenum GetCopyImageEndpointCompressedFormat(const MG_Backend::CopyImageEndpoint& endpoint,
+                                                    TextureUploadTarget uploadTarget, GLint level) {
+            if (endpoint.IsRenderbuffer()) return GL_NONE;
+            return GetCompressedLevelFormat(endpoint.Texture, uploadTarget, level);
+        }
+
+        IntVec3 GetCopyImageEndpointLevelSize(const MG_Backend::CopyImageEndpoint& endpoint,
+                                              TextureUploadTarget uploadTarget, GLint level) {
+            if (endpoint.IsRenderbuffer()) {
+                return {endpoint.Renderbuffer->GetWidth(), endpoint.Renderbuffer->GetHeight(), 1};
+            }
+            return GetCopyImageLevelSize(endpoint.Texture, uploadTarget, level);
+        }
+    } // namespace
+
+    Bool ValidateCopyImageSubData_State(const MG_Backend::CopyImageEndpoint& src,
+                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
+                                        const MG_Backend::CopyImageEndpoint& dst,
+                                        GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY,
+                                        GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        if (!ValidateCopyImageObjectExists(src, "source") ||
+            !ValidateCopyImageObjectExists(dst, "destination")) {
+            return false;
+        }
+        // GL_RENDERBUFFER has no TextureTarget to convert to, and it needs none: it is its own
+        // whole-image target, and the endpoint that carries it was resolved from the renderbuffer
+        // namespace, so it matches its object by construction.
+        const auto srcTextureTarget =
+            src.IsRenderbuffer() ? TextureTarget::Unknown : MG_Util::ConvertGLEnumToTextureTarget(srcTarget);
+        const auto dstTextureTarget =
+            dst.IsRenderbuffer() ? TextureTarget::Unknown : MG_Util::ConvertGLEnumToTextureTarget(dstTarget);
+        if ((!src.IsRenderbuffer() && !TextureImpl::ValidateTextureTarget(srcTextureTarget)) ||
+            (!dst.IsRenderbuffer() && !TextureImpl::ValidateTextureTarget(dstTextureTarget))) {
             return false;
         }
         // GL_TEXTURE_BUFFER and the cube FACE enums convert to a target this frontend knows, but
@@ -3520,8 +3574,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateCopyImageTarget(srcTarget, "source") || !ValidateCopyImageTarget(dstTarget, "destination")) {
             return false;
         }
-        if (!ValidateCopyImageTargetMatchesObject(srcTexture, srcTextureTarget, "source") ||
-            !ValidateCopyImageTargetMatchesObject(dstTexture, dstTextureTarget, "destination")) {
+        if (!ValidateCopyImageTargetMatchesObject(src.Texture, srcTextureTarget, "source") ||
+            !ValidateCopyImageTargetMatchesObject(dst.Texture, dstTextureTarget, "destination")) {
             return false;
         }
         if (!TextureImpl::ValidateTextureLevelNumber(srcLevel) ||
@@ -3535,8 +3589,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // driver as an out-of-range mip index - on Adreno that is a SIGSEGV inside
         // vkCmdCopyImage, which is what KHR-GL43.copy_image.non_existent_mipmap used to do to
         // the whole glcts process. The answer the spec asks for is GL_INVALID_VALUE.
-        if (!TextureImpl::ValidateTextureLevelExists(srcTexture, srcLevel, __func__) ||
-            !TextureImpl::ValidateTextureLevelExists(dstTexture, dstLevel, __func__)) {
+        if (!ValidateCopyImageEndpointLevelExists(src, srcLevel, __func__) ||
+            !ValidateCopyImageEndpointLevelExists(dst, dstLevel, __func__)) {
             return false;
         }
         if (srcWidth < 0 || srcHeight < 0 || srcDepth < 0) {
@@ -3552,37 +3606,41 @@ namespace MobileGL::MG_Impl::GLImpl {
         // A multisample image can only be copied to one with the same sample count, and a
         // single-sample image reports zero - so this one comparison is also what rejects
         // copying between a multisample target and a non-multisample one.
-        if (srcTexture->GetSamples() != dstTexture->GetSamples()) {
+        const Int srcSamples = GetCopyImageEndpointSamples(src);
+        const Int dstSamples = GetCopyImageEndpointSamples(dst);
+        if (srcSamples != dstSamples) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", __func__,
                     std::format("The two images have different sample counts ({} vs. {}).",
-                                srcTexture->GetSamples(), dstTexture->GetSamples())));
+                                srcSamples, dstSamples)));
             return false;
         }
         // 18.3.2: both images must be complete. An incomplete one has no defined texels to copy
         // and no defined storage to copy into.
-        if (!srcTexture->IsComplete() || !dstTexture->IsComplete()) {
+        const Bool srcComplete = IsCopyImageEndpointComplete(src);
+        const Bool dstComplete = IsCopyImageEndpointComplete(dst);
+        if (!srcComplete || !dstComplete) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", __func__,
                     std::format("A copied image is incomplete (source complete: {}, destination complete: {}).",
-                                srcTexture->IsComplete(), dstTexture->IsComplete())));
+                                srcComplete, dstComplete)));
             return false;
         }
-        const auto srcUploadTarget = GetPrimaryUploadTarget(srcTexture);
-        const auto dstUploadTarget = GetPrimaryUploadTarget(dstTexture);
+        const auto srcUploadTarget = GetPrimaryUploadTarget(src.Texture);
+        const auto dstUploadTarget = GetPrimaryUploadTarget(dst.Texture);
         const auto srcBlock = TextureImpl::ResolveCopyImageTexelBlock(
-            srcTexture->GetFormat(), GetCompressedLevelFormat(srcTexture, srcUploadTarget, srcLevel));
+            GetCopyImageEndpointFormat(src), GetCopyImageEndpointCompressedFormat(src, srcUploadTarget, srcLevel));
         const auto dstBlock = TextureImpl::ResolveCopyImageTexelBlock(
-            dstTexture->GetFormat(), GetCompressedLevelFormat(dstTexture, dstUploadTarget, dstLevel));
+            GetCopyImageEndpointFormat(dst), GetCopyImageEndpointCompressedFormat(dst, dstUploadTarget, dstLevel));
         if (!TextureImpl::ValidateCopyImageFormatCompatibility(srcBlock, dstBlock)) {
             return false;
         }
-        const IntVec3 srcLevelSize = GetCopyImageLevelSize(srcTexture, srcUploadTarget, srcLevel);
-        const IntVec3 dstLevelSize = GetCopyImageLevelSize(dstTexture, dstUploadTarget, dstLevel);
+        const IntVec3 srcLevelSize = GetCopyImageEndpointLevelSize(src, srcUploadTarget, srcLevel);
+        const IntVec3 dstLevelSize = GetCopyImageEndpointLevelSize(dst, dstUploadTarget, dstLevel);
         if (!TextureImpl::ValidateCopyImageBlockAlignment(srcBlock, srcX, srcY, srcWidth, srcHeight,
                                                           srcLevelSize.x(), srcLevelSize.y(), "source") ||
             !TextureImpl::ValidateCopyImageBlockAlignment(dstBlock, dstX, dstY, srcWidth, srcHeight,
@@ -5780,17 +5838,29 @@ namespace MobileGL::MG_Impl::GLImpl {
                           GLuint dstName, GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         // A missing name is INVALID_VALUE here, where GetTextureObjectByName's own diagnostic is
-        // INVALID_OPERATION - so resolve through the plain lookup, which answers a null
+        // INVALID_OPERATION - so resolve through the plain lookups, which answer a null
         // SharedPtr, and let the validator record the error this entry point owes.
-        const SharedPtr<MG_State::GLState::ITextureObject> srcTexture =
-            MG_State::pGLContext->GetTextureObject(srcName);
-        const SharedPtr<MG_State::GLState::ITextureObject> dstTexture =
-            MG_State::pGLContext->GetTextureObject(dstName);
-        if (!ValidateCopyImageSubData_State(srcTexture, srcTarget, srcLevel, srcX, srcY, dstTexture, dstTarget,
+        //
+        // The TARGET picks the namespace: GL 4.6 core 18.3.2 accepts GL_RENDERBUFFER, and a
+        // renderbuffer name has nothing to do with a texture name. Resolving both through
+        // GetTextureObject made every renderbuffer endpoint INVALID_VALUE - or, when the number
+        // happened to collide with a live texture, INVALID_ENUM from the target check.
+        const auto resolveEndpoint = [](GLuint name, GLenum target) {
+            MG_Backend::CopyImageEndpoint endpoint{};
+            if (target == GL_RENDERBUFFER) {
+                endpoint.Renderbuffer = MG_State::pGLContext->GetRenderbufferObject(name);
+            } else {
+                endpoint.Texture = MG_State::pGLContext->GetTextureObject(name);
+            }
+            return endpoint;
+        };
+        const MG_Backend::CopyImageEndpoint src = resolveEndpoint(srcName, srcTarget);
+        const MG_Backend::CopyImageEndpoint dst = resolveEndpoint(dstName, dstTarget);
+        if (!ValidateCopyImageSubData_State(src, srcTarget, srcLevel, srcX, srcY, dst, dstTarget,
                                             dstLevel, dstX, dstY, srcWidth, srcHeight, srcDepth)) {
             return;
         }
-        CopyImageSubData_Backend(srcTexture, srcTarget, srcLevel, srcX, srcY, srcZ, dstTexture, dstTarget, dstLevel,
+        CopyImageSubData_Backend(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel,
                                  dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
 

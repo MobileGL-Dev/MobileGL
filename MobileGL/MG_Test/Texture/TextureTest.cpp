@@ -4100,24 +4100,25 @@ namespace {
         GLint SrcZ = -1;
         GLint DstZ = -1;
         GLsizei Depth = -1;
+        Bool SrcIsRenderbuffer = false;
+        Bool DstIsRenderbuffer = false;
     } g_copyImageSubDataCall;
 
-    void RecordCopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture, GLenum srcTarget,
+    void RecordCopyImageSubData(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget,
                                 GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture, GLenum dstTarget,
+                                const MG_Backend::CopyImageEndpoint& dst, GLenum dstTarget,
                                 GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth,
                                 GLsizei srcHeight, GLsizei srcDepth) {
-        (void)srcTexture;
         (void)srcLevel;
         (void)srcX;
         (void)srcY;
-        (void)dstTexture;
         (void)dstLevel;
         (void)dstX;
         (void)dstY;
         (void)srcWidth;
         (void)srcHeight;
-        g_copyImageSubDataCall = {true, srcTarget, dstTarget, srcZ, dstZ, srcDepth};
+        g_copyImageSubDataCall = {true,   srcTarget, dstTarget,           srcZ,
+                                  dstZ,   srcDepth,  src.IsRenderbuffer(), dst.IsRenderbuffer()};
     }
 
     // Two storage-backed 2D textures of the requested formats, so a copy between them is a legal
@@ -4387,4 +4388,103 @@ TEST_F(TextureTest, CopyImageSubDataPassesTheRectangleTargetThroughUntranslated)
     EXPECT_EQ(g_copyImageSubDataCall.SrcTarget, static_cast<GLenum>(GL_TEXTURE_RECTANGLE));
     EXPECT_EQ(g_copyImageSubDataCall.DstTarget, static_cast<GLenum>(GL_TEXTURE_RECTANGLE));
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 18.3.2 accepts GL_RENDERBUFFER as an endpoint target, and a renderbuffer name lives
+// in its own namespace. Resolving BOTH names through the texture namespace answered a null object
+// for every renderbuffer endpoint, so all 74 conformance cases that name one - the whole
+// texture<->renderbuffer half of KHR-GL43.copy_image, plus its smoke test - reported
+// GL_INVALID_VALUE. The endpoint is a sum type now; the target picks the namespace.
+TEST_F(TextureTest, CopyImageSubDataResolvesARenderbufferEndpointInTheRenderbufferNamespace) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 8, 8);
+    GLuint renderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(renderbuffer, GL_RGBA8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(texture, GL_TEXTURE_2D, 0, 0, 0, 0, renderbuffer, GL_RENDERBUFFER, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_FALSE(g_copyImageSubDataCall.SrcIsRenderbuffer);
+    EXPECT_TRUE(g_copyImageSubDataCall.DstIsRenderbuffer);
+    EXPECT_EQ(g_copyImageSubDataCall.DstTarget, static_cast<GLenum>(GL_RENDERBUFFER));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // ...and back the other way, which is the second half of the conformance case's two-copy
+    // shape (texture -> renderbuffer -> texture).
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 0, 0, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_TRUE(g_copyImageSubDataCall.SrcIsRenderbuffer);
+    EXPECT_FALSE(g_copyImageSubDataCall.DstIsRenderbuffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// Renderbuffer to renderbuffer, the shape neither endpoint could take before, plus the negative
+// that pins which table was consulted: with GL_RENDERBUFFER named, a number that is not a live
+// RENDERBUFFER is INVALID_VALUE - the texture table is never asked.
+TEST_F(TextureTest, CopyImageSubDataKeepsTheTwoNameNamespacesApart) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcRenderbuffer = 0;
+    GLuint dstRenderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &srcRenderbuffer);
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &dstRenderbuffer);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(srcRenderbuffer, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(dstRenderbuffer, GL_RGBA8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcRenderbuffer, GL_RENDERBUFFER, 0, 0, 0, 0, dstRenderbuffer,
+                                      GL_RENDERBUFFER, 0, 0, 0, 0, 4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_TRUE(g_copyImageSubDataCall.SrcIsRenderbuffer);
+    EXPECT_TRUE(g_copyImageSubDataCall.DstIsRenderbuffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcRenderbuffer, GL_RENDERBUFFER, 0, 0, 0, 0, 4243, GL_RENDERBUFFER, 0, 0, 0,
+                                      0, 4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// A renderbuffer has exactly one image, so any level above zero is the same INVALID_VALUE a
+// texture gets for a level it does not have - and an unallocated one is an incomplete image,
+// which 18.3.2 spells INVALID_OPERATION.
+TEST_F(TextureTest, CopyImageSubDataChecksARenderbufferLevelAndStorage) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 8, 8);
+    GLuint renderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(renderbuffer, GL_RGBA8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(texture, GL_TEXTURE_2D, 0, 0, 0, 0, renderbuffer, GL_RENDERBUFFER, 1, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    GLuint emptyRenderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &emptyRenderbuffer);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::CopyImageSubData(texture, GL_TEXTURE_2D, 0, 0, 0, 0, emptyRenderbuffer, GL_RENDERBUFFER, 0, 0,
+                                      0, 0, 4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
 }
