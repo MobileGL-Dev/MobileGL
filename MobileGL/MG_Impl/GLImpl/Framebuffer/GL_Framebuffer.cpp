@@ -2613,18 +2613,26 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ClearBufferfi_Backend(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+        // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
+        if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv_Backend(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+        // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
+        if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferfv(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv_Backend(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
+        if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferuiv(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv_Backend(GLenum buffer, GLint drawbuffer, const GLint* value) {
+        // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
+        if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferiv(buffer, drawbuffer, value);
     }
 

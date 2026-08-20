@@ -140,6 +140,29 @@ namespace {
 
     void StubEndXfbPrimitivesQuery(MG_Backend::BackendQueryHandle) { ++g_stubXfbEndCount; }
 
+    // Stub backend occlusion queries. The host has no ES context, and BeginQuery refuses the
+    // occlusion targets outright when the backend advertises no hook - so a conditional-render
+    // test cannot get a legal predicate object without these. g_stubResultNs is the sample count
+    // the "driver" reports, which is the whole input to the predicate.
+    MG_Backend::BackendQueryHandle StubBeginOcclusionQuery() {
+        return reinterpret_cast<MG_Backend::BackendQueryHandle>(static_cast<uintptr_t>(0x54));
+    }
+
+    void StubEndOcclusionQuery(MG_Backend::BackendQueryHandle) {}
+
+    void InstallStubBackendOcclusionQueries() {
+        auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
+        backendGL.BeginOcclusionQuery = StubBeginOcclusionQuery;
+        backendGL.EndOcclusionQuery = StubEndOcclusionQuery;
+        backendGL.IsQueryResultAvailable = StubIsQueryResultAvailable;
+        backendGL.GetQueryResult64 = StubGetQueryResult64;
+        backendGL.DeleteBackendQuery = StubDeleteBackendQuery;
+        g_stubDeleteCount = 0;
+        g_stubResultAvailable = true;
+        g_stubResultObtainable = true;
+        g_stubResultNs = 0;
+    }
+
     void InstallStubBackendXfbQueries() {
         auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
         backendGL.BeginXfbPrimitivesQuery = StubBeginXfbPrimitivesQuery;
@@ -677,6 +700,108 @@ TEST_F(QueryTest, PrimitivesGeneratedKeepsTheBackendResultUnderTheCpuPreference)
 // unified truthy rule (set, non-empty, not "0", case-insensitive not "false").
 // Running the binary under MOBILEGL_DISABLE_TIMERQUERY=1 therefore exercises
 // the real end-to-end path rather than the struct field alone.
+// KHR-GL43.compute_shader.conditional-dispatching and the conditional_render family.
+// glBeginConditionalRender/glEndConditionalRender were bare stubs: every command inside a
+// conditional block executed whatever the query said, so the block that should have been
+// discarded ran and doubled the atomic counter the case reads back.
+TEST_F(QueryTest, ConditionalRenderResolvesItsPredicateFromTheOcclusionQuery) {
+    ScopedBackendFunctionsOverride backendGuard;
+    InstallStubBackendOcclusionQueries();
+
+    GLuint ids[2] = {0, 0};
+    MG_Impl::GLImpl::GenQueries(2, ids);
+    ASSERT_NE(ids[0], 0u);
+    ASSERT_NE(ids[1], 0u);
+
+    // One span that saw samples and one that saw none, which is exactly the pair the
+    // conformance case builds out of a passing and a failing depth test.
+    g_stubResultNs = 1;
+    MG_Impl::GLImpl::BeginQuery(GL_ANY_SAMPLES_PASSED, ids[0]);
+    MG_Impl::GLImpl::EndQuery(GL_ANY_SAMPLES_PASSED);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    GLuint passedResult = 0xFFFFFFFFu;
+    MG_Impl::GLImpl::GetQueryObjectuiv(ids[0], GL_QUERY_RESULT, &passedResult);
+    ASSERT_EQ(passedResult, 1u);
+
+    g_stubResultNs = 0;
+    MG_Impl::GLImpl::BeginQuery(GL_ANY_SAMPLES_PASSED, ids[1]);
+    MG_Impl::GLImpl::EndQuery(GL_ANY_SAMPLES_PASSED);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A block on the query that passed executes.
+    MG_Impl::GLImpl::BeginConditionalRender(ids[0], GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(MG_State::pGLContext->IsConditionalRenderActive());
+    EXPECT_FALSE(MG_State::pGLContext->ConditionalRenderDiscardsCommands());
+    MG_Impl::GLImpl::EndConditionalRender();
+    EXPECT_FALSE(MG_State::pGLContext->IsConditionalRenderActive());
+    EXPECT_FALSE(MG_State::pGLContext->ConditionalRenderDiscardsCommands());
+
+    // A block on the query that did not passes nothing through.
+    MG_Impl::GLImpl::BeginConditionalRender(ids[1], GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(MG_State::pGLContext->ConditionalRenderDiscardsCommands());
+    MG_Impl::GLImpl::EndConditionalRender();
+
+    // ...and the _INVERTED modes swap both verdicts.
+    MG_Impl::GLImpl::BeginConditionalRender(ids[0], GL_QUERY_WAIT_INVERTED);
+    EXPECT_TRUE(MG_State::pGLContext->ConditionalRenderDiscardsCommands());
+    MG_Impl::GLImpl::EndConditionalRender();
+    MG_Impl::GLImpl::BeginConditionalRender(ids[1], GL_QUERY_BY_REGION_NO_WAIT_INVERTED);
+    EXPECT_FALSE(MG_State::pGLContext->ConditionalRenderDiscardsCommands());
+    MG_Impl::GLImpl::EndConditionalRender();
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteQueries(2, ids);
+}
+
+TEST_F(QueryTest, ConditionalRenderRejectsTheErrorsTheSpecNames) {
+    ScopedBackendFunctionsOverride backendGuard;
+    InstallStubBackendOcclusionQueries();
+
+    GLuint ids[2] = {0, 0};
+    MG_Impl::GLImpl::GenQueries(2, ids);
+    g_stubResultNs = 1;
+    MG_Impl::GLImpl::BeginQuery(GL_ANY_SAMPLES_PASSED, ids[0]);
+    MG_Impl::GLImpl::EndQuery(GL_ANY_SAMPLES_PASSED);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // GL 4.6 core 10.9, one rule at a time.
+    MG_Impl::GLImpl::BeginConditionalRender(ids[0], GL_TIME_ELAPSED);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_ENUM);
+    EXPECT_FALSE(MG_State::pGLContext->IsConditionalRenderActive());
+
+    // A generated NAME is not yet a query object.
+    MG_Impl::GLImpl::BeginConditionalRender(ids[1], GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    MG_Impl::GLImpl::BeginConditionalRender(0, GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+
+    // A query that is not an occlusion query cannot drive one.
+    GLuint timerId = 0;
+    MG_Impl::GLImpl::GenQueries(1, &timerId);
+    MG_Impl::GLImpl::BeginQuery(GL_TIME_ELAPSED, timerId);
+    MG_Impl::GLImpl::EndQuery(GL_TIME_ELAPSED);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BeginConditionalRender(timerId, GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // End without a block, and a nested Begin.
+    MG_Impl::GLImpl::EndConditionalRender();
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::BeginConditionalRender(ids[0], GL_QUERY_WAIT);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BeginConditionalRender(ids[0], GL_QUERY_WAIT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    // The rejected nested Begin must not have disturbed the open block.
+    EXPECT_EQ(MG_State::pGLContext->GetConditionalRenderQuery(), ids[0]);
+    MG_Impl::GLImpl::EndConditionalRender();
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteQueries(2, ids);
+    MG_Impl::GLImpl::DeleteQueries(1, &timerId);
+}
+
 TEST_F(QueryTest, DisableTimerQueryFeatureMatchesEnvironment) {
     const char* raw = std::getenv("MOBILEGL_DISABLE_TIMERQUERY");
     Bool expected = false;

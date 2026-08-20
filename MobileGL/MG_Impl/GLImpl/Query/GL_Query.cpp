@@ -565,6 +565,75 @@ namespace MobileGL::MG_Impl::GLImpl {
         queryObject->ended = true;
     }
 
+    void BeginConditionalRender(GLuint id, GLenum mode) {
+        // GL 4.6 core 10.9's eight modes. The _INVERTED half flips the sense of the predicate;
+        // the BY_REGION half only narrows WHERE an implementation is permitted to discard, so
+        // treating it as its whole-framebuffer sibling is what an implementation without region
+        // granularity does. The _NO_WAIT half is a permission to render rather than stall, not an
+        // obligation - see the resolve below.
+        Bool inverted = false;
+        switch (mode) {
+        case GL_QUERY_WAIT:
+        case GL_QUERY_NO_WAIT:
+        case GL_QUERY_BY_REGION_WAIT:
+        case GL_QUERY_BY_REGION_NO_WAIT:
+            inverted = false;
+            break;
+        case GL_QUERY_WAIT_INVERTED:
+        case GL_QUERY_NO_WAIT_INVERTED:
+        case GL_QUERY_BY_REGION_WAIT_INVERTED:
+        case GL_QUERY_BY_REGION_NO_WAIT_INVERTED:
+            inverted = true;
+            break;
+        default:
+            RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "mode is not a conditional render mode.");
+            return;
+        }
+
+        if (MG_State::pGLContext->IsConditionalRenderActive()) {
+            RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "Conditional rendering is already active.");
+            return;
+        }
+
+        {
+            const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
+            const auto* queryObject = FindQueryObjectLocked(id);
+            // A generated NAME is not yet a query object; it becomes one at its first use with a
+            // target (the same rule glIsQuery answers by).
+            if (!queryObject || (!queryObject->created && queryObject->target == 0)) {
+                RecordQueryError(ErrorCode::InvalidValue, __FUNCTION__, "id is not the name of a query object.");
+                return;
+            }
+            if (queryObject->active) {
+                RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "The query object is still active.");
+                return;
+            }
+            if (queryObject->target != GL_SAMPLES_PASSED && queryObject->target != GL_ANY_SAMPLES_PASSED &&
+                queryObject->target != GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
+                RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__,
+                                 "Conditional rendering requires an occlusion query object.");
+                return;
+            }
+        }
+
+        // Resolved ONCE, here, and by WAITING even for the _NO_WAIT modes: the spec lets those
+        // render instead of stalling, so always waiting is conforming and is the only choice that
+        // gives the whole block one deterministic verdict. Reading it per command instead would
+        // let a result that lands mid-block change the answer half way through.
+        Uint64 samplesPassed = 0;
+        if (!GetQueryObjectValue(id, GL_QUERY_RESULT, __FUNCTION__, samplesPassed)) return;
+        const Bool passed = samplesPassed != 0;
+        MG_State::pGLContext->BeginConditionalRender(id, mode, inverted ? passed : !passed);
+    }
+
+    void EndConditionalRender() {
+        if (!MG_State::pGLContext->IsConditionalRenderActive()) {
+            RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "Conditional rendering is not active.");
+            return;
+        }
+        MG_State::pGLContext->EndConditionalRender();
+    }
+
     void GetQueryiv(GLenum target, GLenum pname, GLint* params) {
         if (!params) {
             return;
