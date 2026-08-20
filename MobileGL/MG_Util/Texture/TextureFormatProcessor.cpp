@@ -270,10 +270,30 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // per-channel precision (extra precision stays inside the CTS comparison epsilon, which is
             // derived from the requested format's bit widths). The upload (format, type) below matches
             // the canonical shadow layout in PixelStoreProcessor (UNorm8 / UNorm16 component arrays).
+            //
+            // The <=8-bit ones land on the 8-bit-per-channel storage that layout ALREADY is, rather
+            // than on the narrower GL_RGB565/GL_RGBA4 they nominally fit in. Storing them narrower
+            // made the driver requantize the UNorm8 shadow bytes on every upload, and that step is
+            // exact only by luck: 5-bit value 2 encodes as UNorm8 16, and 16/255*31 = 1.945 sits
+            // astride the 5-bit boundary, so a driver that truncates hands back 1 (all twelve
+            // KHR-GL43.copy_image.functional rgb4->rgb4 cases fail on Mali, at verify()'s FIRST
+            // check - a plain glTexImage/glGetTexImage round trip with no copy involved). The
+            // 8-bit store removes the requantization entirely; the client word round-trips
+            // exactly, because encoding an n-bit field to UNorm8 with rounding and back is the
+            // identity for every n <= 8. It is also what DirectVulkan has always done with them
+            // (VkTextureManager::ResolveTextureFormatInfo resolves all six legacy low-bit formats
+            // to R8G8B8A8_UNORM), so the two backends now agree here.
+            //
+            // Only the DESKTOP-ONLY formats move. GL_RGBA4 and GL_RGB5_A1 are ES formats an
+            // application can legitimately ask for - the same normalization picks the storage for
+            // glRenderbufferStorage - so widening them would be a memory decision, not a
+            // correctness one. Nothing about the REPORTED precision moves either way:
+            // GL_TEXTURE_*_SIZE and glGetInternalformativ answer from TextureMetrics, keyed on the
+            // requested format, not on the ES storage.
             case GL_R3_G3_B2:
             case GL_RGB4:
             case GL_RGB5:
-                *outInternalFormat = GL_RGB565;
+                *outInternalFormat = GL_RGB8;
                 break;
             case GL_RGB10:
             case GL_RGB12:
@@ -283,7 +303,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                                          : GL_RGB16;
                 break;
             case GL_RGBA2:
-                *outInternalFormat = GL_RGBA4;
+                *outInternalFormat = GL_RGBA8;
                 break;
             case GL_RGBA12:
                 *outInternalFormat =

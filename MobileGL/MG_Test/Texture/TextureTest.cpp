@@ -3197,11 +3197,19 @@ TEST_F(TextureTest, NormalizeLegacySizedFormatsMapToCanonicalShadowLayouts) {
         GLenum type;
     };
     const Case cases[] = {
-        // Legacy <=8-bit-per-channel formats store as UNorm8 component arrays.
-        {GL_R3_G3_B2, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGB4, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGB5, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGBA2, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
+        // Legacy <=8-bit-per-channel DESKTOP-ONLY formats store as UNorm8 component arrays, in the
+        // 8-bit-per-channel ES format that layout already is. Storing them in the narrower
+        // GL_RGB565/GL_RGBA4 they nominally fit in made the driver requantize the shadow bytes on
+        // every upload, which is not lossless: 5-bit 2 -> UNorm8 16 -> 16/255*31 = 1.945, which a
+        // truncating driver reads back as 1 (KHR-GL43.copy_image rgb4->rgb4, 12/12 failing on Mali).
+        {GL_R3_G3_B2, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB4, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB5, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGBA2, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        // The two that are ES formats in their own right keep their native storage: an application
+        // that asks for GL_RGBA4 or GL_RGB5_A1 is asking for the smaller image, and the same
+        // normalization also picks the storage for glRenderbufferStorage, where those two are
+        // ordinary ES render targets rather than a desktop-compatibility shim.
         {GL_RGBA4, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
         {GL_RGB5_A1, GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE},
         // 10/12-bit channels store as UNorm16 component arrays.
