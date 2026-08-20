@@ -12,6 +12,7 @@
 #include "glslang/TVarEntryInfo.h"
 #include "glslang/TMglGlslIoResolver.h"
 
+#include <map>
 #include <set>
 
 namespace MobileGL {
@@ -101,6 +102,29 @@ namespace MobileGL {
                 static bool RewriteXfbCaptureNameForFlattenedBlock(const String& captureName,
                                                                    const std::set<String>& flattenedBlockNames,
                                                                    String& outName);
+                // Adds to `collidingBlockNames` every inter-stage interface block this stage
+                // declares in BOTH directions at once (`in FOO {...}; out FOO {...}`, which
+                // desktop GLSL allows because its input and output block namespaces are
+                // separate), and to `declaredNames` every name the module spells. The gate for
+                // UniquifyIoBlockNamesForEssl below, and the source of the name set a
+                // replacement has to avoid. Reads the module; never rewrites it.
+                static void ProbeIoBlockNamesForEssl(const Vector<Uint32>& binary,
+                                                     std::set<String>& collidingBlockNames,
+                                                     std::set<String>& declaredNames);
+                // Renames inter-stage interface BLOCK types so the collision the probe above
+                // found gets one spelling per producing stage. `inputBlockRenames` applies to
+                // blocks this stage consumes and `outputBlockRenames` to blocks it produces,
+                // both planned program-wide by the caller so a producer and its consumer keep
+                // matching; `renamedBlockNames` reports the original names this stage actually
+                // rewrote. SPIRV-Cross re-emits two same-named blocks verbatim and the Mali ES
+                // driver then loses the output block's payload. Only for the DirectGLES
+                // transpile path. See UniquifyIoBlockNamesPass.
+                static bool UniquifyIoBlockNamesForEssl(const Vector<Uint32>& inputBinary,
+                                                        const std::map<String, String>& inputBlockRenames,
+                                                        const std::map<String, String>& outputBlockRenames,
+                                                        std::set<String>& renamedBlockNames,
+                                                        Vector<uint32_t>& outputBinary,
+                                                        bool enableSpirvValidation = false);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.

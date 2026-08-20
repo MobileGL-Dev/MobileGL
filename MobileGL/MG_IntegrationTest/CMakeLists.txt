@@ -83,6 +83,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
+    Scenarios/IoBlockNameCollisionScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp

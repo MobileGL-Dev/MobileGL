@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <cstring>
 #include <regex>
@@ -4715,6 +4716,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return signature + entry;
             }
 
+            // Pipeline position of a shader stage. Names the PRODUCER of an inter-stage
+            // interface block: a block one stage consumes was written by the stage before it.
+            // ShaderStage is declared in pipeline order, so the enum value IS the position;
+            // compute has no inter-stage interface at all and is reported as -1.
+            Int InterStagePipelineIndex(ShaderStage stage) {
+                switch (stage) {
+                case ShaderStage::Vertex:
+                case ShaderStage::TessControl:
+                case ShaderStage::TessEval:
+                case ShaderStage::Geometry:
+                case ShaderStage::Fragment:
+                    return static_cast<Int>(stage);
+                default:
+                    return -1;
+                }
+            }
+
+            // Whether a stage can declare interface blocks in BOTH directions at once, i.e.
+            // whether one block name can name two different blocks inside it. A vertex INPUT
+            // and a fragment OUTPUT cannot be blocks and compute has neither, so only these
+            // three can. This is what keeps the module probe off every program without
+            // tessellation or geometry - which is every program Minecraft and its shader packs
+            // build.
+            Bool CanDeclareBlocksInBothDirections(ShaderStage stage) {
+                return stage == ShaderStage::TessControl || stage == ShaderStage::TessEval ||
+                       stage == ShaderStage::Geometry;
+            }
+
             // Reflection names an array uniform after its first element ("g_image[0]") at every
             // location it spans; SPIR-V names the variable once, without the subscript. This is
             // the name both sides agree on.
@@ -4998,6 +5027,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             std::set<String> flattenedXfbBlockNames;
 
+            // Desktop GLSL keeps SEPARATE name namespaces for input and output interface
+            // blocks, so ONE stage may legally declare `in FOO {...}` and `out FOO {...}` at
+            // the same time - which the tessellation evaluation stage of both interface-block
+            // tests in KHR-GL42/43.shading_language_420pack does ("in TCSOutputBlock ... out
+            // TCSOutputBlock"). SPIRV-Cross keeps the same split (block_input_names vs
+            // block_output_names) and re-emits BOTH under the name FOO, so the generated ESSL
+            // declares two different blocks called FOO in one shader. Adreno's ES compiler
+            // keeps them apart; Mali's does not - the stage compiles, the program links, and
+            // the output block's payload never reaches the next stage. All 22 of that group's
+            // Mali failures are exactly the two tests that write this shape, and every one of
+            // them passes on Adreno and on DirectVulkan.
+            //
+            // The repair is a rename keyed on the PRODUCING stage, planned here and applied
+            // per stage below so a producer and its consumer keep naming the same block.
+            // Gated twice over, because a re-serialised module is not free (it cost the
+            // create-indirect retrace 0.15 SSIM the first time the array-input split missed
+            // its gate): only a tessellation or geometry stage can declare blocks in both
+            // directions at all, and even then the probe has to FIND a collision before any
+            // stage is rewritten.
+            std::set<String> collidingIoBlockNames;
+            std::set<String> declaredIoBlockNames;
+            Vector<Int> stagePipelineIndices(attachedShaders.size(), -1);
+            Bool anyStageCanDeclareBlocksInBothDirections = false;
+            for (SizeT index = 0; index < attachedShaders.size(); ++index) {
+                const ShaderStage stage = attachedShaders[index]->GetShaderStage();
+                stagePipelineIndices[index] = InterStagePipelineIndex(stage);
+                if (CanDeclareBlocksInBothDirections(stage)) anyStageCanDeclareBlocksInBothDirections = true;
+            }
+            if (anyStageCanDeclareBlocksInBothDirections) {
+                for (SizeT index = 0; index < attachedShaders.size() && index < shaderSpirvs.size(); ++index) {
+                    MG_Util::ShaderTranspiler::ShaderCompiler::ProbeIoBlockNamesForEssl(
+                        shaderSpirvs[index], collidingIoBlockNames, declaredIoBlockNames);
+                }
+                // A block a capture request names is resolved BY NAME at
+                // glTransformFeedbackVaryings time - and flattened away entirely by the pass
+                // below - so renaming one would ask the driver for a block the request does
+                // not spell.
+                for (const auto& xfbCaptureBlockName : xfbCaptureBlockNames) {
+                    collidingIoBlockNames.erase(xfbCaptureBlockName);
+                }
+            }
+            // The one spelling every stage of THIS program agrees on for `blockName` as written
+            // by pipeline stage `producerPipelineIndex`. "__" is reserved in GLSL, so a name
+            // already ending in '_' does not get another one, and the digit-suffix loop steps
+            // off any name the program already spells.
+            const auto uniqueIoBlockName = [&declaredIoBlockNames](const String& blockName,
+                                                                   Int producerPipelineIndex) {
+                const char* separator = (!blockName.empty() && blockName.back() == '_') ? "" : "_";
+                String candidate = blockName + separator + "mgio" + std::to_string(producerPipelineIndex);
+                while (declaredIoBlockNames.find(candidate) != declaredIoBlockNames.end()) {
+                    candidate += "0";
+                }
+                return candidate;
+            };
+
             for (int index = 0; index < attachedShaders.size(); ++index) {
                 auto& shader = attachedShaders[index];
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage());
@@ -5144,6 +5228,60 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &flattenedXfbSpirv;
                     flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
                                                   stageFlattenedXfbBlockNames.end());
+                }
+
+                // The producer-keyed rename planned above the loop, applied to this stage: the
+                // blocks it CONSUMES are spelled after the previous stage present in the
+                // program and the ones it PRODUCES after itself, so a tessellation evaluation
+                // stage's two TCSOutputBlocks stop being one name and every other stage still
+                // agrees with it. Same adopt-only-if-rewritten gate as the flatten above.
+                //
+                // A block whose other end is NOT in this program is deliberately left alone:
+                // in a separate-shader-objects pipeline the interface it matches across lives
+                // in another program that never saw this plan, and renaming one side of THAT
+                // would break a program pipeline to repair a driver quirk. That is what the
+                // producer/consumer presence tests below are for - in a monolithic program
+                // both are trivially satisfied for every interface the collision can touch.
+                Vector<unsigned int> uniquifiedIoBlockSpirv;
+                if (!collidingIoBlockNames.empty() && stagePipelineIndices[index] >= 0) {
+                    const Int myPipelineIndex = stagePipelineIndices[index];
+                    Int producerPipelineIndex = -1;
+                    Bool hasConsumerStage = false;
+                    for (const Int otherPipelineIndex : stagePipelineIndices) {
+                        if (otherPipelineIndex < 0) continue;
+                        if (otherPipelineIndex < myPipelineIndex &&
+                            otherPipelineIndex > producerPipelineIndex) {
+                            producerPipelineIndex = otherPipelineIndex;
+                        }
+                        if (otherPipelineIndex > myPipelineIndex) hasConsumerStage = true;
+                    }
+
+                    std::map<String, String> inputBlockRenames;
+                    std::map<String, String> outputBlockRenames;
+                    for (const auto& collidingBlockName : collidingIoBlockNames) {
+                        if (producerPipelineIndex >= 0) {
+                            inputBlockRenames[collidingBlockName] =
+                                uniqueIoBlockName(collidingBlockName, producerPipelineIndex);
+                        }
+                        if (hasConsumerStage) {
+                            outputBlockRenames[collidingBlockName] =
+                                uniqueIoBlockName(collidingBlockName, myPipelineIndex);
+                        }
+                    }
+
+                    std::set<String> stageRenamedIoBlockNames;
+                    if (MG_Util::ShaderTranspiler::ShaderCompiler::UniquifyIoBlockNamesForEssl(
+                            *effectiveSpirv, inputBlockRenames, outputBlockRenames,
+                            stageRenamedIoBlockNames, uniquifiedIoBlockSpirv, enableSpirvValidation) &&
+                        !uniquifiedIoBlockSpirv.empty() && !stageRenamedIoBlockNames.empty()) {
+                        effectiveSpirv = &uniquifiedIoBlockSpirv;
+                        MGLOG_D("Program %u stage %s: %zu inter-stage interface block(s) renamed per "
+                                "producing stage, because some stage of this program declares the same "
+                                "block name in both directions and the ES driver may alias the two.",
+                                m_backendProgramId,
+                                MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                                stageRenamedIoBlockNames.size());
+                    }
                 }
 
                 // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints

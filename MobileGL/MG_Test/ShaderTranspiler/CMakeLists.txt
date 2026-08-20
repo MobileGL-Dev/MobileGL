@@ -9,6 +9,7 @@ add_executable(
         EmulateSubgroupsTest.cpp
         DemoteFloat64Test.cpp
         FlattenXfbInterfaceBlocksTest.cpp
+        UniquifyIoBlockNamesTest.cpp
         LowerViewportIndexTest.cpp
         ClampMultisampleFetchTest.cpp
 )
