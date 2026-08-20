@@ -17,6 +17,7 @@
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
@@ -911,6 +912,77 @@ void main() {
     EXPECT_FALSE(unsupported);
 
     MG_Backend::pActiveBackendObject.reset();
+}
+
+// KHR-GL43.shader_atomic_counters.basic-glsl-built-in, .basic-buffer-bind and .basic-api-get.
+// The atomic-counter limits used to live in two unreconciled tables - glslang compiled every
+// shader against ONE binding while glGetIntegerv advertised thirty-six - and three of the enums
+// had no case in the getter at all, so the query raised INVALID_ENUM and left the caller reading
+// whatever was in its own stack slot.
+TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
+    using namespace MobileGL;
+    namespace Transpiler = MG_Util::ShaderTranspiler;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+
+    GLint reported = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &reported);
+    EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS));
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, &reported);
+    EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE));
+    for (const GLenum pname : {GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS, GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS,
+                               GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS}) {
+        reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(pname, &reported);
+        EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE))
+            << "pname " << pname;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // glBindBufferBase sets the GENERIC binding point too (GL 4.6 6.1.1), and this is the one
+    // indexed-buffer family whose non-indexed query had no case.
+    reported = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_ATOMIC_COUNTER_BUFFER_BINDING, &reported);
+    EXPECT_EQ(reported, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_ATOMIC_COUNTER_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_ATOMIC_COUNTER_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+    MG_Impl::GLImpl::BindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 2, buffer);
+    MG_Impl::GLImpl::GetIntegerv(GL_ATOMIC_COUNTER_BUFFER_BINDING, &reported);
+    EXPECT_EQ(static_cast<GLuint>(reported), buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // ...and the shading language has to expand the same numbers. Each array is sized by a
+    // built-in constant and indexed at its last element with a literal, so the stage only
+    // compiles when that constant is at least what glGetIntegerv just reported - which it was
+    // not while the resource table said one.
+    const String lastBinding = std::to_string(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS - 1);
+    const String lastBuffer = std::to_string(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE - 1);
+    const String source = R"(#version 430 core
+out vec4 color;
+int mgBindings[gl_MaxAtomicCounterBindings];
+int mgCombinedBuffers[gl_MaxCombinedAtomicCounterBuffers];
+int mgFragmentBuffers[gl_MaxFragmentAtomicCounterBuffers];
+layout(binding = )" + lastBinding + R"(, offset = 0) uniform atomic_uint mgCounter;
+void main() {
+    color = vec4(float(mgBindings[)" + lastBinding + R"(] + mgCombinedBuffers[)" + lastBuffer +
+                         R"(] + mgFragmentBuffers[)" + lastBuffer + R"(] + int(atomicCounterIncrement(mgCounter))));
+}
+)";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_FRAGMENT_SHADER,
+        .sourceStr = source,
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
 }
 
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {

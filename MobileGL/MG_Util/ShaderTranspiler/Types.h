@@ -14,6 +14,35 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             inline const char* GLOBAL_UBO_NAME = "MGL_GLOBAL_UBO";
+            // glslang's Vulkan-relaxed parse rewrites every atomic_uint into a member of a
+            // synthesized storage block named "<this>_<GL atomic-counter binding>"
+            // (ParseContextBase::growAtomicCounterBlock). That block IS the GL atomic counter
+            // buffer, and the trailing number is the only place the GL binding survives.
+            inline const char* ATOMIC_COUNTER_BLOCK_PREFIX = "gl_AtomicCounterBlock";
+
+            // Atomic-counter limits, in ONE place because GL 4.6 requires glGetIntegerv and the
+            // shading language's gl_MaxAtomicCounter* constants to report the same numbers
+            // (KHR-GL43.shader_atomic_counters.basic-glsl-built-in compares them directly).
+            // They used to be two unreconciled tables: BuildTBuiltInResource compiled against one
+            // binding and glGetIntegerv advertised thirty-six.
+            //
+            // The binding count is what the backends can actually serve. glslang lowers every
+            // atomic_uint onto a storage block, so one counter BUFFER costs one of the ES
+            // driver's shader-storage binding points, and DirectGLES reserves this many at the
+            // top of that range (see AtomicCounterEsslBinding in the DirectGLES managers).
+            inline constexpr Int MAX_ATOMIC_COUNTER_BUFFER_BINDINGS = 8;
+            // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, in basic machine units. Independent of the
+            // counter COUNTS below - it bounds the byte offset a counter may be declared at, and
+            // the conformance suite declares counters well past the eighth one (offsets 32 and
+            // 128 in a two-counter buffer). KHR-GL44.multi_bind splits it evenly across every
+            // advertised binding point and binds them all in one glBindBuffersRange, so it must
+            // stay a multiple of, and comfortably larger than, four times the binding count.
+            inline constexpr Int MAX_ATOMIC_COUNTER_BUFFER_SIZE = 16384;
+            // GL_MAX_{FRAGMENT,COMPUTE,COMBINED}_ATOMIC_COUNTER_BUFFERS and the matching
+            // _ATOMIC_COUNTERS. Eight is the GL 4.6 core minimum for the compute stage
+            // (table 23.45) and every other stage this implementation serves counters on.
+            inline constexpr Int MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE = 8;
+            inline constexpr Int MAX_ATOMIC_COUNTERS_PER_STAGE = 8;
 
             struct EmptyType {};
 

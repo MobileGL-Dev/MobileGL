@@ -93,8 +93,8 @@ namespace MobileGL {
                 Resources.maxComputeUniformComponents = 1024;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
-                Resources.maxComputeAtomicCounters = 8;
-                Resources.maxComputeAtomicCounterBuffers = 1;
+                Resources.maxComputeAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                Resources.maxComputeAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
                 Resources.maxVaryingComponents = 60;
                 Resources.maxVertexOutputComponents = 64;
                 Resources.maxGeometryInputComponents = 64;
@@ -132,16 +132,22 @@ namespace MobileGL {
                 Resources.maxTessControlAtomicCounters = 0;
                 Resources.maxTessEvaluationAtomicCounters = 0;
                 Resources.maxGeometryAtomicCounters = 0;
-                Resources.maxFragmentAtomicCounters = 8;
-                Resources.maxCombinedAtomicCounters = 8;
-                Resources.maxAtomicCounterBindings = 1;
+                Resources.maxFragmentAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                Resources.maxCombinedAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
+                // Every atomic-counter limit below is the one glGetIntegerv answers; the shared
+                // constants in Types.h are what keeps the two sides from drifting apart again.
+                // gl_MaxAtomicCounterBindings and gl_MaxAtomicCounterBufferSize expand from these
+                // (Initialize.cpp), and the binding count is also the ceiling glslang checks a
+                // `layout(binding = N) uniform atomic_uint` against - it was 1, so every counter
+                // outside binding 0 failed to compile.
+                Resources.maxAtomicCounterBindings = MAX_ATOMIC_COUNTER_BUFFER_BINDINGS;
                 Resources.maxVertexAtomicCounterBuffers = 0;
                 Resources.maxTessControlAtomicCounterBuffers = 0;
                 Resources.maxTessEvaluationAtomicCounterBuffers = 0;
                 Resources.maxGeometryAtomicCounterBuffers = 0;
-                Resources.maxFragmentAtomicCounterBuffers = 1;
-                Resources.maxCombinedAtomicCounterBuffers = 1;
-                Resources.maxAtomicCounterBufferSize = 16384;
+                Resources.maxFragmentAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
+                Resources.maxCombinedAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
+                Resources.maxAtomicCounterBufferSize = MAX_ATOMIC_COUNTER_BUFFER_SIZE;
                 Resources.maxTransformFeedbackBuffers = 4;
                 Resources.maxTransformFeedbackInterleavedComponents = 64;
                 Resources.maxCullDistances = 8;
