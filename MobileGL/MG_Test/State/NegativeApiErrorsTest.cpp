@@ -19,6 +19,8 @@
 //   * KHR-GL43.compute_shader.api-indirect / .api-program.
 //   * KHR-GLxx.texture_storage.compressed_data - compressed formats on TEXTURE_3D.
 //   * KHR-GL32.api.coverage - glFenceSync's condition/flags and glWaitSync's flags/timeout.
+//   * KHR-GL31.api.coverage - a draw's mode INVALID_ENUM has to outrank MobileGL's own
+//     no-current-program guard.
 // Plus the indexed-getter parity RC-7b is about: glGetBooleani_v / glGetInteger64i_v /
 // glGetFloati_v / glGetDoublei_v must answer every pname glGetIntegeri_v answers.
 //
@@ -503,5 +505,38 @@ void main() { g_color = vec4(1); }
 
         DeleteSync(sync);
         EXPECT_EQ(GetError(), GL_NO_ERROR);
+    }
+
+    // KHR-GL31.api.coverage's first two calls are glDrawArraysInstanced / glDrawElementsInstanced
+    // with mode GL_POINTS-1 against a context that has no program and no VAO bound, and they must
+    // answer GL_INVALID_ENUM. MobileGL's own "there is no current program" guard - which the spec
+    // does not list as a draw error at all - used to run first and shadowed the enum check with
+    // GL_INVALID_OPERATION. Nothing here reaches a backend: the mode is rejected before the guard.
+    TEST_F(NegativeApiErrorsTest, BadPrimitiveModeOutranksTheNoProgramGuard) {
+        DrainErrors();
+        // Exactly what the coverage test passes: GL_POINTS is 0, so this is 0xFFFFFFFF.
+        constexpr GLenum kBadMode = static_cast<GLenum>(GL_POINTS - 1);
+
+        RunRows({
+            {"glDrawArraysInstanced with an unaccepted mode", [] { DrawArraysInstanced(kBadMode, 0, 3, 4); },
+             GL_INVALID_ENUM},
+            {"glDrawElementsInstanced with an unaccepted mode",
+             [] { DrawElementsInstanced(kBadMode, 3, GL_UNSIGNED_INT, nullptr, 4); }, GL_INVALID_ENUM},
+            {"glDrawArrays with an unaccepted mode", [] { DrawArrays(kBadMode, 0, 3); }, GL_INVALID_ENUM},
+            {"glDrawElements with an unaccepted mode",
+             [] { DrawElements(kBadMode, 3, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
+            {"glMultiDrawArrays with an unaccepted mode",
+             [] { MultiDrawArrays(kBadMode, nullptr, nullptr, 0); }, GL_INVALID_ENUM},
+            {"glDrawRangeElements with an unaccepted mode",
+             [] { DrawRangeElements(kBadMode, 0, 2, 3, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
+            {"glDrawElementsIndirect with an unaccepted mode",
+             [] { DrawElementsIndirect(kBadMode, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
+            {"glDrawArraysIndirect with an unaccepted mode", [] { DrawArraysIndirect(kBadMode, nullptr); },
+             GL_INVALID_ENUM},
+            // A mode the enum check accepts falls through to the guard, so the INVALID_OPERATION
+            // that used to win is still raised for the calls it is actually about.
+            {"glDrawArrays with a legal mode and no program bound", [] { DrawArrays(GL_TRIANGLES, 0, 3); },
+             GL_INVALID_OPERATION},
+        });
     }
 } // namespace
