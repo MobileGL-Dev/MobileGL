@@ -63,6 +63,77 @@ namespace {
         return element;
     }
 
+    // GL 4.6 core 7.7 / ARB_shader_atomic_counters: within one binding no two atomic counters
+    // may occupy the same bytes, every offset is a multiple of 4, and no counter may reach past
+    // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE. glslang enforces all three in fixOffset(), which the
+    // Vulkan-relaxed parse never reaches - vkRelaxedRemapUniformVariable folds the atomic_uint
+    // into a synthesized storage block and returns from declareVariable() before fixOffset()
+    // runs, clearing explicitOffset on the way ("xxTODO: use logic from fixOffset()"). Two
+    // counters declared at the same binding AND the same offset therefore linked cleanly.
+    //
+    // The offsets themselves survive that lowering (reflection and the SPIR-V generator both
+    // honour layoutOffset), so the check belongs here, over the same model the GL queries answer
+    // from. Returns the info-log line for an illegal layout, empty for a legal one.
+    static MobileGL::String ValidateAtomicCounterLayout(glslang::TProgram& reflection) {
+        using MobileGL::Bool;
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+        using MobileGL::String;
+        using MobileGL::Vector;
+        namespace Transpiler = MobileGL::MG_Util::ShaderTranspiler;
+
+        const Int blockCount = reflection.getNumUniformBlocks();
+        if (blockCount <= 0) return {};
+        const SizeT prefixLength = std::strlen(Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX);
+        Vector<Bool> isCounterBlock(static_cast<SizeT>(blockCount), false);
+        Bool anyCounterBlock = false;
+        for (Int i = 0; i < blockCount; ++i) {
+            const auto& block = reflection.getUniformBlock(i);
+            isCounterBlock[static_cast<SizeT>(i)] =
+                block.name.compare(0, prefixLength, Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX) == 0;
+            anyCounterBlock = anyCounterBlock || isCounterBlock[static_cast<SizeT>(i)];
+        }
+        if (!anyCounterBlock) return {}; // every program that declares no atomic counter
+
+        struct CounterSpan {
+            Int offset = 0;
+            Int size = 0;
+            String name;
+        };
+        Vector<Vector<CounterSpan>> spansByBlock(static_cast<SizeT>(blockCount));
+        const Int uniformCount = reflection.getNumUniformVariables();
+        for (Int i = 0; i < uniformCount; ++i) {
+            const auto& uniform = reflection.getUniform(i);
+            const Int owner = uniform.index;
+            if (owner < 0 || owner >= blockCount || !isCounterBlock[static_cast<SizeT>(owner)]) continue;
+            const Int offset = uniform.offset;
+            if (offset < 0) continue; // no offset recorded; nothing to compare
+            Int elements = uniform.size > 1 ? uniform.size : 1;
+            if (const glslang::TType* type = uniform.getType(); type != nullptr && type->isArray()) {
+                elements = type->isSizedArray() ? type->getCumulativeArraySize() : 1;
+            }
+            const Int size = elements * static_cast<Int>(sizeof(MobileGL::Uint32));
+            if (offset % 4 != 0) {
+                return std::format("Atomic counter '{}' is declared at offset {}, which is not a multiple of 4.",
+                                   uniform.name, offset);
+            }
+            if (offset > Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE - size) {
+                return std::format("Atomic counter '{}' ends at byte {}, past the {}-byte "
+                                   "GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE.",
+                                   uniform.name, offset + size, Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE);
+            }
+            auto& spans = spansByBlock[static_cast<SizeT>(owner)];
+            for (const CounterSpan& existing : spans) {
+                if (offset < existing.offset + existing.size && existing.offset < offset + size) {
+                    return std::format("Atomic counters '{}' and '{}' share a binding and overlap at byte offset {}.",
+                                       existing.name, uniform.name, std::max(offset, existing.offset));
+                }
+            }
+            spans.push_back({offset, size, uniform.name});
+        }
+        return {};
+    }
+
     static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
         const auto* type = output.getType();
         return type && type->getQualifier().builtIn != glslang::EbvNone;
@@ -603,6 +674,14 @@ namespace MobileGL::MG_State::GLState {
             artifacts.infoLog = "Build reflection failed.";
             DeferLog(std::format("ProgramObject {}: DoReflection - buildReflection() returned false",
                                  in.externalIndex));
+            return false;
+        }
+
+        if (String atomicCounterError = ValidateAtomicCounterLayout(*artifacts.program);
+            !atomicCounterError.empty()) {
+            artifacts.infoLog = Move(atomicCounterError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
             return false;
         }
 

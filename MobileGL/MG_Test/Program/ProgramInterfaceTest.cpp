@@ -716,6 +716,44 @@ void main() {
         EXPECT_EQ(TakeError(), GL_INVALID_ENUM);
     }
 
+    // Two counters that share a binding AND an offset must fail to link. glslang's own check
+    // lives in fixOffset(), which the Vulkan-relaxed parse never reaches - it folds the
+    // atomic_uint into a storage block and returns from declareVariable() first - so the pair
+    // used to link cleanly and then increment the same four bytes.
+    TEST_F(ProgramInterfaceTest, OverlappingAtomicCounterOffsetsFailToLink) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout (binding = 0, offset = 0) uniform atomic_uint a;
+layout (binding = 0, offset = 0) uniform atomic_uint b;
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b))); }
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        GLint status = -1;
+        GetProgramiv(p, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(p, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("overlap"), std::string::npos) << "info log was: " << log;
+        ClearErrors();
+
+        // Distinct offsets at one binding, and the same offset at two different bindings, are
+        // both legal and must still link - a check keyed any wider would reject them.
+        const char* legalFs = R"(#version 430
+out vec4 color;
+layout (binding = 0, offset = 0) uniform atomic_uint a;
+layout (binding = 0, offset = 4) uniform atomic_uint b;
+layout (binding = 1, offset = 0) uniform atomic_uint c;
+void main() {
+   color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b) + atomicCounterIncrement(c)));
+}
+)";
+        const GLuint legal = MakeProgram(kSimpleVs, legalFs);
+        LinkProgram(legal);
+        ExpectLinked(legal);
+        ClearErrors();
+    }
+
     // glGetProgramiv(GL_ACTIVE_ATOMIC_COUNTER_BUFFERS) and glGetActiveAtomicCounterBufferiv are
     // the pre-4.3 spelling of the interface above, and the spec requires the two to agree.
     // Neither did: the first counted glslang's atomic counter UNIFORMS - zero, because the
