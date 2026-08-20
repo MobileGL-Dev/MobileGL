@@ -108,6 +108,12 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
         if (program != nullptr) {
+            // A geometry stage writes what it emits, not what the draw assembled, and the
+            // amplification factor lives in the shader. Record that this span contained such
+            // a draw so the transform feedback queries keep their backend result for it.
+            if (program->GetShaderIndexByStage(ShaderStage::Geometry) >= 0) {
+                MG_State::pGLContext->AddTransformFeedbackGeometryCaptureDraw();
+            }
             // Capacity in captured vertices = the tightest bound buffer.
             Uint64 capacityVertices = ~0ull;
             for (SizeT i = 0; i < program->GetTransformFeedbackBufferCount(); ++i) {
@@ -127,6 +133,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->AddTransformFeedbackPrimitives(primitives);
         MG_State::pGLContext->AddTransformFeedbackCapturedVertices(primitives * verticesPerPrimitive);
+        // Only draws that get this far are in the written counter at all. The instanced and
+        // indirect entry points never call this function, so a span that contains one is NOT
+        // fully accounted, and the queries must be able to tell: they compare this counter's
+        // delta against zero before standing in for the backend's own result.
+        MG_State::pGLContext->AddTransformFeedbackAccountedCaptureDraw();
     }
 
     // Every primitive mode a draw command accepts (GL 4.6 core table 10.1, plus

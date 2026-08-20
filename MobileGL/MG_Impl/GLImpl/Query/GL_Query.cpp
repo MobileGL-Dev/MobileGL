@@ -31,8 +31,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             Bool ended = false;
             Bool resultCached = false;
             Uint64 cachedResult = 0;
-            // Transform feedback primitive counter at BeginQuery time.
+            // The transform feedback primitive counter matching this query's target, at
+            // BeginQuery time.
             Uint64 counterSnapshot = 0;
+            // Capture-draw counters at BeginQuery time: how many capture draws the CPU
+            // accounting had reproduced exactly, and how many of those it could not (a
+            // geometry stage amplifies). Their deltas decide whether the CPU result may
+            // stand in for the backend's.
+            Uint64 accountedCaptureDrawSnapshot = 0;
+            Uint64 geometryCaptureDrawSnapshot = 0;
         };
 
         // Query calls may arrive from any thread (launchers migrate the context
@@ -120,6 +127,46 @@ namespace MobileGL::MG_Impl::GLImpl {
             queryObject->active = false;
             queryObject->ended = true;
             g_activeTimeElapsedQueryId = 0;
+        }
+
+        // The CPU accounting counter a transform feedback query target reads: what the capture
+        // buffers took for GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, and everything the capture
+        // stage assembled - a paused span included - for GL_PRIMITIVES_GENERATED. One counter
+        // for both targets would report the clamped written count as the generated one.
+        Uint64 TransformFeedbackCounterForTarget(GLenum target) {
+            return target == GL_PRIMITIVES_GENERATED
+                       ? MG_State::pGLContext->GetTransformFeedbackGeneratedCounter()
+                       : MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter();
+        }
+
+        // The span's CPU accounting delta. Saturating: a snapshot left above its counter (a
+        // context switch between Begin and End, a counter that never moved) would otherwise
+        // wrap to 2^64-1, which GetQueryObjectuiv hands the app as 4294967295.
+        Uint64 TransformFeedbackCpuResult(const QueryObject* queryObject) {
+            const Uint64 counter = TransformFeedbackCounterForTarget(queryObject->target);
+            return counter > queryObject->counterSnapshot ? counter - queryObject->counterSnapshot : 0;
+        }
+
+        // Whether this ended span's result should come from the CPU accounting rather than from
+        // the backend query it also ran. Three conditions, all necessary:
+        //   * the backend asked for it (DirectGLES, whose ES driver counter is the unreliable
+        //     one; DirectVulkan never sets the bit and so is untouched by any of this);
+        //   * the target is PRIMITIVES_WRITTEN. GL_PRIMITIVES_GENERATED counts primitives
+        //     whether or not a capture is active, and the accounting only ever sees capture
+        //     draws, so the backend's counter is the more complete answer there;
+        //   * the span was fully accounted: at least one capture draw reached the accounting
+        //     (the instanced, indirect and multi-draw entry points do not call it at all, so a
+        //     span made of those is invisible to it) and none of them amplified through a
+        //     geometry stage, which the CPU cannot model.
+        Bool PrefersCpuTransformFeedbackResult(const QueryObject* queryObject) {
+            if (!MG_Backend::gBackendFunctionsTable.GL.PrefersCpuXfbPrimitiveAccounting) return false;
+            if (queryObject->target != GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN) return false;
+            if (MG_State::pGLContext->GetTransformFeedbackGeometryCaptureDraws() !=
+                queryObject->geometryCaptureDrawSnapshot) {
+                return false;
+            }
+            return MG_State::pGLContext->GetTransformFeedbackAccountedCaptureDraws() !=
+                   queryObject->accountedCaptureDrawSnapshot;
         }
 
         // Shared GetQueryObject* implementation. Returns false when an error
@@ -407,7 +454,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             const auto beginXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.BeginXfbPrimitivesQuery;
             queryObject->backendHandle =
                 beginXfbPrimitivesQuery ? beginXfbPrimitivesQuery(target == GL_PRIMITIVES_GENERATED) : nullptr;
-            queryObject->counterSnapshot = MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter();
+            queryObject->counterSnapshot = TransformFeedbackCounterForTarget(target);
+            queryObject->accountedCaptureDrawSnapshot =
+                MG_State::pGLContext->GetTransformFeedbackAccountedCaptureDraws();
+            queryObject->geometryCaptureDrawSnapshot =
+                MG_State::pGLContext->GetTransformFeedbackGeometryCaptureDraws();
         } else if (isOcclusionQuery) {
             queryObject->backendHandle = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery();
         } else {
@@ -448,12 +499,21 @@ namespace MobileGL::MG_Impl::GLImpl {
                 if (const auto endXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.EndXfbPrimitivesQuery) {
                     endXfbPrimitivesQuery(queryObject->backendHandle);
                 }
-                // Result comes from the GPU query at read time.
-            } else {
-                queryObject->cachedResult =
-                    MG_State::pGLContext->GetTransformFeedbackPrimitiveCounter() - queryObject->counterSnapshot;
+            }
+            // A backend query that is not going to be read is released here, not left to be
+            // collected later: the span is over, the driver object has nothing left to say.
+            // Ending it first is what makes that legal.
+            if (!queryObject->backendHandle || PrefersCpuTransformFeedbackResult(queryObject)) {
+                if (queryObject->backendHandle) {
+                    if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                        deleteBackendQuery(queryObject->backendHandle);
+                    }
+                    queryObject->backendHandle = nullptr;
+                }
+                queryObject->cachedResult = TransformFeedbackCpuResult(queryObject);
                 queryObject->resultCached = true;
             }
+            // Otherwise the result comes from the GPU query at read time.
             queryObject->active = false;
             queryObject->ended = true;
             activeQueryId = 0;

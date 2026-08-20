@@ -1166,6 +1166,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // geometry shader's amplification.
             funcsTable.GL.BeginXfbPrimitivesQuery = BeginXfbPrimitivesQuery;
             funcsTable.GL.EndXfbPrimitivesQuery = EndXfbPrimitivesQuery;
+            // ...but where it CAN see the whole capture - no geometry stage - the frontend's
+            // own count is the desktop-exact one and the ES driver's is only as good as the
+            // vendor made it (Adreno doubles PRIMITIVES_WRITTEN for a vertex-only capture that
+            // follows a large render pass). The query above stays installed: it is still what
+            // answers an amplifying span, and PRIMITIVES_GENERATED always.
+            funcsTable.GL.PrefersCpuXfbPrimitiveAccounting = true;
             funcsTable.GL.IsQueryResultAvailable = IsQueryResultAvailable;
             funcsTable.GL.GetQueryResult64 = GetQueryResult64;
             funcsTable.GL.DeleteBackendQuery = DeleteBackendQuery;
