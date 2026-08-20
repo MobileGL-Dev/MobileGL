@@ -91,6 +91,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
+    Scenarios/LayeredTextureReadbackScenario.cpp
     Scenarios/AtomicCounterScenario.cpp
 )
 

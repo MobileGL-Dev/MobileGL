@@ -7908,9 +7908,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level,
                 /*withStencil=*/format == GL_DEPTH_STENCIL);
-        } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
-            // ES cannot attach 3D/array textures through glFramebufferTexture2D; read layer 0. Reads
-            // of deeper slices are served from the CPU shadow instead (see the shadow-first branch).
+        } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                   backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY) {
+            // ES cannot attach 3D/array textures through glFramebufferTexture2D; layer 0 here, and
+            // the deeper slices one at a time in the per-layer loop below. A CUBE MAP ARRAY is in
+            // this list for the same reason its layer-faces are addressed as array layers:
+            // glFramebufferTexture2D has no target token for it, so the 2D attach it used to take
+            // left the scratch FBO incomplete and every read fell through to the (stale) CPU
+            // shadow - which is exactly the all-zero result the conformance suite saw.
             ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level, 0);
         } else {
             ScratchFBOImpl::EnsureColorAttachment2D(
@@ -7963,6 +7968,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto size = textureMipmapObject->GetMipmapTexelSize(MG_Util::ConvertGLEnumToTextureUploadTarget(target), level);
 
+        // GL_TEXTURE_1D_ARRAY keeps its LAYERS in the state-side height (that is what
+        // glTexImage2D(GL_TEXTURE_1D_ARRAY, w, layers) means), while the ES texture behind it is a
+        // 2D array of height 1 with the layers in depth - GetBackendUploadSize performs exactly
+        // that swap on the way in. Everything below addresses the ES image, so the same swap has
+        // to happen here: without it the readback asked layer 0 for a `layers`-row rectangle it
+        // does not have, and every layer but the first came back undefined (all zeroes on Adreno,
+        // KHR-GL4x.shader_image_load_store.basic-allTargets-*).
+        const Bool oneDimensionalArray = textureObject->GetTarget() == TextureTarget::Texture1DArray;
+        if (oneDimensionalArray) {
+            size = TextureImpl::GetBackendUploadSize(TextureTarget::Texture1DArray, size);
+        }
+
         MGLOG_D("GetTexImage: mip level %d size = %dx%d", level, size.x(), size.y());
 
         // Prefer the client-format conversion for every convertible combination: the "native" ES pairs
@@ -7976,10 +7993,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 TextureImpl::BackendTextureFormatAddsAlpha(textureObject->GetFormat(), textureObject->GetTarget());
             // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
             // readbacks (cube-map arrays address as arrays); 2D targets must ignore
-            // them (GL 3.3 section 6.1.4).
-            const Bool applyPackImageParams = backendAttachTarget == GL_TEXTURE_3D ||
-                                              backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
-                                              backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
+            // them (GL 3.3 section 6.1.4). A 1D ARRAY is one of those 2D targets: GL hands it back
+            // as a single two-dimensional image whose ROWS are the layers, so the layer stride is
+            // one packed row and the image parameters do not enter into it - even though the ES
+            // texture underneath is an array and is read one layer at a time.
+            const Bool applyPackImageParams = !oneDimensionalArray &&
+                                              (backendAttachTarget == GL_TEXTURE_3D ||
+                                               backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                                               backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY);
             const GLsizei sliceCount = std::max(size.z(), 1);
             const Bool multiSlice = size.z() > 1;
             // glGetTexImage answers with the STORED texels, and for a packed format whose encoding
@@ -8013,7 +8034,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Attach the layers one at a time instead and read each off the GPU, keeping the shadow
             // for the formats the FBO cannot represent at all.
             if (multiSlice && tempFBOComplete &&
-                (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY)) {
+                (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                 backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY)) {
                 // Each slice is packed as its own 2D image, so the per-slice call must not apply
                 // GL_PACK_SKIP_IMAGES / GL_PACK_IMAGE_HEIGHT itself - this walks the destination
                 // over them, using the same layout StoreWideRowsToClient computes.
