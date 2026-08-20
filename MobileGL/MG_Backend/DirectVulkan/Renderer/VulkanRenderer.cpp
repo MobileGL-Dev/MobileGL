@@ -9007,6 +9007,9 @@ void main() {
                 out.arrayLayers = 1;
                 return out.image != VK_NULL_HANDLE;
             }
+            // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
+            // reaches here - but the assertion that says so is compiled out of a release build.
+            if (endpoint.Texture == nullptr) return false;
             auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*endpoint.Texture);
             if (resource == nullptr) return false;
             out.isRenderbuffer = false;
@@ -9127,16 +9130,23 @@ void main() {
         // undefined by the same spec sentence that lets the application ask. Both sides therefore
         // take the same shape - transition the whole image out of UNDEFINED and settle it on a
         // real layout afterwards, since UNDEFINED is not a layout a barrier may transition BACK to.
-        const auto resolveRestoreLayout = [copyAspectMask](VkImageLayout originalLayout) {
+        // A renderbuffer settles on its ATTACHMENT layout instead: it is never sampled, and that is
+        // the layout MaterializePendingClearForRenderbuffer leaves it in.
+        const auto resolveRestoreLayout = [copyAspectMask](VkImageLayout originalLayout, Bool isRenderbuffer) {
             if (originalLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
                 return originalLayout;
             }
-            return (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const Bool depthStencil =
+                (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+            if (isRenderbuffer) {
+                return depthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            return depthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         };
-        const VkImageLayout srcRestoreLayout = resolveRestoreLayout(srcOriginalLayout);
-        const VkImageLayout dstRestoreLayout = resolveRestoreLayout(dstOriginalLayout);
+        const VkImageLayout srcRestoreLayout = resolveRestoreLayout(srcOriginalLayout, srcImage.isRenderbuffer);
+        const VkImageLayout dstRestoreLayout = resolveRestoreLayout(dstOriginalLayout, dstImage.isRenderbuffer);
 
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;

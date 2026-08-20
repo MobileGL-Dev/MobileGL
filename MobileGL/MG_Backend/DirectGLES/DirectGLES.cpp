@@ -5771,6 +5771,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Either way a reference taken by the first call is stale by the time the second returns,
         // and it is read four more times below. Copying the SharedPtr costs two refcount bumps on
         // a path that is already doing a texture copy.
+        // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
+        // reaches here - but the assertion that says so is compiled out of a release build, and
+        // SyncTextureObjectToBackend would register a null state object.
+        if (!endpoint.Texture) return false;
         out.texture = TextureImpl::SyncTextureObjectToBackend(endpoint.Texture);
         if (!out.texture) return false;
         const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
