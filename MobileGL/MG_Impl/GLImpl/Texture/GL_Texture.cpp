@@ -590,6 +590,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                             "AllocateMultisampleTextureStorage requires mipmap-backed storage");
 
             auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            // GL 4.6 core 8.8: a zero-sized image DEALLOCATES the image rather than defining an
+            // empty one. Only the multisample pair cares, and it cares a great deal: the CTS's
+            // per-case state reset clears both DEFAULT multisample textures this way on every
+            // texture unit, and a "defined" 0x0 default texture stops being skipped by
+            // IsUndefinedDefaultTexture - it then joins the per-draw sync and bind passes on
+            // every unit the reset touched, and reaches an ES glTexStorage*Multisample(..., 0, 0)
+            // that ES 3.1 8.19 makes INVALID_VALUE on every driver there is. A proxy target holds
+            // no image at all, only the query result, so it keeps recording what was asked for.
+            if ((width <= 0 || height <= 0 || depth <= 0) &&
+                !TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
+                textureObject->SetInternalFormat(TextureInternalFormat::Unknown);
+                textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, 0);
+                return;
+            }
             textureObject->SetInternalFormat(textureInternalFormat);
             textureObject->SetSamples(samples);
             textureObject->SetFixedSampleLocations(fixedsamplelocations == GL_TRUE);
@@ -4717,6 +4731,22 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureStorage3D(textureObject->GetExternalIndex(), levels, internalformat, width, height, depth);
     }
 
+    // Unlike glTexImage*Multisample, where a zero-sized image is a legal deallocation (see
+    // AllocateMultisampleTextureStorage), the immutable forms take a strictly positive size: GL
+    // 4.6 core 8.19 makes width, height or depth < 1 INVALID_VALUE. Without this the shared
+    // _State helper would deallocate the image and TexStorageMultisample_State would then freeze
+    // the now-imageless texture as immutable.
+    static Bool ValidateTexStorageMultisampleSize(GLsizei width, GLsizei height, GLsizei depth, const char* caller) {
+        if (width >= 1 && height >= 1 && depth >= 1) {
+            return true;
+        }
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                         "Immutable multisample storage requires width, height and depth >= 1."));
+        return false;
+    }
+
     // The multisample storage forms allocate exactly what the glTexImage*Multisample ones do, and
     // then freeze it: TEXTURE_IMMUTABLE_FORMAT becomes TRUE and a second call is INVALID_OPERATION
     // (GL 4.6 core 8.19). Only the allocation was shared before, so a multisample texture stayed
@@ -4737,6 +4767,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
+        if (!ValidateTexStorageMultisampleSize(width, height, 1, __func__)) return;
         TexStorageMultisample_State(
             target, TexImage2DMultisample_State(target, samples, internalformat, width, height, fixedsamplelocations),
             __func__);
@@ -4747,6 +4778,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
+        if (!ValidateTexStorageMultisampleSize(width, height, depth, __func__)) return;
         TexStorageMultisample_State(target,
                                     TexImage3DMultisample_State(target, samples, internalformat, width, height, depth,
                                                                 fixedsamplelocations),

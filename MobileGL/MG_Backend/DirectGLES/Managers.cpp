@@ -2657,25 +2657,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
                             GetFormatCapabilityTargetIndex(targetInternal), textureMipmapObject->GetFormat(),
                             glFormat, static_cast<Int>(stateTextureObject->GetSamples())));
-                        switch (targetInternal) {
-                        case TextureTarget::Texture2DMultisample:
-                            g_GLESFuncs.glTexStorage2DMultisample(
-                                target, backendSamples, glInternalFormat,
-                                static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
-                            break;
-                        case TextureTarget::Texture2DMultisampleArray:
-                            g_GLESFuncs.glTexStorage3DMultisample(
-                                target, backendSamples, glInternalFormat,
-                                static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                static_cast<GLsizei>(baseSize.z()),
-                                stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
-                            break;
-                        default:
-                            MOBILEGL_ASSERT(false, "Unexpected multisample target: %d", static_cast<Int>(targetInternal));
-                            break;
+                        // ES 3.1 8.19 requires width/height (and depth, for the array target) >= 1,
+                        // so a degenerate size has nothing to allocate and must not reach the
+                        // driver. The frontend deallocates such an image rather than defining it
+                        // (GL 4.6 core 8.8), so this is belt and braces for any path that still
+                        // syncs one.
+                        const Bool hasAllocatableSize =
+                            baseSize.x() >= 1 && baseSize.y() >= 1 &&
+                            (targetInternal != TextureTarget::Texture2DMultisampleArray || baseSize.z() >= 1);
+                        if (!hasAllocatableSize) {
+                            MGLOG_D("Skipping multisample storage for texture %u: degenerate size (%d, %d, %d)",
+                                    m_backendTextureId, baseSize.x(), baseSize.y(), baseSize.z());
+                        } else {
+                            switch (targetInternal) {
+                            case TextureTarget::Texture2DMultisample:
+                                g_GLESFuncs.glTexStorage2DMultisample(
+                                    target, backendSamples, glInternalFormat,
+                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
+                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                break;
+                            case TextureTarget::Texture2DMultisampleArray:
+                                g_GLESFuncs.glTexStorage3DMultisample(
+                                    target, backendSamples, glInternalFormat,
+                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
+                                    static_cast<GLsizei>(baseSize.z()),
+                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                break;
+                            default:
+                                MOBILEGL_ASSERT(false, "Unexpected multisample target: %d",
+                                                static_cast<Int>(targetInternal));
+                                break;
+                            }
+                            m_backendStorageImmutable = true;
                         }
-                        m_backendStorageImmutable = true;
+                        // The one storage branch that cleared the ES error queue without ever
+                        // draining it again, so anything this call raised was left for an
+                        // unrelated later query to trip over. Paired with its two siblings now.
+                        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__, target,
+                                                      glInternalFormat, backendSamples](GLenum err) {
+                            MGLOG_D("%s(%s:%d) ES error: %s. glTexStorage*Multisample: target=%s, internalformat=%s, "
+                                    "samples=%d",
+                                    func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                    MG_Util::ConvertGLEnumToString(target).c_str(),
+                                    MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
+                                    static_cast<Int>(backendSamples));
+                        });
                         for (const auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
