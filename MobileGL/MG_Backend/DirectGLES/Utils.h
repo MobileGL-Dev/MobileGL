@@ -154,6 +154,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // extension - requesting an unadvertised extension is itself a compile error, so this is
         // never emitted speculatively. A no-op when not needed or already present.
         String RequestExtendedImageFormats(String glslCode, Bool needed);
+        // Adds `#extension GL_OES_viewport_array : require` when the emitted ESSL names
+        // gl_ViewportIndex. SPIRV-Cross prints that identifier and asks for nothing (unlike
+        // gl_Layer, which it backs with GL_NV_viewport_array2 on ES) and ESSL has no core
+        // spelling for it at any version, so the request has to be made here or the stage does
+        // not compile - which loses the whole program, not just the multi-viewport routing.
+        // `needed` is the caller's answer for the same reason as above: only it knows whether the
+        // driver advertises the extension, and requesting an unadvertised one is itself a compile
+        // error, so this is never emitted speculatively. A no-op when not needed or already
+        // present.
+        String RequestViewportArrayExtension(String glslCode, Bool needed);
         // Writes a format layout qualifier into the image declarations named in
         // `esslFormatByUniformName` that still have none. The completion half of the image-format
         // bake, and ONLY that: the SPIR-V pass (BakeImageFormatsPass) is what normally puts the

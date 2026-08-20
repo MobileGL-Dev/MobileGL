@@ -4899,6 +4899,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &loweredSpirv;
                 }
 
+                // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
+                // there IS an extension that provides it - so this runs only when the driver does
+                // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
+                // gets the `#extension` request added to the decompiled source below instead.
+                // Demoting the builtin costs the multi-viewport routing (every invocation lands in
+                // viewport 0), which is the degradation ViewportArrayScenario already documents
+                // for this backend; NOT demoting it costs the whole program, because the stage
+                // fails to compile and every draw made with it silently renders nothing.
+                // Gated on the module actually declaring the output, so no other stage pays an
+                // optimizer round trip for it.
+                Vector<unsigned int> loweredViewportSpirv;
+                if (!g_GLESCapabilities.SupportsViewportArray &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresViewportIndexBuiltin(*effectiveSpirv) &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerViewportIndexForEssl(
+                        *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
+                    !loweredViewportSpirv.empty()) {
+                    effectiveSpirv = &loweredViewportSpirv;
+                    MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which this ES driver has "
+                            "no GL_OES_viewport_array for. The builtin was demoted to a plain "
+                            "global; every invocation renders into viewport 0.",
+                            m_backendProgramId,
+                            MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+                }
+
                 // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
                 // rather than emulating them, so this has to happen before it sees the binary.
                 Vector<unsigned int> splitArrayInputSpirv;
@@ -5080,6 +5104,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = RequestExtendedImageFormats(std::move(source),
                                                      imageFormatBake.needsExtendedImageFormats &&
                                                          g_GLESCapabilities.SupportsExtendedImageFormats);
+                // The third header-level rewrite, for the builtin SPIRV-Cross prints bare:
+                // gl_ViewportIndex is in no version of ESSL core, so without this directive the
+                // stage does not compile and the whole program - not just its viewport routing -
+                // is lost. The token probe keeps the line off every other program and the
+                // capability gate keeps it off drivers that would hard-error on an unadvertised
+                // name; a driver without the extension took the LowerViewportIndexPass fallback
+                // above and its source no longer names the builtin at all, so the two are mutually
+                // exclusive by construction. Read `source` BEFORE it is moved from.
+                const Bool needsViewportArrayExtension = g_GLESCapabilities.SupportsViewportArray &&
+                                                         source.find("gl_ViewportIndex") != String::npos;
+                source = RequestViewportArrayExtension(std::move(source), needsViewportArrayExtension);
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 // The completion half of the format bake, for the formats SPIRV-Cross throws on
