@@ -133,13 +133,18 @@ namespace MobileGL::MG_State::GLState {
         //   * CAS-LOSER shaders (the re-parse in ShaderCompileTask::ClaimParsedShader, i.e.
         //     the 2nd..Nth link of a shared shader): freed here in full. The handoff is their
         //     ONLY owner.
-        //   * CAS-WINNER shaders (the common case - one shader object linked into one
-        //     program, which is every program of an Iris pack load): NOT freed here. The
-        //     winner branch returns a COPY of ShaderCompileTask::artifacts.shader
-        //     (ShaderCompileTask.cpp:320) and the node never releases its own reference, while
-        //     phase A holds that node through in.shaders[i].compiled for its whole life - and
-        //     phase A lives until PhaseAReleaser fires at the end of this body. So the
-        //     refcount goes 2 -> 1 here and the arena dies where it would have died anyway.
+        //   * L1c-HIT shaders (the compile published a verdict and never parsed, so the parse
+        //     was made on demand by ClaimParsedShader): freed here in full, exactly like a
+        //     CAS loser and for the same reason - the handoff is their only owner. This
+        //     category did not exist before the translation memo's compile half, and it makes
+        //     the clear below strictly more effective than the paragraph below describes.
+        //   * CAS-WINNER shaders (one shader object linked into one program, whose compile
+        //     MISSED L1c and therefore stored its parse): NOT freed here. The winner branch
+        //     returns a COPY of ShaderCompileTask::artifacts.shader and the node never
+        //     releases its own reference, while phase A holds that node through
+        //     in.shaders[i].compiled for its whole life - and phase A lives until
+        //     PhaseAReleaser fires at the end of this body. So the refcount goes 2 -> 1 here
+        //     and the arena dies where it would have died anyway.
         //
         // Making it free the winner's arena too means releasing whatever pins the TShader
         // inside the compile node, and neither obvious route is safe as a drive-by: moving out

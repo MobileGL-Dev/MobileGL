@@ -3010,21 +3010,38 @@ TEST_F(ProgramTest, TwoShaderObjectsWithIdenticalSourceLinkIndependently) {
     ASSERT_NE(objectA, nullptr);
     ASSERT_NE(objectB, nullptr);
     EXPECT_EQ(objectA->GetShaderSource(), objectB->GetShaderSource());
-    // P0b's layer 2 shares the PREPROCESS and never the parse: glslang's TShader is
-    // consume-once, so a memo hit still has to parse for itself.
+    // WHAT THIS CASE IS ACTUALLY ABOUT: two GL shader names holding the same text must never
+    // end up feeding one TShader to two links, because mapIO mutates the aliased intermediate
+    // and the second link would get a corrupted one. There are now three mechanisms that keep
+    // that true, and which one is in play depends on the mode - so the assertion below is on
+    // the PARSES NOT BEING SHARED, never on where each object's parse came from:
     //
-    // P1 stage 6 shares something stronger when it is active - the whole compile JOB, and
-    // therefore the single parse that job produced - and that sharing is made safe by
-    // ShaderCompileTask::ClaimParsedShader's CAS instead, exactly as it already was for one
-    // shader object attached to two programs. ShaderCompileAdoptionTest is where that is
-    // pinned down (it links both objects and compares the generated SPIR-V). So the
-    // one-parse-per-object assertion belongs to the non-adopting path; the two independent
-    // LINKS below are what both modes have to agree on, and they are the point of this case.
+    //   * P0b layer 2 shares the PREPROCESS and never the parse, so each object parses for
+    //     itself. This was the only mechanism when the case was written.
+    //   * P1 stage 6, when async is active, shares the whole compile JOB and therefore its
+    //     single parse - made safe by ClaimParsedShader's CAS, exactly as it already was for
+    //     one shader object attached to two programs. ShaderCompileAdoptionTest pins that
+    //     down by linking both objects and comparing the generated SPIR-V.
+    //   * The translation memo's compile half (L1c) recognises the second object's source and
+    //     publishes its verdict WITHOUT parsing, so that object legitimately holds no TShader
+    //     at all until a link asks ClaimParsedShader for one. Asserting a non-null parse here
+    //     would be asserting that the parse had NOT been skipped - i.e. testing the absence
+    //     of the optimisation rather than the invariant.
+    //
+    // So the pointer assertion applies only where the two objects are genuinely INDEPENDENT,
+    // i.e. where job adoption is not in play. What every mode has to agree on is the two
+    // independent LINKS below, and they are the real point of this case.
     if (!MG_Util::Async::AsyncShaderCompileActive()) {
-        EXPECT_NE(objectA->GetCompiledShader(), objectB->GetCompiledShader());
+        const auto& shaderA = objectA->GetCompiledShader();
+        const auto& shaderB = objectB->GetCompiledShader();
+        // Either may legitimately hold NO parse: that is an L1c hit, where the AST is made on
+        // demand at link instead. So this asserts they are not the SAME non-null parse, and
+        // deliberately not that both have one - the latter would be asserting that the
+        // optimisation had not happened.
+        if (shaderA != nullptr && shaderB != nullptr) {
+            EXPECT_NE(shaderA, shaderB) << "two independent shader objects share one consume-once parse";
+        }
     }
-    EXPECT_NE(objectA->GetCompiledShader(), nullptr);
-    EXPECT_NE(objectB->GetCompiledShader(), nullptr);
 
     GLuint programA = LinkVsFs(vsA, fsA, GL_TRUE);
     GLuint programB = LinkVsFs(vsB, fsB, GL_TRUE);

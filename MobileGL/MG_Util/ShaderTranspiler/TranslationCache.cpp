@@ -16,12 +16,16 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // even if their inputs happened to serialize identically.
         constexpr Uint32 kSpirvKeyTag = 0x4d474c31u;  // "MGL1"
         constexpr Uint32 kEsslKeyTag = 0x4d474c32u;   // "MGL2"
+        constexpr Uint32 kParseVerdictKeyTag = 0x4d474c43u; // "MGLC" - L1c, the compile half
 
         // Bumped whenever the SHAPE of a key changes (a field added, a field's
         // meaning changed). It is in every blob, so a stale in-memory entry from a
         // previous shape cannot be honoured - and a future disk tier gets the same
         // protection for free.
-        constexpr Uint32 kKeyLayoutVersion = 1u;
+        //
+        // 2: L2 gained atomicCounterEsslBindingTop (wave3's atomic-counter block rebinding
+        // prints it into the emitted ESSL), and L1c was added.
+        constexpr Uint32 kKeyLayoutVersion = 2u;
 
         // The repo's existing cache epoch (MG_Config::CacheVersion, the seed
         // ProgramFactory::ComputeHash uses). Strictly redundant for an in-memory
@@ -42,6 +46,21 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // stages' SPIR-V out).
         constexpr SizeT kEsslCacheMaxEntries = 128;
         constexpr SizeT kEsslCacheMaxBytes = 12u * 1024u * 1024u;
+
+        // ---- L1c caps ------------------------------------------------------
+        // 256 entries / 8 MiB. Per-STAGE like L2, so twice L1's entry count again, and
+        // deliberately generous on count because an L1c entry's PAYLOAD is two words and a
+        // usually-empty string - all of an entry's weight is its key, i.e. the preprocessed
+        // source. 8 MiB is exactly ShaderPreprocessCache's budget, and for the same reason:
+        // these two store the same kind of thing (one copy of a shader's text) and neither
+        // should be the one that decides how much source a process keeps resident.
+        //
+        // Sized for REPETITION, like the other two. A CTS smoke case has fewer than ten
+        // distinct stages and fits many times over; an Iris pack load is hundreds of ~100 KB
+        // mostly-distinct stages that would not hit at any cap, so a bigger budget there buys
+        // nothing and costs resident memory on a phone.
+        constexpr SizeT kParseVerdictCacheMaxEntries = 256;
+        constexpr SizeT kParseVerdictCacheMaxBytes = 8u * 1024u * 1024u;
     } // namespace
 
     Bool ShaderTranslationCacheEnabled() {
@@ -108,6 +127,26 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         return MakeTranslationCacheKey(builder);
     }
 
+    TranslationCacheKey BuildShaderParseVerdictKey(const ShaderParseVerdictKeyInputs& inputs) {
+        TranslationKeyBuilder builder;
+        AppendCommonKeyPrefix(builder, kParseVerdictKeyTag);
+        builder.Value(inputs.frontendFingerprint);
+        builder.Value(static_cast<Uint32>(inputs.shaderType));
+        builder.Value(inputs.shaderCompileFlags);
+        builder.Text(inputs.preprocessedSource);
+        return MakeTranslationCacheKey(builder);
+    }
+
+    SizeT ShaderParseVerdictBytes(const ShaderParseVerdict& verdict) { return verdict.infoLog.size(); }
+
+    // Leaked for the same exit-order reason as the other two; see the note below.
+    BoundedTranslationCache<ShaderParseVerdict>& GetShaderParseVerdictCache() {
+        static auto* const kCache = new BoundedTranslationCache<ShaderParseVerdict>(
+            "ShaderTranslationCache L1c (GLSL->parse verdict)", kParseVerdictCacheMaxEntries,
+            kParseVerdictCacheMaxBytes);
+        return *kCache;
+    }
+
     TranslationCacheKey BuildEsslTranslationKey(const EsslTranslationKeyInputs& inputs) {
         TranslationKeyBuilder builder;
         AppendCommonKeyPrefix(builder, kEsslKeyTag);
@@ -167,7 +206,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         return *kCache;
     }
 
-    void ClearShaderTranslationCaches() { GetEsslTranslationCache().Clear(); }
+    void ClearShaderTranslationCaches() {
+        GetShaderParseVerdictCache().Clear();
+        GetEsslTranslationCache().Clear();
+    }
 
-    void LogShaderTranslationCacheStats() { GetEsslTranslationCache().LogStats(); }
+    void LogShaderTranslationCacheStats() {
+        GetShaderParseVerdictCache().LogStats();
+        GetEsslTranslationCache().LogStats();
+    }
 } // namespace MobileGL::MG_Util::ShaderTranspiler

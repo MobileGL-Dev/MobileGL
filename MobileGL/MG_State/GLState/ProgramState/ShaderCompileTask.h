@@ -41,6 +41,20 @@ namespace MobileGL::MG_State::GLState {
         // re-parse in ClaimParsedShader() reproduces the original parse exactly, instead of
         // re-reading whatever the backend says now.
         SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
+        // The parse, WHEN THIS COMPILE ACTUALLY PARSED - and null otherwise, including when
+        // compileStatus is true.
+        //
+        // That combination is not a half-finished compile; it is an L1c hit. The translation
+        // memo's compile half (TranslationCache.h) knows this exact (stage, preprocessed
+        // source, front-end env) parses cleanly, so the verdict is published without running
+        // glslang. What a hit cannot hand over is the TShader itself: mapIO mutates its
+        // aliased intermediate at link, so a parse feeds exactly ONE link and could never
+        // have been shared between compiles.
+        //
+        // Nothing on the compile side of GL reads this - GL_COMPILE_STATUS, the info log,
+        // GL_SHADER_SOURCE, attach/detach and reuse across programs are all answered from the
+        // fields below. The one reader is ClaimParsedShader, which treats null as "parse it
+        // now", which is the same path the consume-once CAS loser has always taken.
         SharedPtr<glslang::TShader> shader;
         // The source the parse actually consumed (after PreprocessShaderSource), kept for
         // ClaimParsedShader's re-parse so a later link never depends on the preprocessor
@@ -53,8 +67,9 @@ namespace MobileGL::MG_State::GLState {
     };
 
     // The unit of asynchronous shader compilation: one glCompileShader's worth of pure CPU
-    // work - preprocess, the two lexical rejections, the two lexical extractions, and the
-    // glslang parse - with every input it needs owned by the node itself.
+    // work - preprocess, the two lexical rejections, the two lexical extractions, and (unless
+    // the translation memo's compile half already knows the answer) the glslang parse - with
+    // every input it needs owned by the node itself.
     //
     // That ownership is the whole point. The node reads no GL-thread state (the source is a
     // SharedPtr<const String> snapshot, the device limits come from the CompileEnv snapshot,
@@ -87,22 +102,29 @@ namespace MobileGL::MG_State::GLState {
         // ---- output: valid iff IsComplete(), immutable afterwards ----
         ShaderCompileArtifacts artifacts;
 
-        // Hands out a link-consumable TShader, exactly once for the stored parse.
+        // Hands out a link-consumable TShader, parsing one on demand when this node has none.
         //
-        // glslang's mapIO mutates the TShader's aliased intermediate, so the parse this node
-        // produced may feed exactly ONE link; every later link (a relink, or the same shader
-        // attached to a second program) needs a fresh parse. The claim is a CAS on this
-        // shared node rather than a flag on the ShaderObject because from stage 4 the two
-        // callers can be two ProgramLinkTasks running on two workers: two programs sharing
-        // one shader, linked back to back. Copying the parse out and tracking consumed-ness
-        // per program would let both of them decide they were the first, run mapIO over the
-        // same intermediate twice, and ship silently corrupt SPIR-V.
+        // TWO WAYS TO GET HERE WITHOUT A STORED PARSE, and they share one implementation:
+        //   * the CAS loser. glslang's mapIO mutates the TShader's aliased intermediate, so
+        //     the parse this node produced may feed exactly ONE link; every later link (a
+        //     relink, or the same shader attached to a second program) needs a fresh one. The
+        //     claim is a CAS on this shared node rather than a flag on the ShaderObject
+        //     because from stage 4 the two callers can be two ProgramLinkTasks on two
+        //     workers: two programs sharing one shader, linked back to back. Copying the
+        //     parse out and tracking consumed-ness per program would let both of them decide
+        //     they were the first, run mapIO over the same intermediate twice, and ship
+        //     silently corrupt SPIR-V.
+        //   * an L1c HIT. The compile published a verdict without parsing at all (see
+        //     ShaderCompileArtifacts::shader), so this call IS the parse - deferred out of
+        //     glCompileShader to the first link that genuinely needs an AST. A link served
+        //     from L1 never gets here, which is the whole point: that program's front end
+        //     never constructs a glslang object of any kind.
         //
-        // The CAS loser re-parses artifacts.preprocessedSource against THIS node's own
+        // Either way the parse runs over artifacts.preprocessedSource against THIS node's own
         // CompileEnv (not against whatever the backend reports now), through the identical
-        // CompileShader path - so winner and loser produce byte-identical SPIR-V. Callable
-        // only once IsComplete() and compileStatus are true. Returns null only if that
-        // re-parse fails, and outReparseLog then carries its diagnostics.
+        // CompileShader path - so every claimant produces byte-identical SPIR-V. Callable
+        // only once IsComplete() and compileStatus are true. Returns null only if that parse
+        // fails, and outReparseLog then carries its diagnostics.
         //
         // Const because the claim is the node's own synchronization, not a mutation of its
         // published artifacts: a claim that is taken and then abandoned (its link was

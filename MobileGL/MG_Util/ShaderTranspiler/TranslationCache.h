@@ -15,7 +15,7 @@
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
     // ===========================================================================
-    // The two-level shader translation memo.
+    // The three-level shader translation memo.
     //
     // MOTIVATION (measured). KHR-GL33.texture_swizzle.smoke_* builds 2592 programs
     // per case out of a handful of DISTINCT sources - the CTS template substitutes
@@ -27,24 +27,41 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //        --[GlslangToSpv]--> SPIR-V --[SanitizeAndOptimizeBinary]--> SPIR-V'
     //        --[backend SPIR-V pass chain]--> SPIR-V'' --[SPIRV-Cross]--> ESSL
     //
-    // L1 memoizes the segment from the parsed program to SPIR-V'; L2 memoizes the
-    // segment from SPIR-V' to the emitted backend payload. The two are kept apart
-    // on purpose: L1 is backend-agnostic (the same module feeds DirectGLES and
-    // DirectVulkan), while L2's key is made almost entirely of BACKEND capability
-    // bits, and folding them into one key would make every DirectGLES capability a
-    // reason to miss on the frontend half as well.
+    // THE LEVELS FOLLOW THE GL ENTRY POINTS, not the arrows above, and that is the
+    // key to reading this file:
+    //   * L1c memoizes what one glCompileShader produces - the PARSE VERDICT;
+    //   * L1  memoizes what one glLinkProgram produces - the whole front end from
+    //     the link through SPIR-V';
+    //   * L2  memoizes the segment from SPIR-V' to the emitted backend payload.
     //
-    // AN L1 HIT SKIPS THE WHOLE FRONT END - the glslang parse, the link and mapIO,
-    // GlslangToSpv, spirv-opt, buildReflection and the global-UBO routing. No
-    // TShader and no TProgram is constructed. That is possible because the payload
-    // is the whole front-end OUTPUT (LinkArtifacts + SpirvArtifacts, both plain
-    // owned data) rather than the SPIR-V alone, and because the GL query surface no
-    // longer reads a live TProgram to answer anything - see
-    // ProgramObject::UniformReflection and ProgramLinkTask::SnapshotGlslangReflection.
-    // Caching the live glslang object graph instead would have been the other way to
-    // get here, and was rejected: TObjectReflection::type points into the TProgram's
-    // own pool allocator, so sharing one between ProgramObjects is an aliasing and
-    // consume-once hazard.
+    // L1 could never have covered the parse, however wide its payload got, because
+    // the parse does not happen during glLinkProgram: it happens one entry point and
+    // one job earlier, and by the time a link consults L1 it has already been paid
+    // for. That is why the compile half is a separate level rather than a bigger
+    // payload - see the L1c section below for the measurement that forced it.
+    //
+    // L1c and L1 are both backend-agnostic (the same modules feed DirectGLES and
+    // DirectVulkan) and share one environment key, CompileEnv::frontendFingerprint.
+    // L2 is kept apart on purpose: its key is made almost entirely of BACKEND
+    // capability bits, and folding them in would make every DirectGLES capability a
+    // reason to miss on the front-end half as well.
+    //
+    // WITH BOTH FRONT-END LEVELS HIT, NO GLSLANG OBJECT IS CONSTRUCTED AT ALL - no
+    // TShader (L1c) and no TProgram (L1) - so the parse, the link and mapIO,
+    // GlslangToSpv, spirv-opt, buildReflection and the global-UBO routing are all
+    // skipped. On the L1 side that is possible because the payload is the whole
+    // front-end OUTPUT (LinkArtifacts + SpirvArtifacts, both plain owned data)
+    // rather than the SPIR-V alone, and because the GL query surface no longer reads
+    // a live TProgram to answer anything - see ProgramObject::UniformReflection and
+    // ProgramLinkTask::SnapshotGlslangReflection.
+    //
+    // NEITHER LEVEL EVER CACHES A LIVE GLSLANG OBJECT GRAPH, and both had the option:
+    // TObjectReflection::type points into the TProgram's own pool allocator, so
+    // sharing a TProgram between ProgramObjects is an aliasing hazard, and mapIO
+    // mutates a TShader's aliased intermediate, so sharing a parse is a consume-once
+    // hazard. L1 sidesteps the first by storing the reflection as owned data; L1c
+    // sidesteps the second by storing only the VERDICT and letting the one link that
+    // actually needs an AST parse it on demand.
     //
     // CORRECTNESS RULE, non-negotiable. A wrong hit is a silently miscompiled
     // shader - far worse than a slow one. So:
@@ -53,8 +70,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //     hash is a bucket selector only; a collision degrades to a miss.
     //   * every input that can change the output is in the blob. Adding an input
     //     to a translation step MEANS adding it to that level's key builder.
-    //   * MOBILEGL_SHADER_CACHE=0 turns both levels off, so a field miscompile can
-    //     be bisected against the cache in one run.
+    //   * MOBILEGL_SHADER_CACHE=0 turns ALL THREE levels off, so a field miscompile
+    //     can be bisected against the cache in one run.
     //
     // NO DISK TIER IN THIS CHANGE. Persistence needs its own invalidation story
     // (driver/vendor string, MobileGL build id, glslang and SPIRV-Cross revisions)
@@ -66,7 +83,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // the payloads are already plain data.
     // ===========================================================================
 
-    // The process-wide master switch, mirroring MOBILEGL_SHADER_CACHE.
+    // The process-wide master switch for ALL THREE levels, mirroring MOBILEGL_SHADER_CACHE.
     // QuirkOverride semantics: unset (Auto) is ON, an explicitly falsy value is
     // OFF. Read once from MG_Config::Features, so a worker never touches the
     // environment.
@@ -314,7 +331,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     };
 
     // =======================================================================
-    // L1 - the FRONT END: parsed GLSL program -> sanitized SPIR-V modules.
+    // L1 - the LINK half of the front end: parsed GLSL program -> sanitized SPIR-V
+    // modules, plus the whole GL query surface. (The PARSE half is L1c, below.)
     // =======================================================================
     //
     // The cached artifact is the module AFTER SanitizeAndOptimizeBinary, not the
@@ -394,6 +412,111 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // whole ProgramObject::LinkArtifacts + SpirvArtifacts, and MG_Util must not depend on
     // MG_State. Only the key - which is plain bytes - is built here, so both layers agree on
     // one definition of "the same front-end input".
+
+    // =======================================================================
+    // L1c - the COMPILE half of the front end: one glCompileShader's PARSE VERDICT.
+    // =======================================================================
+    //
+    // WHY THIS EXISTS. L1 above memoizes one glLinkProgram. It skips the link, mapIO,
+    // GlslangToSpv, spirv-opt, buildReflection and the routing pass - but NOT the glslang
+    // parse, because the parse does not happen at glLinkProgram. It happens at
+    // glCompileShader, one job earlier, and by the time the link hits L1 the parse has
+    // already been paid for. Measured: the parse is ~322 us of a ~650 us CTS-shaped program
+    // build, and on a Mali Immortalis-G925 an L1-only build of
+    // KHR-GL33.texture_swizzle.smoke_access_idx_0_channel_idx_0 (2592 programs) ran 50.65 s
+    // against 75.16/72.68 s with the cache off - 1.45-1.48x, which is what "everything but
+    // the parse" buys. This level is the other half.
+    //
+    // WHAT IS MEMOIZED IS THE VERDICT, NOT THE PARSE. glCompileShader produces exactly three
+    // parse-derived things: GL_COMPILE_STATUS, the info log, and a glslang::TShader. The
+    // first two are a pure function of the key below. The third is CONSUME-ONCE - mapIO
+    // mutates its aliased intermediate at link - so it can be neither cached nor shared, and
+    // caching a live glslang object graph was rejected for L1 for exactly that reason.
+    //
+    // So a hit publishes the verdict and NO TShader at all, and the parse becomes LAZY:
+    // ShaderCompileTask::ClaimParsedShader already re-parses on demand when the node carries
+    // no stored parse, because stage 4 built that path for the CAS loser (one shader linked
+    // into a second program). A link that HITS L1 never calls it, so the parse never happens.
+    // A link that MISSES calls it and pays the parse there instead - the same single parse,
+    // moved, not duplicated.
+    //
+    // WHAT THIS DELIBERATELY IS NOT: an extension of ShaderCompileAdoptionMap. That map
+    // indexes LIVE compile nodes by WeakPtr, per context, so that a burst of shader objects
+    // handed byte-identical source shares one job. It structurally cannot serve this case:
+    // the CTS shape deletes its shader objects every iteration, so the node expires and the
+    // entry with it, and even a hit would hand over a parse whose single use the first link
+    // already consumed. Making it hold strong references would pin one glslang arena per
+    // distinct source for the life of the context - megabytes per shaderpack, and precisely
+    // the live-object-graph hazard this design avoids.
+    //
+    // BACKEND-AGNOSTIC, on the same contract as L1: the key carries
+    // CompileEnv::frontendFingerprint and never CompileEnv::fingerprint.
+    //
+    // IF THE KEY IS EVER WRONG, the two directions fail very differently, and it is worth
+    // knowing which one to fear:
+    //   * a wrong `parsed = true` is CAUGHT. The stage holds no AST, so the first link that
+    //     needs one re-parses - and that parse fails, ConsumeShaders reports "Internal error:
+    //     re-parsing an attached <stage> for linking failed" and the link returns GL_FALSE.
+    //     Wrong, loud, and named.
+    //   * a wrong `parsed = false` is NOT caught. Nothing re-derives it, so a shader that
+    //     would have compiled reports GL_COMPILE_STATUS false with a stale log.
+    // Neither is a silent MISCOMPILE - no wrong SPIR-V can be produced through this level,
+    // because it caches no translated output at all - but the second is the one that would
+    // reach an application as an inexplicable failure. Both are why the key carries the full
+    // source bytes and is compared in full.
+    struct ShaderParseVerdict {
+        // What ShaderCompileTask publishes as GL_COMPILE_STATUS.
+        Bool parsed = false;
+        // What it publishes as the info log. EMPTY whenever `parsed`, and that is a property
+        // of the pipeline rather than of glslang: RunCompilePipeline clears the log on a
+        // successful parse, so a successful compile's observable log is empty no matter what
+        // glslang wrote into it. Stored rather than assumed so the two cannot drift.
+        String infoLog;
+    };
+    using ShaderParseVerdictPtr = SharedPtr<const ShaderParseVerdict>;
+
+    // WHAT IS IN THE KEY - the complete input set of ShaderCompiler::CompileShader, which is
+    // the only thing between this cache and the verdict:
+    //   * frontendFingerprint - BuildTBuiltInResource is the one thing ParseShaderSource
+    //     reads from the environment, and glslang both ENFORCES those limits at parse and
+    //     expands several of them into built-in constants;
+    //   * shaderType - it selects the EShLanguage parsed against, and it is also printed
+    //     verbatim into the failure log this cache reproduces;
+    //   * the FULL preprocessed source, byte for byte. This is the text ParseShaderSource is
+    //     handed, and it also covers CompileShader's legacy-#version retry, which is a pure
+    //     function of that text (RetargetLegacyVersionDirectiveTo460);
+    //   * the ShaderCompileBits - CompileForOpenGL selects a different setEnvClient /
+    //     setEnvTarget triple and skips setEnvInputVulkanRulesRelaxed, which changes both
+    //     what parses and what the parse produces. Always 0 on both production paths; in the
+    //     key so a future non-zero value cannot alias a parse made without it.
+    //
+    // WHAT IS DELIBERATELY OUT:
+    //   * everything else ParseShaderSource touches, because all of it is a COMPILE-TIME
+    //     CONSTANT: the 460/ECoreProfile default version, EShMsgDefault, forwardCompatible,
+    //     the "#undef VULKAN" preamble, setNanMinMaxClamp/setInvertY/setAutoMapLocations/
+    //     setAutoMapBindings, and GLOBAL_UBO_NAME. A build that changes one of them is a
+    //     different binary and cannot share an in-memory cache with the old one.
+    //   * enableSpirvValidation. It is not an argument of CompileShader at all - the parse
+    //     never reaches the SPIR-V validator. (L1 carries it because SanitizeAndOptimizeBinary
+    //     does take it.)
+    //   * backend identity and advertisedExtensions, on exactly L1's argument: the only
+    //     front-end consumer of the extension list REWRITES THE SOURCE TEXT, and the
+    //     preprocessed text is in this key verbatim - a strictly finer discriminator.
+    //   * the ORIGINAL (pre-preprocess) source. The preprocessed text is what the parse
+    //     consumes, so keying on the original would be both coarser in the wrong direction
+    //     and redundant; ShaderPreprocessCache is the memo that keys on the original.
+    struct ShaderParseVerdictKeyInputs {
+        // CompileEnv::frontendFingerprint, NEVER CompileEnv::fingerprint.
+        Uint64 frontendFingerprint = 0;
+        GLenum shaderType = 0;
+        StringView preprocessedSource;
+        Uint32 shaderCompileFlags = 0;
+    };
+
+    TranslationCacheKey BuildShaderParseVerdictKey(const ShaderParseVerdictKeyInputs& inputs);
+    SizeT ShaderParseVerdictBytes(const ShaderParseVerdict& verdict);
+
+    BoundedTranslationCache<ShaderParseVerdict>& GetShaderParseVerdictCache();
 
     // =======================================================================
     // L2 - the BACK END: sanitized SPIR-V -> DirectGLES ESSL payload.
@@ -489,9 +612,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
     BoundedTranslationCache<EsslTranslationResult>& GetEsslTranslationCache();
 
-    // Drops both levels. Called from the same teardown that resets the glslang
-    // prewarm latch: nothing here holds a glslang object, so this is RSS hygiene
-    // rather than a correctness requirement.
+    // Drops L1c and L2 (L1 lives in MG_State and has its own
+    // ClearProgramTranslationCache). Called from the same teardown that resets the
+    // glslang prewarm latch: nothing here holds a glslang object, so this is RSS
+    // hygiene rather than a correctness requirement.
     void ClearShaderTranslationCaches();
 
     // One MGLOG_D line per level. Called at teardown and cheap enough to call from

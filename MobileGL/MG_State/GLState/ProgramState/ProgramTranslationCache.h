@@ -15,17 +15,25 @@ namespace MobileGL::MG_State::GLState {
     // ===================================================================================
     // L1 of the shader translation memo: THE WHOLE FRONT END of one glLinkProgram.
     //
-    // A hit skips the glslang parse, the glslang link and mapIO, GlslangToSpv, the 11-pass
+    // A hit skips the glslang link and mapIO, GlslangToSpv, the 11-pass
     // SanitizeAndOptimizeBinary chain, buildReflection, and the global-UBO routing pass. No
-    // TShader and no TProgram is constructed at all - which is only possible because the GL
-    // query surface no longer reads one (see ProgramObject::UniformReflection and
+    // TProgram is constructed at all - which is only possible because the GL query surface no
+    // longer reads one (see ProgramObject::UniformReflection and
     // ProgramLinkTask::SnapshotGlslangReflection).
+    //
+    // IT DOES NOT SKIP THE PARSE, and no widening of this payload could: the parse belongs to
+    // glCompileShader, a different entry point one job earlier, and it has already run by the
+    // time a link looks this key up. Skipping it is L1c's job - the compile half of the memo,
+    // in MG_Util/ShaderTranspiler/TranslationCache.h. The two together are what make a
+    // repeated program build construct no glslang object of any kind; either one alone leaves
+    // roughly half the front end on the hot path (~322 us of parse against a ~650 us
+    // CTS-shaped program build, and 1.45-1.48x measured on device with L1 alone).
     //
     // WHY THE PAYLOAD IS THE WHOLE THING rather than just the SPIR-V: the frontend answers
     // glGetActiveUniform, glGetProgramResource*, glGetUniformLocation and the rest out of
     // LinkArtifacts, and glUniform*/glGetUniform* out of SpirvArtifacts. Caching only the
-    // modules would have left the parse and the link on the hot path to rebuild exactly the
-    // data the payload can carry - and the parse alone is ~48% of a CTS-shaped program build.
+    // modules would have left the link on the hot path to rebuild exactly the data the
+    // payload can carry.
     //
     // WHY IT LIVES HERE AND NOT IN MG_Util: the payload is a ProgramObject::LinkArtifacts
     // plus a ProgramObject::SpirvArtifacts, and MG_Util must not depend on MG_State. The
