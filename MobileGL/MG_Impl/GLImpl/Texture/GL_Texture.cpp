@@ -3540,11 +3540,42 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // Targets with no mip chain have q == level_base by definition (GL 4.6 core 8.17), so no
+        // minification filter can make them mipmap incomplete - while the shared predicate derives
+        // q from the base level's size alone and would call a 16x16 multisample image incomplete.
+        Bool CopyImageTargetHasMipmapChain(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::TextureRectangle:
+            case TextureTarget::TextureBuffer:
+            case TextureTarget::Texture2DMultisample:
+            case TextureTarget::Texture2DMultisampleArray:
+                return false;
+            default:
+                return true;
+            }
+        }
+
         Bool IsCopyImageEndpointComplete(const MG_Backend::CopyImageEndpoint& endpoint) {
             // A renderbuffer is complete exactly when it has storage - there is nothing else it
             // could be missing.
             if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->IsAllocated();
-            return endpoint.Texture && endpoint.Texture->IsComplete();
+            const auto* texture = endpoint.Texture.get();
+            if (!texture) return false;
+            // 18.3.2 asks for TEXTURE completeness, which GL 4.6 core 8.17 defines to include the
+            // MIP CHAIN whenever the minification filter samples it - and ITextureObject::
+            // IsComplete() only answers the storage half (an internal format, and no zero-size
+            // level in the middle of the chain). A texture with level 0 alone and the default
+            // NEAREST_MIPMAP_LINEAR filter is incomplete, which is exactly how
+            // KHR-GL43.copy_image.incomplete_tex builds its subject.
+            //
+            // The filter is the texture's OWN: copy-image never goes through a texture unit, so no
+            // sampler object is in play. An immutable texture is unaffected - glTexStorage clamps
+            // TEXTURE_MAX_LEVEL to levels-1, which is what makes a single-level immutable texture
+            // mipmap complete under any filter.
+            const auto& sampler = texture->GetSamplerObject();
+            const Bool mipmapped = CopyImageTargetHasMipmapChain(texture->GetTarget()) && sampler &&
+                                   sampler->GetMipmapMode() != SamplerMipmapMode::None;
+            return MG_State::GLState::IsMipmapCompleteForFilter(texture, mipmapped);
         }
 
         GLenum GetCopyImageEndpointCompressedFormat(const MG_Backend::CopyImageEndpoint& endpoint,

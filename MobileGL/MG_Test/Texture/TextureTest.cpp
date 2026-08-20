@@ -4428,9 +4428,13 @@ TEST_F(TextureTest, CopyImageSubDataAcceptsAPlainMutableTexImage2DPair) {
     MG_Impl::GLImpl::GenTextures(1, &reusedSrc);
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, reusedSrc);
     MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     MG_Impl::GLImpl::GenTextures(1, &reusedDst);
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, reusedDst);
     MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MG_Impl::GLImpl::CopyImageSubData(reusedSrc, GL_TEXTURE_2D, 0, 0, 0, 0, reusedDst, GL_TEXTURE_2D, 0, 0, 0, 0, 1,
@@ -4587,6 +4591,111 @@ TEST_F(TextureTest, CopyImageSubDataSizesACompressedArrayLevelByItsBlock) {
 
     MG_Impl::GLImpl::CopyImageSubData(compressedSource, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, uncompressedDestination,
                                       GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// 18.3.2 requires INVALID_OPERATION when either object is an INCOMPLETE TEXTURE, and completeness
+// is GL 4.6 core 8.17's - which includes the mip chain whenever the minification filter reads it.
+// A mutable texture with level 0 alone still carries the default NEAREST_MIPMAP_LINEAR filter, so
+// it is mipmap incomplete; the storage-only IsComplete() this used to ask called it complete and
+// let the copy through, which is the whole of KHR-GL43.copy_image.incomplete_tex.
+TEST_F(TextureTest, CopyImageSubDataRejectsAMipmapIncompleteTexture) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint incomplete = 0;
+    MG_Impl::GLImpl::GenTextures(1, &incomplete);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, incomplete);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    GLuint complete = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &complete);
+    MG_Impl::GLImpl::TextureStorage2D(complete, 1, GL_RGBA8, 16, 16);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(incomplete, GL_TEXTURE_2D, 0, 0, 0, 0, complete, GL_TEXTURE_2D, 0, 0, 0, 0, 4,
+                                      4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // The destination side is checked the same way.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(complete, GL_TEXTURE_2D, 0, 0, 0, 0, incomplete, GL_TEXTURE_2D, 0, 0, 0, 0, 4,
+                                      4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // Capping TEXTURE_MAX_LEVEL at the one level that exists is what the conformance suite's
+    // makeTextureComplete does, and it is enough to make the same object complete.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, incomplete);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::CopyImageSubData(incomplete, GL_TEXTURE_2D, 0, 0, 0, 0, complete, GL_TEXTURE_2D, 0, 0, 0, 0, 4,
+                                      4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The targets that have no mip chain must not be dragged in: GL 4.6 core 8.17 makes q equal to
+// level_base for them, so no filter can make them mipmap incomplete. A rectangle texture gets a
+// non-mipmapping default filter from the object itself, so it would survive a predicate that
+// trusted the sampler alone - it is here because the whole texture path is one branch and this is
+// the cheap half of pinning it.
+TEST_F(TextureTest, CopyImageSubDataDoesNotApplyMipmapCompletenessToRectangleTextures) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcRectangle = 0;
+    GLuint dstRectangle = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_RECTANGLE, 1, &srcRectangle);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_RECTANGLE, 1, &dstRectangle);
+    MG_Impl::GLImpl::TextureStorage2D(srcRectangle, 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstRectangle, 1, GL_RGBA8, 8, 8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(srcRectangle, GL_TEXTURE_RECTANGLE, 0, 0, 0, 0, dstRectangle,
+                                      GL_TEXTURE_RECTANGLE, 0, 0, 0, 0, 4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The multisample half, which is the one the target guard actually exists for: a multisample
+// texture keeps the shared NEAREST_MIPMAP_LINEAR default in its own sampler state (only the
+// rectangle constructor overrides it), so asking the mipmap predicate about it without the target
+// guard would report every 8x8 multisample image incomplete and refuse a legal copy.
+TEST_F(TextureTest, CopyImageSubDataDoesNotApplyMipmapCompletenessToMultisampleTextures) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcMultisample = 0;
+    GLuint dstMultisample = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &srcMultisample);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &dstMultisample);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(srcMultisample, 1, GL_RGBA8, 8, 8, GL_FALSE);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(dstMultisample, 1, GL_RGBA8, 8, 8, GL_FALSE);
+    DrainPendingGlErrors();
+
+    // This unit-test binary has no backend behind the renderable-format and sample-count queries,
+    // so the storage may not have been created at all. Checked on the state objects rather than
+    // assumed, so the case can only skip or test the real rule.
+    const auto srcObject = MG_State::pGLContext->GetTextureObject(srcMultisample);
+    const auto dstObject = MG_State::pGLContext->GetTextureObject(dstMultisample);
+    ASSERT_NE(srcObject, nullptr);
+    ASSERT_NE(dstObject, nullptr);
+    if (!srcObject->IsComplete() || !dstObject->IsComplete()) {
+        GTEST_SKIP() << "this context could not give the multisample textures storage";
+    }
+
+    MG_Impl::GLImpl::CopyImageSubData(srcMultisample, GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, dstMultisample,
+                                      GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, 4, 4, 1);
     EXPECT_TRUE(g_copyImageSubDataCall.Called);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
