@@ -1015,6 +1015,16 @@ TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
     }
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
+    // The compile runs against a captured env, exactly as the pipeline's does. That is the whole
+    // invariant: the env holds the same floored driver answer GetIntegeri_v just returned, so the
+    // resource table and the query agree BY CONSTRUCTION rather than by two tables happening to
+    // carry the same literals.
+    const auto env = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+    for (GLuint index = 0; index < 3; ++index) {
+        EXPECT_EQ(static_cast<GLint>(env->maxComputeWorkGroupSize[index]), size[index]) << "index " << index;
+        EXPECT_EQ(static_cast<GLint>(env->maxComputeWorkGroupCount[index]), count[index]) << "index " << index;
+    }
+
     // A negative array size is a compile error, so the stage only compiles when EVERY component
     // of both built-in constants equals what the query above reported. Two-sided by construction:
     // a resource table that is too permissive fails it exactly like one that is too tight.
@@ -1034,6 +1044,7 @@ void main() {
     auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
         .shaderType = GL_COMPUTE_SHADER,
         .sourceStr = source,
+        .env = env.get(),
     });
     EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
 
@@ -1046,10 +1057,12 @@ void main() {
     EXPECT_TRUE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
         .shaderType = GL_COMPUTE_SHADER,
         .sourceStr = atLimit,
+        .env = env.get(),
     }));
     EXPECT_FALSE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
         .shaderType = GL_COMPUTE_SHADER,
         .sourceStr = pastLimit,
+        .env = env.get(),
     }));
 
     MG_Backend::pActiveBackendObject = Move(previousBackend);
