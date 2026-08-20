@@ -8,6 +8,7 @@
 
 #include "GL_Sync.h"
 #include <MG_Backend/BackendObjects.h>
+#include <MG_State/GLState/Core.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -35,6 +36,22 @@ namespace MobileGL::MG_Impl::GLImpl {
     } // namespace
 
     GLsync FenceSync(GLenum condition, GLbitfield flags) {
+        // GL 4.6 core 4.1.2: GL_SYNC_GPU_COMMANDS_COMPLETE is the only condition and the only
+        // legal flags value is zero; both violations return 0 rather than a handle. A caller that
+        // then hands the 0 back to glDeleteSync hits the glDeleteSync(0) no-op below.
+        if (condition != GL_SYNC_GPU_COMMANDS_COMPLETE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "condition must be GL_SYNC_GPU_COMMANDS_COMPLETE."));
+            return nullptr;
+        }
+        if (flags != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "flags must be zero."));
+            return nullptr;
+        }
         auto* syncObject = new SyncObject;
         syncObject->condition = condition;
         syncObject->flags = flags;
@@ -64,6 +81,18 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+        // GL 4.6 core 4.1.2: the server-side wait takes no flags and no finite timeout - both
+        // arguments exist only to be forward-compatible, and anything else is INVALID_VALUE.
+        // Neither backend ever honored a nonzero timeout (DirectGLES hard-codes
+        // 0/GL_TIMEOUT_IGNORED, DirectVulkan's queue ordering makes the wait implicit), so
+        // rejecting the call loses no wait that used to happen.
+        if (flags != 0 || timeout != GL_TIMEOUT_IGNORED) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "flags must be zero and timeout must be GL_TIMEOUT_IGNORED."));
+            return;
+        }
         const auto* syncObject = FindSyncObject(sync);
         if (!syncObject) {
             return;

@@ -18,6 +18,7 @@
 //     errors that guard a parameter-buffer draw.
 //   * KHR-GL43.compute_shader.api-indirect / .api-program.
 //   * KHR-GLxx.texture_storage.compressed_data - compressed formats on TEXTURE_3D.
+//   * KHR-GL32.api.coverage - glFenceSync's condition/flags and glWaitSync's flags/timeout.
 // Plus the indexed-getter parity RC-7b is about: glGetBooleani_v / glGetInteger64i_v /
 // glGetFloati_v / glGetDoublei_v must answer every pname glGetIntegeri_v answers.
 //
@@ -37,6 +38,7 @@
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Sampler/GL_Sampler.h>
+#include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/GLImpl/VertexArray/GL_VertexArray.h>
 #include <MG_State/GLState/Core.h>
@@ -468,6 +470,38 @@ void main() { g_color = vec4(1); }
         BindVertexBuffer(0, vbo, 2048, 128);
         GetInteger64i_v(GL_VERTEX_BINDING_OFFSET, 0, &offset);
         EXPECT_EQ(offset, 2048);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+    }
+
+    // KHR-GL32.api.coverage: glFenceSync and glWaitSync took every argument they were handed and
+    // reported GL_NO_ERROR for the two calls GL 4.6 core 4.1.2 requires to fail. A rejected
+    // glFenceSync must also hand back 0 rather than a live handle.
+    TEST_F(NegativeApiErrorsTest, SyncEntryPointsRejectTheirIllegalArguments) {
+        DrainErrors();
+
+        RunRows({
+            {"glFenceSync with a condition other than GL_SYNC_GPU_COMMANDS_COMPLETE",
+             [] { EXPECT_EQ(FenceSync(GL_SYNC_FENCE, 0), nullptr); }, GL_INVALID_ENUM},
+            {"glFenceSync with nonzero flags", [] { EXPECT_EQ(FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 1), nullptr); },
+             GL_INVALID_VALUE},
+        });
+
+        // The legal fence still works, and with no backend function table it is the always-signaled
+        // fallback - which is all this GPU-free suite needs to reach glWaitSync's own checks.
+        const GLsync sync = FenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        ASSERT_NE(sync, nullptr);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+        EXPECT_EQ(IsSync(sync), GL_TRUE);
+
+        RunRows({
+            {"glWaitSync with nonzero flags", [&] { WaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, GL_TIMEOUT_IGNORED); },
+             GL_INVALID_VALUE},
+            {"glWaitSync with a finite timeout", [&] { WaitSync(sync, 0, 1000000000ull); }, GL_INVALID_VALUE},
+            {"glWaitSync with the only legal argument pair", [&] { WaitSync(sync, 0, GL_TIMEOUT_IGNORED); },
+             GL_NO_ERROR},
+        });
+
+        DeleteSync(sync);
         EXPECT_EQ(GetError(), GL_NO_ERROR);
     }
 } // namespace
