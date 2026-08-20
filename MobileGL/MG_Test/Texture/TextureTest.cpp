@@ -1651,6 +1651,56 @@ TEST_F(TextureTest, AnUncompressedRespecificationClearsTheCompressedTag) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// The same rule for the 3D entry points, which never recorded the tag at all. Besides the two
+// level queries this decides the level's texel BLOCK SIZE, which glCopyImageSubData compares
+// against the other endpoint's - an untagged GL_COMPRESSED_RG_RGTC2 array level measured as the
+// RG8 storage it resolves to, 2 bytes instead of 16.
+TEST_F(TextureTest, TexImage3DAndTexStorage3DTagASpecificCompressedInternalFormat) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, texture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_COMPRESSED_RG_RGTC2, 8, 8, 2, 0, GL_RG,
+                                GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint compressed = GL_FALSE;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_COMPRESSED, &compressed);
+    EXPECT_EQ(compressed, GL_TRUE);
+
+    GLint internalFormat = 0;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+    EXPECT_EQ(internalFormat, static_cast<GLint>(GL_COMPRESSED_RG_RGTC2));
+
+    // 8x8 in 4x4 blocks of 16 bytes each is 64 bytes a layer, and both layers count.
+    GLint imageSize = 0;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, &imageSize);
+    EXPECT_EQ(imageSize, 128);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The texel shadow behind the tag keeps the uncompressed storage the format resolves to.
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetFormat(), TextureInternalFormat::RG8);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+    // glTexStorage3D has the same gap and the same fix; immutable storage plus
+    // glCompressedTexSubImage3D is the modern way to upload a compressed array texture.
+    GLuint storageTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &storageTexture);
+    MG_Impl::GLImpl::TextureStorage3D(storageTexture, 1, GL_COMPRESSED_RG_RGTC2, 8, 8, 2);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, storageTexture);
+
+    compressed = GL_FALSE;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_COMPRESSED, &compressed);
+    EXPECT_EQ(compressed, GL_TRUE);
+    imageSize = 0;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, &imageSize);
+    EXPECT_EQ(imageSize, 128);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+}
+
 namespace {
     // A 16x16 RGBA8 texture with exactly `levelCount` levels, defined the way
     // KHR-GL43.copy_image.non_existent_mipmap defines its textures - glTexImage2D per
@@ -4510,4 +4560,33 @@ TEST_F(TextureTest, CopyImageSubDataChecksARenderbufferLevelAndStorage) {
                                       0, 0, 4, 4, 1);
     EXPECT_FALSE(g_copyImageSubDataCall.Called);
     ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+// A 16-byte RGTC2 block and a 16-byte RGBA32UI texel are in the same size class, so GL 4.6 core
+// 18.3.2 requires this copy to succeed. It did not for an ARRAY source: glTexImage3D recorded no
+// specific-compressed-format tag, so the level was measured as the 2-byte RG8 storage RGTC2
+// resolves to and the compatibility rule saw 2 against 16.
+TEST_F(TextureTest, CopyImageSubDataSizesACompressedArrayLevelByItsBlock) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint compressedSource = 0;
+    MG_Impl::GLImpl::GenTextures(1, &compressedSource);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, compressedSource);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_COMPRESSED_RG_RGTC2, 8, 8, 1, 0, GL_RG,
+                                GL_UNSIGNED_BYTE, nullptr);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+    GLuint uncompressedDestination = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &uncompressedDestination);
+    MG_Impl::GLImpl::TextureStorage3D(uncompressedDestination, 1, GL_RGBA32UI, 8, 8, 1);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(compressedSource, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, uncompressedDestination,
+                                      GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, 8, 8, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
