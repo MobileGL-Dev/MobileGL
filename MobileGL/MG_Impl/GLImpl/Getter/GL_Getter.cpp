@@ -213,6 +213,23 @@ namespace MobileGL::MG_Impl::GLImpl {
             return ClampBlockCountToBindingPoints(blockCount, BufferTarget::ShaderStorage);
         }
 
+        // The per-stage GL_MAX_*_SHADER_STORAGE_BLOCKS answers. Backend-derived, and NOT a
+        // constant to be "restored" - these used to return a flat 16 for vertex, geometry and
+        // both tessellation stages, which is wrong on any host that does not serve storage
+        // blocks in those stages. Zero is a legal answer: GL 4.6 table 23.64 and ES 3.2 table
+        // 21.44 both set the minimum at 0 for every graphics stage except fragment, which is
+        // why the conformance suite gates each such test on the query instead of assuming it.
+        // ARM's GLES driver reports 0 for all four (a Mali-G925 does), and advertising 16 there
+        // bought nothing: the program still failed to link inside the backend, the frontend
+        // still reported LINK_STATUS as true, and every draw with it silently rendered nothing.
+        GLint StageStorageBlockCount(Int MG_Backend::DynamicBackendParameters::*stageLimit) {
+            static const MG_Backend::DynamicBackendParameters kBackendlessDefaults{};
+            const MG_Backend::DynamicBackendParameters& parameters =
+                MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+                                                 : kBackendlessDefaults;
+            return ClampStorageBlockCount(static_cast<GLint>(parameters.*stageLimit));
+        }
+
         bool TryDecodeDrawBufferQuery(GLenum pname, SizeT& drawBufferIndex) {
             if (pname == GL_DRAW_BUFFER) {
                 drawBufferIndex = 0;
@@ -1548,7 +1565,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxFragmentAtomicCounters;
             return;
         case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
-            *params = ClampStorageBlockCount(16); // TODO
+            *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxFragmentShaderStorageBlocks);
             return;
         case GL_MAX_FRAGMENT_INPUT_COMPONENTS:
             *params = kFrontendMaxFragmentInputComponents;
@@ -1574,7 +1591,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxGeometryAtomicCounterBuffers;
             return;
         case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
-            *params = ClampStorageBlockCount(16); // TODO
+            *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxGeometryShaderStorageBlocks);
             return;
         case GL_MAX_GEOMETRY_INPUT_COMPONENTS:
             *params = kFrontendMaxGeometryInputComponents;
@@ -1645,10 +1662,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 0;
             return;
         case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
-            *params = ClampStorageBlockCount(16); // TODO
+            *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxTessControlShaderStorageBlocks);
             return;
         case GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS:
-            *params = ClampStorageBlockCount(16); // TODO
+            *params =
+                StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxTessEvaluationShaderStorageBlocks);
             return;
         case GL_MAX_TEXTURE_LOD_BIAS:
             *params = 15; // TODO
@@ -1674,7 +1692,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                           : MG_Backend::DynamicBackendParameters{}.MaxVertexImageUniforms;
             return;
         case GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS:
-            *params = ClampStorageBlockCount(16); // TODO
+            *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxVertexShaderStorageBlocks);
             return;
         case GL_MAX_VERTEX_UNIFORM_COMPONENTS:
             *params = kFrontendMaxVertexUniformComponents;
