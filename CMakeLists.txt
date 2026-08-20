@@ -674,3 +674,10 @@ if (NOT ANDROID)
         add_subdirectory(tools/trace_replay)
     endif()
 endif()
+
+# The integration binary is also useful as a standalone adb-shell executable.
+# Android cannot use the desktop-only MobileGL_s target, so its CMake module
+# links libMobileGL.so and creates an AImageReader-backed window instead.
+if (ANDROID AND MOBILEGL_BUILD_INTEGRATION_TEST)
+    add_subdirectory(MobileGL/MG_IntegrationTest)
+endif()

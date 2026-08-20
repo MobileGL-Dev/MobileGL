@@ -14,11 +14,11 @@
 // inspects backend state - both bugs this module pins were invisible to
 // state-level assertions and visible only in pixels.
 //
-// Headless by construction, following MG_Benchmark/Driver/DriverBench.c: an EGL
-// context on a PBUFFER surface. No window, no window manager, no human. Unlike
-// DriverBench the scenarios do draw to the DEFAULT framebuffer (that is where
-// the Y-flip lives) and do call eglSwapBuffers (that is the frame boundary the
-// cross-frame scenarios need to be real).
+// Headless by construction: desktop uses an EGL pbuffer and Android uses an
+// AImageReader-backed ANativeWindow that needs no Activity. No window manager,
+// no human. Unlike DriverBench the scenarios do draw to the DEFAULT framebuffer
+// (that is where the Y-flip lives) and do call eglSwapBuffers (that is the frame
+// boundary the cross-frame scenarios need to be real).
 //
 // One process is one backend: MOBILEGL_BACKEND_TYPE is latched at
 // initialization, so the CMake wiring runs this binary once per backend rather

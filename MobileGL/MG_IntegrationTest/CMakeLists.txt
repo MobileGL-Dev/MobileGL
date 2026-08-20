@@ -24,9 +24,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(MGL_ITEST_ROOT ${CMAKE_CURRENT_LIST_DIR}/../..)
 
-# Only meaningful where MobileGL_s exists (i.e. not Android).
-if (NOT TARGET MobileGL_s)
-    message(STATUS "MobileGL_s is not available; skipping the integration test module")
+# Desktop links the static implementation directly. Android runs the same
+# executable from adb shell and links the shipping shared library instead.
+if (ANDROID)
+    set(MGL_ITEST_MOBILEGL_TARGET MobileGL)
+elseif (TARGET MobileGL_s)
+    set(MGL_ITEST_MOBILEGL_TARGET MobileGL_s)
+else()
+    message(STATUS "No MobileGL library target is available; skipping the integration test module")
     return()
 endif()
 
@@ -69,6 +74,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/UniformInitializerScenario.cpp
     Scenarios/SwizzleAccessRoutineScenario.cpp
     Scenarios/IterationRPFirstReductionScenario.cpp
+    Scenarios/IterationRPProgram203Scenario.cpp
     Scenarios/IterationRPScratchFixScenario.cpp
     Scenarios/ProgramPipelineScenario.cpp
     Scenarios/ImageLoadStoreSsoScenario.cpp
@@ -94,8 +100,19 @@ target_include_directories(MobileGLIntegrationTest PRIVATE
 # gtest, not gtest_main: Main.cpp installs the harness banner itself.
 target_link_libraries(MobileGLIntegrationTest PRIVATE
     GTest::gtest
-    MobileGL_s
+    ${MGL_ITEST_MOBILEGL_TARGET}
 )
+
+if (ANDROID)
+    find_library(MGL_ITEST_ANDROID_LIBRARY android REQUIRED)
+    find_library(MGL_ITEST_LOG_LIBRARY log REQUIRED)
+    find_library(MGL_ITEST_MEDIANDK_LIBRARY mediandk REQUIRED)
+    target_link_libraries(MobileGLIntegrationTest PRIVATE
+        ${MGL_ITEST_ANDROID_LIBRARY}
+        ${MGL_ITEST_LOG_LIBRARY}
+        ${MGL_ITEST_MEDIANDK_LIBRARY}
+    )
+endif()
 
 if (MSVC)
     # Same reason as MG_Test/Backend/DirectVulkan: the GLES headers declare gl*
@@ -104,6 +121,10 @@ if (MSVC)
     target_link_options(MobileGLIntegrationTest PRIVATE /WHOLEARCHIVE:MobileGL_s)
 endif()
 target_compile_definitions(MobileGLIntegrationTest PRIVATE -DNOMINMAX)
+
+if (ANDROID)
+    return()
+endif()
 
 # --- ctest wiring --------------------------------------------------------
 # A bare libEGL on a glvnd box resolves to whatever vendor comes first, which is

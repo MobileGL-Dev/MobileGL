@@ -31,8 +31,14 @@ namespace {
                 // silently bound to a workstation's window system is a different
                 // run from CI's and must be visible as one in the log.
                 const char* eglPlatform = std::getenv("EGL_PLATFORM");
-                std::fprintf(stderr, "  renderer: %s\n  surface:  %dx%d pbuffer (headless, EGL_PLATFORM=%s)\n",
+#if defined(__ANDROID__)
+                constexpr const char* surfaceKind = "AImageReader window";
+#else
+                constexpr const char* surfaceKind = "pbuffer";
+#endif
+                std::fprintf(stderr, "  renderer: %s\n  surface:  %dx%d %s (headless, EGL_PLATFORM=%s)\n",
                              gl.RendererString().c_str(), gl.Width(), gl.Height(),
+                             surfaceKind,
                              eglPlatform != nullptr ? eglPlatform : "<unset>");
             } else if (MGITest::RequireGpu()) {
                 std::fprintf(stderr,
