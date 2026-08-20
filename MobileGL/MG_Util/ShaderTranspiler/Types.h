@@ -18,7 +18,7 @@ namespace MobileGL {
             // synthesized storage block named "<this>_<GL atomic-counter binding>"
             // (ParseContextBase::growAtomicCounterBlock). That block IS the GL atomic counter
             // buffer, and the trailing number is the only place the GL binding survives.
-            inline const char* ATOMIC_COUNTER_BLOCK_PREFIX = "gl_AtomicCounterBlock";
+            inline constexpr const char* ATOMIC_COUNTER_BLOCK_PREFIX = "gl_AtomicCounterBlock";
 
             // Atomic-counter limits, in ONE place because GL 4.6 requires glGetIntegerv and the
             // shading language's gl_MaxAtomicCounter* constants to report the same numbers

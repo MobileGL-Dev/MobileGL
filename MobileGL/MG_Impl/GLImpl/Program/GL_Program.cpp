@@ -642,7 +642,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         }
         case GL_ACTIVE_ATOMIC_COUNTER_BUFFERS:
-            *params = programObject->GetActiveAtomicCounterCount();
+            // Counter BUFFERS, not counters, and glslang's own getNumAtomicCounters() answers
+            // neither: the relaxed parse has already turned every atomic_uint into a plain uint
+            // member of a synthesized storage block by the time it builds its reflection, so it
+            // reports zero. The interface-query model recovers the buffers from those blocks and
+            // is what glGetProgramInterfaceiv(GL_ATOMIC_COUNTER_BUFFER, GL_ACTIVE_RESOURCES)
+            // already answers - the two queries are required to agree.
+            *params = ProgramInterface::GetActiveResourceCount(*programObject, GL_ATOMIC_COUNTER_BUFFER);
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_ATTRIBUTES:
@@ -2833,6 +2839,73 @@ namespace MobileGL::MG_Impl::GLImpl {
             return -1;
         }
         return ProgramInterface::GetResourceLocationIndex(*programObject, programInterface, name);
+    }
+
+    // GL 4.6 §7.7. Every property this reports is one the GL_ATOMIC_COUNTER_BUFFER interface
+    // already carries, so this is a rename of glGetProgramResourceiv's props onto the older
+    // entry point's - and the two are required to agree, which is only true while both read the
+    // same model. It was a silent stub: it wrote nothing, raised nothing, and left every probe
+    // reading its own uninitialised output.
+    static Bool TryMapActiveAtomicCounterBufferProp(GLenum pname, GLenum& outProp) {
+        switch (pname) {
+        case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+            outProp = GL_BUFFER_BINDING;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_DATA_SIZE:
+            outProp = GL_BUFFER_DATA_SIZE;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTERS:
+            outProp = GL_NUM_ACTIVE_VARIABLES;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES:
+            outProp = GL_ACTIVE_VARIABLES;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_VERTEX_SHADER:
+            outProp = GL_REFERENCED_BY_VERTEX_SHADER;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_CONTROL_SHADER:
+            outProp = GL_REFERENCED_BY_TESS_CONTROL_SHADER;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_TESS_EVALUATION_SHADER:
+            outProp = GL_REFERENCED_BY_TESS_EVALUATION_SHADER;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_GEOMETRY_SHADER:
+            outProp = GL_REFERENCED_BY_GEOMETRY_SHADER;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_FRAGMENT_SHADER:
+            outProp = GL_REFERENCED_BY_FRAGMENT_SHADER;
+            return true;
+        case GL_ATOMIC_COUNTER_BUFFER_REFERENCED_BY_COMPUTE_SHADER:
+            outProp = GL_REFERENCED_BY_COMPUTE_SHADER;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void GetActiveAtomicCounterBufferiv(GLuint program, GLuint bufferIndex, GLenum pname, GLint* params) {
+        auto& programObject = TryToGetProgramForInterfaceQuery(program, __func__);
+        if (!programObject) return;
+        GLenum prop = GL_NONE;
+        if (!TryMapActiveAtomicCounterBufferProp(pname, prop)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname is not an active atomic counter buffer property."));
+            return;
+        }
+        Vector<GLint> values;
+        if (!ProgramInterface::GetResourceProp(*programObject, GL_ATOMIC_COUNTER_BUFFER, bufferIndex, prop, values)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "bufferIndex is not an active atomic counter buffer index."));
+            return;
+        }
+        if (params == nullptr) return;
+        // GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES is the only multi-value property
+        // here, and the caller sized its array from _ACTIVE_ATOMIC_COUNTERS.
+        for (SizeT i = 0; i < values.size(); ++i) params[i] = values[i];
     }
 
     // GL 4.6 §7.6.2: <storageBlockIndex> is an active shader storage block index of <program>

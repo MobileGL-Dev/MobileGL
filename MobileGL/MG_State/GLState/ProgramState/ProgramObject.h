@@ -702,10 +702,6 @@ namespace MobileGL::MG_State::GLState {
         // SIGSEGV inside glslang::TProgram::getNumPipeInputs - KHR-GL30.api.coverage does exactly
         // this after a failed glGetAttribLocation, and reached it as soon as the CopyTexImage2D
         // throw ahead of it stopped killing the run first.
-        Int GetActiveAtomicCounterCount() const {
-            const auto& program = Artifacts().program;
-            return program ? program->getNumAtomicCounters() : 0;
-        }
         Int GetActiveAttributesCount() const {
             const auto& program = Artifacts().program;
             return program ? program->getNumPipeInputs() : 0;

@@ -140,6 +140,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                               const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params);
     GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name);
     GLint GetProgramResourceLocationIndex(GLuint program, GLenum programInterface, const GLchar* name);
+    void GetActiveAtomicCounterBufferiv(GLuint program, GLuint bufferIndex, GLenum pname, GLint* params);
     void ShaderStorageBlockBinding(GLuint program, GLuint storageBlockIndex, GLuint storageBlockBinding);
     void Uniform1d(GLint location, GLdouble v0);
     void Uniform1dv(GLint location, GLsizei count, const GLdouble* value);
