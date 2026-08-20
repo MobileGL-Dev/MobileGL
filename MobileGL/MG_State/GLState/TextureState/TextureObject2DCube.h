@@ -39,6 +39,10 @@ namespace MobileGL {
                 SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
                 const void* MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
                                                      Uint mipmapLevel) const override;
+                void SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                        GLenum internalFormat) override;
+                GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
+                                                          Uint mipmapLevel) const override;
 
                 IntVec3 GetBaseSize() const override;
                 Bool IsComplete() const override;

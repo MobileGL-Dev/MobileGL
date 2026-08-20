@@ -377,6 +377,40 @@ TEST_F(TextureTest, ClearTexImageErrorContracts) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_ENUM));
 }
 
+// GL 4.6 core 8.19: a compressed internal format is INVALID_OPERATION for both clear entry points.
+// The generic GL_COMPRESSED_* enums are the half that needs its own tag - MobileGL answers them
+// with uncompressed storage on purpose, so by the time the clear runs the level looks like any
+// other RGBA8 image unless the REQUEST was recorded alongside it.
+TEST_F(TextureTest, ClearTexImageRejectsCompressedTextures) {
+    GLuint genericTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &genericTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, genericTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGBA, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::ClearTexImage(genericTexture, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::ClearTexSubImage(genericTexture, 0, 0, 0, 0, 4, 4, 1, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // A specific compressed internalformat is refused through the tag the level already carried...
+    GLuint specificTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &specificTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, specificTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 0, GL_RED, GL_UNSIGNED_BYTE,
+                                nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::ClearTexImage(specificTexture, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // ...and respecifying the level with an uncompressed format makes it clearable again, because
+    // AllocateStorage clears both tags.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_R8, 8, 8, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::ClearTexImage(specificTexture, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT is float state that must answer every numeric query: GetFloatv
 // is authoritative and GetIntegerv would otherwise fall through to its INVALID_ENUM default.
 TEST_F(TextureTest, MaxTextureMaxAnisotropyIsAnsweredFromTheBackendLimit) {

@@ -691,6 +691,34 @@ namespace MobileGL::MG_Impl::GLImpl {
         return textureObject;
     }
 
+    // Whether a raw internalformat enum names a compressed format - the question GL asks whenever an
+    // entry point is forbidden on a compressed image: glTexStorage3D on TEXTURE_3D (no
+    // block-compressed format is defined for a three-dimensional image, so it is INVALID_OPERATION
+    // rather than the INVALID_ENUM an unknown sized format gets - GL 4.6 core 8.19 / Khronos bug
+    // 11239, KHR-GLxx.texture_storage.compressed_data) and the clear-texture pair (8.19 again).
+    // Written against the enum ranges rather than a name list because the families are contiguous
+    // and MobileGL's own internal-format enum drops the ones it cannot carry, which would make this
+    // check silently narrower than the API surface.
+    static Bool IsCompressedGLInternalFormat(GLenum internalformat) {
+        switch (internalformat) {
+        case 0x8225: // GL_COMPRESSED_RED
+        case 0x8226: // GL_COMPRESSED_RG
+        case 0x84ED: // GL_COMPRESSED_RGB
+        case 0x84EE: // GL_COMPRESSED_RGBA
+        case 0x8C48: // GL_COMPRESSED_SRGB
+        case 0x8C49: // GL_COMPRESSED_SRGB_ALPHA
+            return true;
+        default:
+            break;
+        }
+        return (internalformat >= 0x83F0 && internalformat <= 0x83F3) || // S3TC / DXT
+               (internalformat >= 0x8DBB && internalformat <= 0x8DBE) || // RGTC
+               (internalformat >= 0x8E8C && internalformat <= 0x8E8F) || // BPTC
+               (internalformat >= 0x9270 && internalformat <= 0x9279) || // ETC2 / EAC
+               (internalformat >= 0x93B0 && internalformat <= 0x93BD) || // ASTC LDR
+               (internalformat >= 0x93D0 && internalformat <= 0x93DD);   // ASTC sRGB
+    }
+
     namespace {
         void RecordClearTextureError(const char* caller, ErrorCode code, const String& message) {
             MG_State::pGLContext->RecordError(
@@ -724,6 +752,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (static_cast<Uint>(level) >= mipmapTexture->GetMipmapLevelCount()) {
                 RecordClearTextureError(caller, ErrorCode::InvalidOperation,
                                         std::format("Texture level {} is not defined.", level));
+                return nullptr;
+            }
+            // GL 4.6 core 8.19: a compressed internal format is INVALID_OPERATION for both clear
+            // entry points. Two tags to ask, because they answer different questions: the stored
+            // one covers a level glCompressedTexImage* or a SPECIFIC compressed internalformat
+            // defined, the requested one covers the six generic GL_COMPRESSED_* enums that MobileGL
+            // deliberately backs with uncompressed storage (see MipmapStorage) and that would
+            // otherwise look like an ordinary RGBA8 image by the time the clear runs.
+            const auto& uploadTargets = mipmapTexture->GetUploadTargets();
+            if (!uploadTargets.empty() &&
+                (mipmapTexture->GetMipmapCompressedFormat(uploadTargets[0], static_cast<Uint>(level)) != GL_NONE ||
+                 mipmapTexture->GetMipmapRequestedCompressedFormat(uploadTargets[0], static_cast<Uint>(level)) !=
+                     GL_NONE)) {
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
+                                        "Compressed textures cannot be cleared.");
                 return nullptr;
             }
             return mipmapTexture;
@@ -2210,6 +2253,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureUploadTarget, level, static_cast<GLenum>(internalformat), nullptr,
                     MG_Util::CalculateCompressedTextureImageSize(compressedInfo, {width, height, depth}));
             }
+            // Also after AllocateStorage, which clears it. Records the generic GL_COMPRESSED_*
+            // enums too, which the tag above deliberately skips - glClearTexImage has to refuse
+            // them all (GL 4.6 core 8.19).
+            if (IsCompressedGLInternalFormat(static_cast<GLenum>(internalformat))) {
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget, level,
+                                                                        static_cast<GLenum>(internalformat));
+            }
         }
 
         if (!originalPixels) {
@@ -2356,6 +2406,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureUploadTarget, level, static_cast<GLenum>(internalformat), nullptr,
                     MG_Util::CalculateCompressedTextureImageSize(compressedInfo, {width, height, 1}));
             }
+            // Also after AllocateStorage, which clears it. Records the generic GL_COMPRESSED_*
+            // enums too, which the tag above deliberately skips - glClearTexImage has to refuse
+            // them all (GL 4.6 core 8.19).
+            if (IsCompressedGLInternalFormat(static_cast<GLenum>(internalformat))) {
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget, level,
+                                                                        static_cast<GLenum>(internalformat));
+            }
         }
 
         if (!originalPixels) {
@@ -2444,6 +2501,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!isProxy) {
             DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, 1, 1}, internalBytes});
+            // After AllocateStorage, which clears the tag. No block-compressed format has a 1D
+            // layout, so only the specific-format tag the 2D/3D paths record is skipped here - the
+            // request itself still has to be remembered for glClearTexImage (GL 4.6 core 8.19).
+            if (IsCompressedGLInternalFormat(static_cast<GLenum>(internalFormat))) {
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget, level,
+                                                                        static_cast<GLenum>(internalFormat));
+            }
         }
 
         if (!originalPixels) {
@@ -4542,6 +4606,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             const SizeT byteSize = ComputeTextureStorageByteSize(textureInternalFormat, levelWidth, 1, 1);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{levelWidth, 1, 1}, byteSize});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
+            if (IsCompressedGLInternalFormat(internalformat)) {
+                // After AllocateStorage, which clears the tag. See TexImage1D_State: no compressed
+                // format has a 1D block layout, but glClearTexImage still has to refuse the request.
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget,
+                                                                        static_cast<Uint>(level), internalformat);
+            }
         }
         // Immutable storage defines exactly `levels` levels; AllocateStorage only grows, so a
         // longer pre-existing chain has to be dropped explicitly.
@@ -4610,37 +4680,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                         MG_Util::CalculateCompressedTextureImageSize(compressedInfo,
                                                                      {levelWidth, levelHeight, 1}));
                 }
+                if (IsCompressedGLInternalFormat(internalformat)) {
+                    // Also after AllocateStorage. The generic enums land here and nowhere above,
+                    // and glClearTexImage has to refuse them too (GL 4.6 core 8.19).
+                    textureMipmapObject->SetMipmapRequestedCompressedFormat(uploadTarget,
+                                                                            static_cast<Uint>(level), internalformat);
+                }
             }
             // See TextureStorage1D.
             textureMipmapObject->TruncateMipmapLevels(uploadTarget, static_cast<Uint>(levels));
         }
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
-    }
-
-    // No block-compressed format is defined for a three-dimensional image, so glTexStorage3D on
-    // TEXTURE_3D must reject one - and with INVALID_OPERATION, not the INVALID_ENUM an unknown
-    // sized format gets (GL 4.6 core 8.19 / Khronos bug 11239, KHR-GLxx.texture_storage
-    // .compressed_data). Written against the enum ranges rather than a name list because the
-    // families are contiguous and MobileGL's own internal-format enum drops the ones it cannot
-    // carry, which would make this check silently narrower than the API surface.
-    static Bool IsCompressedGLInternalFormat(GLenum internalformat) {
-        switch (internalformat) {
-        case 0x8225: // GL_COMPRESSED_RED
-        case 0x8226: // GL_COMPRESSED_RG
-        case 0x84ED: // GL_COMPRESSED_RGB
-        case 0x84EE: // GL_COMPRESSED_RGBA
-        case 0x8C48: // GL_COMPRESSED_SRGB
-        case 0x8C49: // GL_COMPRESSED_SRGB_ALPHA
-            return true;
-        default:
-            break;
-        }
-        return (internalformat >= 0x83F0 && internalformat <= 0x83F3) || // S3TC / DXT
-               (internalformat >= 0x8DBB && internalformat <= 0x8DBE) || // RGTC
-               (internalformat >= 0x8E8C && internalformat <= 0x8E8F) || // BPTC
-               (internalformat >= 0x9270 && internalformat <= 0x9279) || // ETC2 / EAC
-               (internalformat >= 0x93B0 && internalformat <= 0x93BD) || // ASTC LDR
-               (internalformat >= 0x93D0 && internalformat <= 0x93DD);   // ASTC sRGB
     }
 
     void TextureStorage3D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,
@@ -4704,6 +4754,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                     textureUploadTarget, static_cast<Uint>(level), internalformat, nullptr,
                     MG_Util::CalculateCompressedTextureImageSize(compressedInfo,
                                                                  {levelWidth, levelHeight, levelDepth}));
+            }
+            if (IsCompressedGLInternalFormat(internalformat)) {
+                // Also after AllocateStorage. The generic enums land here and nowhere above,
+                // and glClearTexImage has to refuse them too (GL 4.6 core 8.19).
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget,
+                                                                        static_cast<Uint>(level), internalformat);
             }
         }
         // See TextureStorage1D.

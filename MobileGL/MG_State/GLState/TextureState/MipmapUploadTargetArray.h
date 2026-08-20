@@ -111,6 +111,16 @@ namespace MobileGL {
                     return m_storage[targetIndex].MapCompressedData(level);
                 }
 
+                void SetRequestedCompressedFormat(Uint targetIndex, Uint level, GLenum internalFormat) {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "SetRequestedCompressedFormat: target invalid");
+                    m_storage[targetIndex].SetRequestedCompressedFormat(level, internalFormat);
+                }
+
+                GLenum GetRequestedCompressedFormat(Uint targetIndex, Uint level) const {
+                    MOBILEGL_ASSERT(targetIndex < TargetCount, "GetRequestedCompressedFormat: target invalid");
+                    return m_storage[targetIndex].GetRequestedCompressedFormat(level);
+                }
+
             protected:
                 Array<MipmapStorage, TargetCount> m_storage;
             };

@@ -96,6 +96,18 @@ namespace MobileGL {
                 SizeT GetCompressedByteSize(Uint level) const;
                 const void* MapCompressedData(Uint level) const;
 
+                // The compressed internalformat the application ASKED for, which is not the same
+                // question as the one above: the six generic GL_COMPRESSED_* enums let the
+                // implementation choose, MobileGL chooses uncompressed storage, and the level is
+                // deliberately left untagged so GL_TEXTURE_COMPRESSED keeps answering false and
+                // glGetCompressedTexImage is not handed a blob nothing ever compressed. The entry
+                // points that must refuse a compressed image outright (glClearTexImage /
+                // glClearTexSubImage, GL 4.6 core 8.19) still need to know, so the request is
+                // recorded separately. Set right after AllocateLevel, which clears it.
+                void SetRequestedCompressedFormat(Uint level, GLenum internalFormat);
+                // GL_NONE when the level was not requested with a compressed internalformat.
+                GLenum GetRequestedCompressedFormat(Uint level) const;
+
             protected:
                 // Insert one clamped, non-empty write box, keeping the list disjoint
                 // and bounded (see kMaxDirtyRects).
@@ -115,6 +127,7 @@ namespace MobileGL {
                 Vector<Vector<MipmapDirtyRegion>> m_dirtyRects;
                 Vector<Vector<Uint8>> m_compressedData;
                 Vector<GLenum> m_compressedFormats;
+                Vector<GLenum> m_requestedCompressedFormats;
             };
         } // namespace GLState
     } // namespace MG_State

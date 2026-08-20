@@ -220,6 +220,15 @@ namespace MobileGL::MG_State::GLState {
         virtual GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
         virtual SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
         virtual const void* MapMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
+
+        // The compressed internalformat the level was REQUESTED with, recorded even when MobileGL
+        // answered it with uncompressed storage (the six generic GL_COMPRESSED_* enums) - see
+        // MipmapStorage. Only the entry points GL forbids on a compressed image read it.
+        virtual void SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                        GLenum internalFormat) = 0;
+        // GL_NONE when the level was not requested with a compressed internalformat.
+        virtual GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
+                                                          Uint mipmapLevel) const = 0;
     };
 
     // Cheap replacement for dynamic_cast on the hot path: TextureObjectMipmap is the
@@ -286,6 +295,9 @@ namespace MobileGL::MG_State::GLState {
         GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
         SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
         const void* MapMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
+        void SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                GLenum internalFormat) override;
+        GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const override;
 
         IntVec3 GetBaseSize() const override;
         Bool IsComplete() const override;
