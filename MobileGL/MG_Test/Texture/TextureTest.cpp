@@ -1057,6 +1057,32 @@ TEST_F(TextureTest, TexImage2DAcceptsSpecCompliantFormatCombinations) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL_STENCIL_INDEX is the unsized base format for stencil-only storage, and refusing it as an
+// internal format killed the ARB_clear_texture stencil case in its own setup - before it could
+// reach the calls it actually tests. The stencil-only transfer format stays paired with
+// stencil-only storage in both directions, which is what keeps those clears erroring.
+TEST_F(TextureTest, StencilIndexIsATextureInternalFormatPairedOnlyWithStencilStorage) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_STENCIL_INDEX, 4, 4, 0, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetFormat(), TextureInternalFormat::StencilIndex8);
+
+    // A colour transfer format against stencil storage is still INVALID_OPERATION, so the clear
+    // the conformance case makes next fails the way it is supposed to.
+    MG_Impl::GLImpl::ClearTexImage(texture, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // ...and the other direction: GL_STENCIL_INDEX against colour storage stays illegal.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, nullptr);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
 // Desktop GL table 3.3 lists GREEN and BLUE as TexImage client formats (GL CTS packed_pixels
 // rgba8_format_green/blue upload with them and verify the readback): the single input component
 // feeds the named channel, the other color channels default to 0 and alpha to 1.

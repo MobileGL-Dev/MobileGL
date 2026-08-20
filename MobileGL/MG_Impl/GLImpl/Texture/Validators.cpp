@@ -313,9 +313,13 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             return false;
         }
 
-        // TexImage in core 3.3 has no stencil-only upload path (that arrived with GL 4.4).
-        if (format == TextureInputFormat::StencilIndex) {
-            return recordInvalidOperation("STENCIL_INDEX is not a valid texture upload format");
+        // The stencil-only transfer path arrived with GL 4.4 / ARB_texture_stencil8, and only ever
+        // pairs with stencil-only storage: against a depth, depth-stencil or colour internal format
+        // STENCIL_INDEX keeps the pre-4.4 answer (GL CTS packed_pixels feeds exactly that pairing
+        // and expects INVALID_OPERATION).
+        if (format == TextureInputFormat::StencilIndex &&
+            internalFormat != TextureInternalFormat::StencilIndex8) {
+            return recordInvalidOperation("STENCIL_INDEX requires a stencil-only internal format");
         }
 
         if (IsDepthLikeInputFormat(format) != IsDepthLikeInternalFormat(internalFormat)) {

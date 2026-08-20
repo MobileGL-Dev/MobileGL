@@ -4303,8 +4303,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         // Shared format/type/internal-format matrix (packed-type pairing, depth-vs-color mismatch,
-        // integer-ness). Also rejects STENCIL_INDEX readback, which needs GL_ARB_texture_stencil8
-        // (not advertised by MobileGL).
+        // integer-ness). Also rejects a STENCIL_INDEX readback of anything but stencil-only
+        // storage, which is the only pairing GL 4.4 / ARB_texture_stencil8 ever made legal.
         if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
                 textureInputFormat, textureObject->GetFormat(), texturePixelDataType)) {
             return false;
