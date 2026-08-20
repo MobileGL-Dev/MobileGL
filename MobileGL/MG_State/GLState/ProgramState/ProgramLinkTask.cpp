@@ -497,9 +497,51 @@ namespace MobileGL::MG_State::GLState {
         spirvHandoff.reflection.uniformIndexInTProgram = artifacts.uniformIndexInTProgram;
         spirvHandoff.reflection.tProgramUniformIndexToGl = artifacts.tProgramUniformIndexToGl;
         spirvHandoff.reflection.maxUniformLocation = artifacts.maxUniformLocation;
+        spirvHandoff.spirvCacheKey = BuildSpirvCacheKey(env);
         spirvHandoff.ready = true;
         MGLOG_D("ProgramObject %u: phase A done, %zu module(s) handed to the SPIR-V job", in.externalIndex,
                 spirvHandoff.shaderTypes.size());
+    }
+
+    // The L1 key. Every input below is one that can change the SPIR-V this program
+    // generates; see the key inventory on SpirvTranslationKeyInputs.
+    //
+    // Deliberately NOT keyed on: the transform-feedback request
+    // (ResolveTransformFeedbackVaryings only READS the linked intermediates - it sets no
+    // XFB qualifier, and the ESSL capture rename happens in the backend, behind L2's own
+    // key), the fragment-output count limit (a link-failure gate, never an emission input),
+    // and reflection (verified non-mutating on this glslang pin; see the ordering note in
+    // RunBody).
+    MG_Util::ShaderTranspiler::TranslationCacheKey ProgramLinkTask::BuildSpirvCacheKey(
+        const MG_Util::ShaderTranspiler::CompileEnv& env) const {
+        using namespace MG_Util::ShaderTranspiler;
+        if (!ShaderTranslationCacheEnabled()) return {};
+
+        SpirvTranslationKeyInputs keyInputs;
+        keyInputs.envFingerprint = env.fingerprint;
+        // Always 0 on both production parse paths (ShaderCompileTask::RunCompilePipeline and
+        // ClaimParsedShader's re-parse). In the key regardless, so that a future non-zero
+        // value cannot alias a module parsed without it.
+        keyInputs.shaderCompileFlags = 0;
+        keyInputs.enableSpirvValidation = in.enableSpirvValidation;
+        keyInputs.stages.reserve(in.shaders.size());
+        for (const LinkShaderInput& shader : in.shaders) {
+            const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);
+            if (compiled.preprocessedSource.empty()) {
+                // No text to key on - an internal shader object, or an artifact this build
+                // did not populate. Refuse to key rather than key on nothing.
+                return {};
+            }
+            keyInputs.stages.push_back(SpirvTranslationKeyInputs::Stage{
+                .type = MG_Util::ConvertShaderStageToGLEnum(shader.stage),
+                .preprocessedSource = StringView(compiled.preprocessedSource)});
+        }
+        if (keyInputs.stages.empty()) return {};
+        keyInputs.explicitVertexInLocations = &in.explicitAttribLocations;
+        keyInputs.explicitFragmentOutLocations = &in.explicitFragDataLocation;
+        keyInputs.explicitFragmentOutIndices = &in.explicitFragDataIndex;
+        keyInputs.explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings;
+        return BuildSpirvTranslationKey(keyInputs);
     }
 
     Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {

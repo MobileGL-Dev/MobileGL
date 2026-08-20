@@ -194,6 +194,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.AsyncShaderCompileThreads = QueryEnvUint32("MOBILEGL_ASYNC_SHADER_COMPILE_THREADS", 0, 0, 64);
         features.AsyncOptimisticShaderStatus =
             QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
+        features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
     }
 
     inline void InitBackendType() {

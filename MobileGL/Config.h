@@ -203,6 +203,14 @@ namespace MobileGL::MG_Config {
         // immediately stay serial by their own construction). Off by default; never
         // advertise it.
         QuirkOverride AsyncOptimisticShaderStatus = QuirkOverride::Auto;
+        // MOBILEGL_SHADER_CACHE: the two-level, in-memory shader translation memo
+        // (MG_Util/ShaderTranspiler/TranslationCache.h) - L1 memoizes a linked
+        // program's sanitized SPIR-V, L2 memoizes DirectGLES's emitted ESSL. Auto
+        // is ON; ForceOff turns BOTH levels off and makes every translation run
+        // from scratch. The escape hatch exists because a wrong cache hit is a
+        // silently miscompiled shader: if a device ever renders differently with
+        // the cache on, one run with this falsy says so.
+        QuirkOverride ShaderTranslationCache = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

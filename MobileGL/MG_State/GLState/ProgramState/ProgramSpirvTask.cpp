@@ -12,6 +12,7 @@
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/SpvcSession.h>
+#include <MG_Util/ShaderTranspiler/TranslationCache.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
 #include <cstring>
@@ -152,6 +153,28 @@ namespace MobileGL::MG_State::GLState {
         using namespace MG_Util::ShaderTranspiler;
         MGLOG_D("ProgramObject %u: GenerateSpirv - start", externalIndex);
 
+        // L1 of the shader translation memo. The segment this short-circuits is the whole
+        // of GlslangToSpv plus the 11-pass SanitizeAndOptimizeBinary chain, for every stage
+        // of the program at once - ~136 us per stage on the RelWithDebInfo host measurement.
+        // The key was built at the tail of phase A (ProgramLinkTask::BuildSpirvCacheKey) and
+        // covers every input that can move these bytes; see TranslationCache.h.
+        //
+        // Note what a HIT does NOT skip: the glslang parse and link, which already happened
+        // in phase A because the frontend's whole GL query surface is built out of the
+        // TProgram they produce.
+        auto& spirvCache = GetSpirvTranslationCache();
+        const TranslationCacheKey& cacheKey = handoff.spirvCacheKey;
+        if (cacheKey.Valid()) {
+            if (const SpirvTranslationResultPtr hit = spirvCache.Find(cacheKey);
+                hit && hit->modules.size() == handoff.shaderTypes.size()) {
+                artifacts.generatedSpirv = hit->modules;
+                artifacts.spirvStatus = true;
+                MGLOG_D("ProgramObject %u: GenerateSpirv - L1 cache hit, %zu module(s) reused",
+                        externalIndex, artifacts.generatedSpirv.size());
+                return;
+            }
+        }
+
         // The shaders were parsed once, in the link-compatible (relaxed Vulkan-rules)
         // configuration, and the handoff's program linked those parses - so it IS the program
         // the backends consume. Generate SPIR-V straight from its intermediates, which the
@@ -195,6 +218,16 @@ namespace MobileGL::MG_State::GLState {
             }
         }
         artifacts.spirvStatus = allOptimized;
+
+        // Only a clean run is memoized. A failed optimizer run leaves `spv` as whatever the
+        // chain got to before it gave up, and that is exactly the binary no other program
+        // should ever be handed.
+        if (allOptimized && cacheKey.Valid()) {
+            auto payload = MakeShared<SpirvTranslationResult>();
+            payload->modules = artifacts.generatedSpirv;
+            const SizeT payloadBytes = SpirvTranslationResultBytes(*payload);
+            spirvCache.Insert(cacheKey, SpirvTranslationResultPtr(Move(payload)), payloadBytes);
+        }
     }
 
     void ProgramSpirvTask::BuildGlobalUboRouting(const ProgramLinkTask::SpirvHandoff& handoff,

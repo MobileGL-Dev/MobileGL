@@ -12,6 +12,7 @@
 #include <MG_State/GLState/ProgramState/ShaderCompileTask.h>
 #include <MG_Util/Async/JobNode.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
 namespace MobileGL::MG_State::GLState {
     // One attached shader, as the link sees it: never the ShaderObject, always a snapshot.
@@ -116,6 +117,19 @@ namespace MobileGL::MG_State::GLState {
             // for phase B after the join has moved `artifacts` away.
             ProgramObject::LinkArtifacts reflection;
 
+            // L1 shader-translation memo key for this program's SPIR-V (see
+            // MG_Util/ShaderTranspiler/TranslationCache.h). Built HERE, at the tail of phase
+            // A, and not by phase B - two reasons, both structural:
+            //   * the key covers the four link-time request maps and the merged opaque
+            //     bindings, and one of those (explicitOpaqueUniformBindings) lives in
+            //     `artifacts`, which phase B is forbidden to read because the GL-thread join
+            //     moves it out from under phase B;
+            //   * built once, it serves both the lookup and the insert, so the program's
+            //     sources are copied into the blob exactly once per link.
+            // Invalid (null blob) when the cache is disabled, or when a stage arrived
+            // without preprocessed source - in which case phase B simply translates.
+            MG_Util::ShaderTranspiler::TranslationCacheKey spirvCacheKey;
+
             // The one flag phase B tests before doing anything: false means this link never
             // reached the tail of RunBody (it failed, or was cancelled mid-body).
             Bool ready = false;
@@ -143,6 +157,13 @@ namespace MobileGL::MG_State::GLState {
         // Each returns false to abort the link with `artifacts.infoLog` already set, which is
         // GL's definition of a failed link: LINK_STATUS false plus a log, never a GL error.
         Bool ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders);
+
+        // The L1 memo key for the SPIR-V this program is about to generate, or an invalid
+        // key when the cache is off or a stage has no preprocessed source to key on.
+        // Called at the tail of RunBody, where every input it needs is still owned by this
+        // node and `artifacts` has not yet been published.
+        MG_Util::ShaderTranspiler::TranslationCacheKey BuildSpirvCacheKey(
+            const MG_Util::ShaderTranspiler::CompileEnv& env) const;
         Bool DoReflection(const MG_Util::ShaderTranspiler::CompileEnv& env);
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();

@@ -18,6 +18,7 @@
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
 #include <atomic>
 #include <mutex>
@@ -72,6 +73,12 @@ namespace MobileGL {
             // built-in symbol tables the prewarm latch stands for, so leaving it set would
             // make the next Initialize() skip a prewarm it genuinely needs.
             MG_Util::ShaderTranspiler::ShaderCompiler::ResetPrewarmLatch();
+            // The two-level translation memo. Nothing in it references a glslang object -
+            // both levels hold plain bytes - so this is RSS hygiene rather than a lifetime
+            // requirement, and it is safe either side of FinalizeProcess. Stats first: an
+            // fordebug build gets one line per level saying how the run went.
+            MG_Util::ShaderTranspiler::LogShaderTranslationCacheStats();
+            MG_Util::ShaderTranspiler::ClearShaderTranslationCaches();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
             if (logLifecycle) {
