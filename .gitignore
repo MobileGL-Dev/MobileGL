@@ -27,3 +27,4 @@ MobileGL/MG*/cmake-build*
 tools/trace_replay/work/
 __pycache__/
 *.py[cod]
+/.gradle
