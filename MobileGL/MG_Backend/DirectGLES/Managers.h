@@ -1076,6 +1076,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     namespace PrgramImpl {
+        // Defined further down, next to CollectImageFormatBakeInputs; only referenced here.
+        struct ImageFormatBakeInputs;
+
         class BackendProgramObjectImpl {
         public:
             // Per-link cache of a sampler-style uniform's backend location: built once in
@@ -1208,6 +1211,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         private:
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
+
+            // One stage's SPIR-V through the DirectGLES pass chain and SPIRV-Cross, producing
+            // the raw emitted ESSL and the interface blocks this stage's XFB flattening
+            // rewrote. This is the segment the L2 shader-translation memo keys on, so every
+            // input it reads must appear in EsslTranslationKeyInputs - see the definition's
+            // header comment in Managers.cpp and MG_Util/ShaderTranspiler/TranslationCache.h.
+            // False means SPIRV-Cross refused the module; `outError` then carries its message.
+            Bool TranspileSpirvToEssl(const Vector<unsigned int>& spirvCode, GLenum glShaderType,
+                                      const std::set<String>& xfbCaptureBlockNames,
+                                      const ImageFormatBakeInputs& imageFormatBake,
+                                      const UnorderedMap<String, Int>& storageBlockBindingOverrides,
+                                      Bool enableSpirvValidation, String& outSource,
+                                      std::set<String>& outFlattenedXfbBlockNames,
+                                      String& outError) const;
 
             Uint m_backendProgramId = 0;
             // GL name of the frontend program this was last synced from; diagnostics only, so

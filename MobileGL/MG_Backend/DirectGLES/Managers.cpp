@@ -12,6 +12,7 @@
 #include "BackendObject_DirectGLES.h"
 #include <Config.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -80,6 +81,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return filter;
         }
     }
+
+    // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so this is the floor MobileGL
+    // advertises whatever the ES driver reports. It steers ClampMultisampleFetchesForEssl
+    // AND is part of the L2 translation-memo key, so the transpile and the key must read
+    // the same constant - hence one definition rather than two locals.
+    // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples(): this is
+    // backend code and must not reach into the GL frontend. 4 is that translation unit's
+    // kFrontendMaxSamples, which is the source of truth - keep the two in step.
+    constexpr Int kFrontendMaxSamples = 4;
 
     static Uint ResolveBackendEsslVersion() {
         const auto& version = g_GLESCapabilities.GLESVersion;
@@ -4751,6 +4761,283 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return ComputeImageUnitFormatSignature() == m_imageUnitFormatSignature;
         }
 
+
+        // ===== THE MEMOIZED SEGMENT (shader translation memo, level 2) =====
+        //
+        // One stage's sanitized SPIR-V turned into the ESSL SPIRV-Cross emits, through the
+        // DirectGLES-specific pass chain. Extracted out of SyncToBackend's loop so that the
+        // boundary the L2 memo keys on is a function signature rather than a comment: every
+        // input this reads is either an argument below or a process-global capability bit,
+        // and EVERY ONE OF THEM IS IN EsslTranslationKeyInputs. If you add a read here, add
+        // it to BuildEsslTranslationKey too - an under-specified key here is a silently
+        // miscompiled shader.
+        //
+        // Reads (audited): the arguments; g_GLESCapabilities.{SupportsViewportArray,
+        // MaxSamples, MaxColorTextureSamples, MaxIntegerSamples, MaxDepthTextureSamples,
+        // SupportsNoperspectiveInterpolation, GLESVersion} (the last via
+        // ResolveBackendEsslVersion); and m_backendProgramId, for a log line only.
+        //
+        // Deliberately NOT in here, and therefore NOT in the key: the text-level passes that
+        // follow in SyncToBackend. They are cheap string work and they read a long tail of
+        // live per-program state (RebindImageUniformsToFrontendUnits walks the ProgramObject
+        // reflection, the norm-clamp masks and the fragColor broadcast count are live
+        // globals, the buffer-texture tier retargets an #extension line) whose inclusion
+        // would make the key both enormous and fragile for no measurable saving.
+        //
+        // Returns false when SPIRV-Cross refused the module; `outError` then holds its
+        // message and nothing is memoized.
+        Bool BackendProgramObjectImpl::TranspileSpirvToEssl(
+            const Vector<unsigned int>& spirvCode, const GLenum glShaderType,
+            const std::set<String>& xfbCaptureBlockNames, const ImageFormatBakeInputs& imageFormatBake,
+            const UnorderedMap<String, Int>& storageBlockBindingOverrides,
+            const Bool enableSpirvValidation, String& outSource,
+            std::set<String>& outFlattenedXfbBlockNames, String& outError) const {
+            // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
+            // plain globals (mg_*) before handing the module to SPIRV-Cross.
+            Vector<unsigned int> loweredSpirv;
+            const Vector<unsigned int>* effectiveSpirv = &spirvCode;
+            if (glShaderType == GL_VERTEX_SHADER &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv, enableSpirvValidation) &&
+                !loweredSpirv.empty()) {
+                effectiveSpirv = &loweredSpirv;
+            }
+
+            // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
+            // there IS an extension that provides it - so this runs only when the driver does
+            // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
+            // gets the `#extension` request added to the decompiled source below instead.
+            // Demoting the builtin costs the multi-viewport routing (every invocation lands in
+            // viewport 0), which is the degradation ViewportArrayScenario already documents
+            // for this backend; NOT demoting it costs the whole program, because the stage
+            // fails to compile and every draw made with it silently renders nothing.
+            // Gated on the module actually declaring the output, so no other stage pays an
+            // optimizer round trip for it.
+            // One parse of the module answers every armed pass gate below. The per-gate
+            // Declares* probes each cost a BuildModule per stage, and on a driver where both
+            // gates are armed (Mali: no GL_OES_viewport_array AND integer multisample
+            // squeezed to 1) the doubled parse made compile-heavy workloads ~10% slower.
+            // Probing the pre-lowering module is sound for both gates: demoting
+            // gl_ViewportIndex neither adds nor removes multisampled image types.
+            // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
+            // this is backend code and must not reach into the GL frontend. 4 is that
+            // translation unit's kFrontendMaxSamples, which is the source of truth -
+            // keep the two in step.
+            const Int advertisedMaxSamples =
+                std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+            const Bool viewportLoweringArmed = !g_GLESCapabilities.SupportsViewportArray;
+            const Bool sampleClampArmed =
+                g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
+                g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
+                g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
+            MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
+            if (viewportLoweringArmed || sampleClampArmed) {
+                spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
+                    *effectiveSpirv);
+            }
+
+            Vector<unsigned int> loweredViewportSpirv;
+            if (viewportLoweringArmed && spirvGates.WritesViewportIndexOutput &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::LowerViewportIndexForEssl(
+                    *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
+                !loweredViewportSpirv.empty()) {
+                effectiveSpirv = &loweredViewportSpirv;
+                MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which this ES driver has "
+                        "no GL_OES_viewport_array for. The builtin was demoted to a plain "
+                        "global; every invocation renders into viewport 0.",
+                        m_backendProgramId,
+                        MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+            }
+
+            // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
+            // ceiling MobileGL advertises is floored to 4 no matter what the ES driver
+            // reports - but the realised allocation cannot be, and
+            // ClampSamplesToBackendSupport quietly gives an integer or depth multisample
+            // texture the ONE sample Adreno and Mali actually support for it. A shader
+            // written against the advertised ceiling then fetches a sample that storage does
+            // not have and reads garbage; KHR-GL33/40/41.texture_swizzle.functional_* and
+            // KHR-GLxx.texture_size_promotion.functional bake exactly that literal in. Clamp
+            // the Sample operand to the backend-real per-category maximum so the fetch lands
+            // inside the allocation. Gated on some category actually being squeezed AND the
+            // module actually declaring a multisampled image, so no other stage pays an
+            // optimizer round trip for it. DirectVulkan is deliberately not given this: it
+            // allocates the sample count it was asked for, so its modules are already right.
+            Vector<unsigned int> clampedSampleSpirv;
+            if (sampleClampArmed && spirvGates.DeclaresMultisampledImage &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
+                    *effectiveSpirv, clampedSampleSpirv,
+                    g_GLESCapabilities.MaxColorTextureSamples,
+                    g_GLESCapabilities.MaxIntegerSamples,
+                    g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
+                    enableSpirvValidation) &&
+                !clampedSampleSpirv.empty()) {
+                effectiveSpirv = &clampedSampleSpirv;
+            }
+
+            // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
+            // rather than emulating them, so this has to happen before it sees the binary.
+            Vector<unsigned int> splitArrayInputSpirv;
+            if (glShaderType == GL_VERTEX_SHADER &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::SplitArrayVertexInputsForEssl(
+                    *effectiveSpirv, splitArrayInputSpirv, enableSpirvValidation) &&
+                !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
+                // Only when the pass ACTUALLY split something. The optimizer hands back a
+                // re-serialised copy either way, and adopting that copy for every vertex
+                // shader would put every one of them through a round trip they do not need
+                // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
+                // first time this gate was missing.
+                effectiveSpirv = &splitArrayInputSpirv;
+            }
+
+            // Adopt the rewritten module only when THIS stage actually had one of the
+            // blocks - the optimizer hands back a re-serialised copy either way, and taking
+            // that copy for a module it did not rewrite is not free (it cost the
+            // create-indirect retrace 0.15 SSIM when the array-input split first missed
+            // this gate). The report has to be per stage, not cumulative: a fragment shader
+            // consuming the same block reports a name the vertex stage already reported,
+            // and its own rewrite must still be taken or the two stages stop matching.
+            Vector<unsigned int> flattenedXfbSpirv;
+            if (!xfbCaptureBlockNames.empty()) {
+                // Reported into a local first, and published only if the module is really
+                // adopted. The caller unions the published set unconditionally (so that a
+                // cache HIT contributes its names too), so publishing a name for a rewrite
+                // that was declined would rename a capture the emitted ESSL never renamed.
+                std::set<String> flattenedNames;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(
+                        *effectiveSpirv, xfbCaptureBlockNames, flattenedNames, flattenedXfbSpirv,
+                        enableSpirvValidation) &&
+                    !flattenedXfbSpirv.empty() && !flattenedNames.empty()) {
+                    effectiveSpirv = &flattenedXfbSpirv;
+                    outFlattenedXfbBlockNames = Move(flattenedNames);
+                }
+            }
+
+            // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
+            // a RelaxedPrecision member as explicit "mediump" in the vertex stage and as
+            // UNQUALIFIED (mediump-by-default) in the fragment stage; after
+            // ForceSupporterOutput swaps the fragment header to highp, that member reads
+            // back as highp and the ES driver refuses to link ("definitions of uniform
+            // block ... do not match"). Strip the hint from block structs so both stages
+            // declare the member highp; nothing else about emission changes.
+            Vector<unsigned int> uboPrecisionSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(
+                    *effectiveSpirv, uboPrecisionSpirv, enableSpirvValidation) &&
+                !uboPrecisionSpirv.empty()) {
+                effectiveSpirv = &uboPrecisionSpirv;
+            }
+
+            // noperspective is core desktop GLSL and reaches here as the SPIR-V NoPerspective
+            // decoration. SPIRV-Cross renders it as ESSL `noperspective` + `#extension
+            // GL_NV_shader_noperspective_interpolation : require`; a driver without that extension
+            // rejects the require. So on such devices emulate screen-linear interpolation instead
+            // (pre-multiply outputs by gl_Position.w, recover inputs via gl_FragCoord.w) and drop
+            // the decoration - exact, extension-free. Devices that have the extension keep the
+            // decoration and let the hardware do it natively.
+            Vector<unsigned int> noperspectiveSpirv;
+            if (!g_GLESCapabilities.SupportsNoperspectiveInterpolation &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::EmulateNoPerspectiveForEssl(
+                    *effectiveSpirv, noperspectiveSpirv, enableSpirvValidation) &&
+                !noperspectiveSpirv.empty()) {
+                effectiveSpirv = &noperspectiveSpirv;
+            }
+
+            // ES has no rectangle sampler, and SPIRV-Cross refuses the whole module rather
+            // than approximating one. The shared pass turns the type into the 2D one and
+            // divides the coordinate of every normalized-coordinate lookup by the texture
+            // size, which is the whole of the difference between the two.
+            Vector<unsigned int> rectLoweredSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv, enableSpirvValidation) &&
+                !rectLoweredSpirv.empty()) {
+                effectiveSpirv = &rectLoweredSpirv;
+            }
+
+            // ES has no 1D texture at all, so a 1D ARRAY is stored as a 2D array with height
+            // 1 (MapToBackendTextureTarget / GetBackendUploadSize). SPIRV-Cross emulates 1D
+            // as 2D for images without ever asking whether the type is arrayed, so a
+            // 1D-array image comes out as ivec2(ivec2(u, layer), 0) - three components in a
+            // two-component constructor, which every driver rejects, taking the whole
+            // program with it. The pass does the conversion properly - type to 2D array,
+            // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
+            Vector<unsigned int> arrayImageSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
+                                                                                      arrayImageSpirv, enableSpirvValidation) &&
+                !arrayImageSpirv.empty()) {
+                effectiveSpirv = &arrayImageSpirv;
+            }
+
+            // GLSL ES has no format-less image: `writeonly uniform uimage2D` is legal desktop
+            // GLSL 4.2 and an Adreno ES compile error ("all images have to define layout
+            // format"), which loses the whole program. Give each such image the format the
+            // application bound to its unit - the one GL's format-class rules make correct -
+            // so SPIRV-Cross prints a qualifier. AFTER the 1D-array lowering above, which
+            // also rewrites image types, so this one is looking at the final shapes.
+            //
+            // Gated on the module actually declaring one: the map is empty for every program
+            // whose images all declare formats, and the cheap probe keeps a program that has
+            // an unbound format-less image from paying an optimizer round trip per stage.
+            Vector<unsigned int> imageFormatSpirv;
+            if (!imageFormatBake.glFormatByUniformName.empty() &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
+                    *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv,
+                    enableSpirvValidation) &&
+                !imageFormatSpirv.empty()) {
+                effectiveSpirv = &imageFormatSpirv;
+            }
+
+            // GLSL ES demands a constant integral expression to index a fragment output
+            // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
+            // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
+            // outright ("array indexes for fragment outputs must be constant integral
+            // expressions"), linking no program and silently no-oping every draw that
+            // uses it. Mesa accepts it, ANGLE does not - which is the whole of the
+            // improved-transparency-minecraft-26.3 failure. Fold or lower the index here,
+            // on the ESSL path only: the same module is legal for DirectVulkan.
+            Vector<unsigned int> outputIndexSpirv;
+            if (glShaderType == GL_FRAGMENT_SHADER &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(
+                    *effectiveSpirv, outputIndexSpirv, enableSpirvValidation) &&
+                !outputIndexSpirv.empty()) {
+                effectiveSpirv = &outputIndexSpirv;
+            }
+
+            MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
+                MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+
+            spvc_compiler_options options;
+            spvcSession.CreateOptions(&options);
+
+            spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
+                                           ResolveBackendEsslVersion());
+            spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+            spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
+
+            spvcSession.SetOptions(options);
+
+            // ES fixes a storage block's binding at link from its layout(binding=) qualifier
+            // and has no glShaderStorageBlockBinding to move it afterwards, so a rebinding
+            // can only be honoured by printing it INTO the qualifier. Rewriting the Binding
+            // decoration before SPIRV-Cross emits is what does that; RemoveLayoutBinding
+            // then deliberately preserves the qualifier for `buffer` declarations.
+            if (!storageBlockBindingOverrides.empty()) { // empty for almost every program
+                spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
+            }
+
+            const char* result = nullptr;
+            spvcSession.Compile(&result);
+
+            if (!result) {
+                // The caller owns the diagnostic: it is the one that knows the
+                // frontend program id, and a failed transpile must NOT be memoized -
+                // the message names the stage and is worth re-emitting every time.
+                const char* lastError = spvcSession.GetLastErrorString();
+                outError = lastError ? lastError : "";
+                return false;
+            }
+
+            outSource = result;
+            return true;
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -4889,254 +5176,79 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                // ESSL cannot express gl_DrawID/gl_BaseInstance/gl_BaseVertex; demote them to
-                // plain globals (mg_*) before handing the module to SPIRV-Cross.
-                Vector<unsigned int> loweredSpirv;
-                const Vector<unsigned int>* effectiveSpirv = &spirvCode;
-                if (glShaderType == GL_VERTEX_SHADER &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv, enableSpirvValidation) &&
-                    !loweredSpirv.empty()) {
-                    effectiveSpirv = &loweredSpirv;
-                }
-
-                // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
-                // there IS an extension that provides it - so this runs only when the driver does
-                // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
-                // gets the `#extension` request added to the decompiled source below instead.
-                // Demoting the builtin costs the multi-viewport routing (every invocation lands in
-                // viewport 0), which is the degradation ViewportArrayScenario already documents
-                // for this backend; NOT demoting it costs the whole program, because the stage
-                // fails to compile and every draw made with it silently renders nothing.
-                // Gated on the module actually declaring the output, so no other stage pays an
-                // optimizer round trip for it.
-                // One parse of the module answers every armed pass gate below. The per-gate
-                // Declares* probes each cost a BuildModule per stage, and on a driver where both
-                // gates are armed (Mali: no GL_OES_viewport_array AND integer multisample
-                // squeezed to 1) the doubled parse made compile-heavy workloads ~10% slower.
-                // Probing the pre-lowering module is sound for both gates: demoting
-                // gl_ViewportIndex neither adds nor removes multisampled image types.
-                // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
-                // this is backend code and must not reach into the GL frontend. 4 is that
-                // translation unit's kFrontendMaxSamples, which is the source of truth -
-                // keep the two in step.
-                constexpr Int kFrontendMaxSamples = 4;
-                const Int advertisedMaxSamples =
+                // ---- L2 of the shader translation memo -------------------------------
+                // The whole DirectGLES SPIR-V pass chain plus SPIRV-Cross for this stage,
+                // memoized on the module bytes and on every capability bit and per-program
+                // input that steers them. See TranslationCache.h for the key inventory and
+                // for why the text-level passes below stay outside the boundary.
+                MG_Util::ShaderTranspiler::EsslTranslationKeyInputs esslKeyInputs;
+                esslKeyInputs.spirv = &spirvCode;
+                esslKeyInputs.shaderType = glShaderType;
+                esslKeyInputs.supportsViewportArray = g_GLESCapabilities.SupportsViewportArray;
+                esslKeyInputs.supportsNoperspectiveInterpolation =
+                    g_GLESCapabilities.SupportsNoperspectiveInterpolation;
+                esslKeyInputs.maxColorTextureSamples = g_GLESCapabilities.MaxColorTextureSamples;
+                esslKeyInputs.maxIntegerSamples = g_GLESCapabilities.MaxIntegerSamples;
+                esslKeyInputs.maxDepthTextureSamples = g_GLESCapabilities.MaxDepthTextureSamples;
+                esslKeyInputs.advertisedMaxSamples =
                     std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
-                const Bool viewportLoweringArmed = !g_GLESCapabilities.SupportsViewportArray;
-                const Bool sampleClampArmed =
-                    g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
-                    g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
-                    g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
-                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
-                if (viewportLoweringArmed || sampleClampArmed) {
-                    spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
-                        *effectiveSpirv);
+                esslKeyInputs.xfbCaptureBlockNames = &xfbCaptureBlockNames;
+                esslKeyInputs.glFormatByUniformName = &imageFormatBake.glFormatByUniformName;
+                esslKeyInputs.storageBlockBindingOverrides = &storageBlockBindingOverrides;
+                esslKeyInputs.esslVersion = ResolveBackendEsslVersion();
+                esslKeyInputs.enableSpirvValidation = enableSpirvValidation;
+
+                auto& esslCache = MG_Util::ShaderTranspiler::GetEsslTranslationCache();
+                MG_Util::ShaderTranspiler::TranslationCacheKey esslCacheKey;
+                if (MG_Util::ShaderTranspiler::ShaderTranslationCacheEnabled()) {
+                    esslCacheKey = MG_Util::ShaderTranspiler::BuildEsslTranslationKey(esslKeyInputs);
                 }
 
-                Vector<unsigned int> loweredViewportSpirv;
-                if (viewportLoweringArmed && spirvGates.WritesViewportIndexOutput &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerViewportIndexForEssl(
-                        *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
-                    !loweredViewportSpirv.empty()) {
-                    effectiveSpirv = &loweredViewportSpirv;
-                    MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which this ES driver has "
-                            "no GL_OES_viewport_array for. The builtin was demoted to a plain "
-                            "global; every invocation renders into viewport 0.",
-                            m_backendProgramId,
-                            MG_Util::ConvertGLEnumToString(glShaderType).c_str());
-                }
-
-                // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
-                // ceiling MobileGL advertises is floored to 4 no matter what the ES driver
-                // reports - but the realised allocation cannot be, and
-                // ClampSamplesToBackendSupport quietly gives an integer or depth multisample
-                // texture the ONE sample Adreno and Mali actually support for it. A shader
-                // written against the advertised ceiling then fetches a sample that storage does
-                // not have and reads garbage; KHR-GL33/40/41.texture_swizzle.functional_* and
-                // KHR-GLxx.texture_size_promotion.functional bake exactly that literal in. Clamp
-                // the Sample operand to the backend-real per-category maximum so the fetch lands
-                // inside the allocation. Gated on some category actually being squeezed AND the
-                // module actually declaring a multisampled image, so no other stage pays an
-                // optimizer round trip for it. DirectVulkan is deliberately not given this: it
-                // allocates the sample count it was asked for, so its modules are already right.
-                Vector<unsigned int> clampedSampleSpirv;
-                if (sampleClampArmed && spirvGates.DeclaresMultisampledImage &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
-                        *effectiveSpirv, clampedSampleSpirv,
-                        g_GLESCapabilities.MaxColorTextureSamples,
-                        g_GLESCapabilities.MaxIntegerSamples,
-                        g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
-                        enableSpirvValidation) &&
-                    !clampedSampleSpirv.empty()) {
-                    effectiveSpirv = &clampedSampleSpirv;
-                }
-
-                // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
-                // rather than emulating them, so this has to happen before it sees the binary.
-                Vector<unsigned int> splitArrayInputSpirv;
-                if (glShaderType == GL_VERTEX_SHADER &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::SplitArrayVertexInputsForEssl(
-                        *effectiveSpirv, splitArrayInputSpirv, enableSpirvValidation) &&
-                    !splitArrayInputSpirv.empty() && splitArrayInputSpirv != *effectiveSpirv) {
-                    // Only when the pass ACTUALLY split something. The optimizer hands back a
-                    // re-serialised copy either way, and adopting that copy for every vertex
-                    // shader would put every one of them through a round trip they do not need
-                    // - which is not free: it cost the create-indirect retrace 0.15 SSIM the
-                    // first time this gate was missing.
-                    effectiveSpirv = &splitArrayInputSpirv;
-                }
-
-                // Adopt the rewritten module only when THIS stage actually had one of the
-                // blocks - the optimizer hands back a re-serialised copy either way, and taking
-                // that copy for a module it did not rewrite is not free (it cost the
-                // create-indirect retrace 0.15 SSIM when the array-input split first missed
-                // this gate). The report has to be per stage, not cumulative: a fragment shader
-                // consuming the same block reports a name the vertex stage already reported,
-                // and its own rewrite must still be taken or the two stages stop matching.
-                Vector<unsigned int> flattenedXfbSpirv;
                 std::set<String> stageFlattenedXfbBlockNames;
-                if (!xfbCaptureBlockNames.empty() &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(
-                        *effectiveSpirv, xfbCaptureBlockNames, stageFlattenedXfbBlockNames,
-                        flattenedXfbSpirv, enableSpirvValidation) &&
-                    !flattenedXfbSpirv.empty() && !stageFlattenedXfbBlockNames.empty()) {
-                    effectiveSpirv = &flattenedXfbSpirv;
-                    flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
-                                                  stageFlattenedXfbBlockNames.end());
+                const MG_Util::ShaderTranspiler::EsslTranslationResultPtr esslHit =
+                    esslCacheKey.Valid() ? esslCache.Find(esslCacheKey) : nullptr;
+                if (esslHit) {
+                    source = esslHit->essl;
+                    stageFlattenedXfbBlockNames = esslHit->flattenedXfbBlockNames;
+                } else {
+                    String transpileError;
+                    if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames,
+                                              imageFormatBake, storageBlockBindingOverrides,
+                                              enableSpirvValidation, source,
+                                              stageFlattenedXfbBlockNames, transpileError)) {
+                        // MGLOG_E, unlatched, like the compile- and link-failure diagnostics
+                        // below: one line per failing stage is bounded by program count and
+                        // naming the stage is the entire diagnostic value. A stage that never
+                        // reaches the driver leaves the program short of that stage, so the link
+                        // fails with an EMPTY driver info log - the least debuggable failure
+                        // MobileGL can produce, and what hid the whole
+                        // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
+                        MGLOG_E("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
+                                "SPIRV-Cross error: %s",
+                                stateProgramObject->GetExternalIndex(),
+                                MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                                transpileError.c_str());
+                        m_backendProgramUsable = false;
+                        continue;
+                    }
+                    if (esslCacheKey.Valid()) {
+                        auto payload = MakeShared<MG_Util::ShaderTranspiler::EsslTranslationResult>();
+                        payload->essl = source;
+                        payload->flattenedXfbBlockNames = stageFlattenedXfbBlockNames;
+                        const SizeT payloadBytes =
+                            MG_Util::ShaderTranspiler::EsslTranslationResultBytes(*payload);
+                        esslCache.Insert(
+                            esslCacheKey,
+                            MG_Util::ShaderTranspiler::EsslTranslationResultPtr(Move(payload)),
+                            payloadBytes);
+                    }
                 }
-
-                // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
-                // a RelaxedPrecision member as explicit "mediump" in the vertex stage and as
-                // UNQUALIFIED (mediump-by-default) in the fragment stage; after
-                // ForceSupporterOutput swaps the fragment header to highp, that member reads
-                // back as highp and the ES driver refuses to link ("definitions of uniform
-                // block ... do not match"). Strip the hint from block structs so both stages
-                // declare the member highp; nothing else about emission changes.
-                Vector<unsigned int> uboPrecisionSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(
-                        *effectiveSpirv, uboPrecisionSpirv, enableSpirvValidation) &&
-                    !uboPrecisionSpirv.empty()) {
-                    effectiveSpirv = &uboPrecisionSpirv;
-                }
-
-                // noperspective is core desktop GLSL and reaches here as the SPIR-V NoPerspective
-                // decoration. SPIRV-Cross renders it as ESSL `noperspective` + `#extension
-                // GL_NV_shader_noperspective_interpolation : require`; a driver without that extension
-                // rejects the require. So on such devices emulate screen-linear interpolation instead
-                // (pre-multiply outputs by gl_Position.w, recover inputs via gl_FragCoord.w) and drop
-                // the decoration - exact, extension-free. Devices that have the extension keep the
-                // decoration and let the hardware do it natively.
-                Vector<unsigned int> noperspectiveSpirv;
-                if (!g_GLESCapabilities.SupportsNoperspectiveInterpolation &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::EmulateNoPerspectiveForEssl(
-                        *effectiveSpirv, noperspectiveSpirv, enableSpirvValidation) &&
-                    !noperspectiveSpirv.empty()) {
-                    effectiveSpirv = &noperspectiveSpirv;
-                }
-
-                // ES has no rectangle sampler, and SPIRV-Cross refuses the whole module rather
-                // than approximating one. The shared pass turns the type into the 2D one and
-                // divides the coordinate of every normalized-coordinate lookup by the texture
-                // size, which is the whole of the difference between the two.
-                Vector<unsigned int> rectLoweredSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv, enableSpirvValidation) &&
-                    !rectLoweredSpirv.empty()) {
-                    effectiveSpirv = &rectLoweredSpirv;
-                }
-
-                // ES has no 1D texture at all, so a 1D ARRAY is stored as a 2D array with height
-                // 1 (MapToBackendTextureTarget / GetBackendUploadSize). SPIRV-Cross emulates 1D
-                // as 2D for images without ever asking whether the type is arrayed, so a
-                // 1D-array image comes out as ivec2(ivec2(u, layer), 0) - three components in a
-                // two-component constructor, which every driver rejects, taking the whole
-                // program with it. The pass does the conversion properly - type to 2D array,
-                // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
-                Vector<unsigned int> arrayImageSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
-                                                                                          arrayImageSpirv, enableSpirvValidation) &&
-                    !arrayImageSpirv.empty()) {
-                    effectiveSpirv = &arrayImageSpirv;
-                }
-
-                // GLSL ES has no format-less image: `writeonly uniform uimage2D` is legal desktop
-                // GLSL 4.2 and an Adreno ES compile error ("all images have to define layout
-                // format"), which loses the whole program. Give each such image the format the
-                // application bound to its unit - the one GL's format-class rules make correct -
-                // so SPIRV-Cross prints a qualifier. AFTER the 1D-array lowering above, which
-                // also rewrites image types, so this one is looking at the final shapes.
-                //
-                // Gated on the module actually declaring one: the map is empty for every program
-                // whose images all declare formats, and the cheap probe keeps a program that has
-                // an unbound format-less image from paying an optimizer round trip per stage.
-                Vector<unsigned int> imageFormatSpirv;
-                if (!imageFormatBake.glFormatByUniformName.empty() &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
-                        *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv,
-                        enableSpirvValidation) &&
-                    !imageFormatSpirv.empty()) {
-                    effectiveSpirv = &imageFormatSpirv;
-                }
-
-                // GLSL ES demands a constant integral expression to index a fragment output
-                // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
-                // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
-                // outright ("array indexes for fragment outputs must be constant integral
-                // expressions"), linking no program and silently no-oping every draw that
-                // uses it. Mesa accepts it, ANGLE does not - which is the whole of the
-                // improved-transparency-minecraft-26.3 failure. Fold or lower the index here,
-                // on the ESSL path only: the same module is legal for DirectVulkan.
-                Vector<unsigned int> outputIndexSpirv;
-                if (glShaderType == GL_FRAGMENT_SHADER &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(
-                        *effectiveSpirv, outputIndexSpirv, enableSpirvValidation) &&
-                    !outputIndexSpirv.empty()) {
-                    effectiveSpirv = &outputIndexSpirv;
-                }
-
-                MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
-                    MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
-
-                spvc_compiler_options options;
-                spvcSession.CreateOptions(&options);
-
-                spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
-                                               ResolveBackendEsslVersion());
-                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
-                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
-
-                spvcSession.SetOptions(options);
-
-                // ES fixes a storage block's binding at link from its layout(binding=) qualifier
-                // and has no glShaderStorageBlockBinding to move it afterwards, so a rebinding
-                // can only be honoured by printing it INTO the qualifier. Rewriting the Binding
-                // decoration before SPIRV-Cross emits is what does that; RemoveLayoutBinding
-                // then deliberately preserves the qualifier for `buffer` declarations.
-                if (!storageBlockBindingOverrides.empty()) { // empty for almost every program
-                    spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
-                }
-
-                const char* result = nullptr;
-                spvcSession.Compile(&result);
-
-                if (!result) {
-                    // MGLOG_E, unlatched, like the compile- and link-failure diagnostics below:
-                    // one line per failing stage is bounded by program count and naming the
-                    // stage is the entire diagnostic value. A stage that
-                    // never reaches the driver leaves the program short of that stage, so the
-                    // link fails with an EMPTY driver info log - the least debuggable failure
-                    // MobileGL can produce, and what hid the whole
-                    // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
-                    MGLOG_E("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
-                            "SPIRV-Cross error: %s",
-                            stateProgramObject->GetExternalIndex(),
-                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
-                            spvcSession.GetLastErrorString());
-                    m_backendProgramUsable = false;
-                    continue;
-                }
-
-                source = result;
+                // Per stage, never cumulative: a fragment shader consuming the same block
+                // reports a name the vertex stage already reported, and its own rewrite must
+                // still be taken or the two stages stop matching. Done here rather than inside
+                // the transpile so a cache HIT contributes its names too.
+                flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
+                                              stageFlattenedXfbBlockNames.end());
 
                 // Position in the chain is arbitrary: this is the only header-level rewrite, it
                 // edits #extension directives and never the body, and the replacement is the
