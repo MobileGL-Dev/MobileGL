@@ -8,6 +8,7 @@
 
 #include "BackendObject_DirectGLES.h"
 #include "MG_Backend/BackendObject.h"
+#include "MG_Backend/BackendObjects.h"
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
@@ -780,6 +781,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
                                     const MG_External::GLESCapabilities& capabilities, FormatCapabilityCache& cache) {
         PopulateFormatCapabilitiesImpl(gl, capabilities, cache);
+    }
+
+    Int ClampSamplesToBackendSupport(SizeT targetIndex, TextureInternalFormat logicalFormat, GLenum imageFormat,
+                                     Int samples) {
+        if (samples <= 1) {
+            return samples;
+        }
+
+        Int maxSamples = 0;
+        const SizeT formatIndex = static_cast<SizeT>(logicalFormat);
+        if (pActiveBackendObject && targetIndex < kFormatCapabilityTargetCount &&
+            formatIndex < kFormatCapabilityFormatCount) {
+            // Descending, so the head is the largest count this device actually allocated.
+            const Vector<Int>& probedCounts =
+                pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
+            if (!probedCounts.empty()) {
+                maxSamples = probedCounts.front();
+            }
+        }
+        if (maxSamples <= 0) {
+            maxSamples = GetGLESFormatMaxSamples(g_GLESCapabilities, logicalFormat, imageFormat);
+        }
+        return std::min(samples, std::max(maxSamples, 1));
     }
 
     BackendObject_DirectGLES::~BackendObject_DirectGLES() {

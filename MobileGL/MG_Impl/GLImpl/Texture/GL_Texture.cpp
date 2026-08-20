@@ -474,15 +474,48 @@ namespace MobileGL::MG_Impl::GLImpl {
                    target == TextureTarget::Texture2DMultisampleArray;
         }
 
-        Int GetMaxSupportedTextureSamples(TextureInternalFormat textureInternalFormat) {
+        // The largest count the backend actually probed for this format on this target, or 0 when
+        // it has no answer for the pair. Both backends build the list in descending order.
+        Int GetProbedMaxTextureSamples(TextureTarget textureTarget, TextureInternalFormat textureInternalFormat) {
+            if (MG_Backend::pActiveBackendObject == nullptr) {
+                return 0;
+            }
+            const SizeT targetIndex = MG_Backend::GetFormatCapabilityTargetIndex(textureTarget);
+            const SizeT formatIndex = static_cast<SizeT>(textureInternalFormat);
+            if (targetIndex >= MG_Backend::kFormatCapabilityTargetCount ||
+                formatIndex >= MG_Backend::kFormatCapabilityFormatCount) {
+                return 0;
+            }
+            const auto& sampleCounts =
+                MG_Backend::pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
+            return sampleCounts.empty() ? 0 : sampleCounts.front();
+        }
+
+        // The ceiling the frontend enforces, which must never be lower than the one MobileGL
+        // advertises: the CTS - and real applications - read GL_MAX_SAMPLES once and hand that
+        // exact count to glTexImage*Multisample for every format. Answering 4 there and then
+        // rejecting 4 here because the ES driver reports GL_MAX_INTEGER_SAMPLES 1 (Adreno) is a
+        // self-inconsistency, not a spec-mandated error. The backends clamp the count they hand
+        // the driver; the shadow state keeps reporting what the application asked for.
+        Int GetMaxSupportedTextureSamples(TextureTarget textureTarget,
+                                          TextureInternalFormat textureInternalFormat) {
             if (MG_Backend::pActiveBackendObject == nullptr) {
                 return std::numeric_limits<Int>::max();
+            }
+
+            const Int advertisedMaxSamples = GetAdvertisedMaxSamples();
+            // glGetInternalformativ(GL_SAMPLES) is answered from this very list (GetInternalformativ
+            // below), and GL 4.6 core 8.8 makes that query the definition of the per-format
+            // maximum - validating against anything else is how the two answers drifted apart.
+            const Int probedMaxSamples = GetProbedMaxTextureSamples(textureTarget, textureInternalFormat);
+            if (probedMaxSamples > 0) {
+                return std::max(probedMaxSamples, advertisedMaxSamples);
             }
 
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             if (MG_Util::IsDepthFormatInternalFormat(textureInternalFormat) ||
                 MG_Util::IsStencilFormatInternalFormat(textureInternalFormat)) {
-                return std::max(dynamicParameters.MaxDepthTextureSamples, 1);
+                return std::max(dynamicParameters.MaxDepthTextureSamples, advertisedMaxSamples);
             }
 
             GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
@@ -495,7 +528,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
             return std::max(isIntegerFormat ? dynamicParameters.MaxIntegerSamples
                                             : dynamicParameters.MaxColorTextureSamples,
-                            1);
+                            advertisedMaxSamples);
         }
 
         Bool ValidateTextureMultisampleStorage(TextureTarget textureTarget, GLsizei samples, GLsizei width,
@@ -532,7 +565,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // dimensions, and GL CTS's per-case state reset (gluStateReset) clears the default
             // GL_TEXTURE_2D_MULTISAMPLE_ARRAY texture with glTexImage3DMultisample(..., 0, 0, 0).
 
-            const Int maxSamples = GetMaxSupportedTextureSamples(textureInternalFormat);
+            const Int maxSamples = GetMaxSupportedTextureSamples(textureTarget, textureInternalFormat);
             if (samples > maxSamples) {
                 // GL specifies INVALID_OPERATION - not INVALID_VALUE - when the sample count
                 // exceeds what the format supports, and the native Adreno driver agrees.

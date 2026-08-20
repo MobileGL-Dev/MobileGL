@@ -422,6 +422,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     } // namespace
 
+    // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so the driver's value is floored
+    // before it is advertised. Every other multisample ceiling MobileGL advertises has to be
+    // floored the same way: promising 4 samples globally while answering GL_MAX_INTEGER_SAMPLES
+    // 1 - which is exactly what Adreno reports - makes the frontend reject the very count it
+    // just told the application to use. The backends clamp the realised count instead.
+    GLint GetAdvertisedMaxSamples() {
+        if (MG_Backend::pActiveBackendObject == nullptr) {
+            return kFrontendMaxSamples;
+        }
+        return std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, kFrontendMaxSamples);
+    }
+
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
     const GLubyte* GetString(GLenum name) {
         static String vendorString;
@@ -2117,7 +2129,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxClipDistances;
             break;
         case GL_MAX_COLOR_TEXTURE_SAMPLES:
-            *params = dynamicParameters.MaxColorTextureSamples;
+            *params = std::max(dynamicParameters.MaxColorTextureSamples, GetAdvertisedMaxSamples());
             break;
         case GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(kFrontendMaxFragmentUniformComponents,
@@ -2147,7 +2159,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxCubeMapTextureSize;
             break;
         case GL_MAX_DEPTH_TEXTURE_SAMPLES:
-            *params = dynamicParameters.MaxDepthTextureSamples;
+            *params = std::max(dynamicParameters.MaxDepthTextureSamples, GetAdvertisedMaxSamples());
             break;
         case GL_MAX_FRAMEBUFFER_WIDTH:
             *params = dynamicParameters.MaxFramebufferWidth;
@@ -2174,7 +2186,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxComputeImageUniforms;
             break;
         case GL_MAX_INTEGER_SAMPLES:
-            *params = dynamicParameters.MaxIntegerSamples;
+            *params = std::max(dynamicParameters.MaxIntegerSamples, GetAdvertisedMaxSamples());
             break;
         case GL_MAX_RENDERBUFFER_SIZE:
             *params = dynamicParameters.MaxRenderbufferSize;
@@ -2340,7 +2352,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                         : dynamicParameters.MaxDrawBuffers;
             break;
         case GL_MAX_SAMPLES:
-            *params = std::max(dynamicParameters.MaxSamples, kFrontendMaxSamples);
+            *params = GetAdvertisedMaxSamples();
             break;
         case GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT:
             // Float state (see GetFloatv); rounded to nearest for the integer query per GL 3.3 6.1.2.

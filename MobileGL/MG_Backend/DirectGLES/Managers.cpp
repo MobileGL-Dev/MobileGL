@@ -9,6 +9,7 @@
 #include "Managers.h"
 #include "Utils.h"
 #include "DirectGLES.h"
+#include "BackendObject_DirectGLES.h"
 #include <Config.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
@@ -2648,16 +2649,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
                         DebugImpl::ErrorLopper::Clear();
                         BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
+                        // The frontend validates against the count MobileGL advertises, which can
+                        // exceed what the driver takes for this format (Adreno: GL_MAX_SAMPLES 4,
+                        // GL_MAX_INTEGER_SAMPLES 1). Clamp the ES call - and only the ES call:
+                        // stateTextureObject keeps the requested count so GL_TEXTURE_SAMPLES and
+                        // framebuffer completeness still report what the application asked for.
+                        const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
+                            GetFormatCapabilityTargetIndex(targetInternal), textureMipmapObject->GetFormat(),
+                            glFormat, static_cast<Int>(stateTextureObject->GetSamples())));
                         switch (targetInternal) {
                         case TextureTarget::Texture2DMultisample:
                             g_GLESFuncs.glTexStorage2DMultisample(
-                                target, static_cast<GLsizei>(stateTextureObject->GetSamples()), glInternalFormat,
+                                target, backendSamples, glInternalFormat,
                                 static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
                                 stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
                             break;
                         case TextureTarget::Texture2DMultisampleArray:
                             g_GLESFuncs.glTexStorage3DMultisample(
-                                target, static_cast<GLsizei>(stateTextureObject->GetSamples()), glInternalFormat,
+                                target, backendSamples, glInternalFormat,
                                 static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
                                 static_cast<GLsizei>(baseSize.z()),
                                 stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
@@ -5621,9 +5630,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
 
             if (samples > 0) {
-                g_GLESFuncs.glRenderbufferStorageMultisample(
-                    GL_RENDERBUFFER, static_cast<GLsizei>(samples), glInternalFormat, static_cast<GLsizei>(width),
-                    static_cast<GLsizei>(height));
+                // Same clamp as the multisample texture path: the frontend accepts the count it
+                // advertised, the driver only takes the count it supports for this format, and
+                // the state object keeps reporting the requested one.
+                const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
+                    GetRenderbufferFormatCapabilityTargetIndex(), internalFormat, glFormat, samples));
+                g_GLESFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, backendSamples, glInternalFormat,
+                                                             static_cast<GLsizei>(width),
+                                                             static_cast<GLsizei>(height));
             } else {
                 g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
                                                   static_cast<GLsizei>(height));

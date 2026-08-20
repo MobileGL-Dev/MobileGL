@@ -18,6 +18,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     const MG_External::GLESCapabilities& capabilities,
                                     FormatCapabilityCache& cache);
 
+    // Clamps a requested sample count down to what the ES driver can really deliver for this
+    // format on this format-capability target: the probed per-format list when there is one, the
+    // driver's per-class GL_MAX_*_SAMPLES otherwise. The frontend deliberately validates against
+    // the count MobileGL advertises instead (GL_Getter's GetAdvertisedMaxSamples), which on a
+    // driver reporting GL_MAX_INTEGER_SAMPLES 1 is higher than the driver accepts, so every ES
+    // allocation call has to come through here. The shadow state keeps the requested count, so
+    // GL_TEXTURE_SAMPLES and framebuffer completeness still answer what the application asked for.
+    Int ClampSamplesToBackendSupport(SizeT targetIndex, TextureInternalFormat logicalFormat, GLenum imageFormat,
+                                     Int samples);
+
     class BackendObject_DirectGLES : public BackendObject {
     public:
         ~BackendObject_DirectGLES() override;
