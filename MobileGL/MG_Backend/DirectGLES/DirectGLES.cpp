@@ -4646,16 +4646,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return;
         }
-        if (readSamples <= 0 || drawSamples > 0 || (mask & GL_COLOR_BUFFER_BIT) == 0) {
-            return;
-        }
-        if (ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter) &&
-            (mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT)) != 0) {
+        // The combined call raised an error, so by GL 4.6 2.3.1 it wrote nothing at all: BOTH
+        // aspect groups still owe their copy, and each has to be retried on its own. Re-issuing
+        // the depth/stencil half only as a rider on a SUCCESSFUL colour resolve dropped it
+        // silently whenever the colour half could not be emulated - and on a framebuffer whose
+        // only attachment is depth it never can, because the colour emulation has no attachment
+        // to take a format from (KHR-GL33.framebuffer_blit's depth config test blits
+        // COLOR|DEPTH|STENCIL across depth-only framebuffers and kept reading the clear value).
+        const GLbitfield colourBit = mask & static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+        const GLbitfield dsBits = mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        // The colour group's one emulation is the multisample resolve that also converts format,
+        // which is the shape this names. It used to double as an early-out for the whole
+        // function, which is what cost a depth-only mask its single-aspect retry.
+        const Bool multisampleResolve = readSamples > 0 && drawSamples <= 0;
+        if (colourBit != 0) {
             DrainBlitErrors();
-            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
-                                          mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT), filter);
-            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, colourBit, filter);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                const Bool emulated =
+                    multisampleResolve &&
+                    ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);
+                if (!emulated) {
+                    MGLOG_E_ONCE("BlitFramebuffer: the colour aspect was dropped - the driver rejected it on its "
+                                 "own and no emulation applies");
+                }
+            }
         }
+        if (dsBits != 0) {
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, dsBits, filter);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                // Nothing to fall back on yet: ResolveThenBlit is colour-only and the replicate
+                // pass runs in the opposite direction, so a driver that declines a multisample
+                // depth/stencil resolve leaves the destination holding its clear value. The log
+                // is the whole diagnostic - the frontend performs no validation of its own, so
+                // this never reaches the application as a GL error.
+                MGLOG_E_ONCE("BlitFramebuffer: the depth/stencil aspect was dropped - the driver rejected it on "
+                             "its own and no emulation applies");
+            }
+        }
+        DrainBlitErrors();
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
