@@ -33,6 +33,7 @@
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
+#include "SpirvPasses/ClampMultisampleFetchPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -649,6 +650,26 @@ namespace MobileGL {
 
             bool ShaderCompiler::DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary) {
                 return LowerViewportIndexPass::DeclaresViewportIndexBuiltin(binary);
+            }
+
+            bool ShaderCompiler::ClampMultisampleFetchesForEssl(const Vector<Uint32>& inputBinary,
+                                                                Vector<uint32_t>& outputBinary,
+                                                                const Int32 maxColorSamples,
+                                                                const Int32 maxIntegerSamples,
+                                                                const Int32 maxDepthSamples,
+                                                                const Int32 advertisedMaxSamples,
+                                                                const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(
+                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples));
+
+                return RunOptimizerChecked("ClampMultisampleFetchesForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeclaresMultisampledImage(const Vector<Uint32>& binary) {
+                return ClampMultisampleFetchPass::DeclaresMultisampledImage(binary);
             }
 
             bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,

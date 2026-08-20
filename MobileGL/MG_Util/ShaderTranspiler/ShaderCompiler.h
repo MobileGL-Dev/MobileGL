@@ -46,6 +46,25 @@ namespace MobileGL {
                 // whether the pass above has anything to do. The gate that keeps every other
                 // stage off an optimizer round trip it does not need.
                 static bool DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary);
+                // Clamps the Sample image-operand of every multisample fetch to the sample count
+                // the BACKEND can really deliver for that image's category, which on Adreno and
+                // Mali is 1 for integer formats while the frontend advertises the GL-mandated
+                // floor of 4. Without it a `texelFetch(usampler2DMS, coord, 3)` reads past the
+                // end of a one-sample allocation. Pass the backend-real per-category ceilings and
+                // the advertised maximum (GL_Getter's GetAdvertisedMaxSamples); a category that
+                // already reaches the advertised value is left alone. DirectGLES transpile path
+                // only. See ClampMultisampleFetchPass.
+                static bool ClampMultisampleFetchesForEssl(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary,
+                                                           Int32 maxColorSamples,
+                                                           Int32 maxIntegerSamples,
+                                                           Int32 maxDepthSamples,
+                                                           Int32 advertisedMaxSamples,
+                                                           bool enableSpirvValidation = false);
+                // Whether the module declares any multisampled image type, i.e. whether the pass
+                // above has anything to do. The gate that keeps every other stage off an
+                // optimizer round trip it does not need.
+                static bool DeclaresMultisampledImage(const Vector<Uint32>& binary);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
                 // locations, seeding a Private copy of the array so indexed reads still work.
                 // GLSL ES has no array vertex inputs and SPIRV-Cross refuses the whole module

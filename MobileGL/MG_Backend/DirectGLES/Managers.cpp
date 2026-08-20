@@ -4923,6 +4923,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str());
                 }
 
+                // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
+                // ceiling MobileGL advertises is floored to 4 no matter what the ES driver
+                // reports - but the realised allocation cannot be, and
+                // ClampSamplesToBackendSupport quietly gives an integer or depth multisample
+                // texture the ONE sample Adreno and Mali actually support for it. A shader
+                // written against the advertised ceiling then fetches a sample that storage does
+                // not have and reads garbage; KHR-GL33/40/41.texture_swizzle.functional_* and
+                // KHR-GLxx.texture_size_promotion.functional bake exactly that literal in. Clamp
+                // the Sample operand to the backend-real per-category maximum so the fetch lands
+                // inside the allocation. Gated on some category actually being squeezed AND the
+                // module actually declaring a multisampled image, so no other stage pays an
+                // optimizer round trip for it. DirectVulkan is deliberately not given this: it
+                // allocates the sample count it was asked for, so its modules are already right.
+                Vector<unsigned int> clampedSampleSpirv;
+                {
+                    // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
+                    // this is backend code and must not reach into the GL frontend. 4 is that
+                    // translation unit's kFrontendMaxSamples, which is the source of truth -
+                    // keep the two in step.
+                    constexpr Int kFrontendMaxSamples = 4;
+                    const Int advertisedMaxSamples =
+                        std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+                    if ((g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
+                         g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
+                         g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples) &&
+                        MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresMultisampledImage(
+                            *effectiveSpirv) &&
+                        MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
+                            *effectiveSpirv, clampedSampleSpirv,
+                            g_GLESCapabilities.MaxColorTextureSamples,
+                            g_GLESCapabilities.MaxIntegerSamples,
+                            g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
+                            enableSpirvValidation) &&
+                        !clampedSampleSpirv.empty()) {
+                        effectiveSpirv = &clampedSampleSpirv;
+                    }
+                }
+
                 // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
                 // rather than emulating them, so this has to happen before it sees the binary.
                 Vector<unsigned int> splitArrayInputSpirv;
