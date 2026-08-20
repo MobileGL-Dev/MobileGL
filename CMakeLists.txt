@@ -279,6 +279,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DecoratePositionInvariantPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DemoteFloat64Pass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerDrawParametersPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerViewportIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/PackDoubleVertexInputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenXfbInterfaceBlocksPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/SplitArrayVertexInputsPass.cpp
@@ -291,6 +292,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NormalizeRectCoordinatesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/Lower1DArrayImagesPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/BakeImageFormatsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ClampMultisampleFetchPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/PrivateToEntryLocalPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripUniformLocationsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripUboMemberRelaxedPrecisionPass.cpp

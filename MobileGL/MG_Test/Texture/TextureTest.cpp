@@ -2975,6 +2975,58 @@ TEST_F(TextureTest, CtsStyleStateResetOnDefaultTexturesLeavesNoError) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_TEXTURE_2D_MULTISAMPLE_ARRAY reset failed";
 }
 
+// Clean is not enough: per GL 4.6 core 8.8 that zero-sized reset has to DEALLOCATE the image,
+// not define an empty one. gluStateReset runs it on both default multisample textures on every
+// texture unit of a 3.2+ context, and a default texture left 'defined' afterwards stops being
+// skipped by IsUndefinedDefaultTexture - it then joins the per-draw sync and bind passes on
+// every unit the reset touched and reaches an ES glTexStorage*Multisample(..., 0, 0), which ES
+// 3.1 8.19 rejects on every driver.
+TEST_F(TextureTest, ZeroSizedMultisampleTexImageDeallocatesTheImage) {
+    MG_Impl::GLImpl::ActiveTexture(GL_TEXTURE0);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    const auto& defaultMultisample = MG_State::pGLContext->GetTextureUnitObject(0)
+                                         .GetBindingSlot(TextureTarget::Texture2DMultisample)
+                                         .GetBoundObject();
+    MG_Impl::GLImpl::TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, 1, GL_RGBA8, 4, 4, GL_TRUE);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_FALSE(MG_State::GLState::IsUndefinedDefaultTexture(defaultMultisample.get()));
+
+    MG_Impl::GLImpl::TexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, 1, GL_RGBA8, 0, 0, GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(defaultMultisample.get()));
+
+    // The array target's reset also passes zero LAYERS, which deallocates just the same.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, 0);
+    const auto& defaultMultisampleArray = MG_State::pGLContext->GetTextureUnitObject(0)
+                                              .GetBindingSlot(TextureTarget::Texture2DMultisampleArray)
+                                              .GetBoundObject();
+    MG_Impl::GLImpl::TexImage3DMultisample(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, 1, GL_RGBA8, 4, 4, 2, GL_TRUE);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_FALSE(MG_State::GLState::IsUndefinedDefaultTexture(defaultMultisampleArray.get()));
+
+    MG_Impl::GLImpl::TexImage3DMultisample(GL_TEXTURE_2D_MULTISAMPLE_ARRAY, 1, GL_RGBA8, 4, 4, 0, GL_TRUE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_TRUE(MG_State::GLState::IsUndefinedDefaultTexture(defaultMultisampleArray.get()));
+
+    // The immutable forms do NOT share that leniency: GL 4.6 core 8.19 makes a size below 1
+    // INVALID_VALUE, and freezing an imageless texture as immutable would be unrecoverable.
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexStorage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, 1, GL_RGBA8, 0, 0, GL_TRUE);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    EXPECT_FALSE(MG_State::pGLContext->GetTextureUnitObject(0)
+                     .GetBindingSlot(TextureTarget::Texture2DMultisample)
+                     .GetBoundObject()
+                     ->IsImmutable());
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // ---- GL CTS packed_pixels / texture_swizzle readback root-cause regressions --------------------
 
 TEST_F(TextureTest, NormalizeLegacySizedFormatsMapToCanonicalShadowLayouts) {

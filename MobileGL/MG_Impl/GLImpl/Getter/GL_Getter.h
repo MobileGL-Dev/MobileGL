@@ -24,4 +24,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
     GLenum GetError();
     GLenum GetGraphicsResetStatus();
+    // The GL_MAX_SAMPLES value MobileGL advertises, i.e. the driver's value floored to the GL
+    // core minimum. Frontend multisample validators have to honour this ceiling for every
+    // format, otherwise MobileGL rejects a sample count it advertised itself.
+    GLint GetAdvertisedMaxSamples();
 } // namespace MobileGL::MG_Impl::GLImpl

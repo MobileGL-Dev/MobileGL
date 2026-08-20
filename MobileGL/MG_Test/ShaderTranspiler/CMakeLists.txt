@@ -9,6 +9,8 @@ add_executable(
         EmulateSubgroupsTest.cpp
         DemoteFloat64Test.cpp
         FlattenXfbInterfaceBlocksTest.cpp
+        LowerViewportIndexTest.cpp
+        ClampMultisampleFetchTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

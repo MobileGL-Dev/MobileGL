@@ -9,6 +9,7 @@
 #include "Managers.h"
 #include "Utils.h"
 #include "DirectGLES.h"
+#include "BackendObject_DirectGLES.h"
 #include <Config.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 
@@ -2648,25 +2649,59 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
                         DebugImpl::ErrorLopper::Clear();
                         BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
-                        switch (targetInternal) {
-                        case TextureTarget::Texture2DMultisample:
-                            g_GLESFuncs.glTexStorage2DMultisample(
-                                target, static_cast<GLsizei>(stateTextureObject->GetSamples()), glInternalFormat,
-                                static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
-                            break;
-                        case TextureTarget::Texture2DMultisampleArray:
-                            g_GLESFuncs.glTexStorage3DMultisample(
-                                target, static_cast<GLsizei>(stateTextureObject->GetSamples()), glInternalFormat,
-                                static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                static_cast<GLsizei>(baseSize.z()),
-                                stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
-                            break;
-                        default:
-                            MOBILEGL_ASSERT(false, "Unexpected multisample target: %d", static_cast<Int>(targetInternal));
-                            break;
+                        // The frontend validates against the count MobileGL advertises, which can
+                        // exceed what the driver takes for this format (Adreno: GL_MAX_SAMPLES 4,
+                        // GL_MAX_INTEGER_SAMPLES 1). Clamp the ES call - and only the ES call:
+                        // stateTextureObject keeps the requested count so GL_TEXTURE_SAMPLES and
+                        // framebuffer completeness still report what the application asked for.
+                        const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
+                            GetFormatCapabilityTargetIndex(targetInternal), textureMipmapObject->GetFormat(),
+                            glFormat, static_cast<Int>(stateTextureObject->GetSamples())));
+                        // ES 3.1 8.19 requires width/height (and depth, for the array target) >= 1,
+                        // so a degenerate size has nothing to allocate and must not reach the
+                        // driver. The frontend deallocates such an image rather than defining it
+                        // (GL 4.6 core 8.8), so this is belt and braces for any path that still
+                        // syncs one.
+                        const Bool hasAllocatableSize =
+                            baseSize.x() >= 1 && baseSize.y() >= 1 &&
+                            (targetInternal != TextureTarget::Texture2DMultisampleArray || baseSize.z() >= 1);
+                        if (!hasAllocatableSize) {
+                            MGLOG_D("Skipping multisample storage for texture %u: degenerate size (%d, %d, %d)",
+                                    m_backendTextureId, baseSize.x(), baseSize.y(), baseSize.z());
+                        } else {
+                            switch (targetInternal) {
+                            case TextureTarget::Texture2DMultisample:
+                                g_GLESFuncs.glTexStorage2DMultisample(
+                                    target, backendSamples, glInternalFormat,
+                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
+                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                break;
+                            case TextureTarget::Texture2DMultisampleArray:
+                                g_GLESFuncs.glTexStorage3DMultisample(
+                                    target, backendSamples, glInternalFormat,
+                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
+                                    static_cast<GLsizei>(baseSize.z()),
+                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                break;
+                            default:
+                                MOBILEGL_ASSERT(false, "Unexpected multisample target: %d",
+                                                static_cast<Int>(targetInternal));
+                                break;
+                            }
+                            m_backendStorageImmutable = true;
                         }
-                        m_backendStorageImmutable = true;
+                        // The one storage branch that cleared the ES error queue without ever
+                        // draining it again, so anything this call raised was left for an
+                        // unrelated later query to trip over. Paired with its two siblings now.
+                        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__, target,
+                                                      glInternalFormat, backendSamples](GLenum err) {
+                            MGLOG_D("%s(%s:%d) ES error: %s. glTexStorage*Multisample: target=%s, internalformat=%s, "
+                                    "samples=%d",
+                                    func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                    MG_Util::ConvertGLEnumToString(target).c_str(),
+                                    MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
+                                    static_cast<Int>(backendSamples));
+                        });
                         for (const auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
@@ -4864,6 +4899,78 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &loweredSpirv;
                 }
 
+                // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
+                // there IS an extension that provides it - so this runs only when the driver does
+                // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
+                // gets the `#extension` request added to the decompiled source below instead.
+                // Demoting the builtin costs the multi-viewport routing (every invocation lands in
+                // viewport 0), which is the degradation ViewportArrayScenario already documents
+                // for this backend; NOT demoting it costs the whole program, because the stage
+                // fails to compile and every draw made with it silently renders nothing.
+                // Gated on the module actually declaring the output, so no other stage pays an
+                // optimizer round trip for it.
+                // One parse of the module answers every armed pass gate below. The per-gate
+                // Declares* probes each cost a BuildModule per stage, and on a driver where both
+                // gates are armed (Mali: no GL_OES_viewport_array AND integer multisample
+                // squeezed to 1) the doubled parse made compile-heavy workloads ~10% slower.
+                // Probing the pre-lowering module is sound for both gates: demoting
+                // gl_ViewportIndex neither adds nor removes multisampled image types.
+                // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
+                // this is backend code and must not reach into the GL frontend. 4 is that
+                // translation unit's kFrontendMaxSamples, which is the source of truth -
+                // keep the two in step.
+                constexpr Int kFrontendMaxSamples = 4;
+                const Int advertisedMaxSamples =
+                    std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+                const Bool viewportLoweringArmed = !g_GLESCapabilities.SupportsViewportArray;
+                const Bool sampleClampArmed =
+                    g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
+                    g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
+                    g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
+                if (viewportLoweringArmed || sampleClampArmed) {
+                    spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
+                        *effectiveSpirv);
+                }
+
+                Vector<unsigned int> loweredViewportSpirv;
+                if (viewportLoweringArmed && spirvGates.WritesViewportIndexOutput &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::LowerViewportIndexForEssl(
+                        *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
+                    !loweredViewportSpirv.empty()) {
+                    effectiveSpirv = &loweredViewportSpirv;
+                    MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which this ES driver has "
+                            "no GL_OES_viewport_array for. The builtin was demoted to a plain "
+                            "global; every invocation renders into viewport 0.",
+                            m_backendProgramId,
+                            MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+                }
+
+                // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
+                // ceiling MobileGL advertises is floored to 4 no matter what the ES driver
+                // reports - but the realised allocation cannot be, and
+                // ClampSamplesToBackendSupport quietly gives an integer or depth multisample
+                // texture the ONE sample Adreno and Mali actually support for it. A shader
+                // written against the advertised ceiling then fetches a sample that storage does
+                // not have and reads garbage; KHR-GL33/40/41.texture_swizzle.functional_* and
+                // KHR-GLxx.texture_size_promotion.functional bake exactly that literal in. Clamp
+                // the Sample operand to the backend-real per-category maximum so the fetch lands
+                // inside the allocation. Gated on some category actually being squeezed AND the
+                // module actually declaring a multisampled image, so no other stage pays an
+                // optimizer round trip for it. DirectVulkan is deliberately not given this: it
+                // allocates the sample count it was asked for, so its modules are already right.
+                Vector<unsigned int> clampedSampleSpirv;
+                if (sampleClampArmed && spirvGates.DeclaresMultisampledImage &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
+                        *effectiveSpirv, clampedSampleSpirv,
+                        g_GLESCapabilities.MaxColorTextureSamples,
+                        g_GLESCapabilities.MaxIntegerSamples,
+                        g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
+                        enableSpirvValidation) &&
+                    !clampedSampleSpirv.empty()) {
+                    effectiveSpirv = &clampedSampleSpirv;
+                }
+
                 // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module
                 // rather than emulating them, so this has to happen before it sees the binary.
                 Vector<unsigned int> splitArrayInputSpirv;
@@ -5045,6 +5152,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = RequestExtendedImageFormats(std::move(source),
                                                      imageFormatBake.needsExtendedImageFormats &&
                                                          g_GLESCapabilities.SupportsExtendedImageFormats);
+                // The third header-level rewrite, for the builtin SPIRV-Cross prints bare:
+                // gl_ViewportIndex is in no version of ESSL core, so without this directive the
+                // stage does not compile and the whole program - not just its viewport routing -
+                // is lost. The token probe keeps the line off every other program and the
+                // capability gate keeps it off drivers that would hard-error on an unadvertised
+                // name; a driver without the extension took the LowerViewportIndexPass fallback
+                // above and its source no longer names the builtin at all, so the two are mutually
+                // exclusive by construction. Read `source` BEFORE it is moved from.
+                const Bool needsViewportArrayExtension = g_GLESCapabilities.SupportsViewportArray &&
+                                                         source.find("gl_ViewportIndex") != String::npos;
+                source = RequestViewportArrayExtension(std::move(source), needsViewportArrayExtension);
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 // The completion half of the format bake, for the formats SPIRV-Cross throws on
@@ -5620,14 +5738,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum glInternalFormat, glType, glFormat;
             TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
 
+            // The allocation is deferred to here, so an ES driver that refuses it (a
+            // multi-gigabyte renderbuffer is refused routinely) used to leave m_isInitialized
+            // true over a renderbuffer with no storage and say nothing at all: the attachment
+            // then rendered nowhere. Drain first so the check cannot pick up an unrelated stale
+            // flag, and report GL_OUT_OF_MEMORY to the application. The error lands on whatever
+            // entry point triggered the sync rather than on glRenderbufferStorage itself, which
+            // is where the deferred model puts it - still far better than silence.
+            DebugImpl::ErrorLopper::Clear();
             if (samples > 0) {
-                g_GLESFuncs.glRenderbufferStorageMultisample(
-                    GL_RENDERBUFFER, static_cast<GLsizei>(samples), glInternalFormat, static_cast<GLsizei>(width),
-                    static_cast<GLsizei>(height));
+                // Same clamp as the multisample texture path: the frontend accepts the count it
+                // advertised, the driver only takes the count it supports for this format, and
+                // the state object keeps reporting the requested one.
+                const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
+                    GetRenderbufferFormatCapabilityTargetIndex(), internalFormat, glFormat, samples));
+                g_GLESFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, backendSamples, glInternalFormat,
+                                                             static_cast<GLsizei>(width),
+                                                             static_cast<GLsizei>(height));
             } else {
                 g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
                                                   static_cast<GLsizei>(height));
             }
+            if (g_GLESFuncs.glGetError() == GL_OUT_OF_MEMORY) {
+                MGLOG_E_ONCE("Renderbuffer %u storage allocation ran out of memory: %dx%d, samples=%d, format=%s",
+                             stateRBOObject->GetExternalIndex(), width, height, samples,
+                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
+                if (MG_State::pGLContext) {
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::OutOfMemory,
+                        MakeUnique<GenericErrorInfo>("DirectGLES", "BackendRenderbufferObject::SyncToBackend",
+                                                     "The ES driver could not allocate the renderbuffer storage."));
+                }
+            }
+            DebugImpl::ErrorLopper::Clear();
 
             m_cacheInternalFormat = internalFormat;
             m_cacheWidth = width;

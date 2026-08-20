@@ -300,10 +300,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Clear();
         }
 #else
-        void ErrorLopper::Loop(const std::function<void(GLenum)>& func) {}
-        void ErrorLopper::Clear() {}
-        ErrorLopper::ErrorLopper() = default;
-        ErrorLopper::~ErrorLopper() = default;
+        // Error HYGIENE is not a debugging feature: every site that brackets a risky ES call with
+        // Clear()/Loop() relied on these to empty the driver's queue, and compiling them to
+        // nothing left whatever the driver raised sitting there for an unrelated later
+        // `glGetError() == GL_NO_ERROR` probe to read as its own failure. The callback stays
+        // unused because MGLOG_D is compiled out at this level, but the queue still gets drained.
+        // Bounded like DrainESErrors: a driver that never returns GL_NO_ERROR (a lost context is
+        // the usual way) must not spin here.
+        constexpr Int kMaxDrainedESErrors = 32;
+
+        void ErrorLopper::Loop(const std::function<void(GLenum)>& func) {
+            static_cast<void>(func);
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+            }
+        }
+
+        void ErrorLopper::Clear() {
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+            }
+        }
+
+        ErrorLopper::ErrorLopper() {
+            Clear();
+        }
+        ErrorLopper::~ErrorLopper() {
+            Clear();
+        }
 #endif
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
@@ -1319,6 +1341,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // is stored as an ES 2D array (MapToBackendTextureTarget), and so is layerable; asking
         // the state target instead answered "no" for it and pinned every 1D-array image binding
         // to layer 0, whatever the application passed.
+        //
+        // `layer` travels with the answer, because GL 4.6 core 8.26 (and ES 3.2 8.22, word for
+        // word) makes them one rule: "If the texture identified by texture does not have
+        // multiple layers or faces, the entire texture level is bound, regardless of the values
+        // of layered and layer." REGARDLESS means ignored - not clamped, and not an error - so
+        // the driver must not be handed a layer index the texture has no room for. Adreno takes
+        // such a request literally and leaves the image unit reading zero, which is what failed
+        // KHR-GL42.bind_image_texture.single_layer's layer:1 rows on GL_TEXTURE_2D and on the
+        // GL_TEXTURE_1D that is stored as one. Normalizing here and not in the frontend shadow
+        // is deliberate: GL_IMAGE_BINDING_LAYER must keep echoing what the application passed.
         static Bool SupportsLayeredImageBinding(TextureTarget target) {
             const TextureTarget backendTarget = TextureImpl::MapToBackendTextureTarget(target);
             return backendTarget == TextureTarget::Texture3D || backendTarget == TextureTarget::TextureCubeMap ||
@@ -1374,10 +1406,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             auto& backendTexture = SyncTextureObjectToBackend(imageBinding.Texture, true);
-            const GLboolean layered =
-                SupportsLayeredImageBinding(imageBinding.Texture->GetTarget()) ? imageBinding.Layered : GL_FALSE;
+            const Bool layerable = SupportsLayeredImageBinding(imageBinding.Texture->GetTarget());
+            const GLboolean layered = layerable ? imageBinding.Layered : GL_FALSE;
+            const GLint layer = layerable ? imageBinding.Layer : 0;
             g_GLESFuncs.glBindImageTexture(unit, backendTexture->GetBackendTextureId(), imageBinding.Level,
-                                           layered, imageBinding.Layer, imageBinding.Access, imageBinding.Format);
+                                           layered, layer, imageBinding.Access, imageBinding.Format);
         }
 
         // A buffer texture bound to a WRITABLE image unit is a buffer the shader is about to
@@ -3845,10 +3878,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
 
-    static void DrainBlitErrors() {
-        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+    // Empties the ES driver's error queue, BOUNDED. A driver that never answers GL_NO_ERROR - a
+    // lost context is the usual way, and GL_CONTEXT_LOST is allowed to keep coming back - would
+    // otherwise spin an unbounded drain forever inside whichever GL entry point happened to be
+    // cleaning up, which is how a GPU reset reads as an unkillable process whose log simply
+    // stops. A healthy context cannot queue anywhere near the cap, so reaching it IS the
+    // diagnostic. Every drain in this backend goes through here so the bound cannot drift apart
+    // between them.
+    static constexpr Int kMaxDrainedGLErrors = 32;
+
+    static void DrainDriverErrors(const char* site) {
+        Int drained = 0;
+        while (drained < kMaxDrainedGLErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+            ++drained;
+        }
+        if (drained == kMaxDrainedGLErrors) {
+            MGLOG_E_ONCE("%s: the ES driver still reported errors after %d drains - the context is most likely lost",
+                         site, kMaxDrainedGLErrors);
         }
     }
+
+    static void DrainBlitErrors() { DrainDriverErrors("BlitFramebuffer"); }
 
     // Sized internal format of the currently bound READ framebuffer's read colour
     // attachment, 0 when it cannot be determined.
@@ -4624,16 +4674,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return;
         }
-        if (readSamples <= 0 || drawSamples > 0 || (mask & GL_COLOR_BUFFER_BIT) == 0) {
-            return;
-        }
-        if (ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter) &&
-            (mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT)) != 0) {
+        // The combined call raised an error, so by GL 4.6 2.3.1 it wrote nothing at all: BOTH
+        // aspect groups still owe their copy, and each has to be retried on its own. Re-issuing
+        // the depth/stencil half only as a rider on a SUCCESSFUL colour resolve dropped it
+        // silently whenever the colour half could not be emulated - and on a framebuffer whose
+        // only attachment is depth it never can, because the colour emulation has no attachment
+        // to take a format from (KHR-GL33.framebuffer_blit's depth config test blits
+        // COLOR|DEPTH|STENCIL across depth-only framebuffers and kept reading the clear value).
+        const GLbitfield colourBit = mask & static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+        const GLbitfield dsBits = mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        // The colour group's one emulation is the multisample resolve that also converts format,
+        // which is the shape this names. It used to double as an early-out for the whole
+        // function, which is what cost a depth-only mask its single-aspect retry.
+        const Bool multisampleResolve = readSamples > 0 && drawSamples <= 0;
+        if (colourBit != 0) {
             DrainBlitErrors();
-            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
-                                          mask & ~static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT), filter);
-            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, colourBit, filter);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                const Bool emulated =
+                    multisampleResolve &&
+                    ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);
+                if (!emulated) {
+                    MGLOG_E_ONCE("BlitFramebuffer: the colour aspect was dropped - the driver rejected it on its "
+                                 "own and no emulation applies");
+                }
+            }
         }
+        if (dsBits != 0) {
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, dsBits, filter);
+            if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                // Nothing to fall back on yet: ResolveThenBlit is colour-only and the replicate
+                // pass runs in the opposite direction, so a driver that declines a multisample
+                // depth/stencil resolve leaves the destination holding its clear value. The log
+                // is the whole diagnostic - the frontend performs no validation of its own, so
+                // this never reaches the application as a GL error.
+                MGLOG_E_ONCE("BlitFramebuffer: the depth/stencil aspect was dropped - the driver rejected it on "
+                             "its own and no emulation applies");
+            }
+        }
+        DrainBlitErrors();
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
@@ -4990,9 +5070,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return false;
     }
 
-    static void ClearGLErrors() {
-        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
-    }
+    static void ClearGLErrors() { DrainDriverErrors("DirectGLES"); }
 
     // Binds a guaranteed-complete 1x1 scratch framebuffer at both targets for the
     // scope (GenerateMipmap must respecify texture storage while no incomplete
@@ -7050,10 +7128,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         data = std::move(expanded);
     }
 
-    static void DrainESErrors() {
-        for (Int i = 0; i < 32 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-        }
-    }
+    static void DrainESErrors() { DrainDriverErrors("ReadPixels"); }
 
     static GLenum QueryReadAttachmentComponentType() {
         GLint framebufferId = 0;

@@ -108,6 +108,12 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
         if (program != nullptr) {
+            // A geometry stage writes what it emits, not what the draw assembled, and the
+            // amplification factor lives in the shader. Record that this span contained such
+            // a draw so the transform feedback queries keep their backend result for it.
+            if (program->GetShaderIndexByStage(ShaderStage::Geometry) >= 0) {
+                MG_State::pGLContext->AddTransformFeedbackGeometryCaptureDraw();
+            }
             // Capacity in captured vertices = the tightest bound buffer.
             Uint64 capacityVertices = ~0ull;
             for (SizeT i = 0; i < program->GetTransformFeedbackBufferCount(); ++i) {
@@ -127,6 +133,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->AddTransformFeedbackPrimitives(primitives);
         MG_State::pGLContext->AddTransformFeedbackCapturedVertices(primitives * verticesPerPrimitive);
+        // Only draws that get this far are in the written counter at all. The instanced and
+        // indirect entry points never call this function, so a span that contains one is NOT
+        // fully accounted, and the queries must be able to tell: they compare this counter's
+        // delta against zero before standing in for the backend's own result.
+        MG_State::pGLContext->AddTransformFeedbackAccountedCaptureDraw();
     }
 
     // Every primitive mode a draw command accepts (GL 4.6 core table 10.1, plus
@@ -151,11 +162,23 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // The `mode` INVALID_ENUM in isolation, so a draw entry point can raise it BEFORE any of the
+    // state-dependent INVALID_OPERATIONs below. GL 4.6 core 10.4 makes a bad mode INVALID_ENUM
+    // unconditionally, while "no current program" is not even a spec-listed draw error - it is
+    // MobileGL's own null-dereference guard - so it must never shadow the enum check
+    // (KHR-GL31.api.coverage calls glDrawArraysInstanced/glDrawElementsInstanced with mode
+    // GL_POINTS-1 against a bare context and pins GL_INVALID_ENUM).
+    static Bool ValidatePrimitiveModeEnum(const char* functionName, GLenum mode) {
+        if (IsAcceptedPrimitiveMode(mode)) return true;
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "mode is not an accepted primitive type."));
+        return false;
+    }
+
     static Bool ValidatePrimitiveModeForBackend(const char* functionName, GLenum mode) {
-        if (!IsAcceptedPrimitiveMode(mode)) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "mode is not an accepted primitive type."));
+        if (!ValidatePrimitiveModeEnum(functionName, mode)) {
             return false;
         }
 
@@ -596,12 +619,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         MultiDrawElementsIndirect_Backend(mode, type, indirect, drawcount, stride);
     }
 
     void MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         MultiDrawArraysIndirect_Backend(mode, indirect, drawcount, stride);
@@ -715,12 +740,14 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                      const void* indices, GLint basevertex) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawRangeElementsBaseVertex_Backend(mode, start, end, count, type, indices, basevertex);
     }
 
     void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawRangeElements_Backend(mode, start, end, count, type, indices);
@@ -728,6 +755,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawElementsInstancedBaseVertexBaseInstance_Backend(mode, count, type, indices, instancecount, basevertex,
@@ -736,6 +764,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                          GLsizei instancecount, GLint basevertex) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawElementsInstancedBaseVertex_Backend(mode, count, type, indices, instancecount, basevertex);
@@ -743,18 +772,21 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawElementsInstancedBaseInstance_Backend(mode, count, type, indices, instancecount, baseinstance);
     }
 
     void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawElementsInstanced_Backend(mode, count, type, indices, instancecount);
     }
 
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         if (!ValidateDrawElementsIndexType(__func__, type)) return;
@@ -764,18 +796,21 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawArraysInstancedBaseInstance_Backend(mode, first, count, instancecount, baseinstance);
     }
 
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         DrawArraysInstanced_Backend(mode, first, count, instancecount);
     }
 
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         if (!ValidateIndirectDrawSource(__func__, indirect, kDrawArraysIndirectCommandBytes)) return;
@@ -783,6 +818,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices, GLint basevertex) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         AccountTransformFeedbackPrimitives(mode, count);
@@ -790,6 +826,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         AccountTransformFeedbackPrimitives(mode, count);
@@ -797,6 +834,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         if (drawcount < 0) {
@@ -810,6 +848,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
                            GLsizei drawcount) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         MultiDrawElements_Backend(mode, count, type, indices, drawcount);
@@ -817,6 +856,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const void* const* indices,
                                      GLsizei drawcount, const GLint* basevertex) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         MultiDrawElementsBaseVertex_Backend(mode, count, type, indices, drawcount, basevertex);
@@ -827,6 +867,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
+        if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
         AccountTransformFeedbackPrimitives(mode, count);

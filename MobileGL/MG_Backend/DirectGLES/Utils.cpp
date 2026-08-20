@@ -569,6 +569,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
+        String RequestViewportArrayExtension(String glslCode, Bool needed) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // gl_ViewportIndex is desktop GL 4.1 core and is in ESSL only under
+            // GL_OES_viewport_array. SPIRV-Cross prints the identifier as-is and requests no
+            // extension for it - three lines away from the BuiltInLayer case, which DOES ask for
+            // one on ES - so an untouched decompile reaches the driver naming a builtin its core
+            // language has never heard of. The stage then fails to compile, the program is marked
+            // unusable and every draw made with it renders nothing while raising no GL error.
+            //
+            // Same `needed` contract as RequestExtendedImageFormats, and the same hard rule:
+            // `#extension` on a name the driver does not advertise is itself a compile error
+            // (ARM's compiler is strict about it), so this must never be emitted speculatively.
+            // A driver without the extension does not come through here at all - its module took
+            // the LowerViewportIndexPass fallback and the emitted source no longer names the
+            // builtin.
+            static constexpr const char* kDirective = "#extension GL_OES_viewport_array : require\n";
+            static constexpr const char* kExtName = "GL_OES_viewport_array";
+            if (!needed || glslCode.find(kExtName) != String::npos) {
+                return glslCode;
+            }
+            // Right after the #version line, for the reason spelled out above: it is the only
+            // position that must stay first, and ForceSupporterOutput's scan for the LAST
+            // #extension directive still finds whichever one that ends up being.
+            const SizeT versionPos = glslCode.find("#version");
+            if (versionPos == String::npos) {
+                return kDirective + glslCode;
+            }
+            const SizeT lineEnd = glslCode.find('\n', versionPos);
+            if (lineEnd == String::npos) {
+                return glslCode + "\n" + kDirective;
+            }
+            glslCode.insert(lineEnd + 1, kDirective);
+            return glslCode;
+        }
+
         String BakeImageFormatQualifiers(String glslCode,
                                          const UnorderedMap<String, String>& esslFormatByUniformName) {
 #ifdef TRACY_ENABLE

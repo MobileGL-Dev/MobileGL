@@ -46,8 +46,10 @@ DEFAULT_DEQP_ARGS = (
     "--deqp-gl-context-type=wgl",
     "--deqp-surface-type=fbo",
     "--deqp-gl-config-name=rgba8888d24s8",
+    # Height <= 0 is DONT_CARE, which FboRenderContext resolves to
+    # GL_MAX_RENDERBUFFER_SIZE - a 64x16384 surface. Pin both.
     "--deqp-surface-width=64",
-    "--deqp-surface-height=-1",
+    "--deqp-surface-height=64",
     "--deqp-base-seed=3",
     "--deqp-visibility=hidden",
     "--deqp-watchdog=enable",

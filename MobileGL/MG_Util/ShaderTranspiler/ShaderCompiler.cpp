@@ -20,6 +20,7 @@
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/DemoteFloat64Pass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
+#include "SpirvPasses/LowerViewportIndexPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/FlattenXfbInterfaceBlocksPass.h"
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
@@ -32,6 +33,7 @@
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
+#include "SpirvPasses/ClampMultisampleFetchPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
@@ -633,6 +635,63 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary,
+                                                           const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(LowerViewportIndexPass::CreateLowerViewportIndexPass());
+
+                return RunOptimizerChecked("LowerViewportIndexForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary) {
+                return LowerViewportIndexPass::DeclaresViewportIndexBuiltin(binary);
+            }
+
+            bool ShaderCompiler::ClampMultisampleFetchesForEssl(const Vector<Uint32>& inputBinary,
+                                                                Vector<uint32_t>& outputBinary,
+                                                                const Int32 maxColorSamples,
+                                                                const Int32 maxIntegerSamples,
+                                                                const Int32 maxDepthSamples,
+                                                                const Int32 advertisedMaxSamples,
+                                                                const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(
+                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples));
+
+                return RunOptimizerChecked("ClampMultisampleFetchesForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeclaresMultisampledImage(const Vector<Uint32>& binary) {
+                return ClampMultisampleFetchPass::DeclaresMultisampledImage(binary);
+            }
+
+            ShaderCompiler::SpirvGateFeatures ShaderCompiler::ProbeSpirvGateFeatures(
+                const Vector<Uint32>& binary) {
+                SpirvGateFeatures features;
+                if (binary.empty()) {
+                    return features;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1,
+                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    binary.data(), binary.size());
+                if (!context) {
+                    // Unparseable here means unusable downstream too; let the ordinary transpile
+                    // path produce the error rather than inventing a verdict from it.
+                    return features;
+                }
+                features.WritesViewportIndexOutput =
+                    LowerViewportIndexPass::DeclaresViewportIndexBuiltin(context.get());
+                features.DeclaresMultisampledImage =
+                    ClampMultisampleFetchPass::DeclaresMultisampledImage(context.get());
+                return features;
             }
 
             bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,

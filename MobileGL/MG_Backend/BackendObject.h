@@ -236,6 +236,14 @@ namespace MobileGL {
             // (optional; null = frontend falls back to CPU accounting).
             BackendQueryHandle (*BeginXfbPrimitivesQuery)(Bool generated);
             void (*EndXfbPrimitivesQuery)(BackendQueryHandle query);
+            // Whether GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN should be answered from the
+            // frontend's own accounting wherever that accounting is exact - a capture with no
+            // geometry stage - instead of from the query above. Set by DirectGLES, whose result
+            // is whatever the ES driver's PRIMITIVES_WRITTEN counter says: Adreno reports twice
+            // the written count for a vertex-only capture that follows a large render pass,
+            // where the desktop-exact answer is the one the frontend already computed. Defaults
+            // to false, so a backend that never sets it keeps using its GPU result.
+            Bool PrefersCpuXfbPrimitiveAccounting = false;
             // Transform feedback capture spans, for backends whose own GL/ES driver
             // performs the capture (DirectGLES). Both optional; null means the backend
             // drives capture from its draw recording instead (DirectVulkan). End is

@@ -328,6 +328,7 @@ namespace MobileGL {
                 // transform feedback counter cannot see them - nothing was being captured.
                 void AddTransformFeedbackPausedPrimitives(Uint64 primitives) {
                     m_transformFeedbackPausedPrimitiveCounter += primitives;
+                    m_transformFeedbackGeneratedPrimitiveCounter += primitives;
                 }
                 Uint64 GetTransformFeedbackPausedPrimitiveCounter() const {
                     return m_transformFeedbackPausedPrimitiveCounter;
@@ -342,8 +343,30 @@ namespace MobileGL {
                 // (pre-clamp; drives the GS strip capture-order fixup at EndTF).
                 void AddTransformFeedbackInputPrimitives(Uint64 primitives) {
                     m_transformFeedbackInputPrimitives += primitives;
+                    m_transformFeedbackGeneratedPrimitiveCounter += primitives;
                 }
                 Uint64 GetTransformFeedbackInputPrimitives() const { return m_transformFeedbackInputPrimitives; }
+                // What a GL_PRIMITIVES_GENERATED query counts over its span: every primitive the
+                // capture stage assembled, including the ones a paused span discarded (those are
+                // generated but never written). Kept as its own running total rather than derived
+                // from the input counter above, which BeginTransformFeedback resets per span while
+                // a query may cover several of them.
+                Uint64 GetTransformFeedbackGeneratedCounter() const {
+                    return m_transformFeedbackGeneratedPrimitiveCounter;
+                }
+                // Capture draws whose written-primitive count the CPU accounting reproduced
+                // exactly, and the subset it could not: a program with a geometry stage amplifies
+                // by whatever the shader emits, which only the driver's own counter knows. The
+                // transform feedback queries diff both over their span to decide whether the CPU
+                // delta may stand in for the backend's GPU result (GL_Query.cpp).
+                void AddTransformFeedbackAccountedCaptureDraw() { ++m_transformFeedbackAccountedCaptureDraws; }
+                Uint64 GetTransformFeedbackAccountedCaptureDraws() const {
+                    return m_transformFeedbackAccountedCaptureDraws;
+                }
+                void AddTransformFeedbackGeometryCaptureDraw() { ++m_transformFeedbackGeometryCaptureDraws; }
+                Uint64 GetTransformFeedbackGeometryCaptureDraws() const {
+                    return m_transformFeedbackGeometryCaptureDraws;
+                }
 
                 // Transform feedback objects (ARB_transform_feedback2 / GL 4.0 core).
                 // The capture state above and the indexed GL_TRANSFORM_FEEDBACK_BUFFER
@@ -439,6 +462,9 @@ namespace MobileGL {
                 Uint64 m_transformFeedbackPausedPrimitiveCounter = 0;
                 Uint64 m_transformFeedbackCapturedVertices = 0;
                 Uint64 m_transformFeedbackInputPrimitives = 0;
+                Uint64 m_transformFeedbackGeneratedPrimitiveCounter = 0;
+                Uint64 m_transformFeedbackAccountedCaptureDraws = 0;
+                Uint64 m_transformFeedbackGeometryCaptureDraws = 0;
 
                 // Everything a transform feedback object owns while it is NOT the bound one.
                 struct TransformFeedbackObjectState {

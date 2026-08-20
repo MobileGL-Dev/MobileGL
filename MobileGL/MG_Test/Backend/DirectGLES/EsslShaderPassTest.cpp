@@ -21,6 +21,7 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
 
 namespace {
@@ -549,4 +550,56 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
     const String out = RequestExtendedImageFormats(source, true);
     EXPECT_EQ(out, source);
     EXPECT_EQ(CountOf(out, "GL_NV_image_formats"), 1u) << out;
+}
+
+// --- GL_OES_viewport_array directive -------------------------------------------------------------
+
+// SPIRV-Cross prints gl_ViewportIndex bare and requests nothing for it, and ESSL has no core
+// spelling at any version - so without this directive the stage fails to compile, the program is
+// marked unusable and every draw made with it silently renders nothing.
+TEST(RequestViewportArrayExtensionTest, TheDirectiveGoesRightAfterTheVersionLine) {
+    const String source = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_ViewportIndex = gl_InvocationID; EmitVertex(); }
+)";
+    const String out = RequestViewportArrayExtension(source, true);
+    EXPECT_TRUE(Contains(out, "#version 320 es\n#extension GL_OES_viewport_array : require\n")) << out;
+}
+
+// Never speculatively: ARM's compiler hard-errors on an `#extension` naming a string the driver
+// does not advertise, so the caller's "not needed" answer has to be honoured exactly. A driver
+// without the extension gets the LowerViewportIndexPass fallback instead.
+TEST(RequestViewportArrayExtensionTest, NotNeededMeansNotEmitted) {
+    const String source = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_ViewportIndex = gl_InvocationID; EmitVertex(); }
+)";
+    EXPECT_EQ(RequestViewportArrayExtension(source, false), source);
+}
+
+TEST(RequestViewportArrayExtensionTest, AnAlreadyPresentDirectiveIsNotDuplicated) {
+    const String source = R"(#version 320 es
+#extension GL_OES_viewport_array : require
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_ViewportIndex = gl_InvocationID; EmitVertex(); }
+)";
+    const String out = RequestViewportArrayExtension(source, true);
+    EXPECT_EQ(out, source);
+    EXPECT_EQ(CountOf(out, "GL_OES_viewport_array"), 1u) << out;
+}
+
+// The two image directives and this one share the insertion point, so a shader that needs both
+// must end up with both - and with #version still first.
+TEST(RequestViewportArrayExtensionTest, CoexistsWithTheImageFormatDirective) {
+    const String source = R"(#version 320 es
+layout(r8ui, binding = 1) uniform writeonly highp uimage2D uni_image;
+void main() { gl_ViewportIndex = 1; imageStore(uni_image, ivec2(0), uvec4(1u)); }
+)";
+    const String out = RequestViewportArrayExtension(RequestExtendedImageFormats(source, true), true);
+    EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_NV_image_formats : require\n")) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
 }

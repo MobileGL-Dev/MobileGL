@@ -474,15 +474,48 @@ namespace MobileGL::MG_Impl::GLImpl {
                    target == TextureTarget::Texture2DMultisampleArray;
         }
 
-        Int GetMaxSupportedTextureSamples(TextureInternalFormat textureInternalFormat) {
+        // The largest count the backend actually probed for this format on this target, or 0 when
+        // it has no answer for the pair. Both backends build the list in descending order.
+        Int GetProbedMaxTextureSamples(TextureTarget textureTarget, TextureInternalFormat textureInternalFormat) {
+            if (MG_Backend::pActiveBackendObject == nullptr) {
+                return 0;
+            }
+            const SizeT targetIndex = MG_Backend::GetFormatCapabilityTargetIndex(textureTarget);
+            const SizeT formatIndex = static_cast<SizeT>(textureInternalFormat);
+            if (targetIndex >= MG_Backend::kFormatCapabilityTargetCount ||
+                formatIndex >= MG_Backend::kFormatCapabilityFormatCount) {
+                return 0;
+            }
+            const auto& sampleCounts =
+                MG_Backend::pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
+            return sampleCounts.empty() ? 0 : sampleCounts.front();
+        }
+
+        // The ceiling the frontend enforces, which must never be lower than the one MobileGL
+        // advertises: the CTS - and real applications - read GL_MAX_SAMPLES once and hand that
+        // exact count to glTexImage*Multisample for every format. Answering 4 there and then
+        // rejecting 4 here because the ES driver reports GL_MAX_INTEGER_SAMPLES 1 (Adreno) is a
+        // self-inconsistency, not a spec-mandated error. The backends clamp the count they hand
+        // the driver; the shadow state keeps reporting what the application asked for.
+        Int GetMaxSupportedTextureSamples(TextureTarget textureTarget,
+                                          TextureInternalFormat textureInternalFormat) {
             if (MG_Backend::pActiveBackendObject == nullptr) {
                 return std::numeric_limits<Int>::max();
+            }
+
+            const Int advertisedMaxSamples = GetAdvertisedMaxSamples();
+            // glGetInternalformativ(GL_SAMPLES) is answered from this very list (GetInternalformativ
+            // below), and GL 4.6 core 8.8 makes that query the definition of the per-format
+            // maximum - validating against anything else is how the two answers drifted apart.
+            const Int probedMaxSamples = GetProbedMaxTextureSamples(textureTarget, textureInternalFormat);
+            if (probedMaxSamples > 0) {
+                return std::max(probedMaxSamples, advertisedMaxSamples);
             }
 
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             if (MG_Util::IsDepthFormatInternalFormat(textureInternalFormat) ||
                 MG_Util::IsStencilFormatInternalFormat(textureInternalFormat)) {
-                return std::max(dynamicParameters.MaxDepthTextureSamples, 1);
+                return std::max(dynamicParameters.MaxDepthTextureSamples, advertisedMaxSamples);
             }
 
             GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
@@ -495,7 +528,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
             return std::max(isIntegerFormat ? dynamicParameters.MaxIntegerSamples
                                             : dynamicParameters.MaxColorTextureSamples,
-                            1);
+                            advertisedMaxSamples);
         }
 
         Bool ValidateTextureMultisampleStorage(TextureTarget textureTarget, GLsizei samples, GLsizei width,
@@ -532,7 +565,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // dimensions, and GL CTS's per-case state reset (gluStateReset) clears the default
             // GL_TEXTURE_2D_MULTISAMPLE_ARRAY texture with glTexImage3DMultisample(..., 0, 0, 0).
 
-            const Int maxSamples = GetMaxSupportedTextureSamples(textureInternalFormat);
+            const Int maxSamples = GetMaxSupportedTextureSamples(textureTarget, textureInternalFormat);
             if (samples > maxSamples) {
                 // GL specifies INVALID_OPERATION - not INVALID_VALUE - when the sample count
                 // exceeds what the format supports, and the native Adreno driver agrees.
@@ -557,6 +590,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                             "AllocateMultisampleTextureStorage requires mipmap-backed storage");
 
             auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+            // GL 4.6 core 8.8: a zero-sized image DEALLOCATES the image rather than defining an
+            // empty one. Only the multisample pair cares, and it cares a great deal: the CTS's
+            // per-case state reset clears both DEFAULT multisample textures this way on every
+            // texture unit, and a "defined" 0x0 default texture stops being skipped by
+            // IsUndefinedDefaultTexture - it then joins the per-draw sync and bind passes on
+            // every unit the reset touched, and reaches an ES glTexStorage*Multisample(..., 0, 0)
+            // that ES 3.1 8.19 makes INVALID_VALUE on every driver there is. A proxy target holds
+            // no image at all, only the query result, so it keeps recording what was asked for.
+            if ((width <= 0 || height <= 0 || depth <= 0) &&
+                !TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
+                textureObject->SetInternalFormat(TextureInternalFormat::Unknown);
+                textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, 0);
+                return;
+            }
             textureObject->SetInternalFormat(textureInternalFormat);
             textureObject->SetSamples(samples);
             textureObject->SetFixedSampleLocations(fixedsamplelocations == GL_TRUE);
@@ -4684,6 +4731,22 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureStorage3D(textureObject->GetExternalIndex(), levels, internalformat, width, height, depth);
     }
 
+    // Unlike glTexImage*Multisample, where a zero-sized image is a legal deallocation (see
+    // AllocateMultisampleTextureStorage), the immutable forms take a strictly positive size: GL
+    // 4.6 core 8.19 makes width, height or depth < 1 INVALID_VALUE. Without this the shared
+    // _State helper would deallocate the image and TexStorageMultisample_State would then freeze
+    // the now-imageless texture as immutable.
+    static Bool ValidateTexStorageMultisampleSize(GLsizei width, GLsizei height, GLsizei depth, const char* caller) {
+        if (width >= 1 && height >= 1 && depth >= 1) {
+            return true;
+        }
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                         "Immutable multisample storage requires width, height and depth >= 1."));
+        return false;
+    }
+
     // The multisample storage forms allocate exactly what the glTexImage*Multisample ones do, and
     // then freeze it: TEXTURE_IMMUTABLE_FORMAT becomes TRUE and a second call is INVALID_OPERATION
     // (GL 4.6 core 8.19). Only the allocation was shared before, so a multisample texture stayed
@@ -4704,6 +4767,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
+        if (!ValidateTexStorageMultisampleSize(width, height, 1, __func__)) return;
         TexStorageMultisample_State(
             target, TexImage2DMultisample_State(target, samples, internalformat, width, height, fixedsamplelocations),
             __func__);
@@ -4714,6 +4778,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
+        if (!ValidateTexStorageMultisampleSize(width, height, depth, __func__)) return;
         TexStorageMultisample_State(target,
                                     TexImage3DMultisample_State(target, samples, internalformat, width, height, depth,
                                                                 fixedsamplelocations),

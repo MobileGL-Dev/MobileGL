@@ -1848,6 +1848,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         }
                     }
                 }
+                if (rounded == 0 && (supported & VK_SAMPLE_COUNT_1_BIT) != 0) {
+                    // Nothing at two samples or above. Reachable because the frontend validates
+                    // multisample allocations against the count MobileGL ADVERTISES (GL requires
+                    // GL_MAX_SAMPLES >= 4) rather than against the device's per-format support, so
+                    // a format this device cannot multisample at all now gets here instead of
+                    // being refused up front. Keeping the unsupported count would hand
+                    // vkCreateImage an invalid VkImageCreateInfo; one sample is at least a legal
+                    // image, and the samples-08726 hazard above is the lesser of the two.
+                    MGLOG_W_ONCE("Multisample texture format %d supports no count above one on this device; "
+                                 "backing it with a single sample",
+                                 static_cast<Int>(format));
+                    rounded = static_cast<Uint32>(VK_SAMPLE_COUNT_1_BIT);
+                }
                 if (rounded != 0) {
                     resolvedSampleCount = static_cast<VkSampleCountFlagBits>(rounded);
                 }

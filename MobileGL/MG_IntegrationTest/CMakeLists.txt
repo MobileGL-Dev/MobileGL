@@ -86,6 +86,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp
     Scenarios/XfbCaptureBufferReuseScenario.cpp
+    Scenarios/XfbPrimitiveQueryScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp

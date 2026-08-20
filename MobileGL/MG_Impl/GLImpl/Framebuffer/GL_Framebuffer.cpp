@@ -13,6 +13,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_Impl/GLImpl/Texture/Validators.h>
+#include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -617,16 +618,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (MG_Backend::pActiveBackendObject == nullptr) {
             return std::numeric_limits<Int>::max();
         }
-        return std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, 1);
+        return GetAdvertisedMaxSamples();
     }
 
-    // GL_MAX_SAMPLES is the ceiling over all formats; an integer format has its own, lower
-    // one (GL_MAX_INTEGER_SAMPLES) and GL 4.6 core 9.2.4 makes exceeding it INVALID_OPERATION.
-    // The multisample TEXTURE path already resolves the limit per format
-    // (GL_Texture.cpp, GetMaxTextureSamplesForFormat); renderbuffers only ever compared
-    // against GL_MAX_SAMPLES, so on a driver where the two differ - Adreno reports
-    // GL_MAX_SAMPLES 4 and GL_MAX_INTEGER_SAMPLES 1 - an integer renderbuffer accepted a
-    // sample count the format cannot deliver, and said GL_NO_ERROR about it.
+    // GL_MAX_SAMPLES is the ceiling over all formats; an integer format has its own
+    // (GL_MAX_INTEGER_SAMPLES) and GL 4.6 core 9.2.4 makes exceeding it INVALID_OPERATION.
+    // The multisample TEXTURE path resolves the limit per format the same way
+    // (GL_Texture.cpp, GetMaxSupportedTextureSamples). Both are floored to the value MobileGL
+    // advertises: on a driver where the two differ - Adreno reports GL_MAX_SAMPLES 4 and
+    // GL_MAX_INTEGER_SAMPLES 1 - rejecting the advertised count here only moves the failure
+    // from the driver into MobileGL, so the frontend accepts it and the backend clamps the
+    // count it actually hands the driver.
     Int GetMaxRenderbufferSamplesForFormat_State(TextureInternalFormat format) {
         if (MG_Backend::pActiveBackendObject == nullptr) {
             return std::numeric_limits<Int>::max();
@@ -645,7 +647,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!isIntegerFormat) {
             return GetMaxRenderbufferSamples_State();
         }
-        return std::max(dynamicParameters.MaxIntegerSamples, 1);
+        // Per-format still, but never below the ceiling glGetIntegerv(GL_MAX_SAMPLES) promised:
+        // the driver's raw GL_MAX_INTEGER_SAMPLES stays the *backend* limit and the backend
+        // clamps to it, while the frontend honours what it advertised.
+        return std::max(dynamicParameters.MaxIntegerSamples, GetAdvertisedMaxSamples());
     }
 
     Bool ValidateRenderbufferStorageSize_State(GLsizei width, GLsizei height, const char* caller) {
@@ -3148,15 +3153,55 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetNamedFramebufferAttachmentParameteriv_State(framebuffer, attachment, pname, params);
     }
 
+    // The three argument errors GL 4.6 core 18.3.1 asks a blit for. They have to be raised here,
+    // in the backend-independent frontend: DirectGLES drains the driver's error queue around the
+    // blit on purpose (that is how the resolve fallback probes the driver), so an ES-side
+    // rejection never reaches the application and glGetError() answered GL_NO_ERROR for a call
+    // the spec requires to fail (KHR-GL30.api.coverage's glBlitFramebuffer sub-check). DirectVulkan
+    // already dropped the bad-filter and LINEAR-with-depth/stencil calls on the floor with a log
+    // line (VulkanRenderer::BlitFramebuffer), so the only thing that changes for it is that the
+    // error is now visible where the spec says it should be.
+    static Bool ValidateBlitMaskAndFilter(const char* functionName, GLbitfield mask, GLenum filter) {
+        constexpr GLbitfield kBlitMaskBits = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+        if ((mask & ~kBlitMaskBits) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "mask contains bits other than GL_COLOR_BUFFER_BIT, "
+                                             "GL_DEPTH_BUFFER_BIT and GL_STENCIL_BUFFER_BIT."));
+            return false;
+        }
+        if (filter != GL_NEAREST && filter != GL_LINEAR) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "filter must be GL_NEAREST or GL_LINEAR."));
+            return false;
+        }
+        // Depth and stencil have no meaningful interpolation, so GL_LINEAR is rejected outright
+        // rather than downgraded - even when the mask also carries the colour bit.
+        if (filter == GL_LINEAR && (mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "GL_LINEAR filtering is not allowed when mask includes "
+                                             "GL_DEPTH_BUFFER_BIT or GL_STENCIL_BUFFER_BIT."));
+            return false;
+        }
+        return true;
+    }
+
     void BlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1,
                               GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,
                               GLenum filter) {
+        if (!ValidateBlitMaskAndFilter(__func__, mask, filter)) return;
         BlitNamedFramebuffer_State(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
                                    dstY1, mask, filter);
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
+        if (!ValidateBlitMaskAndFilter(__func__, mask, filter)) return;
         BlitFramebuffer_Backend(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 
