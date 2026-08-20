@@ -247,6 +247,26 @@ TEST_F(ClampMultisampleFetchTest, TheProbeAnswersOnlyForAMultisampledImage) {
     EXPECT_FALSE(ShaderCompiler::DeclaresMultisampledImage({}));
 }
 
+// The combined probe answers both gate questions from one parse; it must agree with the
+// per-gate probes on the same modules and stay quiet for an empty stage.
+TEST_F(ClampMultisampleFetchTest, TheCombinedProbeAgreesWithThePerGateOnes) {
+    const Vector<Uint32> integerMs = CompileFragment(kIntegerMultisampleFetch);
+    ASSERT_FALSE(integerMs.empty());
+    const auto msFeatures = ShaderCompiler::ProbeSpirvGateFeatures(integerMs);
+    EXPECT_TRUE(msFeatures.DeclaresMultisampledImage);
+    EXPECT_FALSE(msFeatures.WritesViewportIndexOutput);
+
+    const Vector<Uint32> plain = CompileFragment(kNoMultisampleFetch);
+    ASSERT_FALSE(plain.empty());
+    const auto plainFeatures = ShaderCompiler::ProbeSpirvGateFeatures(plain);
+    EXPECT_FALSE(plainFeatures.DeclaresMultisampledImage);
+    EXPECT_FALSE(plainFeatures.WritesViewportIndexOutput);
+
+    const auto emptyFeatures = ShaderCompiler::ProbeSpirvGateFeatures({});
+    EXPECT_FALSE(emptyFeatures.DeclaresMultisampledImage);
+    EXPECT_FALSE(emptyFeatures.WritesViewportIndexOutput);
+}
+
 // The overwhelming majority of modules. Behind the probe they never reach the pass at all, but the
 // pass has to be inert for them on its own, or a future caller that forgets the gate silently
 // re-serialises every shader in the program.

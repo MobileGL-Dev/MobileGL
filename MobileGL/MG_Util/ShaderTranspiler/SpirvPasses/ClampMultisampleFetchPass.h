@@ -74,6 +74,10 @@ namespace MobileGL {
                 // that read a multisample texture directly.
                 static bool DeclaresMultisampledImage(const Vector<Uint32>& binary);
 
+                // Same question answered from an already-built module, so one parse can feed
+                // several gates (ShaderCompiler::ProbeSpirvGateFeatures).
+                static bool DeclaresMultisampledImage(spvtools::opt::IRContext* context);
+
                 static spvtools::Optimizer::PassToken CreateClampMultisampleFetchPass(
                     Int32 maxColorSamples, Int32 maxIntegerSamples, Int32 maxDepthSamples,
                     Int32 advertisedMaxSamples);

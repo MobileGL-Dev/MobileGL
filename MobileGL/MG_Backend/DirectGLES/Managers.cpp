@@ -4909,9 +4909,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // fails to compile and every draw made with it silently renders nothing.
                 // Gated on the module actually declaring the output, so no other stage pays an
                 // optimizer round trip for it.
+                // One parse of the module answers every armed pass gate below. The per-gate
+                // Declares* probes each cost a BuildModule per stage, and on a driver where both
+                // gates are armed (Mali: no GL_OES_viewport_array AND integer multisample
+                // squeezed to 1) the doubled parse made compile-heavy workloads ~10% slower.
+                // Probing the pre-lowering module is sound for both gates: demoting
+                // gl_ViewportIndex neither adds nor removes multisampled image types.
+                // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
+                // this is backend code and must not reach into the GL frontend. 4 is that
+                // translation unit's kFrontendMaxSamples, which is the source of truth -
+                // keep the two in step.
+                constexpr Int kFrontendMaxSamples = 4;
+                const Int advertisedMaxSamples =
+                    std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+                const Bool viewportLoweringArmed = !g_GLESCapabilities.SupportsViewportArray;
+                const Bool sampleClampArmed =
+                    g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
+                    g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
+                    g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
+                if (viewportLoweringArmed || sampleClampArmed) {
+                    spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
+                        *effectiveSpirv);
+                }
+
                 Vector<unsigned int> loweredViewportSpirv;
-                if (!g_GLESCapabilities.SupportsViewportArray &&
-                    MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresViewportIndexBuiltin(*effectiveSpirv) &&
+                if (viewportLoweringArmed && spirvGates.WritesViewportIndexOutput &&
                     MG_Util::ShaderTranspiler::ShaderCompiler::LowerViewportIndexForEssl(
                         *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
                     !loweredViewportSpirv.empty()) {
@@ -4937,28 +4960,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // optimizer round trip for it. DirectVulkan is deliberately not given this: it
                 // allocates the sample count it was asked for, so its modules are already right.
                 Vector<unsigned int> clampedSampleSpirv;
-                {
-                    // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
-                    // this is backend code and must not reach into the GL frontend. 4 is that
-                    // translation unit's kFrontendMaxSamples, which is the source of truth -
-                    // keep the two in step.
-                    constexpr Int kFrontendMaxSamples = 4;
-                    const Int advertisedMaxSamples =
-                        std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
-                    if ((g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
-                         g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
-                         g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples) &&
-                        MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresMultisampledImage(
-                            *effectiveSpirv) &&
-                        MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
-                            *effectiveSpirv, clampedSampleSpirv,
-                            g_GLESCapabilities.MaxColorTextureSamples,
-                            g_GLESCapabilities.MaxIntegerSamples,
-                            g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
-                            enableSpirvValidation) &&
-                        !clampedSampleSpirv.empty()) {
-                        effectiveSpirv = &clampedSampleSpirv;
-                    }
+                if (sampleClampArmed && spirvGates.DeclaresMultisampledImage &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
+                        *effectiveSpirv, clampedSampleSpirv,
+                        g_GLESCapabilities.MaxColorTextureSamples,
+                        g_GLESCapabilities.MaxIntegerSamples,
+                        g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
+                        enableSpirvValidation) &&
+                    !clampedSampleSpirv.empty()) {
+                    effectiveSpirv = &clampedSampleSpirv;
                 }
 
                 // GLSL ES has no ARRAY vertex inputs, and SPIRV-Cross refuses the whole module

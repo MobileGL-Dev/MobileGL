@@ -672,6 +672,28 @@ namespace MobileGL {
                 return ClampMultisampleFetchPass::DeclaresMultisampledImage(binary);
             }
 
+            ShaderCompiler::SpirvGateFeatures ShaderCompiler::ProbeSpirvGateFeatures(
+                const Vector<Uint32>& binary) {
+                SpirvGateFeatures features;
+                if (binary.empty()) {
+                    return features;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1,
+                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    binary.data(), binary.size());
+                if (!context) {
+                    // Unparseable here means unusable downstream too; let the ordinary transpile
+                    // path produce the error rather than inventing a verdict from it.
+                    return features;
+                }
+                features.WritesViewportIndexOutput =
+                    LowerViewportIndexPass::DeclaresViewportIndexBuiltin(context.get());
+                features.DeclaresMultisampledImage =
+                    ClampMultisampleFetchPass::DeclaresMultisampledImage(context.get());
+                return features;
+            }
+
             bool ShaderCompiler::SplitArrayVertexInputsForEssl(const Vector<Uint32>& inputBinary,
                                                                Vector<uint32_t>& outputBinary,
                                                                const bool enableSpirvValidation) {

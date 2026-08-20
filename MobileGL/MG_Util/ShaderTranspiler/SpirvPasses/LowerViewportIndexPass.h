@@ -44,6 +44,10 @@ namespace MobileGL {
                 // but the handful that route viewports from the shader.
                 static bool DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary);
 
+                // Same question answered from an already-built module, so one parse can feed
+                // several gates (ShaderCompiler::ProbeSpirvGateFeatures).
+                static bool DeclaresViewportIndexBuiltin(spvtools::opt::IRContext* context);
+
                 static spvtools::Optimizer::PassToken CreateLowerViewportIndexPass();
             };
         } // namespace ShaderTranspiler

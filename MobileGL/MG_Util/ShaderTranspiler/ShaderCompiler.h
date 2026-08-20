@@ -65,6 +65,16 @@ namespace MobileGL {
                 // above has anything to do. The gate that keeps every other stage off an
                 // optimizer round trip it does not need.
                 static bool DeclaresMultisampledImage(const Vector<Uint32>& binary);
+                // Both gate questions above answered from ONE parse. Every armed gate costs a
+                // BuildModule per shader stage, and on a driver where both are armed (Mali: no
+                // GL_OES_viewport_array AND integer multisample squeezed to 1) the separate
+                // probes made compile-heavy workloads measurably slower - ReservedNames-class
+                // CTS cases paid ~10%. Callers with more than one armed gate use this instead.
+                struct SpirvGateFeatures {
+                    Bool WritesViewportIndexOutput = false;
+                    Bool DeclaresMultisampledImage = false;
+                };
+                static SpirvGateFeatures ProbeSpirvGateFeatures(const Vector<Uint32>& binary);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
                 // locations, seeding a Private copy of the array so indexed reads still work.
                 // GLSL ES has no array vertex inputs and SPIRV-Cross refuses the whole module

@@ -138,9 +138,13 @@ namespace MobileGL {
                     // path produce the error rather than inventing a verdict from it.
                     return false;
                 }
+                return DeclaresViewportIndexBuiltin(context.get());
+            }
+
+            bool LowerViewportIndexPass::DeclaresViewportIndexBuiltin(IRContext* context) {
                 for (const Instruction& annotation : context->annotations()) {
                     if (IsViewportIndexBuiltinDecoration(annotation) &&
-                        GetDecoratedViewportIndexOutput(context.get(), annotation) != nullptr) {
+                        GetDecoratedViewportIndexOutput(context, annotation) != nullptr) {
                         return true;
                     }
                 }

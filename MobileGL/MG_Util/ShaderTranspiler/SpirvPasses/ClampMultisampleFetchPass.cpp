@@ -198,6 +198,10 @@ namespace MobileGL {
                     // path produce the error rather than inventing a verdict from it.
                     return false;
                 }
+                return DeclaresMultisampledImage(context.get());
+            }
+
+            bool ClampMultisampleFetchPass::DeclaresMultisampledImage(IRContext* context) {
                 for (const Instruction& type : context->module()->types_values()) {
                     if (IsMultisampledImageType(&type)) {
                         return true;
