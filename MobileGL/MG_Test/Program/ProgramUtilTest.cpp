@@ -3841,6 +3841,74 @@ TEST_F(ProgramUtilTest, EsslCoreImageFormatSetIsTheThirteenTheSpecLists) {
     EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0 /*GL_NONE*/));
 }
 
+// KHR-GL43.shader_storage_buffer_object.basic-syntax iteration 6. glslang assigns a block's member
+// offsets at DECLARATION time, where a member array that is still unsized contributes zero bytes -
+// so `vec4 position01[]; vec4 position2;` put both members at offset 0 and the shader read
+// position01[0] where it asked for position2. The preprocessor sizes the non-final member from the
+// largest constant index the source uses, which is what the language says it means.
+TEST_F(ProgramUtilTest, ANonFinalUnsizedBufferBlockMemberIsSizedFromItsLargestConstantIndex) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 430 core
+layout(packed) coherent buffer Buffer {
+  vec4 position01[];
+  vec4 position2;
+} g_buffer;
+void main() {
+  if (gl_VertexID == 0) gl_Position = g_buffer.position01[0];
+  else if (gl_VertexID == 1) gl_Position = g_buffer.position01[1];
+  else if (gl_VertexID == 2) gl_Position = g_buffer.position2;
+}
+)";
+    PreprocessShaderSource(ShaderStage::Vertex, source);
+    EXPECT_NE(source.find("vec4 position01[2];"), String::npos) << source;
+    EXPECT_EQ(source.find("position01[];"), String::npos) << source;
+
+    // The LAST member of a storage block is a run-time sized array, which is legal and already
+    // laid out correctly - sizing it would be a wire-format change, not a repair.
+    String lastMember = R"(#version 430 core
+buffer Buffer {
+  vec4 head;
+  vec4 tail[];
+} g_buffer;
+void main() {
+  gl_Position = g_buffer.tail[0] + g_buffer.tail[3];
+}
+)";
+    PreprocessShaderSource(ShaderStage::Vertex, lastMember);
+    EXPECT_NE(lastMember.find("vec4 tail[];"), String::npos) << lastMember;
+
+    // A member the shader subscripts with anything but a literal cannot be sized from the source,
+    // so it is left exactly as it was.
+    String dynamicIndex = R"(#version 430 core
+buffer Buffer {
+  vec4 head[];
+  vec4 tail;
+} g_buffer;
+uniform int g_index;
+void main() {
+  gl_Position = g_buffer.head[g_index] + g_buffer.tail;
+}
+)";
+    PreprocessShaderSource(ShaderStage::Vertex, dynamicIndex);
+    EXPECT_NE(dynamicIndex.find("vec4 head[];"), String::npos) << dynamicIndex;
+
+    // `buffer` is also a member memory qualifier; a declaration that uses it must not be mistaken
+    // for a block header.
+    String memberQualifier = R"(#version 430 core
+coherent buffer Buffer {
+  buffer vec4 position0;
+  vec4 position1[];
+  vec4 position2;
+} g_buffer;
+void main() {
+  gl_Position = g_buffer.position0 + g_buffer.position1[2] + g_buffer.position2;
+}
+)";
+    PreprocessShaderSource(ShaderStage::Vertex, memberQualifier);
+    EXPECT_NE(memberQualifier.find("vec4 position1[3];"), String::npos) << memberQualifier;
+}
+
 // KHR-GL43.shader_storage_buffer_object.negative-glsl-compileTime: a storage block declared at
 // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS must fail to compile, and so must an arrayed one whose
 // LAST element passes the ceiling. The relaxed Vulkan-rules parse enforces neither.

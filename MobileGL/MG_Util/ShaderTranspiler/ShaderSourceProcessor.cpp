@@ -818,6 +818,116 @@ namespace {
         ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
     }
 
+    // GLSL 4.30 4.1.9 allows an interface-block member array to be left unsized when it is NOT the
+    // last member; it is then implicitly sized by the largest constant index the shader uses.
+    // glslang implements the SIZING - adoptImplicitArraySizes, at link - but computes the block's
+    // member OFFSETS at DECLARATION time (fixBlockUniformOffsets), where the array is still
+    // unsized and so contributes zero bytes. Every member after it is therefore laid out on top of
+    // it: `vec4 a[]; vec4 b;` puts BOTH at offset 0, and a shader reading `b` gets `a[0]`
+    // (KHR-GL43.shader_storage_buffer_object.basic-syntax iteration 6, whose degenerate triangle
+    // rasterizes nothing at all).
+    //
+    // The source level is the only place the two can be reconciled, because the offset pass runs
+    // before a single statement has been parsed. Deliberately narrow: it fires only on a `buffer`
+    // block (no other block kind may hold an unsized member at all), only on a member that is not
+    // the last one, and only when every subscript of that member's name in the source is a decimal
+    // literal. Anything outside that shape is left exactly as it was - and the shape itself has no
+    // correct behaviour today, so the rewrite cannot take a working case away.
+    void SizeNonFinalUnsizedBufferBlockMembers(MobileGL::String& source) {
+        // Both tokens must be present for the shape to exist, and "[]" is absent from essentially
+        // every real shader source, so this is the whole cost for them.
+        if (source.find("[]") == MobileGL::String::npos || source.find("buffer") == MobileGL::String::npos) {
+            return;
+        }
+
+        const auto isDecimalInteger = [](const String& text) {
+            return !text.empty() && std::all_of(text.begin(), text.end(), [](char ch) {
+                       return ch >= '0' && ch <= '9';
+                   });
+        };
+
+        const Vector<CodeToken> tokens = TokenizeCode(source);
+        const SizeT count = tokens.size();
+
+        // Pass 1: for every identifier, the largest literal index it is subscripted with (as a
+        // count, i.e. index + 1), or -1 once it is subscripted with anything that is not a literal.
+        // The declaration's own empty `[]` is neither.
+        MobileGL::UnorderedMap<String, long long> subscriptExtent;
+        for (SizeT i = 1; i < count; ++i) {
+            if (tokens[i].text != "[" || !IsIdentifierToken(tokens[i - 1])) continue;
+            if (i + 1 < count && tokens[i + 1].text == "]") continue; // the unsized declarator itself
+            long long& extent = subscriptExtent[tokens[i - 1].text];
+            if (i + 2 < count && isDecimalInteger(tokens[i + 1].text) && tokens[i + 2].text == "]") {
+                if (extent >= 0) {
+                    extent = std::max(extent, std::strtoll(tokens[i + 1].text.c_str(), nullptr, 10) + 1);
+                }
+            } else {
+                extent = -1;
+            }
+        }
+
+        // Pass 2: one edit per repairable member, applied back to front so earlier offsets stand.
+        struct SizeEdit {
+            SizeT pos;
+            String text;
+        };
+        Vector<SizeEdit> edits;
+        for (SizeT i = 0; i < count; ++i) {
+            if (tokens[i].text != "buffer") continue;
+            SizeT cursor = i + 1;
+            // `buffer` is also a member MEMORY qualifier ("buffer vec4 position0;"), which is why
+            // the block body has to be found rather than assumed.
+            if (cursor < count && IsIdentifierToken(tokens[cursor])) ++cursor;
+            if (cursor >= count || tokens[cursor].text != "{") continue;
+
+            const SizeT bodyBegin = cursor + 1;
+            SizeT bodyEnd = bodyBegin;
+            int depth = 1;
+            while (bodyEnd < count) {
+                if (tokens[bodyEnd].text == "{") {
+                    ++depth;
+                } else if (tokens[bodyEnd].text == "}") {
+                    --depth;
+                    if (depth == 0) break;
+                }
+                ++bodyEnd;
+            }
+            if (depth != 0) continue; // unterminated; glslang will have the last word
+
+            Vector<std::pair<SizeT, SizeT>> members; // [begin, end) of each member, ';' excluded
+            SizeT memberBegin = bodyBegin;
+            for (SizeT m = bodyBegin; m < bodyEnd; ++m) {
+                if (tokens[m].text != ";") continue;
+                members.emplace_back(memberBegin, m);
+                memberBegin = m + 1;
+            }
+
+            // The LAST member is deliberately untouched: an unsized array there is a run-time
+            // sized array, which is both legal and correctly laid out already.
+            for (SizeT index = 0; index + 1 < members.size(); ++index) {
+                const SizeT begin = members[index].first;
+                const SizeT end = members[index].second;
+                if (end < begin + 3) continue;
+                if (tokens[end - 1].text != "]" || tokens[end - 2].text != "[") continue;
+                if (!IsIdentifierToken(tokens[end - 3])) continue;
+                // A multi-declarator member would need one size per declarator; out of scope.
+                bool multipleDeclarators = false;
+                for (SizeT t = begin; t < end; ++t) {
+                    if (tokens[t].text == ",") multipleDeclarators = true;
+                }
+                if (multipleDeclarators) continue;
+                const auto known = subscriptExtent.find(tokens[end - 3].text);
+                if (known == subscriptExtent.end() || known->second <= 0) continue;
+                edits.push_back({tokens[end - 1].begin, std::to_string(known->second)});
+            }
+            i = bodyEnd;
+        }
+
+        for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
+            source.insert(it->pos, it->text);
+        }
+    }
+
     // Rewrite the `packed` / `shared` block-packing qualifiers inside layout(...) declarations to
     // `std140`. Desktop GL leaves the memory layout of such blocks to the implementation and the
     // app must query member offsets; MobileGL's SPIR-V pipeline always lays uniform blocks out as
@@ -962,6 +1072,11 @@ namespace MobileGL {
 
                 FilterUnsupportedGpuShaderInt64(env, source);
                 CoerceUniformBlockPackingToStd140(source);
+                // After the packing coercion: that one rewrites `packed`/`shared` in place and so
+                // cannot move an offset this pass depends on, and reading the block declarations
+                // once both qualifiers are normalized keeps the two passes' notions of a block
+                // declaration identical.
+                SizeNonFinalUnsizedBufferBlockMembers(source);
 
                 RenameBuiltinShadowingFunctions(source);
 
