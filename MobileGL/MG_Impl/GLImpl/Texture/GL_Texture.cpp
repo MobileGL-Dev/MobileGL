@@ -3059,6 +3059,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = textureObject->GetSamplerObject()->GetMaxAnisotropy();
             }
             break;
+        // GL 4.6 core 8.11 lists this among the parameters EVERY GetTexParameter form answers.
+        // It was handled by the iv/Iiv/Iuiv getters and missed by this one, so the float query
+        // raised GL_INVALID_ENUM and left the caller's float untouched - which is what
+        // KHR-GL4x.shader_image_load_store.basic-api-texParam reads back.
+        case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
+            if (params) {
+                *params = static_cast<GLfloat>(GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE);
+            }
+            break;
         case GL_DEPTH_STENCIL_TEXTURE_MODE:
             if (params) {
                 *params = static_cast<GLfloat>(textureObject->GetDepthStencilTextureMode());
