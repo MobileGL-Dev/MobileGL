@@ -822,9 +822,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // A rebuilt declaration. Keeps SPIRV-Cross's own word order (`uniform readonly
             // highp image2D`) so the image-rebinding regex in Managers.cpp still matches what
             // comes out of here, whichever order the two passes end up running in.
+            //
+            // `forceCoherent` is for the SPLIT pair only. GLSL guarantees that a write through
+            // one image variable is visible to a read through a DIFFERENT one only when both are
+            // declared coherent, and the split turns a same-variable read-after-write - which
+            // desktop GLSL orders by construction, so the source almost never says `coherent` -
+            // into exactly that cross-variable shape. Without it the driver may serve the load
+            // from a cache that never saw the store through the writeonly half.
             String BuildImageDeclaration(const ImageUniformDecl& decl, const char* memoryQualifier,
-                                         const String& variableName) {
+                                         const String& variableName, Bool forceCoherent = false) {
                 String out = "layout(" + decl.layout + ") uniform ";
+                if (forceCoherent && !ContainsIdentifier(decl.qualifiers, "coherent")) {
+                    out += "coherent ";
+                }
                 out += memoryQualifier;
                 out += ' ';
                 if (!decl.qualifiers.empty()) {
@@ -1008,9 +1018,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
                     takenAliases.push_back(decl.writeName);
                     decl.split = true;
+                    // Both halves carry `coherent`; see BuildImageDeclaration. The
+                    // single-declaration cases below stay as they were - nothing aliases them, so
+                    // there is no visibility to restore and no reason to pay for the cache
+                    // behaviour.
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.name) + "\n" +
-                                         BuildImageDeclaration(decl, "writeonly", decl.writeName)});
+                                     BuildImageDeclaration(decl, "readonly", decl.name, /*forceCoherent=*/true) +
+                                         "\n" +
+                                         BuildImageDeclaration(decl, "writeonly", decl.writeName,
+                                                               /*forceCoherent=*/true)});
                 } else if (decl.stored) {
                     edits.push_back({decl.declStart, decl.declLength,
                                      BuildImageDeclaration(decl, "writeonly", decl.name)});
