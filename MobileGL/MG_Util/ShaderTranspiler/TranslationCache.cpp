@@ -151,19 +151,37 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         return bytes;
     }
 
+    // BOTH SINGLETONS ARE DELIBERATELY LEAKED, and this is not a style choice - it is the
+    // fix for a crash that reproduced 25 times in 40 runs of AsyncCompileTest.
+    //
+    // A plain function-local static object registers its destructor with __cxa_atexit AT
+    // FIRST USE, and first use here is a ShaderCompilePool worker running the first phase B.
+    // ShaderCompilePool registers its own atexit drain sentinel at FIRST POOL USE, which is
+    // strictly earlier - and exit handlers run in REVERSE registration order. So the cache
+    // would be destroyed FIRST, while workers are still live, and the next worker to reach
+    // Insert() would write into a freed std::list and a freed mutex. The observed symptom
+    // was not a crash in the cache at all: it was heap corruption surfacing later, inside
+    // spirv-tools' AggressiveDCEPass destructor on the worker thread.
+    //
+    // This is the same exit-order hazard PinValidatorTablesForProcessExit documents in
+    // ShaderCompiler.cpp for the validator's lazily-built tables, arriving by the same
+    // route. Pinning the construction order the way that function does would work too, but
+    // leaking is stronger: it holds however late the first phase B happens to run, and a
+    // process-lifetime memo has nothing to release at exit that the OS will not reclaim.
+    //
+    // A function-local static POINTER is trivially destructible, so no exit handler is
+    // registered for it at all. ClearShaderTranslationCaches() is what releases the memory
+    // at a controlled point (eglTerminate), after the pool has been drained.
     BoundedTranslationCache<SpirvTranslationResult>& GetSpirvTranslationCache() {
-        // Function-local static: the caches must not be constructed before
-        // MG_Config is loaded, and they must survive every context teardown (the
-        // key carries the CompileEnv fingerprint, so surviving is safe).
-        static BoundedTranslationCache<SpirvTranslationResult> kCache(
+        static auto* const kCache = new BoundedTranslationCache<SpirvTranslationResult>(
             "ShaderTranslationCache L1 (GLSL->SPIR-V)", kSpirvCacheMaxEntries, kSpirvCacheMaxBytes);
-        return kCache;
+        return *kCache;
     }
 
     BoundedTranslationCache<EsslTranslationResult>& GetEsslTranslationCache() {
-        static BoundedTranslationCache<EsslTranslationResult> kCache(
+        static auto* const kCache = new BoundedTranslationCache<EsslTranslationResult>(
             "ShaderTranslationCache L2 (SPIR-V->ESSL)", kEsslCacheMaxEntries, kEsslCacheMaxBytes);
-        return kCache;
+        return *kCache;
     }
 
     void ClearShaderTranslationCaches() {
