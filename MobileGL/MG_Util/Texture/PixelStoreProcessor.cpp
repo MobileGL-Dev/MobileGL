@@ -806,6 +806,14 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
         return IsRawPackedPixelPair(packedInternal.kind, clientFormat, clientType);
     }
 
+    Bool HasRedundantPackedEncoding(TextureInternalFormat internalFormat) {
+        InternalPackedLayout packedInternal{};
+        if (!GetInternalPackedLayout(internalFormat, packedInternal)) {
+            return false;
+        }
+        return packedInternal.kind == PackedInternalKind::FloatRGB9E5;
+    }
+
     // assume 8 bit per channel
     // swizzle.size() == channel count
     void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle) {

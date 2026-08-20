@@ -3320,6 +3320,29 @@ TEST(SharedExponentRGB9E5Test, RawPackedPixelTransferCoversOnlyIdenticalLayouts)
                                           TexturePixelDataType::UnsignedInt5999Rev));
 }
 
+TEST(SharedExponentRGB9E5Test, RedundantPackedEncodingIsRGB9E5Only) {
+    using MG_Util::PixelStoreProcessor::HasRedundantPackedEncoding;
+
+    // This is the predicate that decides whether the CPU shadow has to answer glGetTexImage
+    // instead of a GPU readback, so it must be as narrow as the defect: only the shared exponent
+    // has several legal encodings of one value.
+    EXPECT_TRUE(HasRedundantPackedEncoding(TextureInternalFormat::RGB9E5));
+
+    // The other three packed 32-bit layouts round-trip through float32 bit-exactly (each field is
+    // either an integer or a unique float encoding), so a GPU readback still serves them - which
+    // matters because RGB10_A2 and R11F_G11F_B10F ARE colour-renderable and their shadow can
+    // legitimately be stale.
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGB10A2));
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGB10A2UI));
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::R11FG11FB10F));
+
+    // Nothing unpacked qualifies, and neither does an unknown format.
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGBA8));
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGBA32F));
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::RGB8));
+    EXPECT_FALSE(HasRedundantPackedEncoding(TextureInternalFormat::Unknown));
+}
+
 TEST_F(TextureTest, TexImage2DRGB9E5KeepsNonCanonicalClientWords) {
     // Upload direction: GL_RGB / GL_UNSIGNED_INT_5_9_9_9_REV into GL_RGB9_E5 stores the client
     // words untouched, including the redundant encodings the CTS generates.
