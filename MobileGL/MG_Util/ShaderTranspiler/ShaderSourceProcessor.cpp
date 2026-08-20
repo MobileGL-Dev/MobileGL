@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <climits>
 #include <cstdlib>
 #include <initializer_list>
@@ -1228,10 +1229,65 @@ namespace MobileGL {
                     return false;
                 }
 
-                bool IsDecimalIntegerToken(const String& text) {
-                    if (text.empty()) return false;
-                    return std::all_of(text.begin(), text.end(),
-                                       [](char ch) { return ch >= '0' && ch <= '9'; });
+                // One GLSL integer literal, spelled the C way: "0x"/"0X" is hexadecimal, a leading
+                // '0' is OCTAL, everything else decimal, and a single trailing 'u'/'U' is legal.
+                // strtoll with base 0 already implements exactly that detection, so the only work
+                // here is deciding what the tail is allowed to be.
+                //
+                // Never guesses, which is the discipline every caller depends on: a float ("1.0"),
+                // an unknown suffix ("3f"), an out-of-range run and a negative value all return
+                // false, and the caller skips the declaration rather than recording a wrong number.
+                bool ParseGlslIntegerLiteral(const String& text, long long& out) {
+                    if (text.empty() || text.front() < '0' || text.front() > '9') return false;
+                    errno = 0;
+                    char* tail = nullptr;
+                    const long long value = std::strtoll(text.c_str(), &tail, 0);
+                    if (tail == text.c_str() || errno == ERANGE || value < 0) return false;
+                    const String suffix = text.substr(static_cast<SizeT>(tail - text.c_str()));
+                    if (!suffix.empty() && suffix != "u" && suffix != "U") return false;
+                    out = value;
+                    return true;
+                }
+
+                // glslang reflects an array-of-arrays default-block uniform as ONE RECORD PER
+                // outer-index tuple, carrying the innermost array type: `float u[2][3]` becomes
+                // "u[0][0]" and "u[1][0]" (that last "[0]" is EShReflectionBasicArraySuffix). The
+                // linker resolves such a name by stripping the single trailing "[0]", so it looks
+                // up "u[1]" - a key the root entry alone cannot answer, and the whole declaration
+                // silently loses its explicit location.
+                //
+                // Emit those pre-flattened keys here, next to the root, so the result is
+                // order-independent: each carries the location its own element starts at (element
+                // i of `float u[2][3]` at location L starts at L + i*3). Identifiers cannot
+                // contain brackets, so a synthesized key never collides with a real uniform name,
+                // and a 1-D array needs none of this - stripping "[0]" already reaches the root.
+                void RecordArrayOfArraysElementLocations(const String& name, const Vector<long long>& dimensions,
+                                                         long long baseLocation,
+                                                         MobileGL::UnorderedMap<String, MobileGL::Int>& locations) {
+                    if (dimensions.size() < 2) return;
+                    // A pathological declaration must not be able to blow up the map; past the cap
+                    // only the root entry stands, which is what every case used to get.
+                    constexpr long long kMaxSynthesizedKeys = 4096;
+                    const long long innerSpan = dimensions.back();
+                    const SizeT outerDimensions = dimensions.size() - 1;
+                    long long elementCount = 1;
+                    for (SizeT d = 0; d < outerDimensions; ++d) {
+                        elementCount *= dimensions[d];
+                        if (elementCount > kMaxSynthesizedKeys) return;
+                    }
+                    for (long long element = 0; element < elementCount; ++element) {
+                        String key = name;
+                        long long remainder = element;
+                        for (SizeT d = 0; d < outerDimensions; ++d) {
+                            long long stride = 1;
+                            for (SizeT inner = d + 1; inner < outerDimensions; ++inner) stride *= dimensions[inner];
+                            key += "[" + std::to_string(remainder / stride) + "]";
+                            remainder %= stride;
+                        }
+                        locations.emplace(key, static_cast<MobileGL::Int>(
+                                                   std::min(baseLocation + element * innerSpan,
+                                                            static_cast<long long>(INT_MAX / 2))));
+                    }
                 }
 
                 // Parses one brace-free depth-0 statement [begin, end) and records its
@@ -1244,6 +1300,7 @@ namespace MobileGL {
                                                        MobileGL::UnorderedMap<String, MobileGL::Int>& locations) {
                     using MobileGL::Int;
                     long long location = -1;
+                    long long literal = 0;
                     bool sawUniform = false;
                     SizeT declaratorBegin = end;
 
@@ -1259,9 +1316,9 @@ namespace MobileGL {
                                 } else if (layoutToken == ")") {
                                     --parenDepth;
                                 } else if (parenDepth == 1 && layoutToken == "location" && j + 2 < end &&
-                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
-                                    location = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
-                                                        static_cast<long long>(INT_MAX / 2));
+                                           tokens[j + 1].text == "=" &&
+                                           ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                    location = std::min(literal, static_cast<long long>(INT_MAX / 2));
                                     j += 2;
                                 }
                                 ++j;
@@ -1290,21 +1347,25 @@ namespace MobileGL {
                         const String& name = tokens[k].text;
                         ++k;
                         long long span = 1;
+                        Vector<long long> dimensions;
                         while (k < end && tokens[k].text == "[") {
                             ++k;
                             long long dimension = 1;
-                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) {
-                                dimension = std::strtoll(tokens[k].text.c_str(), nullptr, 10);
+                            if (k < end && ParseGlslIntegerLiteral(tokens[k].text, literal)) {
+                                dimension = literal;
                                 ++k;
                             }
                             if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
                             ++k;
-                            span *= std::max(1ll, std::min(dimension, static_cast<long long>(INT_MAX / 2)));
+                            dimensions.push_back(
+                                std::max(1ll, std::min(dimension, static_cast<long long>(INT_MAX / 2))));
+                            span *= dimensions.back();
                         }
                         // Keep the first sighting: a duplicate can only come from alternative
                         // preprocessor branches declaring the same name.
                         locations.emplace(name, static_cast<Int>(std::min(
                                                     nextLocation, static_cast<long long>(INT_MAX / 2))));
+                        RecordArrayOfArraysElementLocations(name, dimensions, nextLocation, locations);
                         nextLocation += span;
                         if (k >= end) break;
                         if (tokens[k].text == "=") { // skip an initializer up to the declarator comma
@@ -1340,6 +1401,7 @@ namespace MobileGL {
                                                      MobileGL::UnorderedMap<String, MobileGL::Uint>& bindings) {
                     using MobileGL::Int;
                     long long binding = -1;
+                    long long literal = 0;
                     bool sawUniform = false;
                     SizeT declaratorBegin = end;
 
@@ -1355,9 +1417,9 @@ namespace MobileGL {
                                 } else if (layoutToken == ")") {
                                     --parenDepth;
                                 } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < end &&
-                                           tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
-                                    binding = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
-                                                       static_cast<long long>(INT_MAX / 2));
+                                           tokens[j + 1].text == "=" &&
+                                           ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                    binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
                                     j += 2;
                                 }
                                 ++j;
@@ -1390,7 +1452,7 @@ namespace MobileGL {
                         ++k;
                         while (k < end && tokens[k].text == "[") {
                             ++k;
-                            if (k < end && IsDecimalIntegerToken(tokens[k].text)) ++k;
+                            if (k < end && ParseGlslIntegerLiteral(tokens[k].text, literal)) ++k;
                             if (k >= end || tokens[k].text != "]") return; // sized by expression; bail out
                             ++k;
                         }
@@ -1476,8 +1538,10 @@ namespace MobileGL {
 
                     if (k < count && IsIdentifierToken(tokens[k])) ++k; // instance name
                     if (k >= count || tokens[k].text != "[") return 1;
-                    if (k + 2 < count && IsDecimalIntegerToken(tokens[k + 1].text) && tokens[k + 2].text == "]") {
-                        return std::max<long long>(1, std::strtoll(tokens[k + 1].text.c_str(), nullptr, 10));
+                    long long elementCount = 0;
+                    if (k + 2 < count && ParseGlslIntegerLiteral(tokens[k + 1].text, elementCount) &&
+                        tokens[k + 2].text == "]") {
+                        return std::max<long long>(1, elementCount);
                     }
                     return -1; // sized by an expression, or unsized
                 }
@@ -1498,6 +1562,7 @@ namespace MobileGL {
                 // Several layout(...) lists may precede one declaration and the later one wins,
                 // which is the same accumulate-then-consume shape the extractors above use.
                 long long binding = -1;
+                long long literal = 0;
                 for (SizeT pos = 0; pos < count; ++pos) {
                     const String& text = tokens[pos].text;
                     if (text == "layout" && pos + 1 < count && tokens[pos + 1].text == "(") {
@@ -1510,9 +1575,9 @@ namespace MobileGL {
                             } else if (layoutToken == ")") {
                                 --parenDepth;
                             } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < count &&
-                                       tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
-                                binding = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
-                                                   static_cast<long long>(INT_MAX / 2));
+                                       tokens[j + 1].text == "=" &&
+                                       ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
                                 j += 2;
                             }
                             ++j;

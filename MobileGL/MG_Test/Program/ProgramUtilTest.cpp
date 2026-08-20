@@ -3946,3 +3946,122 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
     // A backend that advertises no binding points has no ceiling to enforce.
     EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
 }
+
+// KHR-GL43.explicit_uniform_location.uniform-loc-nondecimal: GLSL integer literals are C-style, so
+// layout(location = 0xA) is 10 and layout(location = 010) is OCTAL 8. The extractor used to accept
+// a base-10 digit run and nothing else: the hex spelling failed the test entirely and the
+// declaration silently lost its explicit location, while the octal one was read as decimal 10.
+// The identical defect sat on every array dimension and on layout(binding = N).
+TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsReadsNonDecimalIntegerLiterals) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(location = 0xA) uniform vec4 hexLower;
+layout(location = 0X1f) uniform vec4 hexUpper;
+layout(location = 010) uniform vec4 octal;
+layout(location = 3u) uniform vec4 unsignedSuffix;
+layout(location = 0x2) uniform float hexArray[0x3];
+layout(location = 1.0) uniform vec4 notAnInteger;
+layout(location = 7f) uniform vec4 unknownSuffix;
+void main() {}
+)";
+
+    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
+    ASSERT_EQ(locations.count("hexLower"), 1u);
+    EXPECT_EQ(locations.at("hexLower"), 10);
+    ASSERT_EQ(locations.count("hexUpper"), 1u);
+    EXPECT_EQ(locations.at("hexUpper"), 31);
+    ASSERT_EQ(locations.count("octal"), 1u);
+    EXPECT_EQ(locations.at("octal"), 8) << "a leading zero is octal in GLSL, not decimal";
+    ASSERT_EQ(locations.count("unsignedSuffix"), 1u);
+    EXPECT_EQ(locations.at("unsignedSuffix"), 3);
+    ASSERT_EQ(locations.count("hexArray"), 1u);
+    EXPECT_EQ(locations.at("hexArray"), 2);
+
+    // Still never guessed at: a float and an unknown suffix are skipped, not rounded.
+    EXPECT_EQ(locations.count("notAnInteger"), 0u);
+    EXPECT_EQ(locations.count("unknownSuffix"), 0u);
+}
+
+// A hexadecimal array dimension has to size the declarator's span too, or the declarator after it
+// in the same statement starts at the wrong location.
+TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsSpansANonDecimalArrayDimension) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(
+        "#version 430 core\nlayout(location = 50) uniform float first[0x3], second;\nvoid main() {}\n");
+    ASSERT_EQ(locations.count("first"), 1u);
+    EXPECT_EQ(locations.at("first"), 50);
+    ASSERT_EQ(locations.count("second"), 1u);
+    EXPECT_EQ(locations.at("second"), 53) << "0x3 is three elements, not zero and not three hundred";
+}
+
+// KHR-GL43.explicit_uniform_location.uniform-loc-array-of-arrays: glslang reflects
+// `float u[2][3]` as "u[0][0]" and "u[1][0]", and the linker resolves such a name by stripping the
+// single trailing "[0]" - so the map has to answer "u[1]", not just "u". Without the pre-flattened
+// keys both records missed the map entirely and were first-fitted from location 0.
+TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsExpandsArrayOfArraysElements) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(location = 2) uniform float two_d[2][3];
+layout(location = 20) uniform float three_d[2][2][4];
+layout(location = 40) uniform float one_d[3];
+void main() {}
+)";
+
+    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
+
+    // The root entry is unchanged - the synthesized keys are additional, never a replacement.
+    ASSERT_EQ(locations.count("two_d"), 1u);
+    EXPECT_EQ(locations.at("two_d"), 2);
+    // One key per outer index, each starting a run of the innermost dimension (3 here).
+    ASSERT_EQ(locations.count("two_d[0]"), 1u);
+    EXPECT_EQ(locations.at("two_d[0]"), 2);
+    ASSERT_EQ(locations.count("two_d[1]"), 1u);
+    EXPECT_EQ(locations.at("two_d[1]"), 5);
+
+    // Three dimensions: glslang expands all but the innermost, so both outer indices are spelled.
+    ASSERT_EQ(locations.count("three_d"), 1u);
+    EXPECT_EQ(locations.at("three_d"), 20);
+    ASSERT_EQ(locations.count("three_d[0][0]"), 1u);
+    EXPECT_EQ(locations.at("three_d[0][0]"), 20);
+    ASSERT_EQ(locations.count("three_d[0][1]"), 1u);
+    EXPECT_EQ(locations.at("three_d[0][1]"), 24);
+    ASSERT_EQ(locations.count("three_d[1][0]"), 1u);
+    EXPECT_EQ(locations.at("three_d[1][0]"), 28);
+    ASSERT_EQ(locations.count("three_d[1][1]"), 1u);
+    EXPECT_EQ(locations.at("three_d[1][1]"), 32);
+
+    // A 1-D array needs no expansion: stripping "[0]" already reaches the root.
+    ASSERT_EQ(locations.count("one_d"), 1u);
+    EXPECT_EQ(locations.at("one_d"), 40);
+    EXPECT_EQ(locations.count("one_d[0]"), 0u);
+
+    // The declarator after an array-of-arrays still advances by the WHOLE element count.
+    const UnorderedMap<String, Int> pair = ExtractExplicitUniformLocations(
+        "#version 430 core\nlayout(location = 0) uniform float a[2][3], b;\nvoid main() {}\n");
+    ASSERT_EQ(pair.count("b"), 1u);
+    EXPECT_EQ(pair.at("b"), 6);
+}
+
+// KHR-GL43.explicit_uniform_location: layout(binding = 0x2) on a sampler is the same literal defect
+// as the location one, and losing it costs the sampler its initial texture unit.
+TEST_F(ProgramUtilTest, ExtractExplicitOpaqueBindingsReadsNonDecimalIntegerLiterals) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(binding = 0x2) uniform sampler2D hexUnit;
+layout(binding = 012) uniform sampler2D octalUnit;
+layout(binding = 1u) uniform sampler2D suffixedUnit;
+void main() {}
+)";
+
+    const UnorderedMap<String, Uint> bindings = ExtractExplicitOpaqueBindings(source);
+    ASSERT_EQ(bindings.count("hexUnit"), 1u);
+    EXPECT_EQ(bindings.at("hexUnit"), 2u);
+    ASSERT_EQ(bindings.count("octalUnit"), 1u);
+    EXPECT_EQ(bindings.at("octalUnit"), 10u) << "012 is octal ten, not twelve";
+    ASSERT_EQ(bindings.count("suffixedUnit"), 1u);
+    EXPECT_EQ(bindings.at("suffixedUnit"), 1u);
+}
