@@ -300,10 +300,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Clear();
         }
 #else
-        void ErrorLopper::Loop(const std::function<void(GLenum)>& func) {}
-        void ErrorLopper::Clear() {}
-        ErrorLopper::ErrorLopper() = default;
-        ErrorLopper::~ErrorLopper() = default;
+        // Error HYGIENE is not a debugging feature: every site that brackets a risky ES call with
+        // Clear()/Loop() relied on these to empty the driver's queue, and compiling them to
+        // nothing left whatever the driver raised sitting there for an unrelated later
+        // `glGetError() == GL_NO_ERROR` probe to read as its own failure. The callback stays
+        // unused because MGLOG_D is compiled out at this level, but the queue still gets drained.
+        // Bounded like DrainESErrors: a driver that never returns GL_NO_ERROR (a lost context is
+        // the usual way) must not spin here.
+        constexpr Int kMaxDrainedESErrors = 32;
+
+        void ErrorLopper::Loop(const std::function<void(GLenum)>& func) {
+            static_cast<void>(func);
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+            }
+        }
+
+        void ErrorLopper::Clear() {
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+            }
+        }
+
+        ErrorLopper::ErrorLopper() {
+            Clear();
+        }
+        ErrorLopper::~ErrorLopper() {
+            Clear();
+        }
 #endif
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
