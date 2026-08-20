@@ -3840,3 +3840,41 @@ TEST_F(ProgramUtilTest, EsslCoreImageFormatSetIsTheThirteenTheSpecLists) {
     EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0x8051 /*GL_RGB8*/));
     EXPECT_FALSE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(0 /*GL_NONE*/));
 }
+
+// KHR-GL43.shader_storage_buffer_object.negative-glsl-compileTime: a storage block declared at
+// GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS must fail to compile, and so must an arrayed one whose
+// LAST element passes the ceiling. The relaxed Vulkan-rules parse enforces neither.
+TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    constexpr Int kMaxBindings = 36;
+    const auto violation = [](const String& body) {
+        return FindShaderStorageBindingViolation("#version 430 core\n" + body + "void main() {}\n", kMaxBindings);
+    };
+
+    // The boundary itself: max - 1 is the last legal point, max is one past it.
+    EXPECT_FALSE(violation("layout(binding = 35) buffer Buffer { int x; };\n").has_value());
+    EXPECT_TRUE(violation("layout(binding = 36) buffer Buffer { int x; };\n").has_value());
+
+    // An instance array takes CONSECUTIVE points, so what has to fit is base + count - 1.
+    EXPECT_FALSE(violation("layout(binding = 32) buffer Buffer { int x; } g_array[4];\n").has_value());
+    EXPECT_TRUE(violation("layout(binding = 34) buffer Buffer { int x; } g_array[4];\n").has_value());
+
+    // Qualifiers and a second layout list may sit between the binding and the keyword.
+    EXPECT_TRUE(violation("layout(std430) layout(binding = 36) coherent restrict buffer B { int x; };\n")
+                    .has_value());
+
+    // Things the scanner must NOT judge: a uniform block (a different ceiling), a storage block
+    // with no explicit binding, the bare default-qualifier form, and an instance array whose size
+    // is not a literal.
+    EXPECT_FALSE(violation("layout(binding = 40) uniform Block { int x; };\n"
+                           "layout(binding = 0) buffer Buffer { int y; };\n")
+                     .has_value());
+    EXPECT_FALSE(violation("buffer Buffer { int x; };\nconst int binding = 40;\n").has_value());
+    EXPECT_FALSE(violation("layout(binding = 1) buffer;\nbuffer Buffer { int x; };\n").has_value());
+    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(binding = 34) buffer B { int x; } g[kCount];\n")
+                     .has_value());
+
+    // A backend that advertises no binding points has no ceiling to enforce.
+    EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
+}

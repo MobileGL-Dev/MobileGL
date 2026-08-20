@@ -1332,6 +1332,97 @@ namespace MobileGL {
                 return bindings;
             }
 
+            namespace {
+                // Binding points a storage-block declaration starting at `bufferPos` occupies.
+                // One for a scalar instance (and for the "layout(...) buffer;" default-qualifier
+                // form, which declares no block at all); the element count for an instance array,
+                // whose elements take base, base+1, ... (GLSL 4.30 4.4.5). -1 means "the grammar
+                // here is outside this scanner's narrow subset", i.e. do not judge this one.
+                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos,
+                                                        SizeT count) {
+                    SizeT k = bufferPos + 1;
+                    if (k < count && IsIdentifierToken(tokens[k])) ++k; // block type name
+                    if (k >= count || tokens[k].text != "{") return 1;
+
+                    MobileGL::Int braceDepth = 0;
+                    while (k < count) {
+                        if (tokens[k].text == "{") {
+                            ++braceDepth;
+                        } else if (tokens[k].text == "}") {
+                            --braceDepth;
+                            if (braceDepth == 0) {
+                                ++k;
+                                break;
+                            }
+                        }
+                        ++k;
+                    }
+                    if (braceDepth != 0) return -1; // unterminated block: not this scanner's business
+
+                    if (k < count && IsIdentifierToken(tokens[k])) ++k; // instance name
+                    if (k >= count || tokens[k].text != "[") return 1;
+                    if (k + 2 < count && IsDecimalIntegerToken(tokens[k + 1].text) && tokens[k + 2].text == "]") {
+                        return std::max<long long>(1, std::strtoll(tokens[k + 1].text.c_str(), nullptr, 10));
+                    }
+                    return -1; // sized by an expression, or unsized
+                }
+            } // namespace
+
+            std::optional<String> FindShaderStorageBindingViolation(const String& source, Int maxBindings) {
+                // A backend that advertises nothing has no ceiling to enforce.
+                if (maxBindings <= 0) return std::nullopt;
+                // Fast path: no storage block, nothing to check. Both keywords are required for a
+                // violation to exist, and the pair is absent from almost every shader-pack source.
+                if (source.find("buffer") == String::npos || source.find("binding") == String::npos) {
+                    return std::nullopt;
+                }
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                // The binding the qualifier run currently being scanned declared, -1 for none.
+                // Several layout(...) lists may precede one declaration and the later one wins,
+                // which is the same accumulate-then-consume shape the extractors above use.
+                long long binding = -1;
+                for (SizeT pos = 0; pos < count; ++pos) {
+                    const String& text = tokens[pos].text;
+                    if (text == "layout" && pos + 1 < count && tokens[pos + 1].text == "(") {
+                        SizeT j = pos + 2;
+                        Int parenDepth = 1;
+                        while (j < count && parenDepth > 0) {
+                            const String& layoutToken = tokens[j].text;
+                            if (layoutToken == "(") {
+                                ++parenDepth;
+                            } else if (layoutToken == ")") {
+                                --parenDepth;
+                            } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < count &&
+                                       tokens[j + 1].text == "=" && IsDecimalIntegerToken(tokens[j + 2].text)) {
+                                binding = std::min(std::strtoll(tokens[j + 2].text.c_str(), nullptr, 10),
+                                                   static_cast<long long>(INT_MAX / 2));
+                                j += 2;
+                            }
+                            ++j;
+                        }
+                        pos = j - 1;
+                        continue;
+                    }
+                    if (text == "buffer") {
+                        const long long points = binding >= 0 ? StorageBlockBindingPointCount(tokens, pos, count) : -1;
+                        if (points > 0 && binding + points > static_cast<long long>(maxBindings)) {
+                            return "ERROR: invalid value " + std::to_string(binding) +
+                                   " for layout specifier 'binding': a shader storage block occupying " +
+                                   std::to_string(points) + " binding point(s) from there passes " +
+                                   "GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS (" + std::to_string(maxBindings) + ").";
+                        }
+                        binding = -1;
+                        continue;
+                    }
+                    // Qualifiers may sit between the layout list and the `buffer` keyword; anything
+                    // else ends the run, so a binding never leaks onto an unrelated declaration.
+                    if (!IsNonLayoutQualifierKeyword(text)) binding = -1;
+                }
+                return std::nullopt;
+            }
+
             UnorderedMap<String, Int> ExtractExplicitUniformLocations(const String& source) {
                 UnorderedMap<String, Int> locations;
                 // Fast path: without the qualifier keyword there is nothing to extract.
