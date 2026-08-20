@@ -2427,6 +2427,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return packedData.data();
         }
 
+        // "Some level of this texture holds an image", which is all the sync gate below actually
+        // needs to know. Deliberately weaker than ITextureObject::IsComplete(): that predicate also
+        // answers whether the texture SAMPLES as complete, so it must keep rejecting a chain with
+        // undefined lower levels - but such a texture still has to be uploaded, or the level that
+        // IS defined never reaches the driver at all.
+        static Bool HasAnyDefinedMipmapLevel(const MG_State::GLState::ITextureObject* stateTextureObject) {
+            const auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject);
+            if (mipmapObject == nullptr) return false;
+            const auto levelCount = mipmapObject->GetMipmapLevelCount();
+            for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
+                for (Uint level = 0; level < levelCount; ++level) {
+                    const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                    if (levelTexelSize.x() > 0 && levelTexelSize.y() > 0 && levelTexelSize.z() > 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
@@ -2474,8 +2494,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // 3. Size changed
             // 4. Mipmap levels changed
 
-            if (!stateTextureObject->IsComplete()) {
-                MGLOG_D("Texture object with ID: %u is not complete, skipping sync.",
+            // IsComplete() is the sampling predicate, and it calls a chain whose lower levels are
+            // undefined incomplete - which is what a top-down build (upload level N, then level 0)
+            // and ARB_clear_texture's conformance cases both produce. Bailing out on that shape
+            // left the backend name with no levels whatsoever, so the level that WAS defined could
+            // never be sampled or read back. Sync whenever some level holds an image; the per-level
+            // loops below skip the degenerate ones individually.
+            if (!stateTextureObject->IsComplete() && !HasAnyDefinedMipmapLevel(stateTextureObject.get())) {
+                MGLOG_D("Texture object with ID: %u has no defined image level, skipping sync.",
                         stateTextureObject->GetExternalIndex());
                 return;
             }
@@ -2577,6 +2603,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     for (auto& uploadTarget : uploadTargets) {
                         for (SizeT level = m_prevTextureInfo.mipmapLevels; level < mipmapCount; ++level) {
                             auto levelTexelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                            // A level the application never defined reads back as {0, 0, 0}; now that a
+                            // sparse chain is synced rather than skipped whole, leave those undefined on
+                            // the driver instead of giving the name a 0x0 image at that index.
+                            if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 || levelTexelSize.z() <= 0) {
+                                textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                                continue;
+                            }
                             auto levelByteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
                             bool levelDirty = textureMipmapObject->IsStorageDirty(uploadTarget, level);
                             auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
@@ -2804,6 +2837,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         for (auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 auto levelTexelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                                // See the append-mips loop: an undefined level stays undefined on the
+                                // driver rather than becoming a 0x0 image.
+                                if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 ||
+                                    levelTexelSize.z() <= 0) {
+                                    textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
+                                    continue;
+                                }
                                 auto levelByteSize = textureMipmapObject->GetMipmapByteSize(uploadTarget, level);
                                 bool levelDirty = textureMipmapObject->IsStorageDirty(uploadTarget, level);
                                 auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
