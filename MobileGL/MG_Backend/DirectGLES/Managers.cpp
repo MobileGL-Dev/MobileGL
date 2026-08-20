@@ -4705,6 +4705,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject) {
             ImageFormatBakeInputs inputs;
+            // A format GLSL ES cannot spell on a driver with no GL_NV_image_formats to spell it
+            // with. There is no legal ESSL for such a shader at all, so the stage will not
+            // compile and the program is lost - a failure that used to leave nothing behind but
+            // a draw that rendered nothing. Recorded and reported ONCE per program build rather
+            // than per uniform: an image array reaches this decision once per element.
+            String unspellableUniform;
+            String unspellableFormat;
+            Uint unspellableCount = 0;
+            const auto recordUnspellableFormat = [&](const String& uniformName, String formatSpelling) {
+                if (unspellableCount == 0) {
+                    unspellableUniform = uniformName;
+                    unspellableFormat = Move(formatSpelling);
+                }
+                ++unspellableCount;
+            };
+
             const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
                 const auto& name = stateProgramObject.GetUniformName(loc);
@@ -4717,6 +4733,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // still needs the extension directive to survive the ES compiler.
                     if (!IsCoreEsslLayoutFormat(type->getQualifier().getFormat())) {
                         inputs.needsExtendedImageFormats = true;
+                        if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                            recordUnspellableFormat(name, glslang::TQualifier::getLayoutFormatString(
+                                                              type->getQualifier().getFormat()));
+                        }
                     }
                     continue;
                 }
@@ -4742,6 +4762,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
                                 "core cannot spell and this driver has no GL_NV_image_formats for.",
                                 name.c_str(), unit, boundFormat);
+                        recordUnspellableFormat(
+                            name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
                         continue;
                     }
                     inputs.needsExtendedImageFormats = true;
@@ -4783,6 +4805,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (const auto& name : textCompleted) {
                 inputs.glFormatByUniformName.erase(name);
+            }
+            // Unlatched MGLOG_E, like the transpile- and link-failure diagnostics in SyncToBackend:
+            // one line per failing program build, and naming the uniform and the format is the
+            // whole diagnostic value. Left as a log rather than a link failure on purpose - the
+            // frontend has already reported LINK_STATUS = true and GL cannot retract it, and the
+            // program stays queryable exactly as the "linked but not drawable" exit leaves it.
+            if (unspellableCount != 0) {
+                MGLOG_E("Image format '%s' on uniform '%s' has no GLSL ES spelling and this driver does not expose "
+                        "GL_NV_image_formats%s; the stage using it cannot compile and the program will draw "
+                        "nothing.",
+                        unspellableFormat.empty() ? "(none)" : unspellableFormat.c_str(), unspellableUniform.c_str(),
+                        unspellableCount > 1 ? " (and it is not the only image uniform affected)" : "");
             }
             return inputs;
         }
