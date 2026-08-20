@@ -1692,7 +1692,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 15; // TODO
             return;
         case GL_MAX_UNIFORM_LOCATIONS:
-            *params = 1024 * 4; // TODO
+            // The same constant the link's location allocator enforces - see ProgramObject.
+            *params = MG_State::GLState::ProgramObject::MAX_UNIFORM_LOCATIONS;
             return;
         case GL_MAX_VARYING_COMPONENTS:
             *params = kFrontendMaxVaryingComponents;

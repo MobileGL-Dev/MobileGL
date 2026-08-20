@@ -848,7 +848,16 @@ namespace MobileGL::MG_State::GLState {
         //    MGL_GLOBAL_UBO, so reflection cannot provide them ("source-explicit");
         //  - glslang's layoutLocation() for opaque uniforms, where the qualifier
         //    survives the relaxed parse (and mapIO auto-assigns the rest).
-        constexpr Uint kNoLocation = glslang::TQualifier::layoutLocationEnd;
+        //
+        // "no effective location yet". Deliberately OUTSIDE the location space rather than
+        // glslang::TQualifier::layoutLocationEnd, which is the first location past the pool and
+        // therefore only one off a legal one - a sentinel that sits at the boundary it guards has
+        // to be re-proved safe every time the ceiling moves, and glslang uses that same value for
+        // "this opaque uniform has no location" as well.
+        constexpr Uint kNoLocation = ~static_cast<Uint>(0);
+        // The ceiling glGetIntegerv(GL_MAX_UNIFORM_LOCATIONS) advertises, which is what the
+        // allocator below has to honour: locations 0..kMaxUniformLocations-1 and no others.
+        constexpr Uint kMaxUniformLocations = static_cast<Uint>(ProgramObject::MAX_UNIFORM_LOCATIONS);
         Vector<Uint> effectiveLocation(tProgramUniformCount, kNoLocation);
         Vector<Bool> locationIsSourceExplicit(tProgramUniformCount, false);
         UnorderedMap<String, Uint> structExplicitCursor; // declared root -> next member location
@@ -885,13 +894,19 @@ namespace MobileGL::MG_State::GLState {
                     cursor->second += static_cast<Uint>(GetUniformLocationSpan(uniform));
                 }
             }
-            if (effectiveLocation[i] == kNoLocation && type != nullptr && type->isOpaque()) {
+            // glslang parks "no location" at layoutLocationEnd, which is a real location in this
+            // table's numbering - test for it explicitly rather than letting it through as one.
+            if (effectiveLocation[i] == kNoLocation && type != nullptr && type->isOpaque() &&
+                uniform.layoutLocation() != glslang::TQualifier::layoutLocationEnd) {
                 effectiveLocation[i] = uniform.layoutLocation();
             }
             if (locationIsSourceExplicit[i] &&
-                effectiveLocation[i] + static_cast<Uint>(GetUniformLocationSpan(uniform)) > kNoLocation) {
+                effectiveLocation[i] + static_cast<Uint>(GetUniformLocationSpan(uniform)) > kMaxUniformLocations) {
                 // Config A rejected out-of-range explicit locations at parse; keep them
-                // from growing the location table unboundedly.
+                // from growing the location table unboundedly. Stated against the advertised
+                // GL_MAX_UNIFORM_LOCATIONS, because that is the rule being enforced (GL 4.6 core
+                // 7.6.1): an array whose LAST element passes the ceiling is a link error even
+                // though its base compiled fine.
                 artifacts.infoLog = std::format("Uniform '{}' explicit location {} is out of range.", uniform.name,
                                                 effectiveLocation[i]);
                 ProgramObject::ResetLinkArtifacts(artifacts);
@@ -899,12 +914,55 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        Int requiredUniformLocations = 0;
+        // ARB_explicit_uniform_location / GL 4.6 core 7.6.1: an explicit location is RESERVED
+        // whether or not the uniform turned out to be active. The dead default-block uniforms
+        // filtered out of glUniformIndexToTProgram above are invisible to every GL query - which
+        // is correct - but their locations must still be kept out of the implicit allocator's
+        // reach, or an implicit uniform is handed a location the source already claimed.
+        //
+        // Deliberately NOT written into artifacts.uniformLocations or uniformIndexInTProgram:
+        // glGetUniformLocation must keep answering -1 for a dead uniform, and a location no
+        // application can legally obtain must not become writable through glUniform*. The
+        // occupancy therefore lives in its own bitset, built once the table has been sized.
+        Vector<Pair<Uint, Int>> deadExplicitReservations;
+        Int deadReservedLocationCount = 0;
+        for (Int i = 0; i < tProgramUniformCount; i++) {
+            if (artifacts.tProgramUniformIndexToGl[i] >= 0) continue; // GL-visible: handled above
+            const auto& uniform = artifacts.program->getUniform(i);
+            if (!isGlobalUboMember(uniform) || uniform.stages != 0) continue;
+            const Int* explicitLocation = findExplicitLocation(uniform.name);
+            if (explicitLocation == nullptr) continue;
+
+            const Uint location = static_cast<Uint>(*explicitLocation);
+            const Int locationSpan = GetUniformLocationSpan(uniform);
+            if (location + static_cast<Uint>(locationSpan) > kMaxUniformLocations) {
+                artifacts.infoLog = std::format("Uniform '{}' explicit location {} is out of range.", uniform.name,
+                                                location);
+                ProgramObject::ResetLinkArtifacts(artifacts);
+                return false;
+            }
+            deadExplicitReservations.emplace_back(location, locationSpan);
+            deadReservedLocationCount += locationSpan;
+            artifacts.maxUniformLocation = std::max(artifacts.maxUniformLocation, location + locationSpan - 1);
+            MGLOG_D("ProgramObject %u: Reflection - inactive uniform '%s' reserves locations %u..%u without "
+                    "becoming GL-visible",
+                    in.externalIndex, uniform.name.c_str(), location, location + locationSpan - 1);
+        }
+
+        Int requiredUniformLocations = deadReservedLocationCount;
+        // The same count restricted to DEFAULT-BLOCK uniforms, which is the only thing
+        // GL_MAX_UNIFORM_LOCATIONS bounds. requiredUniformLocations cannot serve: it also carries
+        // named-block members, which take a slot in this allocator's table (an implementation
+        // detail) but consume no GL uniform location at all, so a big UBO array would otherwise
+        // fail a link the spec allows.
+        Int defaultBlockLocationDemand = deadReservedLocationCount;
         for (const Int i : artifacts.glUniformIndexToTProgram) {
             auto& uniform = artifacts.program->getUniform(i);
             const Uint location = effectiveLocation[i];
             const Int locationSpan = GetUniformLocationSpan(uniform);
             requiredUniformLocations += locationSpan;
+            const Bool inNamedBlock = uniform.index >= 0 && !isGlobalUboMember(uniform);
+            if (!inNamedBlock) defaultBlockLocationDemand += locationSpan;
             if (location != kNoLocation) {
                 artifacts.maxUniformLocation = std::max(artifacts.maxUniformLocation, location + locationSpan - 1);
             }
@@ -916,6 +974,22 @@ namespace MobileGL::MG_State::GLState {
 
         MGLOG_D("ProgramObject %u: Reflection - computed maxUniformLocation=%u uniformNameMaxLength=%d",
                 in.externalIndex, artifacts.maxUniformLocation, artifacts.uniformNameMaxLength);
+
+        // GL 4.6 core 7.6.1: explicit, implicit and reserved-but-inactive default-block uniforms
+        // all draw from the one GL_MAX_UNIFORM_LOCATIONS pool, and a program asking for more than
+        // the implementation advertises FAILS TO LINK
+        // (KHR-GL43.explicit_uniform_location.uniform-loc-negative-link-max-num-of-locations).
+        // A single uniform whose own span passes the ceiling was already rejected above; this is
+        // the aggregate half of the same rule.
+        if (defaultBlockLocationDemand > static_cast<Int>(kMaxUniformLocations)) {
+            artifacts.infoLog =
+                std::format("Uniform locations exhausted: the default-block uniforms need {} locations but "
+                            "GL_MAX_UNIFORM_LOCATIONS is {}.",
+                            defaultBlockLocationDemand, kMaxUniformLocations);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
 
         if (artifacts.maxUniformLocation + 1 < requiredUniformLocations) {
             MGLOG_D("ProgramObject %u: Reflection - maxUniformLocation+1 (%u) < requiredUniformLocations (%d), "
@@ -930,6 +1004,27 @@ namespace MobileGL::MG_State::GLState {
         artifacts.uniformIndexInTProgram.resize(artifacts.maxUniformLocation + 1,
                                                 glslang::TQualifier::layoutLocationEnd);
         artifacts.uniformSamplerOrImageUnitIndex.resize(artifacts.maxUniformLocation + 1, -1);
+
+        // Occupancy for the inactive explicit uniforms collected above: a set bit means "the
+        // source claimed this location", which is enough to keep the two implicit passes off it
+        // without making the location reachable through any GL entry point. A location the
+        // fallback grow path mints later is past this bitset by construction (every reservation
+        // was folded into maxUniformLocation before the table was sized), so the lookup treats
+        // out-of-range as free rather than resizing in lockstep.
+        // Left empty - and unallocated - when nothing reserved anything, which is every program in
+        // the shader-pack corpus; the lookup below reads an empty bitset as "nothing is reserved".
+        Vector<Bool> reservedLocation;
+        if (!deadExplicitReservations.empty()) {
+            reservedLocation.assign(artifacts.maxUniformLocation + 1, false);
+            for (const auto& [reservedBase, reservedSpan] : deadExplicitReservations) {
+                for (Int element = 0; element < reservedSpan; ++element) {
+                    reservedLocation[reservedBase + element] = true;
+                }
+            }
+        }
+        const auto locationIsReserved = [&reservedLocation](SizeT location) {
+            return location < reservedLocation.size() && reservedLocation[location];
+        };
 
         Vector<int> unallocatedUniformIndex;
 
@@ -975,7 +1070,8 @@ namespace MobileGL::MG_State::GLState {
             Bool spanIsFree = location + locationSpan - 1 <= artifacts.maxUniformLocation;
             for (Int element = 0; spanIsFree && element < locationSpan; ++element) {
                 spanIsFree =
-                    artifacts.uniformIndexInTProgram[location + element] == glslang::TQualifier::layoutLocationEnd;
+                    artifacts.uniformIndexInTProgram[location + element] == glslang::TQualifier::layoutLocationEnd &&
+                    !locationIsReserved(location + element);
             }
             if (!spanIsFree) {
                 artifacts.uniformLocations[uniform.name] = kNoLocation;
@@ -1007,7 +1103,8 @@ namespace MobileGL::MG_State::GLState {
                 bool hasRoom = locNeedle + locationSpan - 1 <= artifacts.maxUniformLocation;
                 for (Int element = 0; hasRoom && element < locationSpan; ++element) {
                     hasRoom = artifacts.uniformIndexInTProgram[locNeedle + element] ==
-                              glslang::TQualifier::layoutLocationEnd;
+                                  glslang::TQualifier::layoutLocationEnd &&
+                              !locationIsReserved(locNeedle + element);
                 }
                 if (!hasRoom) continue;
                 // Found a vacant location at locNeedle
