@@ -63,6 +63,180 @@ namespace {
         return element;
     }
 
+    // GL 4.6 core 7.7 / ARB_shader_atomic_counters: within one binding no two atomic counters
+    // may occupy the same bytes, every offset is a multiple of 4, and no counter may reach past
+    // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE. glslang enforces all three in fixOffset(), which the
+    // Vulkan-relaxed parse never reaches - vkRelaxedRemapUniformVariable folds the atomic_uint
+    // into a synthesized storage block and returns from declareVariable() before fixOffset()
+    // runs, clearing explicitOffset on the way ("xxTODO: use logic from fixOffset()"). Two
+    // counters declared at the same binding AND the same offset therefore linked cleanly.
+    //
+    // The offsets themselves survive that lowering (reflection and the SPIR-V generator both
+    // honour layoutOffset), so the check belongs here, over the same model the GL queries answer
+    // from. Returns the info-log line for an illegal layout, empty for a legal one.
+    static MobileGL::String ValidateAtomicCounterLayout(glslang::TProgram& reflection) {
+        using MobileGL::Bool;
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+        using MobileGL::String;
+        using MobileGL::Vector;
+        namespace Transpiler = MobileGL::MG_Util::ShaderTranspiler;
+
+        const Int blockCount = reflection.getNumUniformBlocks();
+        if (blockCount <= 0) return {};
+        const SizeT prefixLength = std::strlen(Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX);
+        Vector<Bool> isCounterBlock(static_cast<SizeT>(blockCount), false);
+        Bool anyCounterBlock = false;
+        for (Int i = 0; i < blockCount; ++i) {
+            const auto& block = reflection.getUniformBlock(i);
+            isCounterBlock[static_cast<SizeT>(i)] =
+                block.name.compare(0, prefixLength, Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX) == 0;
+            anyCounterBlock = anyCounterBlock || isCounterBlock[static_cast<SizeT>(i)];
+        }
+        if (!anyCounterBlock) return {}; // every program that declares no atomic counter
+
+        struct CounterSpan {
+            Int offset = 0;
+            Int size = 0;
+            String name;
+        };
+        Vector<Vector<CounterSpan>> spansByBlock(static_cast<SizeT>(blockCount));
+        const Int uniformCount = reflection.getNumUniformVariables();
+        for (Int i = 0; i < uniformCount; ++i) {
+            const auto& uniform = reflection.getUniform(i);
+            const Int owner = uniform.index;
+            if (owner < 0 || owner >= blockCount || !isCounterBlock[static_cast<SizeT>(owner)]) continue;
+            const Int offset = uniform.offset;
+            if (offset < 0) continue; // no offset recorded; nothing to compare
+            Int elements = uniform.size > 1 ? uniform.size : 1;
+            if (const glslang::TType* type = uniform.getType(); type != nullptr && type->isArray()) {
+                elements = type->isSizedArray() ? type->getCumulativeArraySize() : 1;
+            }
+            const Int size = elements * static_cast<Int>(sizeof(MobileGL::Uint32));
+            if (offset % 4 != 0) {
+                return std::format("Atomic counter '{}' is declared at offset {}, which is not a multiple of 4.",
+                                   uniform.name, offset);
+            }
+            if (offset > Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE - size) {
+                return std::format("Atomic counter '{}' ends at byte {}, past the {}-byte "
+                                   "GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE.",
+                                   uniform.name, offset + size, Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE);
+            }
+            auto& spans = spansByBlock[static_cast<SizeT>(owner)];
+            for (const CounterSpan& existing : spans) {
+                if (offset < existing.offset + existing.size && existing.offset < offset + size) {
+                    return std::format("Atomic counters '{}' and '{}' share a binding and overlap at byte offset {}.",
+                                       existing.name, uniform.name, std::max(offset, existing.offset));
+                }
+            }
+            spans.push_back({offset, size, uniform.name});
+        }
+        return {};
+    }
+
+    // GL 4.6 core 7.6: LinkProgram FAILS when a stage's count of active image uniforms exceeds
+    // GL_MAX_{VERTEX,TESS_CONTROL,TESS_EVALUATION,GEOMETRY,FRAGMENT,COMPUTE}_IMAGE_UNIFORMS, or
+    // when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing enforced it: glslang carries
+    // those numbers in TBuiltInResource only so gl_Max*ImageUniforms can expand from them, and
+    // its linker never counts uniforms against them - so a program declaring one image uniform
+    // more than the limit linked cleanly and then rendered nothing.
+    //
+    // The limits are the ones glGetIntegerv answers (MG_Impl/GLImpl/Getter/GL_Getter.cpp), the
+    // hardcoded tessellation zeros included: a program may not exceed a limit the implementation
+    // advertises, whatever the driver underneath would have taken.
+    //
+    // Counts the APPLICATION's image uniforms. The DirectGLES read/write split emits a second
+    // declaration for an image a stage both reads and writes (MG_Backend/DirectGLES/Utils.h), but
+    // that happens in the backend after this link, and counting the expanded set here would
+    // reject programs that are legal by the numbers GL advertises. Returns the info-log line for
+    // a program over a limit, empty for one within them.
+    static MobileGL::String ValidateImageUniformLimits(
+        glslang::TProgram& reflection, const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using MobileGL::Array;
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+        using MobileGL::UnorderedMap;
+
+        static constexpr EShLanguage kStages[] = {EShLangVertex,   EShLangTessControl, EShLangTessEvaluation,
+                                                  EShLangGeometry, EShLangFragment,    EShLangCompute};
+        static constexpr const char* kLimitNames[] = {
+            "GL_MAX_VERTEX_IMAGE_UNIFORMS",   "GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS",
+            "GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS", "GL_MAX_GEOMETRY_IMAGE_UNIFORMS",
+            "GL_MAX_FRAGMENT_IMAGE_UNIFORMS", "GL_MAX_COMPUTE_IMAGE_UNIFORMS"};
+        constexpr SizeT kStageCount = sizeof(kStages) / sizeof(kStages[0]);
+        const Int limits[kStageCount] = {env.params.MaxVertexImageUniforms,
+                                         0,
+                                         0,
+                                         env.params.MaxGeometryImageUniforms,
+                                         env.params.MaxFragmentImageUniforms,
+                                         env.params.MaxComputeImageUniforms};
+
+        // Reflection spells an image ARRAY one of two ways, and which one it picks depends on how
+        // the shader indexed it: a variable index makes glslang expand the array into one entry
+        // per element ("u_image[0]".."u_image[8]", each carrying the ELEMENT type), while an
+        // array never dereferenced at all stays a single entry carrying the array type. One
+        // program can even produce both spellings for the same array. So neither counting entries
+        // nor trusting the declared size is right on its own - they are reconciled per declared
+        // name with a max, which is exact for either spelling and cannot double-count the mixture.
+        struct ImageUse {
+            Int entries = 0;  // reflection entries seen for this name in this stage
+            Int declared = 0; // largest element count any of them declared
+        };
+        UnorderedMap<MobileGL::String, Array<ImageUse, kStageCount>> useByName;
+
+        const Int uniformCount = reflection.getNumUniformVariables();
+        for (Int i = 0; i < uniformCount; ++i) {
+            const auto& uniform = reflection.getUniform(i);
+            const glslang::TType* type = uniform.getType();
+            if (type == nullptr || !type->isImage()) continue;
+            // An array occupies one image unit per element; an unsized one (never indexed, so
+            // never more than the single element glslang kept) counts as one.
+            Int elements = uniform.size > 1 ? uniform.size : 1;
+            if (type->isArray()) {
+                elements = type->isSizedArray() ? type->getCumulativeArraySize() : 1;
+            }
+            // `stages` is the set of stages that REFERENCE the uniform, which is exactly what GL
+            // counts: an image declared in two stages costs a unit in each, and one no stage
+            // reads is not active at all and costs nothing.
+            Array<ImageUse, kStageCount>* use = nullptr;
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                if ((static_cast<unsigned>(uniform.stages) & (1u << static_cast<unsigned>(kStages[stage]))) == 0) {
+                    continue;
+                }
+                // The one insert this uniform performs, so the reference survives the rest of the
+                // stage loop - a flat hash map relocates on insert, never on read.
+                if (use == nullptr) {
+                    use = &useByName[StripArrayElementSuffix(uniform.name)];
+                }
+                ++(*use)[stage].entries;
+                (*use)[stage].declared = std::max((*use)[stage].declared, elements);
+            }
+        }
+
+        Int counts[kStageCount] = {};
+        for (const auto& entry : useByName) {
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                counts[stage] += std::max(entry.second[stage].entries, entry.second[stage].declared);
+            }
+        }
+
+        Int combined = 0;
+        for (SizeT stage = 0; stage < kStageCount; ++stage) {
+            combined += counts[stage];
+            if (counts[stage] > limits[stage]) {
+                return std::format("This program uses {} active image uniforms in one stage, more than the {} "
+                                   "{} allows.",
+                                   counts[stage], limits[stage], kLimitNames[stage]);
+            }
+        }
+        if (combined > env.params.MaxCombinedImageUniforms) {
+            return std::format("This program uses {} active image uniforms across its stages, more than the {} "
+                               "GL_MAX_COMBINED_IMAGE_UNIFORMS allows.",
+                               combined, env.params.MaxCombinedImageUniforms);
+        }
+        return {};
+    }
+
     static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
         const auto* type = output.getType();
         return type && type->getQualifier().builtIn != glslang::EbvNone;
@@ -606,6 +780,22 @@ namespace MobileGL::MG_State::GLState {
             return false;
         }
 
+        if (String atomicCounterError = ValidateAtomicCounterLayout(*artifacts.program);
+            !atomicCounterError.empty()) {
+            artifacts.infoLog = Move(atomicCounterError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
+
+        if (String imageUniformError = ValidateImageUniformLimits(*artifacts.program, env);
+            !imageUniformError.empty()) {
+            artifacts.infoLog = Move(imageUniformError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
+
         // ---------- GL-facing index spaces (relaxed-parse cleanup) ----------
         // Blocks first: global-UBO membership drives the uniform filter below. The
         // synthesized MGL_GLOBAL_UBO is a transpiler artifact - its members are GL
@@ -658,7 +848,16 @@ namespace MobileGL::MG_State::GLState {
         //    MGL_GLOBAL_UBO, so reflection cannot provide them ("source-explicit");
         //  - glslang's layoutLocation() for opaque uniforms, where the qualifier
         //    survives the relaxed parse (and mapIO auto-assigns the rest).
-        constexpr Uint kNoLocation = glslang::TQualifier::layoutLocationEnd;
+        //
+        // "no effective location yet". Deliberately OUTSIDE the location space rather than
+        // glslang::TQualifier::layoutLocationEnd, which is the first location past the pool and
+        // therefore only one off a legal one - a sentinel that sits at the boundary it guards has
+        // to be re-proved safe every time the ceiling moves, and glslang uses that same value for
+        // "this opaque uniform has no location" as well.
+        constexpr Uint kNoLocation = ~static_cast<Uint>(0);
+        // The ceiling glGetIntegerv(GL_MAX_UNIFORM_LOCATIONS) advertises, which is what the
+        // allocator below has to honour: locations 0..kMaxUniformLocations-1 and no others.
+        constexpr Uint kMaxUniformLocations = static_cast<Uint>(ProgramObject::MAX_UNIFORM_LOCATIONS);
         Vector<Uint> effectiveLocation(tProgramUniformCount, kNoLocation);
         Vector<Bool> locationIsSourceExplicit(tProgramUniformCount, false);
         UnorderedMap<String, Uint> structExplicitCursor; // declared root -> next member location
@@ -695,13 +894,19 @@ namespace MobileGL::MG_State::GLState {
                     cursor->second += static_cast<Uint>(GetUniformLocationSpan(uniform));
                 }
             }
-            if (effectiveLocation[i] == kNoLocation && type != nullptr && type->isOpaque()) {
+            // glslang parks "no location" at layoutLocationEnd, which is a real location in this
+            // table's numbering - test for it explicitly rather than letting it through as one.
+            if (effectiveLocation[i] == kNoLocation && type != nullptr && type->isOpaque() &&
+                uniform.layoutLocation() != glslang::TQualifier::layoutLocationEnd) {
                 effectiveLocation[i] = uniform.layoutLocation();
             }
             if (locationIsSourceExplicit[i] &&
-                effectiveLocation[i] + static_cast<Uint>(GetUniformLocationSpan(uniform)) > kNoLocation) {
+                effectiveLocation[i] + static_cast<Uint>(GetUniformLocationSpan(uniform)) > kMaxUniformLocations) {
                 // Config A rejected out-of-range explicit locations at parse; keep them
-                // from growing the location table unboundedly.
+                // from growing the location table unboundedly. Stated against the advertised
+                // GL_MAX_UNIFORM_LOCATIONS, because that is the rule being enforced (GL 4.6 core
+                // 7.6.1): an array whose LAST element passes the ceiling is a link error even
+                // though its base compiled fine.
                 artifacts.infoLog = std::format("Uniform '{}' explicit location {} is out of range.", uniform.name,
                                                 effectiveLocation[i]);
                 ProgramObject::ResetLinkArtifacts(artifacts);
@@ -709,12 +914,55 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        Int requiredUniformLocations = 0;
+        // ARB_explicit_uniform_location / GL 4.6 core 7.6.1: an explicit location is RESERVED
+        // whether or not the uniform turned out to be active. The dead default-block uniforms
+        // filtered out of glUniformIndexToTProgram above are invisible to every GL query - which
+        // is correct - but their locations must still be kept out of the implicit allocator's
+        // reach, or an implicit uniform is handed a location the source already claimed.
+        //
+        // Deliberately NOT written into artifacts.uniformLocations or uniformIndexInTProgram:
+        // glGetUniformLocation must keep answering -1 for a dead uniform, and a location no
+        // application can legally obtain must not become writable through glUniform*. The
+        // occupancy therefore lives in its own bitset, built once the table has been sized.
+        Vector<Pair<Uint, Int>> deadExplicitReservations;
+        Int deadReservedLocationCount = 0;
+        for (Int i = 0; i < tProgramUniformCount; i++) {
+            if (artifacts.tProgramUniformIndexToGl[i] >= 0) continue; // GL-visible: handled above
+            const auto& uniform = artifacts.program->getUniform(i);
+            if (!isGlobalUboMember(uniform) || uniform.stages != 0) continue;
+            const Int* explicitLocation = findExplicitLocation(uniform.name);
+            if (explicitLocation == nullptr) continue;
+
+            const Uint location = static_cast<Uint>(*explicitLocation);
+            const Int locationSpan = GetUniformLocationSpan(uniform);
+            if (location + static_cast<Uint>(locationSpan) > kMaxUniformLocations) {
+                artifacts.infoLog = std::format("Uniform '{}' explicit location {} is out of range.", uniform.name,
+                                                location);
+                ProgramObject::ResetLinkArtifacts(artifacts);
+                return false;
+            }
+            deadExplicitReservations.emplace_back(location, locationSpan);
+            deadReservedLocationCount += locationSpan;
+            artifacts.maxUniformLocation = std::max(artifacts.maxUniformLocation, location + locationSpan - 1);
+            MGLOG_D("ProgramObject %u: Reflection - inactive uniform '%s' reserves locations %u..%u without "
+                    "becoming GL-visible",
+                    in.externalIndex, uniform.name.c_str(), location, location + locationSpan - 1);
+        }
+
+        Int requiredUniformLocations = deadReservedLocationCount;
+        // The same count restricted to DEFAULT-BLOCK uniforms, which is the only thing
+        // GL_MAX_UNIFORM_LOCATIONS bounds. requiredUniformLocations cannot serve: it also carries
+        // named-block members, which take a slot in this allocator's table (an implementation
+        // detail) but consume no GL uniform location at all, so a big UBO array would otherwise
+        // fail a link the spec allows.
+        Int defaultBlockLocationDemand = deadReservedLocationCount;
         for (const Int i : artifacts.glUniformIndexToTProgram) {
             auto& uniform = artifacts.program->getUniform(i);
             const Uint location = effectiveLocation[i];
             const Int locationSpan = GetUniformLocationSpan(uniform);
             requiredUniformLocations += locationSpan;
+            const Bool inNamedBlock = uniform.index >= 0 && !isGlobalUboMember(uniform);
+            if (!inNamedBlock) defaultBlockLocationDemand += locationSpan;
             if (location != kNoLocation) {
                 artifacts.maxUniformLocation = std::max(artifacts.maxUniformLocation, location + locationSpan - 1);
             }
@@ -726,6 +974,22 @@ namespace MobileGL::MG_State::GLState {
 
         MGLOG_D("ProgramObject %u: Reflection - computed maxUniformLocation=%u uniformNameMaxLength=%d",
                 in.externalIndex, artifacts.maxUniformLocation, artifacts.uniformNameMaxLength);
+
+        // GL 4.6 core 7.6.1: explicit, implicit and reserved-but-inactive default-block uniforms
+        // all draw from the one GL_MAX_UNIFORM_LOCATIONS pool, and a program asking for more than
+        // the implementation advertises FAILS TO LINK
+        // (KHR-GL43.explicit_uniform_location.uniform-loc-negative-link-max-num-of-locations).
+        // A single uniform whose own span passes the ceiling was already rejected above; this is
+        // the aggregate half of the same rule.
+        if (defaultBlockLocationDemand > static_cast<Int>(kMaxUniformLocations)) {
+            artifacts.infoLog =
+                std::format("Uniform locations exhausted: the default-block uniforms need {} locations but "
+                            "GL_MAX_UNIFORM_LOCATIONS is {}.",
+                            defaultBlockLocationDemand, kMaxUniformLocations);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
 
         if (artifacts.maxUniformLocation + 1 < requiredUniformLocations) {
             MGLOG_D("ProgramObject %u: Reflection - maxUniformLocation+1 (%u) < requiredUniformLocations (%d), "
@@ -740,6 +1004,27 @@ namespace MobileGL::MG_State::GLState {
         artifacts.uniformIndexInTProgram.resize(artifacts.maxUniformLocation + 1,
                                                 glslang::TQualifier::layoutLocationEnd);
         artifacts.uniformSamplerOrImageUnitIndex.resize(artifacts.maxUniformLocation + 1, -1);
+
+        // Occupancy for the inactive explicit uniforms collected above: a set bit means "the
+        // source claimed this location", which is enough to keep the two implicit passes off it
+        // without making the location reachable through any GL entry point. A location the
+        // fallback grow path mints later is past this bitset by construction (every reservation
+        // was folded into maxUniformLocation before the table was sized), so the lookup treats
+        // out-of-range as free rather than resizing in lockstep.
+        // Left empty - and unallocated - when nothing reserved anything, which is every program in
+        // the shader-pack corpus; the lookup below reads an empty bitset as "nothing is reserved".
+        Vector<Bool> reservedLocation;
+        if (!deadExplicitReservations.empty()) {
+            reservedLocation.assign(artifacts.maxUniformLocation + 1, false);
+            for (const auto& [reservedBase, reservedSpan] : deadExplicitReservations) {
+                for (Int element = 0; element < reservedSpan; ++element) {
+                    reservedLocation[reservedBase + element] = true;
+                }
+            }
+        }
+        const auto locationIsReserved = [&reservedLocation](SizeT location) {
+            return location < reservedLocation.size() && reservedLocation[location];
+        };
 
         Vector<int> unallocatedUniformIndex;
 
@@ -785,7 +1070,8 @@ namespace MobileGL::MG_State::GLState {
             Bool spanIsFree = location + locationSpan - 1 <= artifacts.maxUniformLocation;
             for (Int element = 0; spanIsFree && element < locationSpan; ++element) {
                 spanIsFree =
-                    artifacts.uniformIndexInTProgram[location + element] == glslang::TQualifier::layoutLocationEnd;
+                    artifacts.uniformIndexInTProgram[location + element] == glslang::TQualifier::layoutLocationEnd &&
+                    !locationIsReserved(location + element);
             }
             if (!spanIsFree) {
                 artifacts.uniformLocations[uniform.name] = kNoLocation;
@@ -817,7 +1103,8 @@ namespace MobileGL::MG_State::GLState {
                 bool hasRoom = locNeedle + locationSpan - 1 <= artifacts.maxUniformLocation;
                 for (Int element = 0; hasRoom && element < locationSpan; ++element) {
                     hasRoom = artifacts.uniformIndexInTProgram[locNeedle + element] ==
-                              glslang::TQualifier::layoutLocationEnd;
+                                  glslang::TQualifier::layoutLocationEnd &&
+                              !locationIsReserved(locNeedle + element);
                 }
                 if (!hasRoom) continue;
                 // Found a vacant location at locNeedle

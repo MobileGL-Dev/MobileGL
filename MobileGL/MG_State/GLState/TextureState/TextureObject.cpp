@@ -250,6 +250,10 @@ namespace MobileGL {
                 return m_contentVersion;
             }
 
+            Uint64 TextureObjectBase::GetShapeVersion() const {
+                return m_shapeVersion;
+            }
+
             Bool TextureObjectBase::IsMipmapCompleteForFilterCached(Bool mipmapped) const {
                 const int slot = mipmapped ? 1 : 0;
                 if (m_completeMemoShapeVersion[slot] == m_shapeVersion) {

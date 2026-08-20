@@ -17,6 +17,7 @@
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
@@ -927,6 +928,161 @@ void main() {
     EXPECT_FALSE(unsupported);
 
     MG_Backend::pActiveBackendObject.reset();
+}
+
+// KHR-GL43.shader_atomic_counters.basic-glsl-built-in, .basic-buffer-bind and .basic-api-get.
+// The atomic-counter limits used to live in two unreconciled tables - glslang compiled every
+// shader against ONE binding while glGetIntegerv advertised thirty-six - and three of the enums
+// had no case in the getter at all, so the query raised INVALID_ENUM and left the caller reading
+// whatever was in its own stack slot.
+TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
+    using namespace MobileGL;
+    namespace Transpiler = MG_Util::ShaderTranspiler;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+
+    GLint reported = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &reported);
+    EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS));
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, &reported);
+    EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE));
+    for (const GLenum pname : {GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS, GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS,
+                               GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS}) {
+        reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(pname, &reported);
+        EXPECT_EQ(reported, static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE))
+            << "pname " << pname;
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // glBindBufferBase sets the GENERIC binding point too (GL 4.6 6.1.1), and this is the one
+    // indexed-buffer family whose non-indexed query had no case.
+    reported = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_ATOMIC_COUNTER_BUFFER_BINDING, &reported);
+    EXPECT_EQ(reported, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_ATOMIC_COUNTER_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_ATOMIC_COUNTER_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+    MG_Impl::GLImpl::BindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 2, buffer);
+    MG_Impl::GLImpl::GetIntegerv(GL_ATOMIC_COUNTER_BUFFER_BINDING, &reported);
+    EXPECT_EQ(static_cast<GLuint>(reported), buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The advertised ceiling is also the one glBindBufferBase and the indexed getter enforce.
+    // A limit nothing validates against is how these tables drifted apart in the first place:
+    // the binding-point ARRAY is 36 deep, and it used to be that number an application saw.
+    constexpr GLuint pastLastBinding = static_cast<GLuint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS);
+    MG_Impl::GLImpl::BindBufferBase(GL_ATOMIC_COUNTER_BUFFER, pastLastBinding, buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+    MG_Impl::GLImpl::GetIntegeri_v(GL_ATOMIC_COUNTER_BUFFER_BINDING, pastLastBinding, &reported);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+
+    // ...and the shading language has to expand the same numbers. Each array is sized by a
+    // built-in constant and indexed at its last element with a literal, so the stage only
+    // compiles when that constant is at least what glGetIntegerv just reported - which it was
+    // not while the resource table said one.
+    const String lastBinding = std::to_string(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS - 1);
+    const String lastBuffer = std::to_string(Transpiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE - 1);
+    const String source = R"(#version 430 core
+out vec4 color;
+int mgBindings[gl_MaxAtomicCounterBindings];
+int mgCombinedBuffers[gl_MaxCombinedAtomicCounterBuffers];
+int mgFragmentBuffers[gl_MaxFragmentAtomicCounterBuffers];
+layout(binding = )" + lastBinding + R"(, offset = 0) uniform atomic_uint mgCounter;
+void main() {
+    color = vec4(float(mgBindings[)" + lastBinding + R"(] + mgCombinedBuffers[)" + lastBuffer +
+                         R"(] + mgFragmentBuffers[)" + lastBuffer + R"(] + int(atomicCounterIncrement(mgCounter))));
+}
+)";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_FRAGMENT_SHADER,
+        .sourceStr = source,
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
+// KHR-GL43.compute_shader.max: the test queries every GL_MAX_COMPUTE_* value through the API and
+// then makes a compute shader compare the matching gl_MaxCompute* constant against it. The two
+// used to be independent tables and gl_MaxComputeWorkGroupSize.z disagreed - glslang compiled
+// against a permissive 1024 while the context advertises the 64 the GL 4.6 minimum (and every ES
+// driver) reports.
+TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+
+    GLint size[3] = {0, 0, 0};
+    GLint count[3] = {0, 0, 0};
+    for (GLuint index = 0; index < 3; ++index) {
+        MG_Impl::GLImpl::GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, index, &size[index]);
+        MG_Impl::GLImpl::GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, index, &count[index]);
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The compile runs against a captured env, exactly as the pipeline's does. That is the whole
+    // invariant: the env holds the same floored driver answer GetIntegeri_v just returned, so the
+    // resource table and the query agree BY CONSTRUCTION rather than by two tables happening to
+    // carry the same literals.
+    const auto env = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+    for (GLuint index = 0; index < 3; ++index) {
+        EXPECT_EQ(static_cast<GLint>(env->maxComputeWorkGroupSize[index]), size[index]) << "index " << index;
+        EXPECT_EQ(static_cast<GLint>(env->maxComputeWorkGroupCount[index]), count[index]) << "index " << index;
+    }
+
+    // A negative array size is a compile error, so the stage only compiles when EVERY component
+    // of both built-in constants equals what the query above reported. Two-sided by construction:
+    // a resource table that is too permissive fails it exactly like one that is too tight.
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+const int mgAgree = (gl_MaxComputeWorkGroupSize == ivec3()" +
+                         std::to_string(size[0]) + ", " + std::to_string(size[1]) + ", " +
+                         std::to_string(size[2]) + R"() &&
+                     gl_MaxComputeWorkGroupCount == ivec3()" +
+                         std::to_string(count[0]) + ", " + std::to_string(count[1]) + ", " +
+                         std::to_string(count[2]) + R"()) ? 1 : -1;
+int mgProbe[mgAgree];
+void main() {
+    mgProbe[0] = 0;
+}
+)";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = source,
+        .env = env.get(),
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    // The z ceiling is also what glslang checks a declared local_size_z against, so it has to
+    // reject one invocation past the advertised limit and accept the limit itself.
+    const String atLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2]) +
+                           ") in;\nvoid main() {}\n";
+    const String pastLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2] + 1) +
+                             ") in;\nvoid main() {}\n";
+    EXPECT_TRUE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = atLimit,
+        .env = env.get(),
+    }));
+    EXPECT_FALSE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = pastLimit,
+        .env = env.get(),
+    }));
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
 }
 
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {

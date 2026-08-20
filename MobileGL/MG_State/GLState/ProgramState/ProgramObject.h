@@ -24,6 +24,20 @@ namespace MobileGL::MG_State::GLState {
 
     class ProgramObject {
     public:
+        // GL_MAX_UNIFORM_LOCATIONS: locations 0 .. MAX_UNIFORM_LOCATIONS-1 are the whole legal
+        // range (GL 4.6 core 7.6.1 / ARB_explicit_uniform_location). Shared with GL_Getter rather
+        // than spelled twice, because the link and the query must agree exactly - the CTS declares
+        // a uniform at the advertised value minus one and expects it to link
+        // (KHR-GL43.explicit_uniform_location.uniform-loc-max).
+        //
+        // Tied to glslang's own ceiling and NOT raisable past it: ParseHelper rejects
+        // `layout(location = N)` for N >= TQualifier::layoutLocationEnd at COMPILE time, so
+        // layoutLocationEnd - 1 is the largest location any shader in this stack can declare -
+        // which makes exactly layoutLocationEnd locations, 0 .. layoutLocationEnd - 1, the pool.
+        // Advertising more would promise a location no shader could name. Comfortably above the
+        // 1024 GL 4.3 requires.
+        static constexpr Int MAX_UNIFORM_LOCATIONS = static_cast<Int>(glslang::TQualifier::layoutLocationEnd);
+
         ProgramObject(Uint externalIndex) : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
         // Cancel-not-join, exactly like ~ShaderObject: the link job owns its inputs, so an
         // in-flight link whose program just went away is safe to abandon where it stands.
@@ -702,10 +716,6 @@ namespace MobileGL::MG_State::GLState {
         // SIGSEGV inside glslang::TProgram::getNumPipeInputs - KHR-GL30.api.coverage does exactly
         // this after a failed glGetAttribLocation, and reached it as soon as the CopyTexImage2D
         // throw ahead of it stopped killing the run first.
-        Int GetActiveAtomicCounterCount() const {
-            const auto& program = Artifacts().program;
-            return program ? program->getNumAtomicCounters() : 0;
-        }
         Int GetActiveAttributesCount() const {
             const auto& program = Artifacts().program;
             return program ? program->getNumPipeInputs() : 0;

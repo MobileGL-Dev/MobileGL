@@ -697,23 +697,126 @@ void main() {
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
         }
 
-        TEST_F(DoublePrecisionScenario, A64BitVertexFormatIsDeclinedOnEveryBackend) {
+        TEST_F(DoublePrecisionScenario, A64BitVertexFormatIsRecordedAndItsArrayIsDroppedAtDraw) {
             if (!Ready()) return;
             // The demotion leaves no 64-bit shader input to feed, so there is nothing a 64-bit
             // vertex FETCH could be fetched into - on either backend, and no longer only on the
-            // ones whose device lacks shaderFloat64. Declined loudly rather than accepted and
-            // drawn as garbage; the matching POST row says the same thing at startup.
+            // ones whose device lacks shaderFloat64.
+            //
+            // What that costs is the ARRAY, not the CALL. GL 4.6 core 10.3.2 defines no error for
+            // a well-formed glVertexAttribLFormat and 64-bit attributes are core in the GL 4.3
+            // context MobileGL advertises, so refusing the call would be non-conformant and would
+            // leave four pure state queries unanswerable
+            // (KHR-GL43.vertex_attrib_binding.basic-state1/3). The format is therefore recorded and
+            // queryable; the enabled array is what gets dropped, and the attribute then reads its
+            // generic current value. The matching POST row says exactly that at startup.
             GLuint vao = 0;
             glGenVertexArrays(1, &vao);
             glBindVertexArray(vao);
             while (glGetError() != GL_NO_ERROR) {}
 
-            glVertexAttribLFormat(0, 3, GL_DOUBLE, 0);
-            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+            glVertexAttribLFormat(1, 3, GL_DOUBLE, 8);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "glVertexAttribLFormat is a legal call in a GL 4.3 context";
+
+            GLint attribSize = 0;
+            GLint attribType = 0;
+            GLint attribIsLong = 0;
+            GLint attribRelativeOffset = 0;
+            glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_SIZE, &attribSize);
+            glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_TYPE, &attribType);
+            glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_LONG, &attribIsLong);
+            glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_RELATIVE_OFFSET, &attribRelativeOffset);
+            EXPECT_EQ(attribSize, 3);
+            EXPECT_EQ(attribType, static_cast<GLint>(GL_DOUBLE));
+            EXPECT_EQ(attribIsLong, GL_TRUE) << "GL_VERTEX_ATTRIB_ARRAY_LONG is what makes this the "
+                                                "unconverted form; without it the state is a lie";
+            EXPECT_EQ(attribRelativeOffset, 8);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
 
             glBindVertexArray(0);
             glDeleteVertexArrays(1, &vao);
             while (glGetError() != GL_NO_ERROR) {}
+        }
+
+        // The consequence of recording the state rather than refusing the call: a 64-bit array can
+        // now be ENABLED in a VAO that a draw uses, which it never could before. That must not
+        // take the draw down. Leaving such an array enabled with no pointer behind it is exactly
+        // the documented Adreno null-deref (SIGSEGV inside the next glDraw*), so DirectGLES
+        // disables it before glVertexAttribPointer can ever see GL_DOUBLE, and DirectVulkan maps
+        // the format to VK_FORMAT_UNDEFINED so it never enters the pipeline's vertex input state.
+        //
+        // The shader deliberately does NOT read location 1: that keeps the two backends on the
+        // same path (DirectVulkan declines a draw whose SHADER reads an unsupported enabled array,
+        // by design and loudly, which is a different assertion from this one) and it is the shape
+        // the crash needed - an enabled array nothing set a pointer for.
+        TEST_F(DoublePrecisionScenario, AnEnabledLongArrayDoesNotBreakADrawThatIgnoresIt) {
+            if (!Ready()) return;
+
+            constexpr const char* kVs = R"(#version 430 core
+layout(location = 0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+)";
+            constexpr const char* kFs = R"(#version 430 core
+out vec4 o_color;
+void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
+)";
+            std::string error;
+            const unsigned int program = CompileProgram(kVs, kFs, &error);
+            ASSERT_NE(program, 0u) << error;
+
+            ColorFbo target = MakeColorFbo(32, 32);
+            ASSERT_NE(target.fbo, 0u) << "could not create the render target";
+            BindFbo(target);
+
+            const float positions[8] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
+            const double doubles[4] = {1.0, 2.0, 3.0, 4.0};
+
+            GLuint vao = 0;
+            GLuint positionBuffer = 0;
+            GLuint doubleBuffer = 0;
+            glGenVertexArrays(1, &vao);
+            glBindVertexArray(vao);
+            glGenBuffers(1, &positionBuffer);
+            glBindBuffer(GL_ARRAY_BUFFER, positionBuffer);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(positions), positions, GL_STATIC_DRAW);
+            glGenBuffers(1, &doubleBuffer);
+            glBindBuffer(GL_ARRAY_BUFFER, doubleBuffer);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(doubles), doubles, GL_STATIC_DRAW);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+            glVertexAttribFormat(0, 2, GL_FLOAT, GL_FALSE, 0);
+            glVertexAttribBinding(0, 0);
+            glBindVertexBuffer(0, positionBuffer, 0, static_cast<GLsizei>(2 * sizeof(float)));
+            glEnableVertexAttribArray(0);
+
+            glVertexAttribLFormat(1, 1, GL_DOUBLE, 0);
+            glVertexAttribBinding(1, 1);
+            glBindVertexBuffer(1, doubleBuffer, 0, static_cast<GLsizei>(sizeof(double)));
+            glEnableVertexAttribArray(1);
+            EXPECT_EQ(FirstGLError(), 0u) << "setting up the 64-bit array was refused";
+
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glUseProgram(program);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            EXPECT_EQ(FirstGLError(), 0u) << "a draw with an enabled 64-bit array must not raise an error";
+
+            const Image image = ReadPixels(target.width, target.height);
+            ASSERT_FALSE(image.Empty());
+            EXPECT_GT(image.At(target.width / 2, target.height / 2).g, 200)
+                << "the draw did not happen; the enabled 64-bit array must be dropped, not fatal";
+
+            glDisableVertexAttribArray(0);
+            glDisableVertexAttribArray(1);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            glDeleteBuffers(1, &positionBuffer);
+            glDeleteBuffers(1, &doubleBuffer);
+            BindDefaultFramebuffer();
+            DestroyColorFbo(target);
+            glUseProgram(0);
+            glDeleteProgram(program);
+            EXPECT_EQ(FirstGLError(), 0u);
         }
 
     } // namespace

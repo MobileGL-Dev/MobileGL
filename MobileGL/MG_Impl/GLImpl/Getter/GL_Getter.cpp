@@ -25,6 +25,7 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -46,13 +47,29 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        constexpr GLint kFrontendMaxComputeUniformComponents = 1024;
-        constexpr GLint kFrontendMaxComputeAtomicCounters = 8;
-        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers = 8;
+        // Shared with the glslang resource table for the same reason as the atomic-counter
+        // limits below: gl_MaxComputeUniformComponents expands from BuildTBuiltInResource.
+        constexpr GLint kFrontendMaxComputeUniformComponents =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_COMPUTE_UNIFORM_COMPONENTS);
+        // Every atomic-counter limit is shared with the glslang resource table
+        // (BuildTBuiltInResource) through MG_Util/ShaderTranspiler/Types.h: GL 4.6 requires
+        // glGetIntegerv and the gl_MaxAtomicCounter* built-in constants to agree, and the two
+        // used to be independent tables that disagreed on both the binding count and the buffer
+        // size. Never move one of these without the other.
+        constexpr GLint kFrontendMaxComputeAtomicCounters =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
+        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
         constexpr GLint kFrontendMaxComputeSharedMemorySize = 32768;
         constexpr GLint kFrontendMaxComputeWorkGroupInvocations = 1024;
-        constexpr GLint kFrontendMaxCombinedAtomicCounters = 8;
-        constexpr GLint kFrontendMaxFragmentAtomicCounters = 8;
+        constexpr GLint kFrontendMaxCombinedAtomicCounters =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
+        constexpr GLint kFrontendMaxCombinedAtomicCounterBuffers =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
+        constexpr GLint kFrontendMaxFragmentAtomicCounters =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
+        constexpr GLint kFrontendMaxFragmentAtomicCounterBuffers =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
         constexpr GLint kFrontendMaxGeometryAtomicCounters = 0;
         constexpr GLint kFrontendMaxTessControlAtomicCounters = 0;
         constexpr GLint kFrontendMaxTessEvaluationAtomicCounters = 0;
@@ -66,10 +83,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxTessControlAtomicCounterBuffers = 0;
         constexpr GLint kFrontendMaxTessEvaluationAtomicCounterBuffers = 0;
         constexpr GLint kFrontendMaxVertexAtomicCounterBuffers = 0;
-        // One atomic counter is a uint, and a buffer never has to hold more counters than the
-        // combined limit the frontend advertises. GL 4.6 table 23.63 floors this at 32 bytes.
+        // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE: the byte offset ceiling a counter may be declared
+        // at. The matching binding count is applied in GetIndexedBufferQueryPointCount, so that
+        // the getter, the indexed queries and glBindBufferBase all share one ceiling.
         constexpr GLint kFrontendMaxAtomicCounterBufferSize =
-            kFrontendMaxCombinedAtomicCounters * static_cast<GLint>(sizeof(GLuint));
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE);
         // KHR_debug minima (GL 4.6 table 23.66); the debug entry points are stubs, but the
         // limits they advertise still have to be legal.
         constexpr GLint kFrontendMaxDebugGroupStackDepth = 64;
@@ -103,12 +121,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendSubpixelBits = 4;
         constexpr GLint kFrontendMaxSamples = 4;
 
+        // The floors under GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE. Shared with the compile
+        // pipeline (CaptureCompileEnv floors the same driver answers at them, and
+        // BuildTBuiltInResource expands gl_MaxComputeWorkGroup* from the result), because a
+        // shader is allowed to compare the built-in constant against this query.
         constexpr GLint GetMinComputeWorkGroupCount(GLuint index) {
-            return index < 3 ? 65535 : 0;
+            return index < 3 ? static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_COMPUTE_WORK_GROUP_COUNT[index]) : 0;
         }
 
         constexpr GLint GetMinComputeWorkGroupSize(GLuint index) {
-            return index < 2 ? 1024 : (index == 2 ? 64 : 0);
+            return index < 3 ? static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_COMPUTE_WORK_GROUP_SIZE[index]) : 0;
         }
 
         GLint GetMaxCombinedUniformComponents(GLint maxDefaultUniformComponents, GLint maxUniformBlocks,
@@ -185,6 +207,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 const Int backendCount =
                     MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
                 return std::min(frontendCount, static_cast<SizeT>(std::max(backendCount, 0)));
+            }
+            if (bufferTarget == BufferTarget::AtomicCounter) {
+                // The counter family's binding count is NOT the state layer's array size: a
+                // counter buffer only reaches a shader as a lowered storage block, so what an
+                // implementation can serve is the reserved range, and that number is also what
+                // glslang compiles a layout(binding = N) atomic_uint against. Clamped here so
+                // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, the indexed getters' index check and
+                // glBindBufferBase's all report the same ceiling.
+                return std::min(frontendCount,
+                                static_cast<SizeT>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS));
             }
             return frontendCount;
         }
@@ -1549,6 +1581,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_COMBINED_ATOMIC_COUNTERS:
             *params = kFrontendMaxCombinedAtomicCounters;
             return;
+        case GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxCombinedAtomicCounterBuffers;
+            return;
         case GL_MAX_COMBINED_UNIFORM_BLOCKS:
             *params = ClampUniformBlockCount(kFrontendMaxCombinedUniformBlocks);
             return;
@@ -1563,6 +1598,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MAX_FRAGMENT_ATOMIC_COUNTERS:
             *params = kFrontendMaxFragmentAtomicCounters;
+            return;
+        case GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS:
+            *params = kFrontendMaxFragmentAtomicCounterBuffers;
             return;
         case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxFragmentShaderStorageBlocks);
@@ -1672,7 +1710,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 15; // TODO
             return;
         case GL_MAX_UNIFORM_LOCATIONS:
-            *params = 1024 * 4; // TODO
+            // The same constant the link's location allocator enforces - see ProgramObject.
+            *params = MG_State::GLState::ProgramObject::MAX_UNIFORM_LOCATIONS;
             return;
         case GL_MAX_VARYING_COMPONENTS:
             *params = kFrontendMaxVaryingComponents;
@@ -2002,6 +2041,24 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_UNIFORM_BUFFER_START:
             RecordIndexedOnlyGetterError(__func__, pname);
             return;
+        // glBindBufferBase/Range set the GENERIC binding point too (GL 4.6 core 6.1.1), and this
+        // is the one indexed-buffer family whose non-indexed query was never answered - so it
+        // fell through to INVALID_ENUM and left the caller's variable holding whatever was in its
+        // stack slot. _START/_SIZE stay indexed-only, exactly like their uniform-buffer siblings.
+        case GL_ATOMIC_COUNTER_BUFFER_BINDING:
+            if (const auto& obj =
+                    MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::AtomicCounter).GetBoundObject()) {
+                *params = static_cast<GLint>(obj->GetExternalIndex());
+            } else {
+                *params = 0;
+            }
+            return;
+        case GL_ATOMIC_COUNTER_BUFFER_START:
+            RecordIndexedOnlyGetterError(__func__, pname);
+            return;
+        case GL_ATOMIC_COUNTER_BUFFER_SIZE:
+            RecordIndexedOnlyGetterError(__func__, pname);
+            return;
         case GL_UNPACK_ALIGNMENT:
             *params = MG_State::pGLContext->GetPixelStoreParam(PixelStoreParam::UnpackAlignment);
             return;
@@ -2237,18 +2294,19 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                           static_cast<Uint64>(INT32_MAX)));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
+            // NOT the frontend's binding-point array size: GetIndexedBufferQueryPointCount
+            // clamps this family to the range a lowered counter block can actually be served
+            // from, which is the same number glslang compiles a layout(binding = N) atomic_uint
+            // against and the same one glBindBufferBase validates an index against.
             *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE:
             // The conformance suite splits this evenly across every advertised binding point and
             // binds all of them in one glBindBuffersRange
-            // (KHR-GL44.multi_bind.functional_bind_buffers_range), so the pair has to divide:
-            // 32 bytes over 36 binding points is a zero-sized range, which BindBufferRange
-            // rejects with INVALID_VALUE before it binds anything. Floor the advertised size at
-            // one counter per binding point.
-            *params = std::max<GLint>(
-                kFrontendMaxAtomicCounterBufferSize,
-                static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter) * sizeof(GLuint)));
+            // (KHR-GL44.multi_bind.functional_bind_buffers_range), so the pair has to divide -
+            // a zero-sized range is INVALID_VALUE before BindBufferRange binds anything. The
+            // shared constant is 16384 over 8 binding points, which divides.
+            *params = kFrontendMaxAtomicCounterBufferSize;
             break;
         case GL_MAX_TEXTURE_BUFFER_SIZE:
             *params = dynamicParameters.MaxTextureBufferSize;

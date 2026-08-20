@@ -4194,24 +4194,30 @@ TEST_F(TextureTest, CopyTexImage1DReportsUnsupportedInsteadOfTerminating) {
     ExpectSingleGlError(GL_INVALID_OPERATION);
 }
 
-TEST_F(TextureTest, GetTexLevelParameterOnBufferStorageReportsErrorInsteadOfTerminating) {
-    // TextureStorageType is {Mipmap, Buffer} and the level queries only answer out of a mipmap
-    // chain, so every glGetTexLevelParameter* on a GL_TEXTURE_BUFFER texture reached a
-    // THROW_UNIMPL_EXCEPTION default: label and killed the process.
+TEST_F(TextureTest, GetTexLevelParameterAnswersBufferStorageGeometry) {
+    // TextureStorageType is {Mipmap, Buffer} and the level queries used to answer only out of a
+    // mipmap chain, so every glGetTexLevelParameter* on a GL_TEXTURE_BUFFER texture reached a
+    // THROW_UNIMPL_EXCEPTION default: label and killed the process. It now answers out of the
+    // attached buffer range instead (GL 4.6 core 8.9): a buffer texture is one-dimensional, and
+    // with no buffer attached it addresses no texels at all.
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_BUFFER, 1, &texture);
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, texture);
     MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, 0);
     DrainPendingGlErrors();
 
-    for (const GLenum pname : {GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT, GL_TEXTURE_DEPTH}) {
+    const std::pair<GLenum, GLint> expectations[] = {
+        {GL_TEXTURE_WIDTH, 0}, {GL_TEXTURE_HEIGHT, 1}, {GL_TEXTURE_DEPTH, 1}};
+    for (const auto& [pname, expected] : expectations) {
         GLint intParam = 0x20202020;
         MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_BUFFER, 0, pname, &intParam);
-        ExpectSingleGlError(GL_INVALID_OPERATION);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_NO_ERROR));
+        EXPECT_EQ(intParam, expected) << "pname " << pname;
 
         GLfloat floatParam = 12345.0f;
         MG_Impl::GLImpl::GetTexLevelParameterfv(GL_TEXTURE_BUFFER, 0, pname, &floatParam);
-        ExpectSingleGlError(GL_INVALID_OPERATION);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_NO_ERROR));
+        EXPECT_EQ(floatParam, static_cast<GLfloat>(expected)) << "pname " << pname;
     }
 }
 
@@ -4808,4 +4814,42 @@ TEST_F(TextureTest, CopyImageSubDataDoesNotApplyMipmapCompletenessToMultisampleT
                                       GL_TEXTURE_2D_MULTISAMPLE, 0, 0, 0, 0, 4, 4, 1);
     EXPECT_TRUE(g_copyImageSubDataCall.Called);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 8.11 makes GL_IMAGE_FORMAT_COMPATIBILITY_TYPE readable through every
+// GetTexParameter form. Three of MobileGL's four getters answered it and glGetTexParameterfv did
+// not, so the float query raised GL_INVALID_ENUM and left the caller's float uninitialised
+// (KHR-GL4x.shader_image_load_store.basic-api-texParam reads it with both iv and fv and compares
+// them). Asserted across all four here, because an enum present in three of four parallel
+// switches is the drift shape that comes back.
+TEST_F(TextureTest, ImageFormatCompatibilityTypeAgreesAcrossEveryTexParameterGetter) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+    DrainPendingGlErrors();
+
+    GLint integerValue = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_IMAGE_FORMAT_COMPATIBILITY_TYPE, &integerValue);
+    EXPECT_EQ(integerValue, GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLfloat floatValue = 0.0f;
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_IMAGE_FORMAT_COMPATIBILITY_TYPE, &floatValue);
+    EXPECT_FLOAT_EQ(floatValue, static_cast<GLfloat>(GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint signedValue = 0;
+    MG_Impl::GLImpl::GetTexParameterIiv(GL_TEXTURE_2D, GL_IMAGE_FORMAT_COMPATIBILITY_TYPE, &signedValue);
+    EXPECT_EQ(signedValue, GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLuint unsignedValue = 0;
+    MG_Impl::GLImpl::GetTexParameterIuiv(GL_TEXTURE_2D, GL_IMAGE_FORMAT_COMPATIBILITY_TYPE, &unsignedValue);
+    EXPECT_EQ(unsignedValue, static_cast<GLuint>(GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
 }

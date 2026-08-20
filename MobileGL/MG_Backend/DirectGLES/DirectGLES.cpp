@@ -395,6 +395,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        void SyncAtomicCounterBuffers(const Vector<Int>& glBindings, Int esslBindingTop) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::AtomicCounter);
+            for (const Int glBinding : glBindings) {
+                if (glBinding < 0 || static_cast<SizeT>(glBinding) >= pointCount) continue;
+                const Int esslBinding = esslBindingTop - glBinding;
+                // Already diagnosed once when the block was transpiled; nothing was bound to it
+                // there either, so there is nothing to unbind here.
+                if (esslBinding < 0) continue;
+                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::AtomicCounter,
+                                                                          static_cast<Uint>(glBinding));
+                auto& obj = point.GetBoundObject();
+                if (!obj) {
+                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), 0);
+                    continue;
+                }
+
+                auto* backendResource = EnsureBufferResource(obj);
+                if (!backendResource || backendResource->id == 0) {
+                    MGLOG_E_ONCE("No backend buffer found for atomic counter binding point %d.", glBinding);
+                    continue;
+                }
+
+                const auto& range = point.GetRange();
+                if (range.start == 0 && range.end >= obj->GetSize()) {
+                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
+                                         backendResource->id);
+                } else {
+                    const auto start = std::min(range.start, obj->GetSize());
+                    const auto end = std::min(range.end, obj->GetSize());
+                    BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
+                                          backendResource->id, static_cast<GLintptr>(start),
+                                          static_cast<GLsizeiptr>(end - start));
+                }
+                // The whole point of a counter is that the shader INCREMENTS it, and every
+                // conformance case reads the result back with glMapBufferRange or
+                // glGetBufferSubData - which serve the frontend's CPU shadow until the buffer is
+                // flagged (BufferObject::SyncGpuWrites), exactly as for a storage buffer.
+                obj->MarkGpuWritten();
+            }
+        }
+
         void SyncBoundBuffer(BufferTarget target, GLenum glTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -1394,12 +1438,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        // Highest image unit that has ever been given a texture, plus one. Maintained by the
+        // single funnel below, so it is a sound "no draw in this context can be reading an image"
+        // test: nothing reaches an image unit without going through SyncImageTextureBinding.
+        // Almost every program (every Minecraft draw) leaves it at zero, which is what keeps the
+        // draw-path staleness check below at one integer test.
+        static Uint g_imageUnitHighWaterMark = 0;
+
         void SyncImageTextureBinding(Uint unit) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
             TrackWritableImageBufferUnit(unit, IsWritableImageBufferTexture(imageBinding));
+            if (imageBinding.Texture && unit + 1 > g_imageUnitHighWaterMark) {
+                g_imageUnitHighWaterMark = unit + 1;
+            }
             if (!imageBinding.Texture) {
                 g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
                 return;
@@ -1452,6 +1506,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
             }
+        }
+
+        // What the draw path last swept the image units against. A draw never swept them at all:
+        // an image unit was established once, eagerly, by glBindImageTexture and never revisited.
+        // That is stale the moment the texture behind it is re-specified with a new size or
+        // format, because ES 3.1 only allows IMMUTABLE storage on an image unit
+        // (SyncTextureObjectToBackend's imageBindableStorageRequired), immutable storage cannot be
+        // redefined, and so the re-spec MINTS A NEW ES TEXTURE NAME - leaving the unit pointing at
+        // the deleted one and imageSize() reporting the old dimensions
+        // (KHR-GL43.shader_image_size.advanced-changeSize).
+        static Uint64 g_imageSweepContextId = 0;
+        static Uint64 g_imageSweepSamplingGeneration = 0;
+        static Uint g_imageSweepBackendContextGeneration = 0;
+        static Bool g_imageSweepValid = false;
+
+        // The sweep is a glBindImageTexture per unit, so it must not run per draw: the gate is the
+        // frontend's sampling-resolution generation, which TextureObjectBase::BumpShapeVersion
+        // moves on exactly the shape and format changes that can force the re-mint. Deliberately
+        // NOT the backend-side re-mint counter (g_attachmentBackendIdGeneration's sibling would be
+        // the obvious choice): a texture that is bound ONLY to an image unit is re-minted inside
+        // this very sweep, so a backend-side trigger would be bumped after the gate had already
+        // declined to run it.
+        void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
+            if (g_imageUnitHighWaterMark == 0) return;
+            if (g_imageSweepValid && g_imageSweepContextId == keys.contextId &&
+                g_imageSweepSamplingGeneration == keys.samplingGeneration &&
+                g_imageSweepBackendContextGeneration == g_backendContextGeneration) {
+                return;
+            }
+            SyncImageTextureBindings();
+            g_imageSweepContextId = keys.contextId;
+            g_imageSweepSamplingGeneration = keys.samplingGeneration;
+            g_imageSweepBackendContextGeneration = g_backendContextGeneration;
+            g_imageSweepValid = true;
         }
     } // namespace TextureImpl
 
@@ -2396,6 +2484,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           syncBit & DrawSyncBit::IndirectBuffer);
         VertexArrayImpl::SyncCurrentVAO(currentVAO, vaoTwin);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
+        // A draw reads and writes through its image units too, so the unit bindings have to be
+        // as current as the sampled ones. Gated (see the sweep): a program with no image binding
+        // pays one integer test, and one with images re-issues them only when a texture shape
+        // moved under them.
+        TextureImpl::SyncImageTextureBindingsForDraw(textureKeys);
         // A draw writes through its image units too - the conformance case that found this
         // stores into a buffer texture from the FRAGMENT stage, not from a dispatch.
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
@@ -2913,6 +3006,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             }
                         }
                     }
+                }
+
+                // Atomic counter buffers. Bound here rather than beside the storage-buffer sync
+                // in SyncNeccessaryBuffers because the reserved slot the transpiled ESSL reads
+                // them at is PROGRAM state: it is `top - GL binding` for the counter blocks THIS
+                // program declares, and no other program's blocks live there. Both the draw and
+                // the dispatch path reach this, which is what a compute-shader counter needs.
+                if (!backendProgram.GetAtomicCounterBindings().empty()) {
+                    BufferImpl::SyncAtomicCounterBuffers(backendProgram.GetAtomicCounterBindings(),
+                                                         backendProgram.GetAtomicCounterEsslBindingTop());
                 }
 
                 {
@@ -5683,15 +5786,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glDispatchComputeIndirect(indirect);
     }
 
+    // An atomic counter is a shader storage block by the time it reaches the ES driver (glslang
+    // lowers every atomic_uint onto one), so an application that asks only for the counter
+    // barrier is asking about memory the driver knows as storage-buffer memory. Ordering one
+    // does not oblige a driver to order the other, so the counter bit implies the storage bit
+    // here - which is what the lowering costs and the only place it can be paid.
+    static GLbitfield LowerAtomicCounterBarrierBits(GLbitfield barriers) {
+        if ((barriers & GL_ATOMIC_COUNTER_BARRIER_BIT) != 0) {
+            barriers |= GL_SHADER_STORAGE_BARRIER_BIT;
+        }
+        return barriers;
+    }
+
     void MemoryBarrier(GLbitfield barriers) {
-        g_GLESFuncs.glMemoryBarrier(barriers);
+        g_GLESFuncs.glMemoryBarrier(LowerAtomicCounterBarrierBits(barriers));
         if (g_GLESCapabilities.IsAngleRenderer) {
             g_GLESFuncs.glFlush();
         }
     }
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
-        g_GLESFuncs.glMemoryBarrierByRegion(barriers);
+        g_GLESFuncs.glMemoryBarrierByRegion(LowerAtomicCounterBarrierBits(barriers));
     }
 
     // One endpoint of a glCopyImageSubData, expressed the way the ES driver stores it.
@@ -7842,9 +7957,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 tempFB, GL_READ_FRAMEBUFFER, backendTexId,
                 backendAttachTarget == GL_UNKNOWN_MGL ? target : backendAttachTarget, level,
                 /*withStencil=*/format == GL_DEPTH_STENCIL);
-        } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY) {
-            // ES cannot attach 3D/array textures through glFramebufferTexture2D; read layer 0. Reads
-            // of deeper slices are served from the CPU shadow instead (see the shadow-first branch).
+        } else if (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                   backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY) {
+            // ES cannot attach 3D/array textures through glFramebufferTexture2D; layer 0 here, and
+            // the deeper slices one at a time in the per-layer loop below. A CUBE MAP ARRAY is in
+            // this list for the same reason its layer-faces are addressed as array layers:
+            // glFramebufferTexture2D has no target token for it, so the 2D attach it used to take
+            // left the scratch FBO incomplete and every read fell through to the (stale) CPU
+            // shadow - which is exactly the all-zero result the conformance suite saw.
             ScratchFBOImpl::EnsureColorAttachmentLayer(tempFB, GL_READ_FRAMEBUFFER, backendTexId, level, 0);
         } else {
             ScratchFBOImpl::EnsureColorAttachment2D(
@@ -7897,6 +8017,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto size = textureMipmapObject->GetMipmapTexelSize(MG_Util::ConvertGLEnumToTextureUploadTarget(target), level);
 
+        // GL_TEXTURE_1D_ARRAY keeps its LAYERS in the state-side height (that is what
+        // glTexImage2D(GL_TEXTURE_1D_ARRAY, w, layers) means), while the ES texture behind it is a
+        // 2D array of height 1 with the layers in depth - GetBackendUploadSize performs exactly
+        // that swap on the way in. Everything below addresses the ES image, so the same swap has
+        // to happen here: without it the readback asked layer 0 for a `layers`-row rectangle it
+        // does not have, and every layer but the first came back undefined (all zeroes on Adreno,
+        // KHR-GL4x.shader_image_load_store.basic-allTargets-*).
+        const Bool oneDimensionalArray = textureObject->GetTarget() == TextureTarget::Texture1DArray;
+        if (oneDimensionalArray) {
+            size = TextureImpl::GetBackendUploadSize(TextureTarget::Texture1DArray, size);
+        }
+
         MGLOG_D("GetTexImage: mip level %d size = %dx%d", level, size.x(), size.y());
 
         // Prefer the client-format conversion for every convertible combination: the "native" ES pairs
@@ -7910,10 +8042,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 TextureImpl::BackendTextureFormatAddsAlpha(textureObject->GetFormat(), textureObject->GetTarget());
             // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
             // readbacks (cube-map arrays address as arrays); 2D targets must ignore
-            // them (GL 3.3 section 6.1.4).
-            const Bool applyPackImageParams = backendAttachTarget == GL_TEXTURE_3D ||
-                                              backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
-                                              backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
+            // them (GL 3.3 section 6.1.4). A 1D ARRAY is one of those 2D targets: GL hands it back
+            // as a single two-dimensional image whose ROWS are the layers, so the layer stride is
+            // one packed row and the image parameters do not enter into it - even though the ES
+            // texture underneath is an array and is read one layer at a time.
+            const Bool applyPackImageParams = !oneDimensionalArray &&
+                                              (backendAttachTarget == GL_TEXTURE_3D ||
+                                               backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                                               backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY);
             const GLsizei sliceCount = std::max(size.z(), 1);
             const Bool multiSlice = size.z() > 1;
             // glGetTexImage answers with the STORED texels, and for a packed format whose encoding
@@ -7947,7 +8083,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Attach the layers one at a time instead and read each off the GPU, keeping the shadow
             // for the formats the FBO cannot represent at all.
             if (multiSlice && tempFBOComplete &&
-                (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY)) {
+                (backendAttachTarget == GL_TEXTURE_3D || backendAttachTarget == GL_TEXTURE_2D_ARRAY ||
+                 backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY)) {
                 // Each slice is packed as its own 2D image, so the per-slice call must not apply
                 // GL_PACK_SKIP_IMAGES / GL_PACK_IMAGE_HEIGHT itself - this walks the destination
                 // over them, using the same layout StoreWideRowsToClient computes.

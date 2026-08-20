@@ -55,6 +55,12 @@ namespace MobileGL::MG_State::GLState {
         // Backends compare it against a per-resource snapshot to skip re-syncing unchanged
         // textures across draws (e.g. the block atlas bound across a whole terrain batch).
         virtual Uint64 GetContentVersion() const = 0;
+        // Monotonic counter bumped on every SHAPE mutation - level sizes, the stored level
+        // set, the internal format, the level range (see BumpShapeVersion). Disjoint from the
+        // content version on purpose: glTexImage2D(..., nullptr) re-specifies a level's size
+        // without dirtying a single texel, so a backend that keys its "nothing changed since
+        // the last sync" skip on content alone keeps a resource of the OLD size alive.
+        virtual Uint64 GetShapeVersion() const = 0;
         // Answers IsMipmapCompleteForFilter() from a memo. Sampling completeness is a
         // property of the texture's SHAPE - level sizes, level count, level range,
         // internal format - and never of its texel content, but every draw asks about
@@ -106,6 +112,7 @@ namespace MobileGL::MG_State::GLState {
         void SetImmutableLevels(Uint levels) override;
         Uint16 GetTextureParamsVersion() const override;
         Uint64 GetContentVersion() const override;
+        Uint64 GetShapeVersion() const override;
         Bool IsMipmapCompleteForFilterCached(Bool mipmapped) const override;
         // Bumps the content version without touching per-level storage-dirty flags. Used when the
         // set of defined mip levels grows via GPU-side mip generation (glGenerateMipmap): the level

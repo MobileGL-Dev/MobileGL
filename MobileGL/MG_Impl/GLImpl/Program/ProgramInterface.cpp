@@ -19,7 +19,7 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
         // "<getAtomicCounterBlockName()>_<binding>" (ParseContextBase.cpp), one per GL
         // atomic-counter binding point. That block IS the GL_ATOMIC_COUNTER_BUFFER resource
         // and its trailing number IS GL_BUFFER_BINDING; its members stay GL_UNIFORMs.
-        constexpr const char* kAtomicCounterBlockPrefix = "gl_AtomicCounterBlock";
+        constexpr const char* kAtomicCounterBlockPrefix = MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX;
 
         enum class BlockKind {
             Uniform,       // a real GL uniform block

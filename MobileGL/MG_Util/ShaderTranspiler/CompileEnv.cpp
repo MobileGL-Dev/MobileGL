@@ -28,6 +28,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         HashValue(state, env.maxComputeWorkGroupSize[0]);
         HashValue(state, env.maxComputeWorkGroupSize[1]);
         HashValue(state, env.maxComputeWorkGroupSize[2]);
+        HashValue(state, env.maxComputeWorkGroupCount[0]);
+        HashValue(state, env.maxComputeWorkGroupCount[1]);
+        HashValue(state, env.maxComputeWorkGroupCount[2]);
         HashValue(state, env.maxComputeWorkGroupInvocations);
         HashValue(state, env.backend);
         // DynamicBackendParameters is a plain aggregate of scalars; hashing its object
@@ -51,19 +54,23 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             env->advertisedExtensions = activeBackend->GetRendererInfo().RendererGLInfo.Extensions;
         }
 
-        // GL_MAX_COMPUTE_WORK_GROUP_SIZE. This is a REAL driver call on DirectGLES; it must
-        // happen here, on the context thread, and exactly once per context. The frontend
-        // minimum is the floor, matching what GL_Getter reports.
-        // TODO: Share these exposed compute limit helpers with GL_Getter.cpp instead of duplicating the frontend minima.
-        constexpr Uint kFrontendMinComputeWorkGroupSizes[3] = {1024, 1024, 64};
+        // GL_MAX_COMPUTE_WORK_GROUP_SIZE / _COUNT. These are REAL driver calls on DirectGLES; they
+        // must happen here, on the context thread, and exactly once per context. The frontend
+        // minimum is the floor, matching what GL_Getter reports - both sides now floor at the
+        // shared MIN_COMPUTE_WORK_GROUP_* constants rather than at their own copy of them.
         for (Uint index = 0; index < 3; ++index) {
-            Int backendValue = 0;
+            Int backendSize = 0;
+            Int backendCount = 0;
             if (MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v) {
                 MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, index,
-                                                                    &backendValue);
+                                                                    &backendSize);
+                MG_Backend::gBackendFunctionsTable.GL.GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, index,
+                                                                    &backendCount);
             }
             env->maxComputeWorkGroupSize[index] =
-                std::max(static_cast<Uint>(std::max(backendValue, 0)), kFrontendMinComputeWorkGroupSizes[index]);
+                std::max(static_cast<Uint>(std::max(backendSize, 0)), MIN_COMPUTE_WORK_GROUP_SIZE[index]);
+            env->maxComputeWorkGroupCount[index] =
+                std::max(static_cast<Uint>(std::max(backendCount, 0)), MIN_COMPUTE_WORK_GROUP_COUNT[index]);
         }
 
         constexpr Uint64 kFrontendMaxComputeWorkGroupInvocations = 1024;

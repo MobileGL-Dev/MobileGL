@@ -80,6 +80,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/ImageTargetKindScenario.cpp
     Scenarios/ImageFormatQualifierScenario.cpp
+    Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
@@ -91,6 +92,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
+    Scenarios/LayeredTextureReadbackScenario.cpp
+    Scenarios/AtomicCounterScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

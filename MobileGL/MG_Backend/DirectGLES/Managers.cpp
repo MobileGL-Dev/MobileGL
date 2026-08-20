@@ -45,6 +45,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
     constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
 
+    // ES has no atomic-counter buffers: glslang lowers every atomic_uint onto a synthesized
+    // storage block, so one GL counter BUFFER costs one of the driver's shader-storage binding
+    // points. Those slots are taken from the TOP of the range downwards - below the one
+    // mg_IndirectParams already reserves - so an application binding its own SSBOs from 0 upwards
+    // never meets them, and the slot for GL binding N is `this - N` in every stage of the
+    // program without any shared state. Negative when the driver has no room left at all.
+    static Int AtomicCounterEsslBindingTop() {
+        return g_GLESCapabilities.MaxShaderStorageBufferBindings - 2;
+    }
+
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.IsAngleLlvmpipeRenderer;
     }
@@ -1758,14 +1768,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                m_syncedAttributeVersions[attribIndex].BufferVersion;
                 if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
-                // Defence in depth. The frontend already declines glVertexAttribLFormat on this
-                // backend (SupportsFloat64VertexAttributes is false - ES has no GL_DOUBLE vertex
-                // format and ESSL has no fp64 type), so IsLong should never arrive here; if it ever
-                // did, passing GL_DOUBLE to glVertexAttribPointer would only raise GL_INVALID_ENUM on
-                // the real driver. Disabling rather than merely skipping matters: becoming long bumps
-                // FormatVersion, not SwitchVersion, so the enable/disable block above will not run
-                // again and an already-enabled array would stay enabled with no pointer and no
-                // ARRAY_BUFFER binding - which ES 3.1+ makes an INVALID_OPERATION at draw.
+                // This is where a 64-bit array actually stops. glVertexAttribLFormat is a legal call
+                // in a GL 4.3 context and the frontend RECORDS its format (the state queries have to
+                // answer), so IsLong does arrive here - what this backend cannot do is FEED it:
+                // SupportsFloat64VertexAttributes is false because ES has no GL_DOUBLE vertex format
+                // and ESSL has no fp64 type, and passing GL_DOUBLE to glVertexAttribPointer would
+                // only raise GL_INVALID_ENUM on the real driver. Disabling rather than merely
+                // skipping matters: becoming long bumps FormatVersion, not SwitchVersion, so the
+                // enable/disable block above will not run again and an already-enabled array would
+                // stay enabled with no pointer and no ARRAY_BUFFER binding - which ES 3.1+ makes an
+                // INVALID_OPERATION at draw.
                 //
                 // IsLong is not the only way a 64-bit array gets here: glVertexAttribFormat
                 // with GL_DOUBLE asks for doubles in memory CONVERTED to float, so it is not
@@ -4745,6 +4757,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject) {
             ImageFormatBakeInputs inputs;
+            // A format GLSL ES cannot spell on a driver with no GL_NV_image_formats to spell it
+            // with. There is no legal ESSL for such a shader at all, so the stage will not
+            // compile and the program is lost - a failure that used to leave nothing behind but
+            // a draw that rendered nothing. Recorded and reported ONCE per program build rather
+            // than per uniform: an image array reaches this decision once per element.
+            String unspellableUniform;
+            String unspellableFormat;
+            Uint unspellableCount = 0;
+            const auto recordUnspellableFormat = [&](const String& uniformName, String formatSpelling) {
+                if (unspellableCount == 0) {
+                    unspellableUniform = uniformName;
+                    unspellableFormat = Move(formatSpelling);
+                }
+                ++unspellableCount;
+            };
+
             const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
                 const auto& name = stateProgramObject.GetUniformName(loc);
@@ -4757,6 +4785,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // still needs the extension directive to survive the ES compiler.
                     if (!IsCoreEsslLayoutFormat(type->getQualifier().getFormat())) {
                         inputs.needsExtendedImageFormats = true;
+                        if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                            recordUnspellableFormat(name, glslang::TQualifier::getLayoutFormatString(
+                                                              type->getQualifier().getFormat()));
+                        }
                     }
                     continue;
                 }
@@ -4782,6 +4814,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
                                 "core cannot spell and this driver has no GL_NV_image_formats for.",
                                 name.c_str(), unit, boundFormat);
+                        recordUnspellableFormat(
+                            name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
                         continue;
                     }
                     inputs.needsExtendedImageFormats = true;
@@ -4823,6 +4857,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             for (const auto& name : textCompleted) {
                 inputs.glFormatByUniformName.erase(name);
+            }
+            // Unlatched MGLOG_E, like the transpile- and link-failure diagnostics in SyncToBackend:
+            // one line per failing program build, and naming the uniform and the format is the
+            // whole diagnostic value. Left as a log rather than a link failure on purpose - the
+            // frontend has already reported LINK_STATUS = true and GL cannot retract it, and the
+            // program stays queryable exactly as the "linked but not drawable" exit leaves it.
+            if (unspellableCount != 0) {
+                MGLOG_E("Image format '%s' on uniform '%s' has no GLSL ES spelling and this driver does not expose "
+                        "GL_NV_image_formats%s; the stage using it cannot compile and the program will draw "
+                        "nothing.",
+                        unspellableFormat.empty() ? "(none)" : unspellableFormat.c_str(), unspellableUniform.c_str(),
+                        unspellableCount > 1 ? " (and it is not the only image uniform affected)" : "");
             }
             return inputs;
         }
@@ -4881,6 +4927,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this build current - the draw path compares the signature and rebuilds on a change.
             const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
             m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
+            // Rebuilt by the transpile loop below, one entry per atomic-counter block it finds.
+            // The top is snapshotted here so every stage of this program - and the draw path
+            // reading it afterwards - resolves the same slot for the same GL binding.
+            m_atomicCounterGlBindings.clear();
+            m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
@@ -5206,6 +5257,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
                 }
 
+                // Atomic counters, same mechanism for the same reason. glslang already turned
+                // every atomic_uint into a member of gl_AtomicCounterBlock_<N> and let the IO
+                // mapper pick that block's binding, which has no relation to the GL binding point
+                // N the application bound its counter buffer to - and can alias an SSBO the
+                // application binds itself. Move each block to its reserved slot and record N, so
+                // the draw path knows which GL_ATOMIC_COUNTER_BUFFER points to re-issue as
+                // storage-buffer bindings.
+                spvcSession.SetAtomicCounterBlockBindings(m_atomicCounterEsslBindingTop,
+                                                          m_atomicCounterGlBindings);
+
                 const char* result = nullptr;
                 spvcSession.Compile(&result);
 
@@ -5351,6 +5412,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glDeleteShader(backendShaderId);
 
                 MGLOG_D("Processed shader source length: %zu", source.length());
+            }
+
+            // A counter buffer declared by several stages was recorded once per stage; the draw
+            // path binds per GL binding point, so collapse the duplicates here rather than
+            // re-issuing the same glBindBufferBase two or three times every draw.
+            if (!m_atomicCounterGlBindings.empty()) {
+                std::sort(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end());
+                m_atomicCounterGlBindings.erase(
+                    std::unique(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end()),
+                    m_atomicCounterGlBindings.end());
             }
 
             // Transform feedback capture runs on the real driver (see XfbImpl in

@@ -22,6 +22,25 @@ class ITextureObject;
 namespace MobileGL::MG_Backend::DirectVulkan {
 enum class SamplerNumericDomain : Uint8;
 
+// A GL 1D-ARRAY level keeps its LAYER COUNT in the state-side HEIGHT: that is what
+// glTexImage2D(GL_TEXTURE_1D_ARRAY, width, layers) means, and the frontend records the level
+// as {width, layers, 1} (see GL_Texture.cpp's AllocateStorage and the completeness walk in
+// TextureObject.cpp, which shrinks only x down the chain). Vulkan packs it the other way: a
+// 1D array is a VK_IMAGE_TYPE_1D image whose extent.height MUST be 1 and whose layers live in
+// arrayLayers - i.e. in the slot this backend reads out of z. So every place that turns a GL
+// level size into Vulkan image geometry has to move the count across first, and every GL-space
+// sub-box that rides along with it has to move its y the same way. DirectGLES performs the
+// identical remap onto the ES 2D array it maps 1D arrays to (GetBackendUploadSize).
+//
+// Applied to nothing else: a 2D array, a cube array and a 3D texture all already carry their
+// depth/layer count in z, which is where the Vulkan side expects it.
+inline IntVec3 ToVulkanLevelExtent(TextureTarget stateTarget, const IntVec3& glTexelSize) {
+    if (stateTarget == TextureTarget::Texture1DArray) {
+        return {glTexelSize.x(), 1, glTexelSize.y()};
+    }
+    return glTexelSize;
+}
+
 class VkTextureManager {
 public:
     // Monotonic epoch bumped whenever a texture VkImage is (re)created. The render-pass
@@ -206,6 +225,12 @@ public:
         // as defense-in-depth: any path that grows the level set (which resizes the sampled view)
         // busts the skip even if it failed to bump the content version.
         Uint32 syncedMipLevelCount = 0;
+        // Snapshot of ITextureObject::GetShapeVersion() at the last successful sync. The content
+        // version alone does NOT cover a re-specification: glTexImage2D(..., nullptr) on an
+        // already-defined level changes its size or format and dirties no texel, so it moves the
+        // shape version and nothing else. Without this in the early-out key the image, its views
+        // and therefore imageSize() all keep answering with the texture's PREVIOUS shape.
+        Uint64 syncedShapeVersion = 0;
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -237,6 +262,7 @@ public:
             std::swap(this->lastRecordingGeneration, that.lastRecordingGeneration);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
+            std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
         }
 
         void Reset() {
@@ -300,6 +326,7 @@ public:
             syncedTextureParamsVersion = 0;
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
+            syncedShapeVersion = 0;
         }
 
         ~TextureResource() {
