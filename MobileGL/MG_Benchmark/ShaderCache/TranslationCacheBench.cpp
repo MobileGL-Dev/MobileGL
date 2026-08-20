@@ -10,22 +10,40 @@
 // motivated it: the KHR-GL33.texture_swizzle.smoke_* shape, where one case builds 2592
 // programs out of a handful of distinct sources.
 //
-// Two pairs of cases, each Off/On:
+// Four pairs of cases, each Off/On:
 //
-//   ProgramLink   - the whole glCompileShader + glLinkProgram path for one program, in
-//                   situ. This is what L1 moves, and it is deliberately the PESSIMISTIC
-//                   number: a hit still pays for both glslang parses and the link, because
-//                   the frontend's GL query surface is built out of the TProgram they
-//                   produce. Only GlslangToSpv and the 11-pass sanitize chain are skipped.
+//   ProgramLink      - the whole glCompileShader + glLinkProgram path for one program, with
+//                      FRESH SHADER OBJECTS every iteration. This is the CTS shape exactly,
+//                      and it is the headline case now. It used to be the PESSIMISTIC one:
+//                      a hit still paid for both glslang parses, because the parse happens
+//                      at glCompileShader - a different entry point from the one L1
+//                      memoizes - and fresh shader objects meant ShaderCompileAdoptionMap
+//                      could not hand the earlier parse over either. L1c is what closed
+//                      that: the compile half of the memo recognises each stage's source
+//                      and publishes its verdict without parsing, so on a hit this case now
+//                      constructs no glslang object at all.
 //
-//   EsslTranspile - the DirectGLES backend segment: the SPIR-V pass chain plus SPIRV-Cross.
-//                   Runs the driver-INDEPENDENT half of the real chain (the passes
-//                   SyncToBackend runs unconditionally, plus the two stage-gated ones a
-//                   fragment module reaches) so the miss path costs what production costs;
-//                   the capability-gated passes need a live ES driver and are not
-//                   reachable from a benchmark process.
+//   SharedShaderLink - the same program population with the shader objects KEPT ALIVE, so
+//                      the parses happen once outside the measured loop whatever the cache
+//                      does. That makes it the CONTROL for L1c rather than a target: its
+//                      numbers should not move, and if they do, L1c has added cost to a
+//                      path it was supposed to leave alone.
 //
-// Both On cases run with a warm cache: the first iteration misses and every one after it
+//   DeferredParseLink - the shape where L1c could LOSE: a constant vertex source (which
+//                      hits L1c and therefore skips its parse) against a fresh fragment
+//                      source every iteration (which makes the PROGRAM key miss, so the
+//                      skipped parse has to happen inside the link after all). Same parse
+//                      count either way, so the pair should land within noise; see its own
+//                      header below.
+//
+//   EsslTranspile    - the DirectGLES backend segment: the SPIR-V pass chain plus
+//                      SPIRV-Cross. Runs the driver-INDEPENDENT half of the real chain (the
+//                      passes SyncToBackend runs unconditionally, plus the two stage-gated
+//                      ones a fragment module reaches) so the miss path costs what
+//                      production costs; the capability-gated passes need a live ES driver
+//                      and are not reachable from a benchmark process.
+//
+// Every On case runs with a warm cache: the first iteration misses and every one after it
 // hits, which is exactly the steady state of a 2592-program smoke case.
 
 #include <benchmark/benchmark.h>
@@ -222,12 +240,18 @@ static void BM_ProgramLink_CacheOn(benchmark::State& state) {
     const String fs = SwizzleLikeFragment("", static_cast<int>(state.range(0)));
     LinkOneProgram(vs, fs); // prime, so the measured loop is the steady state
     const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats parseBefore = GetShaderParseVerdictCache().Stats();
     for (auto _ : state) {
         LinkOneProgram(vs, fs);
     }
     const TranslationCacheStats stats = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats parseStats = GetShaderParseVerdictCache().Stats();
     state.counters["L1_hits"] = static_cast<double>(stats.hits - before.hits);
     state.counters["L1_misses"] = static_cast<double>(stats.misses - before.misses);
+    // Two stages per iteration, so a clean run shows L1c_hits == 2 * iterations and zero
+    // misses: every glCompileShader in the loop skipped its parse.
+    state.counters["L1c_hits"] = static_cast<double>(parseStats.hits - parseBefore.hits);
+    state.counters["L1c_misses"] = static_cast<double>(parseStats.misses - parseBefore.misses);
 }
 BENCHMARK(BM_ProgramLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
@@ -240,10 +264,14 @@ BENCHMARK(BM_ProgramLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecon
 // that never reuses a shader object pays) but it is the pessimistic one, and the residual it
 // leaves is the parse, not the link.
 //
-// This pair keeps the shader objects alive, so ShaderCompileAdoptionMap can hand a later
-// glCompileShader the earlier one's parse, and the L1 hit then skips the link, mapIO, the
-// SPIR-V, the reflection and the routing outright. That is the
-// KHR-GL33.texture_swizzle.smoke_* shape - 2592 programs over a handful of distinct sources.
+// This pair keeps the shader objects alive, so the parses happen once before the measured
+// loop and the L1 hit then skips the link, mapIO, the SPIR-V, the reflection and the routing
+// outright.
+//
+// SINCE L1c THIS IS THE CONTROL, NOT THE TARGET. Nothing inside the measured loop calls
+// glCompileShader, so L1c cannot fire here at all - which is exactly what makes the pair
+// useful: it is the shape that says whether the compile-side memo has slowed the LINK path
+// down. Its numbers should be indistinguishable from the pre-L1c ones.
 // ---------------------------------------------------------------------------------------
 namespace {
     struct SharedShaders {
@@ -358,5 +386,72 @@ static void BM_EsslTranspile_CacheOn(benchmark::State& state) {
     state.counters["L2_misses"] = static_cast<double>(stats.misses);
 }
 BENCHMARK(BM_EsslTranspile_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
+
+// ---------------------------------------------------------------------------------------
+// L1c, the shape where it could LOSE rather than win: the DEFERRED PARSE.
+// ---------------------------------------------------------------------------------------
+// A stage whose compile hits L1c holds no AST, so if the program-level key then MISSES, the
+// parse it skipped has to happen anyway - inside the link, via ClaimParsedShader. The parse
+// is moved, not removed, and this pair is what says whether moving it costs anything.
+//
+// The shape forces exactly that, every iteration: one CONSTANT vertex source (hits L1c after
+// the first iteration) linked against a FRESH fragment source each time (misses L1c, and
+// makes the program key miss too). So:
+//
+//   cache off - two parses at glCompileShader, then the link.
+//   cache on  - one parse at glCompileShader (the fragment), one deferred parse inside the
+//               link (the vertex), then the link.
+//
+// The parse count is identical, so these two should land within noise of each other. If the
+// On arm is materially SLOWER, L1c is charging for something - the per-compile key build and
+// hash over the full preprocessed source, or the loss of the claim-CAS reuse - and that cost
+// shows up here and nowhere else.
+//
+// The distinct fragment sources also churn both front-end levels through their FIFO caps,
+// which is the eviction behaviour a real shaderpack load produces; over a long run the
+// constant vertex entry is occasionally evicted by that churn and re-inserted, so the L1c
+// hit rate reported below is high but not exactly 1.0 per iteration.
+namespace {
+    String UniqueFragmentSource(const Uint64 serial, const int padLines) {
+        return SwizzleLikeFragment("", padLines) +
+               "\n// unique-" + std::to_string(serial) + "\n";
+    }
+} // namespace
+
+static void BM_DeferredParseLink_CacheOff(benchmark::State& state) {
+    MobileGL::Initialize();
+    const SyncCompileScope sync;
+    const CacheModeScope cache(false);
+    const String vs = kVertexSource;
+    Uint64 serial = 0;
+    for (auto _ : state) {
+        LinkOneProgram(vs, UniqueFragmentSource(serial++, static_cast<int>(state.range(0))));
+    }
+    state.SetLabel("MOBILEGL_SHADER_CACHE=0");
+}
+BENCHMARK(BM_DeferredParseLink_CacheOff)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
+
+static void BM_DeferredParseLink_CacheOn(benchmark::State& state) {
+    MobileGL::Initialize();
+    const SyncCompileScope sync;
+    const CacheModeScope cache(true);
+    const String vs = kVertexSource;
+    Uint64 serial = 0;
+    LinkOneProgram(vs, UniqueFragmentSource(~0ull, static_cast<int>(state.range(0)))); // prime the vertex entry
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats parseBefore = GetShaderParseVerdictCache().Stats();
+    for (auto _ : state) {
+        LinkOneProgram(vs, UniqueFragmentSource(serial++, static_cast<int>(state.range(0))));
+    }
+    const TranslationCacheStats stats = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats parseStats = GetShaderParseVerdictCache().Stats();
+    // Expected shape: L1 all misses (every program is new), L1c one hit (vertex) and one miss
+    // (fragment) per iteration.
+    state.counters["L1_hits"] = static_cast<double>(stats.hits - before.hits);
+    state.counters["L1_misses"] = static_cast<double>(stats.misses - before.misses);
+    state.counters["L1c_hits"] = static_cast<double>(parseStats.hits - parseBefore.hits);
+    state.counters["L1c_misses"] = static_cast<double>(parseStats.misses - parseBefore.misses);
+}
+BENCHMARK(BM_DeferredParseLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_MAIN();

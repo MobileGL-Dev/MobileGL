@@ -1103,3 +1103,256 @@ TEST_F(TranslationCacheTest, ConcurrentLinksOfSharedSourcesProduceIdenticalSpirv
     EXPECT_NE(expected[0], expected[1]);
     EXPECT_NE(expected[1], expected[2]);
 }
+
+// =========================================================================================
+// L1c - the COMPILE half: the parse verdict memo
+// =========================================================================================
+//
+// Same weighting as the two levels above: mostly the KEY, because an under-specified key
+// here means a shader that reports GL_TRUE for a source that does not actually parse (or
+// the reverse), which is the one way this level can produce a wrong answer.
+
+namespace {
+    ShaderParseVerdictKeyInputs BaselineParseVerdictInputs(const StringView source) {
+        ShaderParseVerdictKeyInputs inputs;
+        inputs.frontendFingerprint = 0x0f1e'2d3c'4b5a'6978ull;
+        inputs.shaderType = GL_FRAGMENT_SHADER;
+        inputs.preprocessedSource = source;
+        inputs.shaderCompileFlags = 0;
+        return inputs;
+    }
+
+    // A source no other case in this file uses, so the process-global L1c cache cannot be
+    // pre-warmed by a neighbour and turn a "must miss" assertion green by accident.
+    String UniqueFragment(const String& tag) {
+        return "#version 460\n"
+               "in vec3 vPos;\n"
+               "layout(location = 0) out vec4 fragColor;\n"
+               "uniform vec3 uTint_" + tag + ";\n"
+               "void main() {\n"
+               "    fragColor = vec4(uTint_" + tag + " * vPos, 1.0);\n"
+               "}\n";
+    }
+
+    Bool ShaderHasParse(const GLuint shader) {
+        const auto& object = MG_State::pGLContext->GetShaderObject(shader);
+        return object != nullptr && object->GetCompiledShader() != nullptr;
+    }
+
+    String ShaderInfoLog(const GLuint shader) {
+        const auto& object = MG_State::pGLContext->GetShaderObject(shader);
+        return object ? object->GetInfoLog() : String();
+    }
+
+    GLint ShaderCompileStatus(const GLuint shader) {
+        GLint status = GL_FALSE;
+        MG_Impl::GLImpl::GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        return status;
+    }
+} // namespace
+
+// One case per input in the key inventory on ShaderParseVerdictKeyInputs. Each must move the
+// key on its own, and none may collide with another - the same discipline the L1 and L2 key
+// cases follow, and the test that catches an input someone forgot to add.
+TEST_F(TranslationCacheTest, TheParseVerdictKeyMovesWithEveryInput) {
+    const String source = UniqueFragment("keyinputs");
+    const String otherSource = UniqueFragment("keyinputs_other");
+    const TranslationCacheKey baseline = BuildShaderParseVerdictKey(BaselineParseVerdictInputs(source));
+
+    const Vector<Pair<const char*, std::function<void(ShaderParseVerdictKeyInputs&, const String&)>>> mutations{
+        {"frontendFingerprint",
+         [](ShaderParseVerdictKeyInputs& i, const String&) { i.frontendFingerprint ^= 1ull; }},
+        {"shaderType",
+         [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderType = GL_VERTEX_SHADER; }},
+        {"preprocessedSource",
+         [](ShaderParseVerdictKeyInputs& i, const String& other) { i.preprocessedSource = other; }},
+        {"shaderCompileFlags",
+         [](ShaderParseVerdictKeyInputs& i, const String&) { i.shaderCompileFlags = 1u; }},
+    };
+
+    Vector<TranslationCacheKey> seen{baseline};
+    for (const auto& [name, mutate] : mutations) {
+        ShaderParseVerdictKeyInputs inputs = BaselineParseVerdictInputs(source);
+        mutate(inputs, otherSource);
+        const TranslationCacheKey moved = BuildShaderParseVerdictKey(inputs);
+        EXPECT_FALSE(moved == baseline) << "moving " << name << " did not move the L1c key";
+        for (const TranslationCacheKey& previous : seen) {
+            EXPECT_FALSE(moved == previous) << name << " collides with an earlier L1c input";
+        }
+        seen.push_back(moved);
+    }
+}
+
+// L1c inherits L1 backend-agnosticism by contract, so it gets L1 own case: two environments
+// that differ in every way that only steers a BACKEND must share one entry.
+TEST_F(TranslationCacheTest, TheParseVerdictKeyIgnoresBackendOnlyDifferences) {
+    const auto [a, b] = BackendOnlyDifferentEnvs();
+    const String source = UniqueFragment("agnostic");
+
+    ShaderParseVerdictKeyInputs onA = BaselineParseVerdictInputs(source);
+    onA.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(a);
+    ShaderParseVerdictKeyInputs onB = BaselineParseVerdictInputs(source);
+    onB.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(b);
+
+    EXPECT_TRUE(BuildShaderParseVerdictKey(onA) == BuildShaderParseVerdictKey(onB));
+}
+
+// The headline behaviour: a second shader object handed the same source does not parse.
+//
+// Synchronous, deliberately. Under async, ShaderCompileAdoptionMap would hand the second
+// object the FIRST one whole compile node and no second compile would run at all - a
+// different (and older) optimisation, which would make this case pass without L1c existing.
+TEST_F(TranslationCacheTest, ASecondCompileOfTheSameSourceSkipsTheParse) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOn(true);
+    const String fs = UniqueFragment("skipparse");
+
+    const TranslationCacheStats before = GetShaderParseVerdictCache().Stats();
+    const GLuint first = MakeShader(GL_FRAGMENT_SHADER, fs);
+    const TranslationCacheStats afterFirst = GetShaderParseVerdictCache().Stats();
+    const GLuint second = MakeShader(GL_FRAGMENT_SHADER, fs);
+    const TranslationCacheStats afterSecond = GetShaderParseVerdictCache().Stats();
+
+    EXPECT_EQ(afterFirst.misses - before.misses, 1u) << "the first compile must be a miss";
+    EXPECT_EQ(afterSecond.hits - afterFirst.hits, 1u) << "the second compile must be an L1c hit";
+    EXPECT_EQ(afterSecond.misses - afterFirst.misses, 0u);
+
+    // Everything glCompileShader makes observable is identical...
+    EXPECT_EQ(ShaderCompileStatus(first), GL_TRUE);
+    EXPECT_EQ(ShaderCompileStatus(second), GL_TRUE);
+    EXPECT_EQ(ShaderInfoLog(second), ShaderInfoLog(first));
+
+    // ...and the second one really did skip the parse. This is the assertion that fails if
+    // the level silently stops working; the counters above would still look right if the
+    // publish path had been changed to parse anyway.
+    EXPECT_TRUE(ShaderHasParse(first)) << "the first compile was supposed to parse";
+    EXPECT_FALSE(ShaderHasParse(second)) << "the second compile parsed anyway; L1c did nothing";
+}
+
+// A failed compile is memoized too, and a hit has to reproduce the diagnostic the
+// application would have read - not merely the GL_FALSE. An empty log on a failed compile is
+// the least debuggable thing this driver can hand back, so it gets its own assertion.
+TEST_F(TranslationCacheTest, AFailedCompileReproducesItsInfoLogFromTheMemo) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOn(true);
+    const String broken = "#version 460\n"
+                          "layout(location = 0) out vec4 fragColor;\n"
+                          "void main() { fragColor = this_function_does_not_exist(); }\n";
+
+    const GLuint first = MakeShader(GL_FRAGMENT_SHADER, broken);
+    const TranslationCacheStats afterFirst = GetShaderParseVerdictCache().Stats();
+    const GLuint second = MakeShader(GL_FRAGMENT_SHADER, broken);
+    const TranslationCacheStats afterSecond = GetShaderParseVerdictCache().Stats();
+
+    EXPECT_EQ(ShaderCompileStatus(first), GL_FALSE);
+    EXPECT_EQ(ShaderCompileStatus(second), GL_FALSE);
+    EXPECT_FALSE(ShaderInfoLog(first).empty());
+    EXPECT_EQ(ShaderInfoLog(second), ShaderInfoLog(first))
+        << "a memoized compile failure lost the diagnostic the application reads";
+
+    // The second compile is served by SOME memo - which one depends on whether the
+    // per-context preprocess cache got there first (it records ParseFailed and short-circuits
+    // ahead of L1c). Either way what must not happen is a second parse, so assert on the
+    // thing both routes guarantee rather than on which route ran.
+    EXPECT_EQ(afterSecond.misses - afterFirst.misses, 0u)
+        << "the second compile of a known-bad source reached the parse again";
+    EXPECT_FALSE(ShaderHasParse(second));
+}
+
+// The deferred parse, which is the half of this design that could quietly produce a wrong
+// program: a stage whose compile hit L1c holds no AST, so a link that MISSES L1 has to parse
+// it on demand - and the module it produces must be the one a from-scratch build produces.
+//
+// The shape forces exactly that: the same vertex source is linked into two programs with
+// DIFFERENT fragment stages, so the second link vertex stage hits L1c (same source) while
+// the program-level key misses (different fragment source).
+TEST_F(TranslationCacheTest, AStageServedFromL1cStillLinksWhenTheProgramKeyMisses) {
+    const SyncCompileScope sync;
+    const String fsA = UniqueFragment("deferred_a");
+    const String fsB = UniqueFragment("deferred_b");
+
+    // The reference: the whole chain with every memo off.
+    Vector<Uint64> uncachedB;
+    {
+        const CacheModeScope cacheOff(false);
+        uncachedB = ProgramSpirvDigest(LinkProgramFromSources(kVertexSource, fsB));
+    }
+    ASSERT_EQ(uncachedB.size(), 2u);
+
+    const CacheModeScope cacheOn(true);
+    // Program 1 populates L1c for kVertexSource.
+    const GLuint programA = LinkProgramFromSources(kVertexSource, fsA);
+    GLint statusA = GL_FALSE;
+    MG_Impl::GLImpl::GetProgramiv(programA, GL_LINK_STATUS, &statusA);
+    ASSERT_EQ(statusA, GL_TRUE);
+
+    const TranslationCacheStats l1Before = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats l1cBefore = GetShaderParseVerdictCache().Stats();
+    const GLuint programB = LinkProgramFromSources(kVertexSource, fsB);
+    const TranslationCacheStats l1After = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats l1cAfter = GetShaderParseVerdictCache().Stats();
+
+    ASSERT_EQ(l1cAfter.hits - l1cBefore.hits, 1u) << "the shared vertex stage was supposed to hit L1c";
+    ASSERT_EQ(l1After.misses - l1Before.misses, 1u) << "the program key was supposed to miss";
+
+    GLint statusB = GL_FALSE;
+    MG_Impl::GLImpl::GetProgramiv(programB, GL_LINK_STATUS, &statusB);
+    EXPECT_EQ(statusB, GL_TRUE) << "the deferred parse failed to produce a linkable stage";
+    EXPECT_EQ(ProgramSpirvDigest(programB), uncachedB)
+        << "a stage parsed lazily at link time produced different SPIR-V from one parsed at compile time";
+}
+
+// MOBILEGL_SHADER_CACHE=0 has to reach this level too. It is the switch that isolated the
+// static-destruction-order heap corruption in the first place, so a level it does not cover
+// is a level that cannot be bisected against.
+TEST_F(TranslationCacheTest, TheEscapeHatchDisablesL1c) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOff(false);
+    const String fs = UniqueFragment("escapehatch");
+
+    const TranslationCacheStats before = GetShaderParseVerdictCache().Stats();
+    const GLuint first = MakeShader(GL_FRAGMENT_SHADER, fs);
+    const GLuint second = MakeShader(GL_FRAGMENT_SHADER, fs);
+    const TranslationCacheStats after = GetShaderParseVerdictCache().Stats();
+
+    EXPECT_EQ(after.hits - before.hits, 0u);
+    EXPECT_EQ(after.misses - before.misses, 0u) << "the cache was consulted with the escape hatch set";
+    EXPECT_EQ(after.inserts - before.inserts, 0u);
+    // With the level off, BOTH compiles parse - which is the pre-L1c behaviour exactly.
+    EXPECT_TRUE(ShaderHasParse(first));
+    EXPECT_TRUE(ShaderHasParse(second));
+}
+
+// The whole point, end to end and in the CTS shape: N programs from fresh shader objects
+// over one pair of sources. After the first, no program constructs a glslang object at all -
+// no parse (L1c) and no link, mapIO, GlslangToSpv or reflection (L1).
+TEST_F(TranslationCacheTest, TheCtsShapeStopsParsingAfterTheFirstProgram) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOn(true);
+    const String fs = UniqueFragment("ctsshape");
+    constexpr Uint kPrograms = 8;
+
+    const GLuint firstProgram = LinkProgramFromSources(kVertexSource, fs);
+    GLint firstStatus = GL_FALSE;
+    MG_Impl::GLImpl::GetProgramiv(firstProgram, GL_LINK_STATUS, &firstStatus);
+    ASSERT_EQ(firstStatus, GL_TRUE);
+    const Vector<Uint64> firstDigest = ProgramSpirvDigest(firstProgram);
+
+    const TranslationCacheStats l1Before = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats l1cBefore = GetShaderParseVerdictCache().Stats();
+    for (Uint i = 1; i < kPrograms; ++i) {
+        const GLuint program = LinkProgramFromSources(kVertexSource, fs);
+        GLint status = GL_FALSE;
+        MG_Impl::GLImpl::GetProgramiv(program, GL_LINK_STATUS, &status);
+        ASSERT_EQ(status, GL_TRUE) << "program " << i;
+        EXPECT_EQ(ProgramSpirvDigest(program), firstDigest) << "program " << i;
+    }
+    const TranslationCacheStats l1After = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const TranslationCacheStats l1cAfter = GetShaderParseVerdictCache().Stats();
+
+    // Two stages per program, and every one of them served from the memo.
+    EXPECT_EQ(l1cAfter.hits - l1cBefore.hits, 2u * (kPrograms - 1));
+    EXPECT_EQ(l1cAfter.misses - l1cBefore.misses, 0u) << "a stage reached the glslang parse again";
+    EXPECT_EQ(l1After.hits - l1Before.hits, kPrograms - 1);
+    EXPECT_EQ(l1After.misses - l1Before.misses, 0u);
+}
