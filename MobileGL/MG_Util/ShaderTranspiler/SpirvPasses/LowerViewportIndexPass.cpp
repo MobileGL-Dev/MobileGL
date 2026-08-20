@@ -210,6 +210,14 @@ namespace MobileGL {
                     variable->SetResultType(privatePointerTypeId);
                     variable->SetInOperand(0, {static_cast<uint32_t>(spv::StorageClass::Private)});
 
+                    // FindPointerToType APPENDS a newly minted pointer type to the end of the
+                    // globals section - after this variable - and SPIR-V requires def before use.
+                    // Re-anchor the variable directly after its new type, which is equally correct
+                    // when the type already existed further up.
+                    Instruction* privatePointerType = defUseMgr->GetDef(privatePointerTypeId);
+                    variable->RemoveFromList();
+                    variable->InsertAfter(privatePointerType);
+
                     irContext->KillInst(target.decoration);
                     RemoveFromEntryPointInterfaces(irContext, variableId);
                     ReplaceName(irContext, variableId, kLoweredName);
