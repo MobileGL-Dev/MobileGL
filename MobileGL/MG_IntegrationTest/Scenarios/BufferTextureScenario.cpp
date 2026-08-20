@@ -299,4 +299,99 @@ void main() {
         EXPECT_EQ(FirstGLError(), 0u);
     }
 
+    // glGetTexLevelParameter used to refuse EVERY pname on a buffer texture: WIDTH/HEIGHT/DEPTH
+    // fell out of a mipmap-only switch as GL_INVALID_OPERATION, and GL_TEXTURE_BUFFER_SIZE /
+    // GL_TEXTURE_BUFFER_OFFSET were not in the switch at all, so they came back GL_INVALID_ENUM.
+    // KHR-GL43.texture_buffer wraps both queries in GLU_EXPECT_NO_ERROR, so the error alone fails
+    // the case before any value is compared.
+    //
+    // The two halves report DIFFERENT units and only one of them is clamped, which is the thing
+    // easiest to get backwards: WIDTH is a TEXEL count clamped to GL_MAX_TEXTURE_BUFFER_SIZE,
+    // BUFFER_SIZE is the range in basic machine units exactly as it was given.
+    TEST_F(BufferTextureScenario, LevelQueriesDescribeTheAttachedBufferRange) {
+        if (!Ready()) return;
+        FirstGLError();
+
+        GLint offsetAlignment = 1;
+        glGetIntegerv(GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT, &offsetAlignment);
+        if (offsetAlignment < 1) offsetAlignment = 1;
+        GLint maxTexels = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTexels);
+        ASSERT_EQ(FirstGLError(), 0u);
+        ASSERT_GT(maxTexels, 0) << "an OpenGL 4.x context may not advertise a zero buffer-texture limit";
+
+        constexpr GLint kTexelBytes = 4; // GL_RGBA8
+        const GLsizeiptr rangeOffset = static_cast<GLsizeiptr>(offsetAlignment);
+        const GLsizeiptr rangeBytes = 32 * kTexelBytes;
+        // Deliberately bigger than the range, so a getter that answered out of the BUFFER rather
+        // than out of the texture's window would be caught.
+        const GLsizeiptr bufferBytes = rangeOffset + rangeBytes + 16 * kTexelBytes;
+
+        const std::vector<GLubyte> zeros(static_cast<size_t>(bufferBytes), 0);
+        GLuint buffer = 0;
+        glGenBuffers(1, &buffer);
+        glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+        glBufferData(GL_TEXTURE_BUFFER, bufferBytes, zeros.data(), GL_STATIC_DRAW);
+
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_BUFFER, texture);
+        glTexBufferRange(GL_TEXTURE_BUFFER, GL_RGBA8, buffer, rangeOffset, rangeBytes);
+        ASSERT_EQ(FirstGLError(), 0u) << "glTexBufferRange(GL_RGBA8) was refused";
+
+        const auto levelQuery = [](GLenum pname) {
+            GLint value = -1;
+            glGetTexLevelParameteriv(GL_TEXTURE_BUFFER, 0, pname, &value);
+            return value;
+        };
+        const auto levelQueryF = [](GLenum pname) {
+            GLfloat value = -1.0f;
+            glGetTexLevelParameterfv(GL_TEXTURE_BUFFER, 0, pname, &value);
+            return value;
+        };
+
+        EXPECT_EQ(levelQuery(GL_TEXTURE_WIDTH), static_cast<GLint>(rangeBytes / kTexelBytes))
+            << "GL_TEXTURE_WIDTH is a texel count over the attached RANGE";
+        EXPECT_EQ(levelQuery(GL_TEXTURE_HEIGHT), 1);
+        EXPECT_EQ(levelQuery(GL_TEXTURE_DEPTH), 1);
+        EXPECT_EQ(levelQuery(GL_TEXTURE_BUFFER_SIZE), static_cast<GLint>(rangeBytes))
+            << "GL_TEXTURE_BUFFER_SIZE reports basic machine units, not texels";
+        EXPECT_EQ(levelQuery(GL_TEXTURE_BUFFER_OFFSET), static_cast<GLint>(rangeOffset));
+        EXPECT_EQ(FirstGLError(), 0u) << "a buffer-texture level query raised an error";
+        EXPECT_LE(levelQuery(GL_TEXTURE_WIDTH), maxTexels)
+            << "GL_TEXTURE_WIDTH must stay clamped to GL_MAX_TEXTURE_BUFFER_SIZE";
+
+        // The float getter is a separate switch and has drifted from the integer one before.
+        EXPECT_FLOAT_EQ(levelQueryF(GL_TEXTURE_WIDTH), static_cast<GLfloat>(rangeBytes / kTexelBytes));
+        EXPECT_FLOAT_EQ(levelQueryF(GL_TEXTURE_HEIGHT), 1.0f);
+        EXPECT_FLOAT_EQ(levelQueryF(GL_TEXTURE_BUFFER_SIZE), static_cast<GLfloat>(rangeBytes));
+        EXPECT_EQ(FirstGLError(), 0u) << "the float form of a buffer-texture level query raised an error";
+
+        // The whole-buffer form follows the buffer's current size instead of freezing a window.
+        glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, buffer);
+        EXPECT_EQ(levelQuery(GL_TEXTURE_BUFFER_OFFSET), 0);
+        EXPECT_EQ(levelQuery(GL_TEXTURE_BUFFER_SIZE), static_cast<GLint>(bufferBytes));
+        EXPECT_EQ(levelQuery(GL_TEXTURE_WIDTH), static_cast<GLint>(bufferBytes / kTexelBytes));
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        // Both buffer pnames belong to buffer textures alone; anything else is INVALID_OPERATION,
+        // the same shape GL_TEXTURE_COMPRESSED_IMAGE_SIZE uses for an uncompressed image.
+        GLuint plainTexture = 0;
+        glGenTextures(1, &plainTexture);
+        glBindTexture(GL_TEXTURE_2D, plainTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        EXPECT_EQ(FirstGLError(), 0u);
+        GLint unused = -1;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_BUFFER_SIZE, &unused);
+        EXPECT_EQ(FirstGLError(), static_cast<unsigned int>(GL_INVALID_OPERATION));
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_BUFFER, 0);
+        glBindBuffer(GL_TEXTURE_BUFFER, 0);
+        glDeleteTextures(1, &plainTexture);
+        glDeleteTextures(1, &texture);
+        glDeleteBuffers(1, &buffer);
+        EXPECT_EQ(FirstGLError(), 0u);
+    }
+
 } // namespace MGITest

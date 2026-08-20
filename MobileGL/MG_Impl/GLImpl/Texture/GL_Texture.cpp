@@ -661,21 +661,42 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Compressed texture formats are not supported."));
         }
 
-        // glGetTexLevelParameter{i,f}v answers WIDTH/HEIGHT/DEPTH out of the mipmap chain. The only
-        // other storage type the state layer knows is GL_TEXTURE_BUFFER (TextureStorageType is
-        // {Mipmap, Buffer}), whose level geometry this stack does not track yet. Report that instead
-        // of throwing: THROW_UNIMPL_EXCEPTION unwinds a C++ exception through the C GL ABI and takes
-        // the process down, which is never an acceptable answer to a query - see the same reasoning
-        // above for the compressed-format path.
+        // GL_TEXTURE_WIDTH of a buffer texture: how many texels of the texture's internal format fit
+        // in the buffer range it addresses, CLAMPED to GL_MAX_TEXTURE_BUFFER_SIZE. Attaching a larger
+        // buffer is legal (GL 4.6 core 8.9) - the texture simply addresses the first
+        // MAX_TEXTURE_BUFFER_SIZE texels of it, and that clamped count is what WIDTH reports.
+        //
+        // GL_TEXTURE_BUFFER_SIZE is deliberately NOT clamped the same way: it reports the range in
+        // basic machine units exactly as glTexBuffer/glTexBufferRange were given it. Swapping the two
+        // fails KHR-GL43.texture_buffer.texture_buffer_max_size in the opposite direction.
+        GLint GetBufferTextureTexelWidth(const MG_State::GLState::ITextureObject* textureObject) {
+            const SizeT texelByteSize = MG_Util::GetSizedInternalFormatSizeInBytes(textureObject->GetFormat());
+            // A format with no known footprint has no texel count to report; answering 0 beats
+            // dividing by it.
+            if (texelByteSize == 0) return 0;
+            const auto* bufferTextureObject =
+                static_cast<const MG_State::GLState::TextureObjectBuffer*>(textureObject);
+            const SizeT texelCount = bufferTextureObject->GetBufferRangeSizeInBytes() / texelByteSize;
+            const SizeT maxTexelCount = static_cast<SizeT>(
+                std::max(0, MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTextureBufferSize));
+            return static_cast<GLint>(std::min(texelCount, maxTexelCount));
+        }
+
+        // glGetTexLevelParameter{i,f}v answers WIDTH/HEIGHT/DEPTH out of the mipmap chain, and (since
+        // the buffer-texture arms above) out of the attached buffer range for GL_TEXTURE_BUFFER. This
+        // is what is left: a storage class with no level geometry at all. Report it instead of
+        // throwing - THROW_UNIMPL_EXCEPTION unwinds a C++ exception through the C GL ABI and takes the
+        // process down, which is never an acceptable answer to a query - see the same reasoning above
+        // for the compressed-format path.
         void RecordUnsupportedLevelQueryStorage(const char* caller, GLenum pname) {
-            MGLOG_W_ONCE("%s: glGetTexLevelParameter(pname=%s) is not implemented for texture-buffer "
-                    "storage; recording GL_INVALID_OPERATION instead of terminating",
+            MGLOG_W_ONCE("%s: glGetTexLevelParameter(pname=%s) is not implemented for this texture's "
+                    "storage class; recording GL_INVALID_OPERATION instead of terminating",
                     caller, MG_Util::ConvertGLEnumToString(pname).c_str());
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
-                    "Level queries are not supported for texture-buffer storage."));
+                    "Level queries are not supported for this texture's storage class."));
         }
     } // namespace
 
@@ -3117,6 +3138,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).x();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = GetBufferTextureTexelWidth(textureObject.get());
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
                     break;
@@ -3132,6 +3156,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).y();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = 1; // a buffer texture is one-dimensional
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
                     break;
@@ -3147,6 +3174,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).z();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = 1; // a buffer texture is one-dimensional
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameteriv_State", pname);
                     break;
@@ -3216,6 +3246,31 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             break;
         }
+        case GL_TEXTURE_BUFFER_SIZE:
+        case GL_TEXTURE_BUFFER_OFFSET: {
+            // GL 4.6 core 8.9: both describe the window of the attached buffer a GL_TEXTURE_BUFFER
+            // texture addresses, so there is nothing to report for any other storage - which is
+            // INVALID_OPERATION, the same shape GL_TEXTURE_COMPRESSED_IMAGE_SIZE guards itself with
+            // above.
+            if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "GetTexLevelParameteriv_State",
+                        "GL_TEXTURE_BUFFER_SIZE / GL_TEXTURE_BUFFER_OFFSET need a buffer texture."));
+                return;
+            }
+            if (params) {
+                const auto* bufferTextureObject =
+                    static_cast<MG_State::GLState::TextureObjectBuffer*>(textureObject.get());
+                // Basic machine units, and UNCLAMPED - see GetBufferTextureTexelWidth for why this
+                // half does not take the GL_MAX_TEXTURE_BUFFER_SIZE clamp that WIDTH does.
+                *params = static_cast<GLint>(pname == GL_TEXTURE_BUFFER_SIZE
+                                                 ? bufferTextureObject->GetBufferRangeSizeInBytes()
+                                                 : bufferTextureObject->GetBufferRangeOffset());
+            }
+            break;
+        }
         default:
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetTexLevelParameteriv_State",
@@ -3255,6 +3310,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = (GLfloat)textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).x();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = (GLfloat)GetBufferTextureTexelWidth(textureObject.get());
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
                     break;
@@ -3270,6 +3328,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = (GLfloat)textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).y();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = 1.0f; // a buffer texture is one-dimensional
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
                     break;
@@ -3285,6 +3346,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     *params = (GLfloat)textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level).z();
                     break;
                 }
+                case TextureStorageType::Buffer:
+                    *params = 1.0f; // a buffer texture is one-dimensional
+                    break;
                 default:
                     RecordUnsupportedLevelQueryStorage("GetTexLevelParameterfv_State", pname);
                     break;
@@ -3349,6 +3413,27 @@ namespace MobileGL::MG_Impl::GLImpl {
                 const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
                 *params = static_cast<GLfloat>(
                     textureMipmapObject->GetMipmapCompressedByteSize(textureUploadTarget, static_cast<Uint>(level)));
+            }
+            break;
+        }
+        case GL_TEXTURE_BUFFER_SIZE:
+        case GL_TEXTURE_BUFFER_OFFSET: {
+            // See GetTexLevelParameteriv_State: both describe the attached buffer range of a
+            // GL_TEXTURE_BUFFER texture, so any other storage makes the query INVALID_OPERATION.
+            if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "GetTexLevelParameterfv_State",
+                        "GL_TEXTURE_BUFFER_SIZE / GL_TEXTURE_BUFFER_OFFSET need a buffer texture."));
+                return;
+            }
+            if (params) {
+                const auto* bufferTextureObject =
+                    static_cast<MG_State::GLState::TextureObjectBuffer*>(textureObject.get());
+                *params = static_cast<GLfloat>(pname == GL_TEXTURE_BUFFER_SIZE
+                                                   ? bufferTextureObject->GetBufferRangeSizeInBytes()
+                                                   : bufferTextureObject->GetBufferRangeOffset());
             }
             break;
         }
