@@ -45,6 +45,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
     constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
 
+    // ES has no atomic-counter buffers: glslang lowers every atomic_uint onto a synthesized
+    // storage block, so one GL counter BUFFER costs one of the driver's shader-storage binding
+    // points. Those slots are taken from the TOP of the range downwards - below the one
+    // mg_IndirectParams already reserves - so an application binding its own SSBOs from 0 upwards
+    // never meets them, and the slot for GL binding N is `this - N` in every stage of the
+    // program without any shared state. Negative when the driver has no room left at all.
+    static Int AtomicCounterEsslBindingTop() {
+        return g_GLESCapabilities.MaxShaderStorageBufferBindings - 2;
+    }
+
     static Bool IsAngleLlvmpipeRenderer() {
         return g_GLESCapabilities.IsAngleLlvmpipeRenderer;
     }
@@ -4831,6 +4841,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this build current - the draw path compares the signature and rebuilds on a change.
             const auto& storageBlockBindingOverrides = stateProgramObject->GetShaderStorageBlockBindingOverrides();
             m_shaderStorageBlockBindingSignature = ComputeShaderStorageBlockBindingSignature(*stateProgramObject);
+            // Rebuilt by the transpile loop below, one entry per atomic-counter block it finds.
+            // The top is snapshotted here so every stage of this program - and the draw path
+            // reading it afterwards - resolves the same slot for the same GL binding.
+            m_atomicCounterGlBindings.clear();
+            m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
@@ -5156,6 +5171,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     spvcSession.SetShaderStorageBlockBinding(storageBlockBindingOverrides);
                 }
 
+                // Atomic counters, same mechanism for the same reason. glslang already turned
+                // every atomic_uint into a member of gl_AtomicCounterBlock_<N> and let the IO
+                // mapper pick that block's binding, which has no relation to the GL binding point
+                // N the application bound its counter buffer to - and can alias an SSBO the
+                // application binds itself. Move each block to its reserved slot and record N, so
+                // the draw path knows which GL_ATOMIC_COUNTER_BUFFER points to re-issue as
+                // storage-buffer bindings.
+                spvcSession.SetAtomicCounterBlockBindings(m_atomicCounterEsslBindingTop,
+                                                          m_atomicCounterGlBindings);
+
                 const char* result = nullptr;
                 spvcSession.Compile(&result);
 
@@ -5301,6 +5326,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glDeleteShader(backendShaderId);
 
                 MGLOG_D("Processed shader source length: %zu", source.length());
+            }
+
+            // A counter buffer declared by several stages was recorded once per stage; the draw
+            // path binds per GL binding point, so collapse the duplicates here rather than
+            // re-issuing the same glBindBufferBase two or three times every draw.
+            if (!m_atomicCounterGlBindings.empty()) {
+                std::sort(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end());
+                m_atomicCounterGlBindings.erase(
+                    std::unique(m_atomicCounterGlBindings.begin(), m_atomicCounterGlBindings.end()),
+                    m_atomicCounterGlBindings.end());
             }
 
             // Transform feedback capture runs on the real driver (see XfbImpl in

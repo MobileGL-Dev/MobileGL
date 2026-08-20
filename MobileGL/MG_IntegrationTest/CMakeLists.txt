@@ -91,6 +91,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
+    Scenarios/AtomicCounterScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

@@ -29,7 +29,7 @@ namespace MobileGL {
             // The binding count is what the backends can actually serve. glslang lowers every
             // atomic_uint onto a storage block, so one counter BUFFER costs one of the ES
             // driver's shader-storage binding points, and DirectGLES reserves this many at the
-            // top of that range (see AtomicCounterEsslBinding in the DirectGLES managers).
+            // top of that range (see AtomicCounterEsslBindingTop in the DirectGLES managers).
             inline constexpr Int MAX_ATOMIC_COUNTER_BUFFER_BINDINGS = 8;
             // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE, in basic machine units. Independent of the
             // counter COUNTS below - it bounds the byte offset a counter may be declared at, and

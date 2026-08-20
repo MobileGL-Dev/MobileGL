@@ -326,6 +326,55 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            // "gl_AtomicCounterBlock_5" -> 5, -1 for anything that is not one of those blocks.
+            // The suffix is the GL atomic-counter binding the application declared, and after
+            // the relaxed lowering it is the only place that number still exists.
+            static Int AtomicCounterBlockBinding(const char* blockName) {
+                if (blockName == nullptr) return -1;
+                const SizeT prefixLength = std::strlen(ATOMIC_COUNTER_BLOCK_PREFIX);
+                const String name = blockName;
+                if (name.length() <= prefixLength + 1) return -1;
+                if (name.compare(0, prefixLength, ATOMIC_COUNTER_BLOCK_PREFIX) != 0) return -1;
+                if (name[prefixLength] != '_') return -1;
+                Int binding = 0;
+                for (SizeT i = prefixLength + 1; i < name.length(); ++i) {
+                    if (name[i] < '0' || name[i] > '9') return -1;
+                    binding = binding * 10 + (name[i] - '0');
+                    if (binding > 0x0FFFFFFF) return -1;
+                }
+                return binding;
+            }
+
+            spvc_result SpvcSession::SetAtomicCounterBlockBindings(Int topBinding, Vector<Int>& outGlBindings) {
+                if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
+
+                SPVC_CHK_INIT
+                const spvc_reflected_resource* list = nullptr;
+                size_t count = 0;
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
+                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                for (size_t i = 0; i < count; ++i) {
+                    auto& resource = list[i];
+                    // The block TYPE name: glslang gives the synthesized block an EMPTY instance
+                    // name, so resource.name carries nothing to match on. Read before Compile(),
+                    // which is where SPIRV-Cross renames the reserved "gl_" prefix away.
+                    const Int glBinding = AtomicCounterBlockBinding(
+                        spvc_compiler_get_name(compiler, resource.base_type_id));
+                    if (glBinding < 0) continue;
+                    const Int esslBinding = topBinding - glBinding;
+                    if (esslBinding < 0) {
+                        MGLOG_E_ONCE("Atomic counter binding %d needs more shader storage binding points than this "
+                                     "driver has; its counters will not be updated.",
+                                     glBinding);
+                        continue;
+                    }
+                    spvc_compiler_set_decoration(compiler, resource.id, SpvDecorationBinding,
+                                                 static_cast<unsigned>(esslBinding));
+                    outGlBindings.push_back(glBinding);
+                }
+                SPVC_CHK_RETURN
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

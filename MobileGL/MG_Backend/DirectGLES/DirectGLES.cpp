@@ -395,6 +395,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        void SyncAtomicCounterBuffers(const Vector<Int>& glBindings, Int esslBindingTop) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::AtomicCounter);
+            for (const Int glBinding : glBindings) {
+                if (glBinding < 0 || static_cast<SizeT>(glBinding) >= pointCount) continue;
+                const Int esslBinding = esslBindingTop - glBinding;
+                // Already diagnosed once when the block was transpiled; nothing was bound to it
+                // there either, so there is nothing to unbind here.
+                if (esslBinding < 0) continue;
+                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::AtomicCounter,
+                                                                          static_cast<Uint>(glBinding));
+                auto& obj = point.GetBoundObject();
+                if (!obj) {
+                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), 0);
+                    continue;
+                }
+
+                auto* backendResource = EnsureBufferResource(obj);
+                if (!backendResource || backendResource->id == 0) {
+                    MGLOG_E_ONCE("No backend buffer found for atomic counter binding point %d.", glBinding);
+                    continue;
+                }
+
+                const auto& range = point.GetRange();
+                if (range.start == 0 && range.end >= obj->GetSize()) {
+                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
+                                         backendResource->id);
+                } else {
+                    const auto start = std::min(range.start, obj->GetSize());
+                    const auto end = std::min(range.end, obj->GetSize());
+                    BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
+                                          backendResource->id, static_cast<GLintptr>(start),
+                                          static_cast<GLsizeiptr>(end - start));
+                }
+                // The whole point of a counter is that the shader INCREMENTS it, and every
+                // conformance case reads the result back with glMapBufferRange or
+                // glGetBufferSubData - which serve the frontend's CPU shadow until the buffer is
+                // flagged (BufferObject::SyncGpuWrites), exactly as for a storage buffer.
+                obj->MarkGpuWritten();
+            }
+        }
+
         void SyncBoundBuffer(BufferTarget target, GLenum glTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -2913,6 +2957,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             }
                         }
                     }
+                }
+
+                // Atomic counter buffers. Bound here rather than beside the storage-buffer sync
+                // in SyncNeccessaryBuffers because the reserved slot the transpiled ESSL reads
+                // them at is PROGRAM state: it is `top - GL binding` for the counter blocks THIS
+                // program declares, and no other program's blocks live there. Both the draw and
+                // the dispatch path reach this, which is what a compute-shader counter needs.
+                if (!backendProgram.GetAtomicCounterBindings().empty()) {
+                    BufferImpl::SyncAtomicCounterBuffers(backendProgram.GetAtomicCounterBindings(),
+                                                         backendProgram.GetAtomicCounterEsslBindingTop());
                 }
 
                 {
@@ -5683,15 +5737,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glDispatchComputeIndirect(indirect);
     }
 
+    // An atomic counter is a shader storage block by the time it reaches the ES driver (glslang
+    // lowers every atomic_uint onto one), so an application that asks only for the counter
+    // barrier is asking about memory the driver knows as storage-buffer memory. Ordering one
+    // does not oblige a driver to order the other, so the counter bit implies the storage bit
+    // here - which is what the lowering costs and the only place it can be paid.
+    static GLbitfield LowerAtomicCounterBarrierBits(GLbitfield barriers) {
+        if ((barriers & GL_ATOMIC_COUNTER_BARRIER_BIT) != 0) {
+            barriers |= GL_SHADER_STORAGE_BARRIER_BIT;
+        }
+        return barriers;
+    }
+
     void MemoryBarrier(GLbitfield barriers) {
-        g_GLESFuncs.glMemoryBarrier(barriers);
+        g_GLESFuncs.glMemoryBarrier(LowerAtomicCounterBarrierBits(barriers));
         if (g_GLESCapabilities.IsAngleRenderer) {
             g_GLESFuncs.glFlush();
         }
     }
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
-        g_GLESFuncs.glMemoryBarrierByRegion(barriers);
+        g_GLESFuncs.glMemoryBarrierByRegion(LowerAtomicCounterBarrierBits(barriers));
     }
 
     // One endpoint of a glCopyImageSubData, expressed the way the ES driver stores it.
