@@ -285,6 +285,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RebaseInstanceIndexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/ZeroBaseVertexPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeriveNumSubgroupsPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FixIterationRPBarrierPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FixIterationRPSubgroupScratchPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateSubgroupsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/NormalizeRectCoordinatesPass.cpp

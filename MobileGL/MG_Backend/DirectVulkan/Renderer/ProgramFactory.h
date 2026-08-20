@@ -381,6 +381,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct SubgroupLoweringPolicy {
             Bool emulateSubgroups = false;      // MOBILEGL_MAGMA_EMULATE_SUBGROUP, no-native-support devices
             Bool fixIterationRPSubgroupScratch = false; // patch iterationRP's under-declared scratch
+            Bool fixIterationRPBarrier = false; // repair Program 203's shared-scratch race
             Bool deriveNumSubgroups = false;    // repair the NumSubgroups builtin
             Bool requireFullSubgroups = false;  // computeFullSubgroups enabled on the device
             Uint32 nativeSubgroupSize = 0;

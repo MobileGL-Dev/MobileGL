@@ -122,6 +122,9 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jboolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
                                                                         jboolean avoidAngleLlvmpipeExplicitLodBias,
                                                                         jboolean coherentAsFlush,
+                                                                        jboolean fixIterationRPSubgroupScratch,
+                                                                        jboolean deriveNumSubgroups,
+                                                                        jboolean iterationRPFixBarrier,
                                                                         jstring texture2dDumps) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
@@ -150,6 +153,9 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
         avoidAngleLlvmpipeSamplerMipmapMinFilter == JNI_TRUE;
     request.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias == JNI_TRUE;
     request.coherentAsFlush = coherentAsFlush == JNI_TRUE;
+    request.fixIterationRPSubgroupScratch = fixIterationRPSubgroupScratch == JNI_TRUE;
+    request.deriveNumSubgroups = deriveNumSubgroups == JNI_TRUE;
+    request.iterationRPFixBarrier = iterationRPFixBarrier == JNI_TRUE;
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);

@@ -179,6 +179,12 @@ namespace MobileGL {
                                                                    Uint32 nativeSubgroupSize,
                                                                    Uint32 maxWorkgroupScratchBytes,
                                                                    bool enableSpirvValidation = false);
+                // Inserts the missing workgroup rendezvous between Program 203's two
+                // prefixSumCache reductions. Fingerprint-gated to the iterationRP shape;
+                // unrelated and already-repaired modules pass through byte-identical.
+                static bool FixIterationRPBarrierForVulkan(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary,
+                                                           bool enableSpirvValidation = false);
                 // Re-declares 64-bit float vertex inputs as their 32-bit unsigned word pair
                 // (double -> uvec2, dvec2 -> uvec4) and bitcasts them back to double at entry, so no
                 // VK_FORMAT_R64*_SFLOAT is needed - lavapipe advertises none of them for vertex

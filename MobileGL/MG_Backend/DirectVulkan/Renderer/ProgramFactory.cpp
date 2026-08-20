@@ -3190,10 +3190,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             // GL_KHR_shader_subgroup handling (SubgroupSupportPolicy.h). Native subgroup
-            // operations execute natively; two module repairs keep the GL contract intact
+            // operations execute natively; module repairs keep the GL contract intact
             // around them. The opt-in emulation path replaces them only on devices with no
             // subgroup support at all (MOBILEGL_MAGMA_EMULATE_SUBGROUP).
             if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Compute) {
+                // Program 203 broadcasts the first reduction through
+                // prefixSumCache[0], then lets the second reduction overwrite that
+                // scratch without first rendezvousing all readers. Patch that exact
+                // fingerprint before either native or emulated subgroup lowering.
+                if (m_subgroupPolicy.fixIterationRPBarrier) {
+                    Vector<Uint> patchedSpirv;
+                    if (MG_Util::ShaderTranspiler::ShaderCompiler::FixIterationRPBarrierForVulkan(
+                            moduleSpirvs[i], patchedSpirv, enableSpirvValidation)) {
+                        moduleSpirvs[i] = std::move(patchedSpirv);
+                    } else {
+                        MGLOG_E("ProgramFactory: iterationRP barrier patch failed for program %u; "
+                                "Program 203 keeps its shared-scratch race",
+                                program.GetExternalIndex());
+                    }
+                }
                 if (m_subgroupPolicy.emulateSubgroups) {
                     Vector<Uint> emulatedSpirv;
                     if (MG_Util::ShaderTranspiler::ShaderCompiler::EmulateSubgroupsForVulkan(

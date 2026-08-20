@@ -639,6 +639,12 @@ jobs:
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
+            export MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1
+            export MOBILEGL_DERIVE_NUM_SUBGROUPS=1
+            export MOBILEGL_ITERATIONRP_FIX_BARRIER=1
+          fi
           # The blended depth-write quirk auto-enables only on Qualcomm, which no CI
           # runner has, so force it on for the OIT case it exists to fix. ForceOn
           # bypasses only the vendor gate, so this exercises the real strip on

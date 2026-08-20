@@ -100,6 +100,10 @@ namespace MobileGL::MG_Config {
         // itself on >= 16-lane devices. Auto is ON; ForceOff replays the pack's bug
         // verbatim.
         QuirkOverride FixIterationRPSubgroupScratch = QuirkOverride::Auto;
+        // MOBILEGL_ITERATIONRP_FIX_BARRIER: repair Program 203's missing workgroup
+        // rendezvous between its two reductions over prefixSumCache. Off by default and
+        // fingerprint-gated by FixIterationRPBarrierPass when enabled.
+        Bool IterationRPFixBarrier = false;
         // MOBILEGL_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
         // ceil(workgroup invocations / gl_SubgroupSize) on the NATIVE subgroup path
         // (ShaderTranspiler::DeriveNumSubgroupsPass). Auto is ON: GL requires

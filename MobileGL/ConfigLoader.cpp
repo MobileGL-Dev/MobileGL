@@ -171,6 +171,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaEmulateSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_EMULATE_SUBGROUP");
         features.FixIterationRPSubgroupScratch =
             QueryEnvQuirkOverride("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+        features.IterationRPFixBarrier = QueryEnvFlag("MOBILEGL_ITERATIONRP_FIX_BARRIER");
         features.DeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_DERIVE_NUM_SUBGROUPS");
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");

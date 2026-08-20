@@ -164,6 +164,21 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
+    if (request.fixIterationRPSubgroupScratch) {
+        setenv("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+    }
+    if (request.deriveNumSubgroups) {
+        setenv("MOBILEGL_DERIVE_NUM_SUBGROUPS", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_DERIVE_NUM_SUBGROUPS");
+    }
+    if (request.iterationRPFixBarrier) {
+        setenv("MOBILEGL_ITERATIONRP_FIX_BARRIER", "1", 1);
+    } else {
+        unsetenv("MOBILEGL_ITERATIONRP_FIX_BARRIER");
+    }
     if (request.fboAttachmentDumps.empty()) {
         unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");
     } else {
@@ -818,6 +833,10 @@ bool WriteResultJson(const Request& request, const Result& result) {
          << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
     file << "  \"avoidAngleLlvmpipeExplicitLodBias\": "
          << (request.avoidAngleLlvmpipeExplicitLodBias ? "true" : "false") << ",\n";
+    file << "  \"fixIterationRPSubgroupScratch\": " << (request.fixIterationRPSubgroupScratch ? "true" : "false")
+         << ",\n";
+    file << "  \"deriveNumSubgroups\": " << (request.deriveNumSubgroups ? "true" : "false") << ",\n";
+    file << "  \"iterationRPFixBarrier\": " << (request.iterationRPFixBarrier ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
     file << "}\n";

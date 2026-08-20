@@ -44,6 +44,9 @@ struct Request {
     bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
     bool avoidAngleLlvmpipeExplicitLodBias = false;
     bool coherentAsFlush = false;
+    bool fixIterationRPSubgroupScratch = false;
+    bool deriveNumSubgroups = false;
+    bool iterationRPFixBarrier = false;
     int holdMs = 0;
 };
 

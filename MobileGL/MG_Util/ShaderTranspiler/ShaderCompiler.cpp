@@ -27,6 +27,7 @@
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/DeriveNumSubgroupsPass.h"
 #include "SpirvPasses/EmulateSubgroupsPass.h"
+#include "SpirvPasses/FixIterationRPBarrierPass.h"
 #include "SpirvPasses/FixIterationRPSubgroupScratchPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
@@ -921,6 +922,17 @@ namespace MobileGL {
                         nativeSubgroupSize, maxWorkgroupScratchBytes));
 
                 return RunOptimizerChecked("FixIterationRPSubgroupScratchForVulkan", optimizer,
+                                           inputBinary, outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::FixIterationRPBarrierForVulkan(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FixIterationRPBarrierPass::CreateFixIterationRPBarrierPass());
+
+                return RunOptimizerChecked("FixIterationRPBarrierForVulkan", optimizer,
                                            inputBinary, outputBinary, true, enableSpirvValidation);
             }
 

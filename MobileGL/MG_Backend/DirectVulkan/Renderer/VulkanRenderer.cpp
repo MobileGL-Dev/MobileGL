@@ -3063,6 +3063,7 @@ void main() {
         subgroupPolicy.emulateSubgroups = ShouldEmulateSubgroups(m_nativeSubgroupSupported);
         subgroupPolicy.fixIterationRPSubgroupScratch =
             m_nativeSubgroupSupported && ShouldFixIterationRPSubgroupScratch();
+        subgroupPolicy.fixIterationRPBarrier = ShouldFixIterationRPBarrier();
         subgroupPolicy.deriveNumSubgroups =
             m_nativeSubgroupSupported && ShouldDeriveNumSubgroups();
         subgroupPolicy.requireFullSubgroups = m_computeFullSubgroupsFeatureEnabled;

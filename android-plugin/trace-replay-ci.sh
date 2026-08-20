@@ -40,6 +40,9 @@ Set MOBILEGL_TRACE_ANGLE_VARIANT to the packaged ANGLE short hash used by
 DirectGLES replay.
 Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
+Set MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1,
+MOBILEGL_DERIVE_NUM_SUBGROUPS=1, and MOBILEGL_ITERATIONRP_FIX_BARRIER=1 to
+forward the corresponding iterationRP SPIR-V repairs into the APK process.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
 need ANGLE llvmpipe sampler mipmap filters downgraded to avoid driver stalls.
 Pass --avoid-angle-llvmpipe-explicit-lod-bias for DirectGLES traces whose shaders
@@ -362,6 +365,15 @@ run_retrace() {
   fi
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true
+  fi
+  if [ "${MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH:-}" = "1" ]; then
+    set -- "$@" --ez fix_iterationrp_subgroup_scratch true
+  fi
+  if [ "${MOBILEGL_DERIVE_NUM_SUBGROUPS:-}" = "1" ]; then
+    set -- "$@" --ez derive_num_subgroups true
+  fi
+  if [ "${MOBILEGL_ITERATIONRP_FIX_BARRIER:-}" = "1" ]; then
+    set -- "$@" --ez iterationrp_fix_barrier true
   fi
   if [ -n "${texture_2d_dumps}" ]; then
     set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"

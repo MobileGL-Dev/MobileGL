@@ -18,9 +18,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //
     // Native subgroups are the implementation whenever the device has them, whatever
     // their width - subgroup operations execute on the hardware paths they were made
-    // for. Two module-level repairs keep the GL contract intact around them:
+    // for. Module-level repairs keep the GL contract intact around them:
     //   - FixIterationRPSubgroupScratchPass patches the one known pack bug: iterationRP's
     //     prefixSumCache[32], under-declared for sub-16-lane devices (8-lane lavapipe);
+    //   - FixIterationRPBarrierPass repairs Program 203's race between two reductions
+    //     reusing that scratch, when explicitly enabled;
     //   - DeriveNumSubgroupsPass replaces the one builtin drivers get wrong
     //     (gl_NumSubgroups) with the value the rest of the topology implies.
     // The 32-lane shared-memory emulation (EmulateSubgroupsPass) is a LAST RESORT for
@@ -45,6 +47,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // grows one under-declared array; every other module passes through untouched.
         return MG_Config::Features.FixIterationRPSubgroupScratch !=
                MG_Config::QuirkOverride::ForceOff;
+    }
+
+    inline Bool ShouldFixIterationRPBarrier() {
+        return MG_Config::Features.IterationRPFixBarrier;
     }
 
     inline Bool ShouldDeriveNumSubgroups() {
