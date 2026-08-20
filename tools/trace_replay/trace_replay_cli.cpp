@@ -72,8 +72,16 @@ bool ReadDouble(int argc, char **argv, int &index, double &out) {
     return true;
 }
 
+bool ReadEnvFlag(const char *name) {
+    const char *value = std::getenv(name);
+    return value != nullptr && std::string(value) == "1";
+}
+
 bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     request.backend = "DirectGLES";
+    request.fixIterationRPSubgroupScratch = ReadEnvFlag("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+    request.deriveNumSubgroups = ReadEnvFlag("MOBILEGL_DERIVE_NUM_SUBGROUPS");
+    request.iterationRPFixBarrier = ReadEnvFlag("MOBILEGL_ITERATIONRP_FIX_BARRIER");
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
