@@ -213,7 +213,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
                 reasons.push_back("no colour-renderable three-channel format on OpenGL ES");
             }
-            if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+            // A format is either 8- or 16-bit signed normalized, so at most one of the two ever
+            // survives GetApplicablePixelFormatNormalizeOptions and the reason is not duplicated.
+            if ((options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) ||
+                (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                 reasons.push_back("EXT_render_snorm not supported");
             }
 

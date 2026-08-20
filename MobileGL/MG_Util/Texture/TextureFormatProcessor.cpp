@@ -31,32 +31,41 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRgb16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
             break;
+        // The two render-target bits reach EVERY signed-normalized format, one-, two- and
+        // four-channel included. They used to be granted to GL_RGB16_SNORM alone, which left the
+        // other seven with no colour-renderable fallback at all on a driver without
+        // EXT_render_snorm: an R8_SNORM or R16_SNORM attachment (what KHR-GL4x.texture_swizzle
+        // renders into for every SNORM source format) got no substitute, so the ES framebuffer was
+        // incomplete, the draw landed nowhere and the readback fell through to the never-written
+        // CPU shadow.
         case GL_RGB16_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRGB16Snorm;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
-            if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
-                applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
-            }
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
             break;
         case GL_RGBA16_SNORM:
         case GL_RG16_SNORM:
         case GL_R16_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoNorm16;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
             break;
         case GL_RGBA8_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
             break;
         case GL_RGB8_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
             break;
         case GL_RG8_SNORM:
         case GL_R8_SNORM:
             applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8;
+            applicableOptions |= options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
             break;
         // The rest of the three-channel formats no real ES driver renders to. They have no
         // other fallback: none of the driver/forced option bits names them, so before the
@@ -113,9 +122,12 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 return {GL_RGBA16F, GL_RGBA, GL_FLOAT};
             case GL_RGB16_SNORM:
                 // A half float loses the low bits of a 16-bit SNORM channel, so keep the
-                // signed-normalized encoding whenever the driver can render to it.
+                // signed-normalized encoding whenever the driver can render to it - and when it
+                // cannot, widen to the 32-bit float, which is the only renderable storage that
+                // still holds all 65535 channel values exactly. GL_RGBA16F here handed -23451/32767
+                // back as -23457, six times the +/-1-step window KHR-GL4x.texture_swizzle allows.
                 return (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
-                           ? ThreeChannelWidening{GL_RGBA16F, GL_RGBA, GL_FLOAT}
+                           ? ThreeChannelWidening{GL_RGBA32F, GL_RGBA, GL_FLOAT}
                            : ThreeChannelWidening{GL_RGBA16_SNORM, GL_RGBA, GL_SHORT};
             // Unsigned-normalized 16-bit (and the legacy 10/12-bit formats stored as RGB16):
             // GL_RGB32F is a legal ES texture format but is not colour-renderable either.
@@ -203,7 +215,17 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 }
                 *outInternalFormat = internalFormat;
                 break;
+            // NoSnorm16RenderTarget outranks the other two 16-bit fallbacks on purpose: it is the
+            // only one whose substitute has to be EXACT, so it picks the 32-bit float rather than
+            // the half the driver/ANGLE fallbacks settle for. The capability probe folds the
+            // driver options and the render-target options into one set while the runtime storage
+            // choice can see the render-target bit alone (GetRuntimeFallbackNormalizeOptions), so
+            // the two would disagree on the storage format without a fixed precedence.
             case GL_RGBA16_SNORM:
+                if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+                    *outInternalFormat = GL_RGBA32F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
                     *outInternalFormat = GL_RGBA16F;
@@ -212,6 +234,12 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB16_SNORM:
+                // The three-channel widening below replaces this whenever the target has to stay
+                // renderable; GL_RGB32F keeps the precision for the targets that do not.
+                if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+                    *outInternalFormat = GL_RGB32F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
@@ -221,6 +249,10 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RG16_SNORM:
+                if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+                    *outInternalFormat = GL_RG32F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
                     *outInternalFormat = GL_RG16F;
@@ -229,6 +261,10 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = internalFormat;
                 break;
             case GL_R16_SNORM:
+                if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+                    *outInternalFormat = GL_R32F;
+                    break;
+                }
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
                     *outInternalFormat = GL_R16F;
@@ -236,30 +272,36 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 }
                 *outInternalFormat = internalFormat;
                 break;
+            // 8-bit SNORM: the half float already IS exact here, so the render-target bit lands on
+            // the same storage the other two 8-bit fallbacks pick.
             case GL_RGBA8_SNORM:
                 if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
-                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm)) {
+                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outInternalFormat = GL_RGBA16F;
                     break;
                 }
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RGB8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outInternalFormat = GL_RGB16F;
                     break;
                 }
                 *outInternalFormat = internalFormat;
                 break;
             case GL_RG8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outInternalFormat = GL_RG16F;
                     break;
                 }
                 *outInternalFormat = internalFormat;
                 break;
             case GL_R8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outInternalFormat = GL_R16F;
                     break;
                 }
@@ -533,7 +575,8 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
                     (internalFormat == GL_RGB16_SNORM &&
                      (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm)) ||
-                    (options & PixelFormatNormalizeOptionBit::NoSnorm16)) {
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm16) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)) {
                     *outType = GL_FLOAT;
                     break;
                 } else {
@@ -543,7 +586,8 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_RGB8_SNORM:
             case GL_RG8_SNORM:
             case GL_R8_SNORM:
-                if (options & PixelFormatNormalizeOptionBit::NoSnorm8) {
+                if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outType = GL_FLOAT;
                     break;
                 }
@@ -551,7 +595,8 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 break;
             case GL_RGBA8_SNORM:
                 if ((options & PixelFormatNormalizeOptionBit::NoSnorm8) ||
-                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm)) {
+                    (options & PixelFormatNormalizeOptionBit::NoRGBA8Snorm) ||
+                    (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                     *outType = GL_FLOAT;
                     break;
                 }

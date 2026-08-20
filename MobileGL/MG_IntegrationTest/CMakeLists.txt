@@ -59,6 +59,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/ThreeChannelAttachmentScenario.cpp
+    Scenarios/SnormAttachmentScenario.cpp
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp

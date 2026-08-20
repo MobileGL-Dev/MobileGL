@@ -3868,6 +3868,131 @@ TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
                 PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
     EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, texture2DIndex) &
                  PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+
+    // ...and neither can an 8-bit one. That half of the answer used to be missing entirely, which
+    // is why an R8_SNORM / RG8_SNORM colour attachment got no substitute at all on a driver
+    // without EXT_render_snorm.
+    EXPECT_TRUE(GetRenderTargetNormalizeOptions(noSnormCapabilities, texture2DIndex) &
+                PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, texture2DIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(noSnormCapabilities, bufferIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+
+    // 8-bit signed-normalized storage is core ES, so only EXT_render_snorm gates the 8-bit bit;
+    // the 16-bit one also needs EXT_texture_norm16 for the encoding to exist at all.
+    MG_External::GLESCapabilities noNorm16Capabilities{};
+    noNorm16Capabilities.SupportsRenderSnorm = true;
+    noNorm16Capabilities.SupportsNorm16Texture = false;
+    EXPECT_TRUE(GetRenderTargetNormalizeOptions(noNorm16Capabilities, texture2DIndex) &
+                PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(noNorm16Capabilities, texture2DIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+}
+
+// ---- Signed-normalized colour-renderable substitution (KHR-GL4x.texture_swizzle on Mali) -------
+//
+// A driver without GL_EXT_render_snorm treats every signed-normalized format as texture-only, so a
+// colour attachment in one of them leaves the ES framebuffer incomplete: the draw lands nowhere and
+// the readback falls through to the CPU shadow, which for a glTexImage2D(..., nullptr) output
+// texture is all zeroes. The render-target bits used to reach GL_RGB16_SNORM alone, so five of the
+// eight SNORM formats - and in particular the single-channel GL_R8_SNORM / GL_R16_SNORM that
+// KHR-GL4x.texture_swizzle renders into for EVERY SNORM source format - had no fallback at all.
+
+TEST_F(TextureTest, SnormRenderTargetOptionsApplyToEverySignedNormalizedFormat) {
+    using MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions;
+    const Flags<PixelFormatNormalizeOptionBit> requested =
+        PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget | PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+
+    for (const GLenum internalFormat : {GL_R8_SNORM, GL_RG8_SNORM, GL_RGB8_SNORM, GL_RGBA8_SNORM}) {
+        const auto applicable = GetApplicablePixelFormatNormalizeOptions(internalFormat, requested);
+        EXPECT_TRUE(applicable & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+        // The two bits are per precision class, so the 16-bit one never reaches an 8-bit format -
+        // that is what keeps the fallback reason from naming both.
+        EXPECT_FALSE(applicable & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+    for (const GLenum internalFormat : {GL_R16_SNORM, GL_RG16_SNORM, GL_RGB16_SNORM, GL_RGBA16_SNORM}) {
+        const auto applicable = GetApplicablePixelFormatNormalizeOptions(internalFormat, requested);
+        EXPECT_TRUE(applicable & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+        EXPECT_FALSE(applicable & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+    // GL_RGB16_SNORM used to be granted the 16-bit bit only when the three-channel widening was
+    // requested alongside it, which made the answer depend on the order the caller assembled its
+    // option set in. The capability probe and the runtime storage choice assemble different sets.
+    EXPECT_TRUE(GetApplicablePixelFormatNormalizeOptions(GL_RGB16_SNORM,
+                                                         PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) &
+                PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+
+    // Nothing else responds to either bit; an unsigned-normalized or float format keeps its storage.
+    for (const GLenum internalFormat : {GL_R8, GL_R16, GL_RGBA8, GL_RGBA16, GL_RGB16F, GL_RGBA32F, GL_RGB9_E5}) {
+        EXPECT_FALSE(GetApplicablePixelFormatNormalizeOptions(internalFormat, requested))
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+}
+
+TEST_F(TextureTest, SnormRenderTargetSubstitutesKeepEveryChannelValueExactly) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct Case {
+        GLenum requested;
+        Flags<PixelFormatNormalizeOptionBit> options;
+        GLenum internalFormat;
+        GLenum format;
+        GLenum type;
+    };
+    const Flags<PixelFormatNormalizeOptionBit> snorm8RT = PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
+    const Flags<PixelFormatNormalizeOptionBit> snorm16RT = PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+
+    const Case cases[] = {
+        // 8-bit: a half float represents every v/127 exactly (the worst case, -123/127, quantizes
+        // 0.03 of a SNORM step away), so it is the same storage GL_RGBA8_SNORM already always got.
+        {GL_R8_SNORM, snorm8RT, GL_R16F, GL_RED, GL_FLOAT},
+        {GL_RG8_SNORM, snorm8RT, GL_RG16F, GL_RG, GL_FLOAT},
+        {GL_RGBA8_SNORM, snorm8RT, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        // 16-bit: NOT a half float. Its spacing just below 1.0 is some 16 SNORM steps, so it hands
+        // -23451/32767 back as -23457 against a conformance window of one step; a 32-bit float
+        // round-trips all 65535 channel values.
+        {GL_R16_SNORM, snorm16RT, GL_R32F, GL_RED, GL_FLOAT},
+        {GL_RG16_SNORM, snorm16RT, GL_RG32F, GL_RG, GL_FLOAT},
+        {GL_RGBA16_SNORM, snorm16RT, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // The render-target bit outranks the narrower fallbacks, whichever way the caller's option
+        // set was assembled: the capability probe folds the driver options in, the runtime storage
+        // choice can see the render-target bit alone, and the two have to pick the same storage.
+        {GL_R16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoNorm16, GL_R32F, GL_RED, GL_FLOAT},
+        {GL_RG16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoSnorm16, GL_RG32F, GL_RG, GL_FLOAT},
+        {GL_RGBA16_SNORM,
+         snorm16RT | PixelFormatNormalizeOptionBit::NoNorm16 | PixelFormatNormalizeOptionBit::NoSnorm16,
+         GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // The three-channel formats go on through the widening, which outranks everything.
+        {GL_RGB8_SNORM, snorm8RT | PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget, GL_RGBA16F, GL_RGBA,
+         GL_FLOAT},
+        {GL_RGB16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget, GL_RGBA32F, GL_RGBA,
+         GL_FLOAT},
+        // Control: with EXT_render_snorm neither bit is ever set, so the driver that renders to the
+        // signed-normalized encoding keeps storing it byte for byte. This is the shape Adreno and
+        // llvmpipe take, which is why the substitution is invisible on every gate the project runs.
+        {GL_R8_SNORM, PixelFormatNormalizeOptionBit::None, GL_R8_SNORM, GL_RED, GL_BYTE},
+        {GL_RG8_SNORM, PixelFormatNormalizeOptionBit::None, GL_RG8_SNORM, GL_RG, GL_BYTE},
+        {GL_R16_SNORM, PixelFormatNormalizeOptionBit::None, GL_R16_SNORM, GL_RED, GL_SHORT},
+        {GL_RG16_SNORM, PixelFormatNormalizeOptionBit::None, GL_RG16_SNORM, GL_RG, GL_SHORT},
+        {GL_RGBA16_SNORM, PixelFormatNormalizeOptionBit::None, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
+        // ...and the bit for the other precision class does nothing on its own.
+        {GL_R8_SNORM, snorm16RT, GL_R8_SNORM, GL_RED, GL_BYTE},
+        {GL_R16_SNORM, snorm8RT, GL_R16_SNORM, GL_RED, GL_SHORT},
+    };
+
+    for (const auto& testCase : cases) {
+        GLenum internalFormat = 0;
+        GLenum format = 0;
+        GLenum type = 0;
+        NormalizePixelFormat(testCase.requested, testCase.options, &internalFormat, &format, &type);
+        EXPECT_EQ(internalFormat, testCase.internalFormat) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(format, testCase.format) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(type, testCase.type) << "requested 0x" << std::hex << testCase.requested;
+    }
 }
 
 TEST_F(TextureTest, ThreeChannelRenderTargetOptionAppliesToEveryDeniedThreeChannelFormat) {
@@ -3918,9 +4043,10 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
         {GL_RGB16F, widen, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
         {GL_RGB32F, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // 16-bit SNORM keeps its encoding where EXT_render_snorm can render to it; a half float's
-        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly.
+        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly, so the driver that
+        // cannot render to the encoding gets the 32-bit float rather than the half.
         {GL_RGB16_SNORM, widen, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
-        {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16.
         {GL_RGB16, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         {GL_RGB10, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
