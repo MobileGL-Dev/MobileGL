@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -484,52 +485,165 @@ TEST_F(DemoteFloat64Test, RejectsGarbageInput) {
     EXPECT_FALSE(ShaderCompiler::DemoteFloat64ToFloat32(notSpirv, output, true));
 }
 
-// EliminateFloatEqualsZeroPass turns a comparison against 0.0 into an epsilon test, a
-// workaround for drivers whose exact float compare misbehaves. Deciding WHICH constants are
-// zero used to read every float constant as though it were 32 bits wide, and on a 64-bit
-// constant that reads the LOW half of the mantissa - which is zero for 1.0lf, 2.0lf, 0.5lf and
-// every other round double a shader is likely to spell. Each of those was mistaken for 0.0, so
-// a comparison against 1.0lf became an epsilon test against ZERO, and came out true for a
-// uniform holding exactly 1.0. That is the whole of KHR-GL43.compute_shader.fp64-case2.
+// EliminateFloatEqualsZeroPass re-spells a comparison against 0.0 through GLSL.std.450 FAbs, so
+// that no float-equality instruction reaches a driver that gets one wrong. Deciding WHICH
+// constants are zero used to read every float constant as though it were 32 bits wide, and on a
+// 64-bit constant that reads the LOW half of the mantissa - which is zero for 1.0lf, 2.0lf, 0.5lf
+// and every other round double a shader is likely to spell. Each of those was mistaken for 0.0, so
+// a comparison against 1.0lf became a test against ZERO, and came out true for a uniform holding
+// exactly 1.0. That is the whole of KHR-GL43.compute_shader.fp64-case2.
+//
+// The replacement itself used to be an epsilon ball, `abs(x) < 1e-4`, which called any legitimately
+// small value zero: KHR-GL3x.buffer_objects.triangles computes a specular term of ~6e-5 at a large
+// render target and rendered black. It is exact now - `abs(x) <= 0.0` / `abs(x) > 0.0` against the
+// module's own zero constant - and the tests below pin both halves of that: only a genuine 0.0 is
+// matched, and what the compare tests against is the constant the source itself spelled.
 //
 // Asserted on the optimized module rather than through a driver, because that is where the
-// rewrite happens and its fingerprint there is unambiguous: the epsilon form introduces a
+// rewrite happens and its fingerprint there is unambiguous: the rewrite introduces a
 // GLSL.std.450 FAbs, and nothing else in these shaders would.
 namespace {
-    Bool RewritesToAnEpsilonTest(const String& source) {
+    String OptimizedDisassembly(const String& source) {
         const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, source);
         EXPECT_FALSE(input.empty());
-        if (input.empty()) return false;
+        if (input.empty()) return {};
         Vector<Uint32> output;
         EXPECT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output, true, true));
-        return Disassemble(output).find("FAbs") != String::npos;
+        return Disassemble(output);
     }
 
-    String CompareAgainst(const String& type, const String& literal) {
+    Bool RewritesToAnAbsoluteValueTest(const String& source) {
+        return OptimizedDisassembly(source).find("FAbs") != String::npos;
+    }
+
+    String CompareAgainstUsing(const String& type, const String& op, const String& literal) {
         return "#version 430 core\n"
                "layout(local_size_x = 1) in;\n"
                "buffer Result { int g_result; };\n"
                "uniform " + type + " g_0;\n"
                "void main() {\n"
                "  g_result = 0;\n"
-               "  if (g_0 != " + literal + ") g_result = 1;\n"
+               "  if (g_0 " + op + " " + literal + ") g_result = 1;\n"
                "}\n";
+    }
+
+    String CompareAgainst(const String& type, const String& literal) {
+        return CompareAgainstUsing(type, "!=", literal);
+    }
+
+    // Every instruction of a disassembly, split into whitespace-separated tokens, so an operand can
+    // be identified by position instead of by a substring another opcode might also contain -
+    // `OpFOrdLessThan` is a prefix of `OpFOrdLessThanEqual`, and those two are the whole difference
+    // between the epsilon rewrite and the exact one.
+    Vector<Vector<String>> TokenizedInstructions(const String& disassembly) {
+        Vector<Vector<String>> instructions;
+        StringStream lines(disassembly);
+        String line;
+        while (std::getline(lines, line)) {
+            Vector<String> tokens;
+            StringStream words(line);
+            String word;
+            while (words >> word) tokens.push_back(word);
+            instructions.push_back(tokens);
+        }
+        return instructions;
+    }
+
+    // The compare the rewrite leaves behind, e.g. `%22 = OpFOrdLessThanEqual %bool %21 %float_0`,
+    // or an empty vector if the module has none. These four opcodes are the only ones the pass
+    // emits and nothing else in these shaders produces one.
+    Vector<String> FindRewrittenCompare(const String& disassembly) {
+        for (const Vector<String>& tokens : TokenizedInstructions(disassembly)) {
+            if (tokens.size() < 6 || tokens[1] != "=") continue;
+            if (tokens[2] == "OpFOrdLessThanEqual" || tokens[2] == "OpFUnordLessThanEqual" ||
+                tokens[2] == "OpFOrdGreaterThan" || tokens[2] == "OpFUnordGreaterThan") {
+                return tokens;
+            }
+        }
+        return {};
+    }
+
+    // Result id of the module's 0.0 constant of the type FAbs produces - the constant the source
+    // itself spelled - found without assuming what the disassembler names it or how it prints the
+    // literal.
+    String FindZeroConstantId(const String& disassembly) {
+        const Vector<Vector<String>> instructions = TokenizedInstructions(disassembly);
+        String floatTypeId;
+        for (const Vector<String>& tokens : instructions) {
+            if (tokens.size() >= 7 && tokens[2] == "OpExtInst" && tokens[5] == "FAbs") {
+                floatTypeId = tokens[3];
+                break;
+            }
+        }
+        if (floatTypeId.empty()) return {};
+
+        for (const Vector<String>& tokens : instructions) {
+            if (tokens.size() < 5 || tokens[2] != "OpConstant" || tokens[3] != floatTypeId) continue;
+            char* end = nullptr;
+            const double value = std::strtod(tokens[4].c_str(), &end);
+            if (end != nullptr && *end == '\0' && value == 0.0) return tokens[0];
+        }
+        return {};
+    }
+
+    // The shape the pass promises: the given opcode (either NaN half of it), tested against the
+    // module's own zero constant rather than against anything this pass invented.
+    void ExpectComparedAgainstModuleZero(const String& source, const String& orderedOpcode,
+                                         const String& unorderedOpcode) {
+        const String disassembly = OptimizedDisassembly(source);
+        const Vector<String> compare = FindRewrittenCompare(disassembly);
+        ASSERT_FALSE(compare.empty()) << "no rewritten compare in the optimized module\n"
+                                      << disassembly;
+        EXPECT_TRUE(compare[2] == orderedOpcode || compare[2] == unorderedOpcode)
+            << "expected " << orderedOpcode << " (or its unordered twin), got " << compare[2] << "\n"
+            << disassembly;
+
+        const String zeroId = FindZeroConstantId(disassembly);
+        ASSERT_FALSE(zeroId.empty()) << "the module has no 0.0 constant of the abs() type\n"
+                                     << disassembly;
+        EXPECT_EQ(compare.back(), zeroId)
+            << "the rewrite compares against " << compare.back()
+            << " instead of the module's own zero; a synthesized threshold is the epsilon bug\n"
+            << disassembly;
     }
 } // namespace
 
 TEST_F(DemoteFloat64Test, AComparisonAgainstANonZeroDoubleIsLeftAlone) {
-    EXPECT_FALSE(RewritesToAnEpsilonTest(CompareAgainst("double", "1.0LF")))
-        << "a double compared against 1.0lf was rewritten into an epsilon test against zero";
+    EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("double", "1.0LF")))
+        << "a double compared against 1.0lf was rewritten into a test against zero";
 }
 
 TEST_F(DemoteFloat64Test, AComparisonAgainstZeroIsStillRewritten) {
-    EXPECT_TRUE(RewritesToAnEpsilonTest(CompareAgainst("double", "0.0LF")))
+    EXPECT_TRUE(RewritesToAnAbsoluteValueTest(CompareAgainst("double", "0.0LF")))
         << "the rewrite must still fire for a genuine comparison against zero";
 }
 
 TEST_F(DemoteFloat64Test, TheThirtyTwoBitBehaviourIsUnchanged) {
-    EXPECT_FALSE(RewritesToAnEpsilonTest(CompareAgainst("float", "1.0")))
+    EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "1.0")))
         << "a float compared against 1.0 must not be rewritten";
-    EXPECT_TRUE(RewritesToAnEpsilonTest(CompareAgainst("float", "0.0")))
+    EXPECT_TRUE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "0.0")))
         << "the 32-bit behaviour this pass shipped with must be preserved exactly";
+}
+
+// The pass matches ZERO, not "small". The old constant-is-zero test was `fabs(v) <= 1e-4`, so a
+// float compared against exactly 1e-4 was declared a comparison against zero and rewritten into
+// `abs(x) >= 1e-4` - a different question from the one the shader asked, against a constant that
+// was never zero to begin with.
+TEST_F(DemoteFloat64Test, AComparisonAgainstASmallNonZeroLiteralIsLeftAlone) {
+    EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("float", "0.0001")))
+        << "a float compared against 1e-4 was treated as a comparison against zero";
+    EXPECT_FALSE(RewritesToAnAbsoluteValueTest(CompareAgainst("double", "0.0001LF")))
+        << "the 64-bit accessor must judge the constant just as exactly as the 32-bit one";
+}
+
+// What replaces the compare, not just that something did. Both properties here are what makes the
+// rewrite exact rather than a tolerance, and neither is visible in the FAbs fingerprint above.
+TEST_F(DemoteFloat64Test, TheRewriteComparesAbsAgainstTheModulesOwnZero) {
+    // `x == 0.0` -> `abs(x) <= 0.0`. The equality has to be INSIDE the replacement: with a strict
+    // `<` and no epsilon left to hide behind, +/-0 would stop comparing equal to zero.
+    ExpectComparedAgainstModuleZero(CompareAgainstUsing("float", "==", "0.0"),
+                                    "OpFOrdLessThanEqual", "OpFUnordLessThanEqual");
+    // `x != 0.0` -> `abs(x) > 0.0`, the strict complement of the above.
+    ExpectComparedAgainstModuleZero(CompareAgainstUsing("float", "!=", "0.0"), "OpFOrdGreaterThan",
+                                    "OpFUnordGreaterThan");
 }
