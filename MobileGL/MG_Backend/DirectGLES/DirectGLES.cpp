@@ -3867,10 +3867,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
 
-    static void DrainBlitErrors() {
-        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+    // Empties the ES driver's error queue, BOUNDED. A driver that never answers GL_NO_ERROR - a
+    // lost context is the usual way, and GL_CONTEXT_LOST is allowed to keep coming back - would
+    // otherwise spin an unbounded drain forever inside whichever GL entry point happened to be
+    // cleaning up, which is how a GPU reset reads as an unkillable process whose log simply
+    // stops. A healthy context cannot queue anywhere near the cap, so reaching it IS the
+    // diagnostic. Every drain in this backend goes through here so the bound cannot drift apart
+    // between them.
+    static constexpr Int kMaxDrainedGLErrors = 32;
+
+    static void DrainDriverErrors(const char* site) {
+        Int drained = 0;
+        while (drained < kMaxDrainedGLErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+            ++drained;
+        }
+        if (drained == kMaxDrainedGLErrors) {
+            MGLOG_E_ONCE("%s: the ES driver still reported errors after %d drains - the context is most likely lost",
+                         site, kMaxDrainedGLErrors);
         }
     }
+
+    static void DrainBlitErrors() { DrainDriverErrors("BlitFramebuffer"); }
 
     // Sized internal format of the currently bound READ framebuffer's read colour
     // attachment, 0 when it cannot be determined.
@@ -5042,9 +5059,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return false;
     }
 
-    static void ClearGLErrors() {
-        while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
-    }
+    static void ClearGLErrors() { DrainDriverErrors("DirectGLES"); }
 
     // Binds a guaranteed-complete 1x1 scratch framebuffer at both targets for the
     // scope (GenerateMipmap must respecify texture storage while no incomplete
@@ -7102,10 +7117,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         data = std::move(expanded);
     }
 
-    static void DrainESErrors() {
-        for (Int i = 0; i < 32 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-        }
-    }
+    static void DrainESErrors() { DrainDriverErrors("ReadPixels"); }
 
     static GLenum QueryReadAttachmentComponentType() {
         GLint framebufferId = 0;
