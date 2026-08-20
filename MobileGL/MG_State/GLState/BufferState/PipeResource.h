@@ -10,8 +10,56 @@
 #include <Includes.h>
 #include <MG_Util/Types.h>
 #include <bit>
+#include <new>
+#include <vector>
 
 namespace MobileGL::MG_State::GLState {
+    // GL_MIN_MAP_BUFFER_ALIGNMENT. GL 4.2 / ARB_map_buffer_alignment fix the minimum at 64 and
+    // MobileGL advertises exactly that (MG_Impl/GLImpl/Getter/GL_Getter.cpp reads this constant),
+    // so under-reporting is not available - the implementation has to be brought up to the number
+    // instead. The promise is about POINTERS, not just the query: glMapBuffer must return a
+    // 64-byte-aligned pointer, and glMapBufferRange must return one whose base - the returned
+    // pointer minus the offset the caller asked for - is. Every pointer the frontend hands out
+    // comes from the shadow below or from BufferObject's staging buffer, and std::vector only
+    // promises alignof(std::max_align_t) (16 on aarch64), so both allocations carry the alignment
+    // themselves. One constant for the getter and the allocator, because the two may never
+    // disagree - the same reason the atomic-counter limits are shared through
+    // MG_Util/ShaderTranspiler/Types.h.
+    inline constexpr SizeT MIN_MAP_BUFFER_ALIGNMENT = 64;
+
+    // Allocator that gives every allocation MIN_MAP_BUFFER_ALIGNMENT. Deliberately minimal: the
+    // vectors it backs hold raw bytes and are only ever sized, so allocate/deallocate plus the
+    // rebinding and equality boilerplate std::vector requires is the whole interface.
+    template <typename T>
+    struct MapAlignedAllocator {
+        using value_type = T;
+
+        MapAlignedAllocator() noexcept = default;
+        template <typename U>
+        MapAlignedAllocator(const MapAlignedAllocator<U>&) noexcept {}
+
+        T* allocate(SizeT count) {
+            if (count == 0) return nullptr;
+            return static_cast<T*>(
+                ::operator new(count * sizeof(T), std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT}));
+        }
+        void deallocate(T* pointer, SizeT) noexcept {
+            ::operator delete(pointer, std::align_val_t{MIN_MAP_BUFFER_ALIGNMENT});
+        }
+
+        template <typename U>
+        Bool operator==(const MapAlignedAllocator<U>&) const noexcept {
+            return true;
+        }
+        template <typename U>
+        Bool operator!=(const MapAlignedAllocator<U>&) const noexcept {
+            return false;
+        }
+    };
+
+    // Byte store for anything the application may end up holding a mapped pointer into.
+    using MapAlignedData = std::vector<Uint8, MapAlignedAllocator<Uint8>>;
+
     // Opaque, refcounted handle to the backend's GPU storage for one buffer
     // (the driver-side resource). The active backend derives from it and attaches
     // its own payload (VkBufferResource / GLESBufferResource). Held by PipeResource.
@@ -57,8 +105,8 @@ namespace MobileGL::MG_State::GLState {
         }
         // Direct shadow access, used only by the backend's upload-from-shadow path,
         // which never runs for a GPU-resident (persistent) buffer.
-        Data& Shadow() { return *m_shadow; }
-        const Data& Shadow() const { return *m_shadow; }
+        MapAlignedData& Shadow() { return *m_shadow; }
+        const MapAlignedData& Shadow() const { return *m_shadow; }
 
         // Transition to persistent GPU residency: adopt the backend's coherent
         // mapped base as the source of truth and drop the CPU shadow. The caller
@@ -85,7 +133,10 @@ namespace MobileGL::MG_State::GLState {
         SharedPtr<BackendBufferResource> ReleaseBackend() { return std::move(m_backend); }
 
     private:
-        SharedPtr<Data> m_shadow = MakeShared<Data>();
+        // MapAlignedData, not Data: a read-only glMapBuffer hands the application this very
+        // pointer, and a range map hands it base + offset, so the base has to be on the
+        // GL_MIN_MAP_BUFFER_ALIGNMENT grid for either to satisfy ARB_map_buffer_alignment.
+        SharedPtr<MapAlignedData> m_shadow = MakeShared<MapAlignedData>();
         void* m_gpuMapped = nullptr;
         SharedPtr<BackendBufferResource> m_backend;
     };

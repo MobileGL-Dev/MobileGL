@@ -239,7 +239,14 @@ namespace MobileGL {
             // Set by MarkGpuWritten, cleared by SyncGpuWrites once the shadow is refreshed.
             Bool m_gpuWritePending = false;
             Range1D m_mappedRange;
-            Vector<Uint8> m_stagingData;
+            // The write-map staging store. MapAlignedData because the application is handed a
+            // pointer into it, and biased by m_stagingBias because ARB_map_buffer_alignment
+            // requires (returned pointer - offset) to be aligned, not the pointer itself: a range
+            // map at offset 63 must hand back a pointer sitting 63 bytes past the alignment grid.
+            // The bias is the offset's phase, so the mapped bytes still start at
+            // m_stagingData.data() + m_stagingBias and the allocation is that much longer.
+            MapAlignedData m_stagingData;
+            SizeT m_stagingBias = 0;
             Bool m_ownsStagingData;
         };
     } // namespace MG_State::GLState

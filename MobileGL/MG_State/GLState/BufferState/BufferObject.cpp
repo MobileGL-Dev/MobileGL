@@ -163,7 +163,7 @@ namespace MobileGL::MG_State::GLState {
             if (!m_resource.IsGpuResident() &&
                 !(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
                 if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
-                    Memcpy(m_resource.Bytes() + m_mappedRange.start, m_stagingData.data(),
+                    Memcpy(m_resource.Bytes() + m_mappedRange.start, m_stagingData.data() + m_stagingBias,
                            m_mappedRange.end - m_mappedRange.start);
                 }
                 NotifyFlushMappedRange(m_mappedRange, m_mappingAccess);
@@ -175,6 +175,7 @@ namespace MobileGL::MG_State::GLState {
         m_isMapped = false;
         m_mappingAccess = BufferMappingAccessBit::Null;
         m_mappedRange = {0, 0};
+        m_stagingBias = 0;
         m_ownsStagingData = false;
     }
 
@@ -193,7 +194,7 @@ namespace MobileGL::MG_State::GLState {
         // FLUSH_EXPLICIT maps are never GPU-resident (only coherent maps are adopted), so
         // the staged bytes must be copied into the shadow before the backend reads them.
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
-            Memcpy(m_resource.Bytes() + start, m_stagingData.data() + offset, length);
+            Memcpy(m_resource.Bytes() + start, m_stagingData.data() + m_stagingBias + offset, length);
         }
         NotifyFlushMappedRange({start, end}, m_mappingAccess);
     }
@@ -311,6 +312,9 @@ namespace MobileGL::MG_State::GLState {
             m_mappedRange = {0, m_size};
 
             if (m_mappingAccess & BufferMappingAccessBit::Write) {
+                // glMapBuffer maps from offset 0, so no bias: the allocation's own
+                // GL_MIN_MAP_BUFFER_ALIGNMENT-aligned base is what the application must get.
+                m_stagingBias = 0;
                 m_stagingData.resize(m_size);
                 m_ownsStagingData = true;
 
@@ -372,14 +376,21 @@ namespace MobileGL::MG_State::GLState {
         }
 
         if (access & BufferMappingAccessBit::Write) {
-            m_stagingData.resize(range.end - range.start);
+            // ARB_map_buffer_alignment constrains (returned pointer - offset), not the pointer:
+            // a map at offset 63 must hand back a pointer 63 bytes past the alignment grid, which
+            // is exactly what the read path below gets for free from shadowBase + offset. The
+            // staging store has to be biased by the same phase to match, so it over-allocates by
+            // it and the mapped bytes start at data() + m_stagingBias.
+            m_stagingBias = range.start % MIN_MAP_BUFFER_ALIGNMENT;
+            const SizeT mappedLength = range.end - range.start;
+            m_stagingData.resize(m_stagingBias + mappedLength);
             m_ownsStagingData = true;
 
             if (!(access & (BufferMappingAccessBit::InvalidateRange | BufferMappingAccessBit::InvalidateBuffer))) {
-                Memcpy(m_stagingData.data(), m_resource.Bytes() + range.start, m_stagingData.size());
+                Memcpy(m_stagingData.data() + m_stagingBias, m_resource.Bytes() + range.start, mappedLength);
             }
 
-            return m_stagingData.data();
+            return m_stagingData.data() + m_stagingBias;
         } else {
             m_ownsStagingData = false;
             return m_resource.Bytes() + range.start;
@@ -438,7 +449,7 @@ namespace MobileGL::MG_State::GLState {
             return const_cast<Uint8*>(m_resource.Bytes()) + m_mappedRange.start;
         }
         if (m_ownsStagingData) {
-            return const_cast<Uint8*>(m_stagingData.data());
+            return const_cast<Uint8*>(m_stagingData.data()) + m_stagingBias;
         }
         return const_cast<Uint8*>(m_resource.Bytes()) + m_mappedRange.start;
     }

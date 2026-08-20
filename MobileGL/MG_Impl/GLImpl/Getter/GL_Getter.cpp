@@ -1664,7 +1664,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Multisample) ? GL_TRUE : GL_FALSE;
             return;
         case GL_MIN_MAP_BUFFER_ALIGNMENT:
-            *params = 64; // TODO
+            // The same constant the map paths align to (MG_State/GLState/BufferState/
+            // PipeResource.h), never a literal: this number is a PROMISE about the pointers
+            // glMapBuffer and glMapBufferRange return, and the two used to be unrelated - the
+            // query said 64 while the pointers came out of a std::vector aligned to 16.
+            *params = static_cast<GLint>(MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT);
             return;
         case GL_MAX_LABEL_LENGTH:
             *params = 256; // TODO

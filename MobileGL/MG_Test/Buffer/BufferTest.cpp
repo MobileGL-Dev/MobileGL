@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <limits>
 
 #include "Includes.h"
@@ -265,6 +266,116 @@ TEST_F(BufferTest, AcquireMemoryRangeWithExplicit) {
     void* p = bufObj->AcquireMemory(false, true, false);
     memcpy(actual.data(), p, byteSize);
     ASSERT_EQ(actual, expected);
+}
+
+// GL_MIN_MAP_BUFFER_ALIGNMENT is a promise about POINTERS, and MobileGL used to keep only the
+// query half of it: glGetIntegerv answered 64 while every mapped pointer came out of a plain
+// std::vector, aligned to alignof(std::max_align_t) - 16 on aarch64. GL 4.2 /
+// ARB_map_buffer_alignment fix the minimum at 64, so under-reporting is not available and the
+// implementation has to be brought up to the number instead. Note the two different constraints:
+// glMapBuffer's pointer must be aligned outright, while glMapBufferRange's must be aligned AFTER
+// subtracting the offset the caller asked for - i.e. it sits at the offset's own alignment phase.
+// KHR-GLxx.map_buffer_alignment.functional asserts exactly these two, at offset 63, for 24
+// storage-flag combinations across 14 targets, and failed identically on both test devices.
+TEST_F(BufferTest, MappedPointersHonourTheAdvertisedMapBufferAlignment) {
+    GLint advertisedAlignment = 0;
+    MobileGL::MG_Impl::GLImpl::GetIntegerv(GL_MIN_MAP_BUFFER_ALIGNMENT, &advertisedAlignment);
+    ASSERT_EQ(advertisedAlignment, static_cast<GLint>(MobileGL::MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT))
+        << "the query and the allocator must read the same constant";
+    ASSERT_GE(advertisedAlignment, 64) << "GL 4.2 fixes the minimum at 64";
+    const SizeT alignment = static_cast<SizeT>(advertisedAlignment);
+
+    auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Uniform);
+    Vector<Uint> bufferNames;
+    MobileGL::MG_State::pGLContext->GenBufferNames(1, bufferNames);
+    auto bufObj = MobileGL::MG_State::pGLContext->CreateBufferObject(bufferNames[0]);
+    slot.Bind(bufObj);
+
+    // The conformance test's own shape: a buffer two alignments long, mapped from the last byte
+    // inside the first alignment - the offset most likely to expose a base-aligned-only fix.
+    const SizeT bufferSize = 2 * alignment;
+    const SizeT offset = alignment - 1;
+    bufObj->Resize(bufferSize);
+    Vector<Uint8> initData(bufferSize);
+    for (SizeT i = 0; i < bufferSize; ++i) initData[i] = static_cast<Uint8>(i);
+    bufObj->UploadData(DataPtr{.data = initData.data(), .size = bufferSize}, 0);
+
+    const auto addressOf = [](const void* pointer) { return reinterpret_cast<std::uintptr_t>(pointer); };
+
+    // glMapBuffer, read-only: the shadow base itself is handed out.
+    void* readMapped = bufObj->AcquireMemory(true, true, false);
+    ASSERT_NE(readMapped, nullptr);
+    EXPECT_EQ(addressOf(readMapped) % alignment, 0u) << "glMapBuffer(GL_READ_ONLY) returned an unaligned pointer";
+    bufObj->ReleaseMemory();
+
+    // glMapBuffer, write: the staging store is handed out instead.
+    void* writeMapped = bufObj->AcquireMemory(true, false, true);
+    ASSERT_NE(writeMapped, nullptr);
+    EXPECT_EQ(addressOf(writeMapped) % alignment, 0u) << "glMapBuffer(GL_WRITE_ONLY) returned an unaligned pointer";
+    EXPECT_EQ(bufObj->GetMappedPointer(), writeMapped)
+        << "GL_BUFFER_MAP_POINTER must report the pointer the map returned";
+    bufObj->ReleaseMemory();
+
+    // glMapBufferRange, read-only: shadow base + offset, so the phase falls out for free.
+    const Range1D mapRange{.start = offset, .end = bufferSize};
+    void* rangeRead = bufObj->AcquireMemoryRange(mapRange, BufferMappingAccessBit::Read);
+    ASSERT_NE(rangeRead, nullptr);
+    EXPECT_EQ((addressOf(rangeRead) - offset) % alignment, 0u)
+        << "glMapBufferRange(READ) returned a pointer whose base is unaligned";
+    bufObj->ReleaseMemory();
+
+    // glMapBufferRange, write: the staging store has to be biased to the same phase, and the
+    // write-back has to follow the bias or the bytes land at the wrong place in the shadow.
+    Uint8* rangeWrite = static_cast<Uint8*>(bufObj->AcquireMemoryRange(mapRange, BufferMappingAccessBit::Write));
+    ASSERT_NE(rangeWrite, nullptr);
+    EXPECT_EQ((addressOf(rangeWrite) - offset) % alignment, 0u)
+        << "glMapBufferRange(WRITE) returned a pointer whose base is unaligned";
+    EXPECT_EQ(bufObj->GetMappedPointer(), rangeWrite)
+        << "GL_BUFFER_MAP_POINTER must report the pointer the map returned";
+    // Seeded from the shadow, so the mapped view starts at the offset's byte.
+    EXPECT_EQ(rangeWrite[0], static_cast<Uint8>(offset));
+    rangeWrite[0] = 0xAB;
+    rangeWrite[bufferSize - offset - 1] = 0xCD;
+    bufObj->ReleaseMemory();
+
+    Vector<Uint8> readBack(bufferSize);
+    bufObj->DownloadSubData(readBack.data(), 0, bufferSize);
+    EXPECT_EQ(readBack[offset], 0xAB) << "the biased staging write-back landed at the wrong offset";
+    EXPECT_EQ(readBack[bufferSize - 1], 0xCD) << "the biased staging write-back landed at the wrong offset";
+    EXPECT_EQ(readBack[offset - 1], static_cast<Uint8>(offset - 1)) << "the write-back overran the mapped range";
+}
+
+// The explicit-flush path reads through the same bias, one flush offset further in: a flush of
+// [offset + 4, offset + 8) must copy the bytes the application wrote at rangeWrite[4..8), not the
+// ones sitting four bytes into the raw allocation.
+TEST_F(BufferTest, ExplicitFlushOfARangeMapFollowsTheAlignmentBias) {
+    auto& slot = MobileGL::MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Uniform);
+    Vector<Uint> bufferNames;
+    MobileGL::MG_State::pGLContext->GenBufferNames(1, bufferNames);
+    auto bufObj = MobileGL::MG_State::pGLContext->CreateBufferObject(bufferNames[0]);
+    slot.Bind(bufObj);
+
+    const SizeT alignment = MobileGL::MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT;
+    const SizeT bufferSize = 2 * alignment;
+    const SizeT offset = alignment - 1;
+    bufObj->Resize(bufferSize);
+    Vector<Uint8> initData(bufferSize, 0);
+    bufObj->UploadData(DataPtr{.data = initData.data(), .size = bufferSize}, 0);
+
+    const Range1D mapRange{.start = offset, .end = bufferSize};
+    Uint8* mapped = static_cast<Uint8*>(bufObj->AcquireMemoryRange(
+        mapRange, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    ASSERT_NE(mapped, nullptr);
+    mapped[4] = 0x5A;
+    mapped[5] = 0x5B;
+    bufObj->FlushMemoryRange(4, 2);
+    bufObj->ReleaseMemory();
+
+    Vector<Uint8> readBack(bufferSize);
+    bufObj->DownloadSubData(readBack.data(), 0, bufferSize);
+    EXPECT_EQ(readBack[offset + 4], 0x5A);
+    EXPECT_EQ(readBack[offset + 5], 0x5B);
+    EXPECT_EQ(readBack[offset + 3], 0x00) << "the explicit flush copied bytes outside the flushed range";
 }
 
 TEST_F(BufferTest, CopyBufferSubData) {
