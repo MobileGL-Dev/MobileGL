@@ -4682,6 +4682,208 @@ TEST_F(TextureTest, CopyImageSubDataChecksARenderbufferLevelAndStorage) {
     ExpectSingleGlError(GL_INVALID_OPERATION);
 }
 
+// GL 4.6 core 18.3.2 requires INVALID_VALUE when the region exceeds either image's boundaries, and
+// this validator had no bounds check whatsoever: the one call shaped like one,
+// ValidateCopyImageBlockAlignment, returns true on its first line for every UNCOMPRESSED format.
+// Texture endpoints only looked covered because the ES driver raised its own error - which
+// DirectGLES logs and swallows, so the application saw GL_NO_ERROR and a destination that never
+// changed (KHR-GL43.copy_image.exceeding_boundaries).
+TEST_F(TextureTest, CopyImageSubDataRejectsARegionThatLeavesTheImage) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA8, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The region that exactly reaches the far edge is the boundary this must NOT reject - a
+    // validator that answered INVALID_VALUE to every non-origin region would satisfy the negatives
+    // below and break every legal partial copy.
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 4, 4, 0, dstTexture, GL_TEXTURE_2D, 0, 4, 4, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // One texel past it on x, on y, and on the destination side.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 5, 4, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 4, 5, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 5, 5, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A negative origin is out of bounds on the other side of the same rule.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, -1, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The endpoint the missing bounds check actually cost: a renderbuffer never reaches the ES
+// driver's texture-shaped checks either, so a 4x4 region at y = 14 of a 16x16 renderbuffer - the
+// exact sub-case KHR-GL43.copy_image.exceeding_boundaries starts with, GL_RENDERBUFFER being first
+// in its target list - was accepted outright.
+TEST_F(TextureTest, CopyImageSubDataBoundsARenderbufferRegion) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 16, 16);
+    GLuint renderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(renderbuffer, GL_RGBA8, 16, 16);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 12, 0, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 14, 0, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // ...and as the destination, where the same renderbuffer has the same one image.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(texture, GL_TEXTURE_2D, 0, 0, 0, 0, renderbuffer, GL_RENDERBUFFER, 0, 14, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A renderbuffer has exactly one slice, so any z at all is out of range.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 0, 1, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The z axis was structurally unbounded - srcZ/dstZ did not even reach the validator - so a layer
+// range running off the end of an array reached the backend as an out-of-range image subresource.
+TEST_F(TextureTest, CopyImageSubDataBoundsTheLayerRangeOfAnArray) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage3D(srcTexture, 1, GL_RGBA8, 8, 8, 12);
+    MG_Impl::GLImpl::TextureStorage3D(dstTexture, 1, GL_RGBA8, 8, 8, 12);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Layers 5..11 of a 12-layer array: the last one the range may reach.
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 5, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 5, 4, 4, 7);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 6, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 0, 4, 4, 7);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 6, 4, 4, 7);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The convention the bounds check has to get right, and the one that would silently reject legal
+// copies if it did not: on a CUBE MAP the z axis selects among the six faces, which this frontend
+// keeps as six separate one-slice upload targets - so the level's own extent reports depth 1 and a
+// bound taken from it would refuse every whole-cube copy.
+TEST_F(TextureTest, CopyImageSubDataCountsCubeMapFacesOnTheZAxis) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2D(srcTexture, 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstTexture, 1, GL_RGBA8, 8, 8);
+    DrainPendingGlErrors();
+
+    const auto srcObject = MG_State::pGLContext->GetTextureObject(srcTexture);
+    const auto dstObject = MG_State::pGLContext->GetTextureObject(dstTexture);
+    ASSERT_NE(srcObject, nullptr);
+    ASSERT_NE(dstObject, nullptr);
+    if (!srcObject->IsComplete() || !dstObject->IsComplete()) {
+        GTEST_SKIP() << "this context could not give the cube maps storage";
+    }
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_CUBE_MAP, 0, 0, 0, 0, dstTexture, GL_TEXTURE_CUBE_MAP,
+                                      0, 0, 0, 0, 8, 8, 6);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A seventh face does not exist.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_CUBE_MAP, 0, 0, 0, 1, dstTexture, GL_TEXTURE_CUBE_MAP,
+                                      0, 0, 0, 0, 8, 8, 6);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The other axis convention: GL puts a 1D ARRAY's layers on y for this entry point (srcY is the
+// first layer, srcHeight the layer count), which is also where this frontend keeps them - so the
+// level extent answers directly and z stays a single slice.
+TEST_F(TextureTest, CopyImageSubDataBoundsA1DArraysLayersOnTheYAxis) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D_ARRAY, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D_ARRAY, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2D(srcTexture, 1, GL_RGBA8, 16, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstTexture, 1, GL_RGBA8, 16, 8);
+    DrainPendingGlErrors();
+
+    const auto srcObject = MG_State::pGLContext->GetTextureObject(srcTexture);
+    const auto dstObject = MG_State::pGLContext->GetTextureObject(dstTexture);
+    ASSERT_NE(srcObject, nullptr);
+    ASSERT_NE(dstObject, nullptr);
+    if (!srcObject->IsComplete() || !dstObject->IsComplete()) {
+        GTEST_SKIP() << "this context could not give the 1D arrays storage";
+    }
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 3, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 3, 0, 4, 5, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 4, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 0, 0, 4, 5, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
 // A 16-byte RGTC2 block and a 16-byte RGBA32UI texel are in the same size class, so GL 4.6 core
 // 18.3.2 requires this copy to succeed. It did not for an ARRAY source: glTexImage3D recorded no
 // specific-compressed-format tag, so the level was measured as the 2-byte RG8 storage RGTC2

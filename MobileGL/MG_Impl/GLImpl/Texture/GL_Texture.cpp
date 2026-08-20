@@ -3749,12 +3749,57 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             return GetCopyImageLevelSize(endpoint.Texture, uploadTarget, level);
         }
+
+        // How far the region's z axis may reach. It does not mean the same thing on every target
+        // GL 4.6 core 18.3.2 accepts: on a CUBE MAP it selects among the six faces, which this
+        // frontend keeps as six separate one-slice upload targets - so the level's own extent
+        // says 1 and the real bound is 6. A cube-map ARRAY is one upload target whose depth
+        // already counts layer-faces, and a 1D array carries its layers on y (which is where GL
+        // puts them for this entry point too), so both are answered by the level extent.
+        Int GetCopyImageEndpointLayerCount(const MG_Backend::CopyImageEndpoint& endpoint,
+                                           const IntVec3& levelSize) {
+            if (!endpoint.IsRenderbuffer() && endpoint.Texture &&
+                endpoint.Texture->GetTarget() == TextureTarget::TextureCubeMap) {
+                return 6;
+            }
+            return std::max(levelSize.z(), 1);
+        }
+
+        // GL 4.6 core 18.3.2 requires INVALID_VALUE when the region exceeds either image's
+        // boundaries. The only bounds-shaped call this validator used to make was
+        // ValidateCopyImageBlockAlignment, whose first line returns true for every UNCOMPRESSED
+        // format - so no uncompressed copy was bounded at all, and the z extent could not be
+        // bounded even in principle because srcZ/dstZ never reached the validator. Texture
+        // endpoints were covered only by accident, through the ES driver's own error, which the
+        // DirectGLES backend logs and swallows rather than reporting; a GL_RENDERBUFFER endpoint
+        // got neither (KHR-GL43.copy_image.exceeding_boundaries).
+        Bool ValidateCopyImageRegionBounds(const MG_Backend::CopyImageEndpoint& endpoint, const IntVec3& levelSize,
+                                           GLint x, GLint y, GLint z, GLsizei width, GLsizei height, GLsizei depth,
+                                           const char* endpointName) {
+            // An extent this frontend does not know cannot bound anything, and guessing would
+            // reject a copy GL allows. Every caller has already established that the level
+            // exists and that the image is complete, so this is a belt-and-braces guard.
+            if (levelSize.x() <= 0 || levelSize.y() <= 0) return true;
+            const Int layers = GetCopyImageEndpointLayerCount(endpoint, levelSize);
+            if (x >= 0 && y >= 0 && z >= 0 && static_cast<Int64>(x) + width <= levelSize.x() &&
+                static_cast<Int64>(y) + height <= levelSize.y() && static_cast<Int64>(z) + depth <= layers) {
+                return true;
+            }
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
+                    std::format("The {} region [{}, {}, {}] + [{} x {} x {}] does not fit inside the {} x {} x {} "
+                                "image.",
+                                endpointName, x, y, z, width, height, depth, levelSize.x(), levelSize.y(), layers)));
+            return false;
+        }
     } // namespace
 
     Bool ValidateCopyImageSubData_State(const MG_Backend::CopyImageEndpoint& src,
-                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
+                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
                                         const MG_Backend::CopyImageEndpoint& dst,
-                                        GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY,
+                                        GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                         GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         if (!ValidateCopyImageObjectExists(src, "source") ||
             !ValidateCopyImageObjectExists(dst, "destination")) {
@@ -3847,6 +3892,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                           srcLevelSize.x(), srcLevelSize.y(), "source") ||
             !TextureImpl::ValidateCopyImageBlockAlignment(dstBlock, dstX, dstY, srcWidth, srcHeight,
                                                           dstLevelSize.x(), dstLevelSize.y(), "destination")) {
+            return false;
+        }
+        // One region extent, measured against both images: GL 4.6 core 18.3.2 gives the copy a
+        // single width/height/depth and requires it to fit in the source AND the destination.
+        if (!ValidateCopyImageRegionBounds(src, srcLevelSize, srcX, srcY, srcZ, srcWidth, srcHeight, srcDepth,
+                                           "source") ||
+            !ValidateCopyImageRegionBounds(dst, dstLevelSize, dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth,
+                                           "destination")) {
             return false;
         }
         return true;
@@ -6082,8 +6135,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         };
         const MG_Backend::CopyImageEndpoint src = resolveEndpoint(srcName, srcTarget);
         const MG_Backend::CopyImageEndpoint dst = resolveEndpoint(dstName, dstTarget);
-        if (!ValidateCopyImageSubData_State(src, srcTarget, srcLevel, srcX, srcY, dst, dstTarget,
-                                            dstLevel, dstX, dstY, srcWidth, srcHeight, srcDepth)) {
+        if (!ValidateCopyImageSubData_State(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget,
+                                            dstLevel, dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth)) {
             return;
         }
         CopyImageSubData_Backend(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel,
