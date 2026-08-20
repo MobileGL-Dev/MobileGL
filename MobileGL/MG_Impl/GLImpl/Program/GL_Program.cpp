@@ -21,6 +21,9 @@
 #include <MG_Backend/BackendObjects.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
+    // The flattened uniform type these helpers used to take as a raw glslang::TType*
+    // pointing into the TProgram's pool allocator. See ProgramObject::TypeFacts.
+    using TypeFactsRef = const MG_State::GLState::ProgramObject::TypeFacts&;
     static GLint BoolToGLInt(bool value) {
         return value ? GL_TRUE : GL_FALSE;
     }
@@ -223,14 +226,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         return false;
     }
 
-    GLint GetOpaqueUniformUnitLimit(const glslang::TType* type) {
+    GLint GetOpaqueUniformUnitLimit(const TypeFactsRef type) {
         const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
-        if (type && type->isImage()) return dynamicParameters.MaxImageUnits;
-        if (type && type->isTexture()) return dynamicParameters.MaxCombinedTextureImageUnits;
+        if (type.isImage) return dynamicParameters.MaxImageUnits;
+        if (type.isTexture) return dynamicParameters.MaxCombinedTextureImageUnits;
         return 0;
     }
 
-    bool ValidateOpaqueUniformUnit(const char* functionName, const glslang::TType* type, GLint unit) {
+    bool ValidateOpaqueUniformUnit(const char* functionName, const TypeFactsRef type, GLint unit) {
         const GLint limit = GetOpaqueUniformUnitLimit(type);
         if (unit < 0 || unit >= limit) {
             MG_State::pGLContext->RecordError(
@@ -856,10 +859,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     // demotion makes a dmat4 a mat4 in the shader and a mat4-shaped slot here - but because it
     // is ROUTED differently: the caller's component-by-component EbtDouble branch has to widen
     // each float back to the queried type, and it undoes the same padding itself.
-    Bool TryGatherFloatMatrixColumns(const glslang::TType* ttype, const char* pBase, void* params) {
-        if (ttype == nullptr || !ttype->isMatrix() || ttype->getBasicType() == glslang::EbtDouble) return false;
-        const Int columns = ttype->getMatrixCols();
-        const Int rows = ttype->getMatrixRows();
+    Bool TryGatherFloatMatrixColumns(const TypeFactsRef ttype, const char* pBase, void* params) {
+        if (!ttype.isMatrix || ttype.isDouble) return false;
+        const Int columns = ttype.matrixCols;
+        const Int rows = ttype.matrixRows;
         for (Int column = 0; column < columns; ++column) {
             Memcpy(static_cast<char*>(params) + static_cast<SizeT>(column) * rows * sizeof(GLfloat),
                    pBase + static_cast<SizeT>(column) * 4 * sizeof(GLfloat), rows * sizeof(GLfloat));
@@ -871,7 +874,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // everything except a float matrix, whose padded columns make it wider. The rule itself
     // lives on ProgramObject, because the pipeline composite's uniform refresh needs the same
     // one and two copies of a layout rule is one too many.
-    SizeT UniformStorageSpanInBytes(const glslang::TType* ttype, SizeT tightSize) {
+    SizeT UniformStorageSpanInBytes(const TypeFactsRef ttype, SizeT tightSize) {
         return MG_State::GLState::ProgramObject::UniformStorageSpanInBytes(ttype, tightSize);
     }
 
@@ -904,7 +907,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto offset = programObject->GetUniformOffset(location);
             auto size = programObject->GetUniformSizesInBytes(location);
             char* pUBO = (char*)programObject->MapUBO();
-            auto* ttype = programObject->GetUniformTType(location);
+            const auto& ttype = programObject->GetUniformTypeFacts(location);
             const SizeT span = UniformStorageSpanInBytes(ttype, size);
             if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
                 offset + span > programObject->GetUBOSize()) {
@@ -958,7 +961,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto offset = programObject->GetUniformOffset(location);
         auto size = programObject->GetUniformSizesInBytes(location);
         char* pUBO = static_cast<char*>(programObject->MapUBO());
-        auto* ttype = programObject->GetUniformTType(location);
+        const auto& ttype = programObject->GetUniformTypeFacts(location);
         const SizeT span = UniformStorageSpanInBytes(ttype, size);
         if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
             offset + span > programObject->GetUBOSize()) {
@@ -981,10 +984,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         // conversion rules (7.6: round to nearest for the integer queries) apply; the value
         // widens back to the queried type, having lost precision at the glUniform*d that
         // stored it and not here.
-        if (ttype->getBasicType() == glslang::EbtDouble) {
-            const Int columns = ttype->isMatrix() ? ttype->getMatrixCols() : 1;
-            const Int rows = ttype->isMatrix() ? ttype->getMatrixRows()
-                                               : (ttype->isVector() ? ttype->getVectorSize() : 1);
+        if (ttype.isDouble) {
+            const Int columns = ttype.isMatrix ? ttype.matrixCols : 1;
+            const Int rows = ttype.isMatrix ? ttype.matrixRows
+                                               : (ttype.isVector ? ttype.vectorSize : 1);
             // std140 gives every matrix column its own 16-byte slot; a non-matrix is one
             // tightly packed run and never reaches the stride at all.
             const SizeT columnStride = 4 * sizeof(GLfloat);
@@ -1191,8 +1194,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             Memcpy(pUBO + offset + byteOffsetInsideUniform, value, writeSize);
             programObject.MarkUBOContentDirty();
         } else {
-            auto* ttype = programObject.GetUniformTType(location);
-            if (!ttype->isTexture() && !ttype->isImage()) return;
+            const auto& ttype = programObject.GetUniformTypeFacts(location);
+            if (!ttype.isTexture && !ttype.isImage) return;
             if constexpr (!std::is_same_v<std::remove_cv_t<T>, GLint> || ItemCount != 1) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,

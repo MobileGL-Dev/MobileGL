@@ -165,6 +165,9 @@ namespace MobileGL::MG_State::GLState {
         MG_Util::ShaderTranspiler::TranslationCacheKey BuildSpirvCacheKey(
             const MG_Util::ShaderTranspiler::CompileEnv& env) const;
         Bool DoReflection(const MG_Util::ShaderTranspiler::CompileEnv& env);
+        // Copies every reflection record the GL query surface reads out of the glslang
+        // TProgram into LinkArtifacts own owned tables. Runs at the tail of DoReflection.
+        void SnapshotGlslangReflection();
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();
         void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);

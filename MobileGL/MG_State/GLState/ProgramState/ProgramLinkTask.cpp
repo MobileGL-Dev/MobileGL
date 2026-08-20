@@ -36,6 +36,69 @@ namespace {
         return std::min(backendLimit, capacity);
     }
 
+    // Everything the post-link query surface ever asks a glslang::TType, flattened into a
+    // POD. The list is closed and was audited call site by call site: nothing after the link
+    // walks a struct, a type name or the AST, so there is no recursion to mirror.
+    //
+    // Why it has to be flattened at all: TObjectReflection::type points into the TProgram's
+    // OWN TPoolAllocator (reflection.cpp clones each TType into it), so every one of these
+    // pointers dangles the moment the TProgram is released - and releasing it is exactly what
+    // lets a link be served from the L1 translation memo without a parse.
+    static MobileGL::MG_State::GLState::ProgramObject::TypeFacts MakeTypeFacts(const glslang::TType* type) {
+        MobileGL::MG_State::GLState::ProgramObject::TypeFacts facts;
+        if (type == nullptr) return facts;
+        facts.isArray = type->isArray();
+        facts.isMatrix = type->isMatrix();
+        facts.isVector = type->isVector();
+        facts.isOpaque = type->isOpaque();
+        facts.isTexture = type->isTexture();
+        facts.isImage = type->isImage();
+        facts.isDouble = type->getBasicType() == glslang::EbtDouble;
+        facts.isVoid = type->getBasicType() == glslang::EbtVoid;
+        facts.basicType = static_cast<MobileGL::Int>(type->getBasicType());
+        // Stored RAW, exactly as glslang reports them (0 for a non-matrix, 1 for a scalar),
+        // because the callers already gate on isMatrix()/isVector() themselves.
+        facts.vectorSize = type->getVectorSize();
+        facts.matrixCols = type->getMatrixCols();
+        facts.matrixRows = type->getMatrixRows();
+        const glslang::TQualifier& qualifier = type->getQualifier();
+        facts.isBuffer = qualifier.storage == glslang::EvqBuffer;
+        facts.isPatch = qualifier.patch;
+        facts.hasIndex = qualifier.hasIndex();
+        facts.layoutIndex = static_cast<MobileGL::Int>(qualifier.layoutIndex);
+        facts.hasFormat = qualifier.hasFormat();
+        facts.layoutFormat = static_cast<MobileGL::Uint>(qualifier.getFormat());
+        facts.layoutMatrix = static_cast<MobileGL::Int>(qualifier.layoutMatrix);
+        return facts;
+    }
+
+    // One glslang::TObjectReflection, flattened. Shared by uniforms, blocks, pipe inputs and
+    // pipe outputs, because glslang reflects all four as TObjectReflection.
+    static MobileGL::MG_State::GLState::ProgramObject::ResourceReflection MakeResourceReflection(
+        const glslang::TObjectReflection& object) {
+        MobileGL::MG_State::GLState::ProgramObject::ResourceReflection record;
+        record.name = object.name;
+        record.glDefineType = object.glDefineType;
+        record.offset = object.offset;
+        record.size = object.size;
+        record.index = object.index;
+        record.counterIndex = object.counterIndex;
+        record.arrayStride = object.arrayStride;
+        record.topLevelArraySize = object.topLevelArraySize;
+        record.topLevelArrayStride = object.topLevelArrayStride;
+        record.binding = object.getBinding();
+        record.location = object.layoutLocation();
+        record.stages = static_cast<MobileGL::Uint32>(object.stages);
+        record.type = MakeTypeFacts(object.getType());
+        // GL_UNIFORM_SIZE / GL_ARRAY_SIZE, resolved here so no caller needs the TType:
+        // TObjectReflection::size carries the element count only for a NON-block array, so
+        // the sized-array outer count wins whenever it exists.
+        const glslang::TType* type = object.getType();
+        record.arraySize = (type != nullptr && type->isSizedArray()) ? type->getOuterArraySize()
+                                                                     : (object.size < 1 ? 1 : object.size);
+        return record;
+    }
+
     static MobileGL::String StripArrayElementSuffix(const MobileGL::String& name) {
         const MobileGL::SizeT bracket = name.find('[');
         return bracket == MobileGL::String::npos ? name : name.substr(0, bracket);
@@ -497,6 +560,15 @@ namespace MobileGL::MG_State::GLState {
         spirvHandoff.reflection.uniformIndexInTProgram = artifacts.uniformIndexInTProgram;
         spirvHandoff.reflection.tProgramUniformIndexToGl = artifacts.tProgramUniformIndexToGl;
         spirvHandoff.reflection.maxUniformLocation = artifacts.maxUniformLocation;
+        // The owned reflection mirror, and the block index space its global-UBO test needs.
+        // BuildGlobalUboRouting reads BOTH - per-uniform array size, opaqueness, GL type and
+        // matrix shape, plus "is this a member of a GL-visible block". Leaving them out of the
+        // handoff is not a compile error, it is a SILENT one: every array collapses to a
+        // single element and every element past the first falls through to the fallback tail
+        // allocator (ProgramTest.NestedStructArrayUniformElementWrites catches exactly that).
+        spirvHandoff.reflection.uniformReflection = artifacts.uniformReflection;
+        spirvHandoff.reflection.blockReflection = artifacts.blockReflection;
+        spirvHandoff.reflection.tProgramBlockIndexToGl = artifacts.tProgramBlockIndexToGl;
         spirvHandoff.spirvCacheKey = BuildSpirvCacheKey(env);
         spirvHandoff.ready = true;
         MGLOG_D("ProgramObject %u: phase A done, %zu module(s) handed to the SPIR-V job", in.externalIndex,
@@ -1032,7 +1104,76 @@ namespace MobileGL::MG_State::GLState {
             MGLOG_D("ProgramObject %u: Reflection - UBO[%d] name='%s' size=%u binding=%d", in.externalIndex, i,
                     ubo.name.c_str(), ubo.size, ubo.getBinding());
         }
+
+        SnapshotGlslangReflection();
         return true;
+    }
+
+    // The last thing DoReflection does, and the thing that lets everything after it stop
+    // caring that a glslang::TProgram ever existed: copy every reflection record the GL query
+    // surface reads into LinkArtifacts' own owned tables.
+    //
+    // Indexed by TPROGRAM index throughout - the same space glUniformIndexToTProgram,
+    // tProgramUniformIndexToGl and uniformIndexInTProgram already speak - so the accessors
+    // that used to call program->getUniform(i) index uniformReflection[i] and are otherwise
+    // unchanged.
+    void ProgramLinkTask::SnapshotGlslangReflection() {
+        glslang::TProgram& program = *artifacts.program;
+
+        // Blocks FIRST: a uniform's effective layoutMatrix is resolved against its owning
+        // block below, which needs the block records to already exist.
+        const Int blockCount = program.getNumUniformBlocks();
+        artifacts.blockReflection.clear();
+        artifacts.blockReflection.reserve(static_cast<SizeT>(blockCount));
+        for (Int i = 0; i < blockCount; ++i) {
+            artifacts.blockReflection.push_back(MakeResourceReflection(program.getUniformBlock(i)));
+        }
+
+        const Int uniformCount = program.getNumUniformVariables();
+        artifacts.uniformReflection.clear();
+        artifacts.uniformReflection.reserve(static_cast<SizeT>(uniformCount));
+        artifacts.uniformIndexByName.clear();
+        artifacts.uniformIndexByName.reserve(static_cast<SizeT>(uniformCount));
+        for (Int i = 0; i < uniformCount; ++i) {
+            ProgramObject::UniformReflection record = MakeResourceReflection(program.getUniform(i));
+            // A block-level layout(row_major)/(column_major) that the member did not inherit
+            // in its own qualifier. Resolved once HERE rather than at every GL_UNIFORM_* query,
+            // which is what the getUniformBlock() fallback in the old accessors was doing.
+            if (record.type.layoutMatrix == static_cast<Int>(glslang::ElmNone) && record.index >= 0 &&
+                record.index < static_cast<Int>(artifacts.blockReflection.size())) {
+                record.type.layoutMatrix = artifacts.blockReflection[record.index].type.layoutMatrix;
+            }
+            // Keyed on the REFLECTED name and on uniforms only. That is deliberate and is the
+            // filtered semantics the old code hand-rolled: glslang's TReflection::nameToIndex
+            // also holds block and function entries, which is exactly why every
+            // getUniformIndex() call site re-checked getUniform(idx).name == name afterwards.
+            // First writer wins, so a duplicated name resolves the way a forward scan would.
+            artifacts.uniformIndexByName.emplace(record.name, i);
+            artifacts.uniformReflection.push_back(Move(record));
+        }
+
+        const Int pipeInputCount = program.getNumPipeInputs();
+        artifacts.pipeInputReflection.clear();
+        artifacts.pipeInputReflection.reserve(static_cast<SizeT>(pipeInputCount));
+        for (Int i = 0; i < pipeInputCount; ++i) {
+            artifacts.pipeInputReflection.push_back(MakeResourceReflection(program.getPipeInput(i)));
+        }
+
+        const Int pipeOutputCount = program.getNumPipeOutputs();
+        artifacts.pipeOutputReflection.clear();
+        artifacts.pipeOutputReflection.reserve(static_cast<SizeT>(pipeOutputCount));
+        for (Int i = 0; i < pipeOutputCount; ++i) {
+            artifacts.pipeOutputReflection.push_back(MakeResourceReflection(program.getPipeOutput(i)));
+        }
+
+        artifacts.atomicCounterCount = program.getNumAtomicCounters();
+        for (Uint dim = 0; dim < 3u; ++dim) {
+            artifacts.computeLocalSize[dim] = program.getLocalSize(static_cast<Int>(dim));
+        }
+        MGLOG_D("ProgramObject %u: Reflection - snapshot: %zu uniform(s), %zu block(s), %zu input(s), "
+                "%zu output(s)",
+                in.externalIndex, artifacts.uniformReflection.size(), artifacts.blockReflection.size(),
+                artifacts.pipeInputReflection.size(), artifacts.pipeOutputReflection.size());
     }
 
     Bool ProgramLinkTask::ValidateFragmentOutputLocations() {

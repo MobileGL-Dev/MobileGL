@@ -4670,12 +4670,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& name = stateProgramObject.GetUniformName(loc);
                 if (name.empty()) continue;
                 if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
-                const glslang::TType* type = stateProgramObject.GetUniformTType(loc);
-                if (type == nullptr) continue;
-                if (type->getQualifier().hasFormat()) {
+                const auto& type = stateProgramObject.GetUniformTypeFacts(loc);
+                if (type.hasFormat) {
                     // Declared, and therefore left exactly as written - but a non-core spelling
                     // still needs the extension directive to survive the ES compiler.
-                    if (!IsCoreEsslLayoutFormat(type->getQualifier().getFormat())) {
+                    if (!IsCoreEsslLayoutFormat(static_cast<glslang::TLayoutFormat>(type.layoutFormat))) {
                         inputs.needsExtendedImageFormats = true;
                     }
                     continue;

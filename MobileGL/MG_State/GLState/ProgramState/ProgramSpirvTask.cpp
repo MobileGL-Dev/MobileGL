@@ -329,22 +329,25 @@ namespace MobileGL::MG_State::GLState {
         for (Uint location = 0; location <= reflection.maxUniformLocation; ++location) {
             if (artifacts.uniformOffsets[location] != ProgramObject::kInvalidUniformOffset) continue;
             if (!ProgramObject::IsValidUniformLocation(reflection, static_cast<Int>(location))) continue;
-            const auto& uniform = reflection.program->getUniform(reflection.uniformIndexInTProgram[location]);
-            const glslang::TType* type = uniform.getType();
-            if (type != nullptr && type->isOpaque()) continue;
-            if (uniform.index >= 0 && uniform.index < reflection.program->getNumUniformBlocks() &&
-                std::strstr(reflection.program->getUniformBlock(uniform.index).name.c_str(),
-                            MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) == nullptr) {
-                // Member of a named uniform block: not settable through glUniform*, so it
-                // needs no global-UBO shadow storage.
+            const auto& uniform =
+                ProgramObject::UniformAtIn(reflection, reflection.uniformIndexInTProgram[location]);
+            if (uniform.type.isOpaque) continue;
+            // Member of a named uniform block: not settable through glUniform*, so it needs
+            // no global-UBO shadow storage. tProgramBlockIndexToGl[i] >= 0 means block i is
+            // GL-visible, i.e. NOT the synthesized MGL_GLOBAL_UBO - which is exactly what the
+            // strstr(GLOBAL_UBO_NAME) test this replaced was asking, without needing the
+            // TProgram to spell the block name.
+            if (uniform.index >= 0 &&
+                uniform.index < static_cast<Int>(reflection.tProgramBlockIndexToGl.size()) &&
+                reflection.tProgramBlockIndexToGl[uniform.index] >= 0) {
                 continue;
             }
 
             // std140-style slot: the matrix upload paths write column vectors at
             // 16-byte strides, so a matrix slot must cover cols * 16 bytes.
             SizeT slotSize = MG_Util::GetGLTypeSize(uniform.glDefineType);
-            if (type != nullptr && type->isMatrix()) {
-                slotSize = static_cast<SizeT>(type->getMatrixCols()) * 16u;
+            if (uniform.type.isMatrix) {
+                slotSize = static_cast<SizeT>(uniform.type.matrixCols) * 16u;
             }
             slotSize = (slotSize + 15u) & ~static_cast<SizeT>(15u);
             const SizeT slotOffset = (artifacts.globalUboScratch.size() + 15u) & ~static_cast<SizeT>(15u);

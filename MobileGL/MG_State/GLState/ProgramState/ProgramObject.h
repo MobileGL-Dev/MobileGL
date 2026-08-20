@@ -24,6 +24,68 @@ namespace MobileGL::MG_State::GLState {
 
     class ProgramObject {
     public:
+        // Everything the query surface ever asked a glslang::TType, flattened. Twenty
+        // predicates, no recursion: nothing post-link ever walks a struct, a type name or the
+        // AST, so a POD covers the whole surface exactly.
+        struct TypeFacts {
+            Bool isArray = false;
+            Bool isMatrix = false;
+            Bool isVector = false;
+            Bool isOpaque = false;
+            Bool isTexture = false;
+            Bool isImage = false;
+            Bool isDouble = false;   // getBasicType() == EbtDouble
+            Bool isVoid = false;     // getBasicType() == EbtVoid (hidden block members)
+            Bool isBuffer = false;   // getQualifier().storage == EvqBuffer
+            Bool isPatch = false;    // getQualifier().patch
+            Bool hasIndex = false;   // getQualifier().hasIndex()
+            Bool hasFormat = false;  // getQualifier().hasFormat()
+            Int vectorSize = 0;
+            Int matrixCols = 0;
+            Int matrixRows = 0;
+            Int layoutIndex = 0;     // getQualifier().layoutIndex
+            Uint layoutFormat = 0;   // getQualifier().getFormat()
+            // glslang::TLayoutMatrix, widened. For a uniform this is already RESOLVED against
+            // the owning block's qualifier, so the getUniformBlock() fallback the old
+            // accessors carried is gone.
+            Int layoutMatrix = 0;
+            // glslang::TBasicType, widened - ApplyUniformInitialValues and the typed
+            // glGetUniform* paths compare against a handful of enumerators.
+            Int basicType = 0;
+        };
+
+        // One glslang::TObjectReflection, flattened. Used for uniforms, blocks, pipe inputs
+        // and pipe outputs alike, because glslang reflects all four as TObjectReflection.
+        struct ResourceReflection {
+            String name;
+            GLenum glDefineType = 0;
+            Int offset = -1;
+            // TObjectReflection::size, RAW. For a uniform prefer `arraySize` below, which is
+            // the resolved GL_UNIFORM_SIZE answer.
+            Int size = 0;
+            // TObjectReflection::index - for a uniform, the TPROGRAM block index owning it
+            // (-1 for a default-block one; translate with GlBlockIndexFromTProgram).
+            Int index = -1;
+            Int counterIndex = -1;
+            Int arrayStride = 0;
+            Int topLevelArraySize = 0;
+            Int topLevelArrayStride = 0;
+            Int binding = -1;
+            Int location = -1; // layoutLocation()
+            // EShLanguageMask of the stages that reference it; 0 means "declared but read by
+            // nobody", which is what the dead-default-block-uniform filter tests.
+            Uint32 stages = 0;
+            // GL_UNIFORM_SIZE / GL_ARRAY_SIZE, already resolved through the
+            // isSizedArray()/getOuterArraySize()/size fallback.
+            GLint arraySize = 1;
+            TypeFacts type;
+        };
+
+        using UniformReflection = ResourceReflection;
+        using BlockReflection = ResourceReflection;
+        using PipeInputReflection = ResourceReflection;
+        using PipeOutputReflection = ResourceReflection;
+
         ProgramObject(Uint externalIndex) : m_externalIndex(externalIndex), m_lifetimeId(AllocateLifetimeId()) {}
         // Cancel-not-join, exactly like ~ShaderObject: the link job owns its inputs, so an
         // in-flight link whose program just went away is safe to abandon where it stands.
@@ -134,8 +196,7 @@ namespace MobileGL::MG_State::GLState {
             const Int index = Artifacts().uniformIndexInTProgram[base];
             // "[k]" only addresses arrays ("scalar[0]" is not a uniform name), and only
             // in-range elements.
-            const glslang::TType* type = Artifacts().program->getUniform(index).getType();
-            if (type == nullptr || !type->isArray()) return -1;
+            if (!UniformAt(index).type.isArray) return -1;
             if (static_cast<GLint>(element) >= GetUniformArraySizeByTIndex(index)) return -1;
             const Int location = base + (Int)element;
             if (!UniformLocationsAliasSameUniform(base, location)) return -1;
@@ -175,44 +236,35 @@ namespace MobileGL::MG_State::GLState {
         }
 
         Int GetActiveUniformIndex(const String& name) const {
-            const Int tProgramCount = static_cast<Int>(Artifacts().tProgramUniformIndexToGl.size());
-            const Int uniformIndex = Artifacts().program->getUniformIndex(name.c_str());
-            if (uniformIndex >= 0 && uniformIndex < tProgramCount &&
-                Artifacts().program->getUniform(uniformIndex).name == name) {
-                return GlUniformIndexFromTProgram(uniformIndex);
+            // uniformIndexByName is keyed by the REFLECTED name, so a lookup that hits is
+            // already the exact-match the old code re-verified with a string compare after
+            // glslang's getUniformIndex(); a lookup that misses needs no bounds check.
+            const auto& byName = Artifacts().uniformIndexByName;
+            if (const auto direct = byName.find(name); direct != byName.end()) {
+                return GlUniformIndexFromTProgram(direct->second);
             }
 
             // Reflection stores an array uniform under "arr[0]"; accept the bare "arr"
             // spelling too. The reverse ("arr[0]" against a bare "arr" entry) is kept for
             // robustness against non-suffixed reflection entries.
             if (!name.empty() && name.back() != ']') {
-                const String suffixedName = name + "[0]";
-                const Int suffixedIndex = Artifacts().program->getUniformIndex(suffixedName.c_str());
-                if (suffixedIndex >= 0 && suffixedIndex < tProgramCount &&
-                    Artifacts().program->getUniform(suffixedIndex).name == suffixedName) {
-                    return GlUniformIndexFromTProgram(suffixedIndex);
-                }
-                return -1;
+                const auto suffixed = byName.find(name + "[0]");
+                return suffixed != byName.end() ? GlUniformIndexFromTProgram(suffixed->second) : -1;
             }
 
             if (name.length() <= 3 || name.compare(name.length() - 3, 3, "[0]") != 0) return -1;
-            const String baseName = name.substr(0, name.length() - 3);
-            const Int baseIndex = Artifacts().program->getUniformIndex(baseName.c_str());
-            if (baseIndex < 0 || baseIndex >= tProgramCount) return -1;
-            return Artifacts().program->getUniform(baseIndex).name == baseName ? GlUniformIndexFromTProgram(baseIndex)
-                                                                     : -1;
+            const auto base = byName.find(name.substr(0, name.length() - 3));
+            return base != byName.end() ? GlUniformIndexFromTProgram(base->second) : -1;
         }
 
         Bool IsValidUniformLocation(Int location) const { return IsValidUniformLocation(Artifacts(), location); }
 
         GLenum GetUniformType(Uint location) const {
-            auto& uniform = Artifacts().program->getUniform(Artifacts().uniformIndexInTProgram[location]);
-            return uniform.glDefineType;
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).glDefineType;
         }
 
         GLenum GetActiveUniformType(Uint index) const {
-            auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
-            return uniform.glDefineType;
+            return UniformAt(TProgramUniformIndex(index)).glDefineType;
         }
 
         // Number of active array elements (GL_UNIFORM_SIZE / GL_ARRAY_SIZE); 1 for a non-array.
@@ -229,16 +281,15 @@ namespace MobileGL::MG_State::GLState {
         }
 
         Int GetActiveUniformBlockIndex(Uint index) const {
-            auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
             // Members of the synthesized global UBO are default-block uniforms to GL: -1.
-            return GlBlockIndexFromTProgram(uniform.index);
+            return GlBlockIndexFromTProgram(UniformAt(TProgramUniformIndex(index)).index);
         }
 
         // GL_UNIFORM_OFFSET: byte offset within the owning named block; -1 for a default-block
         // uniform. The relaxed parse gives global-UBO members real byte offsets, but GL must keep
         // seeing them as default-block uniforms, so gate on the GL-visible block index.
         GLint GetActiveUniformOffset(Uint index) const {
-            const auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
+            const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return -1;
             return uniform.offset;
         }
@@ -252,13 +303,12 @@ namespace MobileGL::MG_State::GLState {
         // generated SPIR-V lay the array out with std140 16-byte-rounded strides. MobileGL's UBO
         // layout is always std140, where every array element stride rounds up to a vec4.
         GLint GetActiveUniformArrayStride(Uint index) const {
-            const auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
+            const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return -1;
-            const glslang::TType* type = uniform.getType();
-            if (type == nullptr || !type->isArray()) return 0;
-            if (type->isMatrix()) {
+            if (!uniform.type.isArray) return 0;
+            if (uniform.type.isMatrix) {
                 const bool rowMajor = GetActiveUniformIsRowMajor(index) != 0;
-                const int vectors = rowMajor ? type->getMatrixRows() : type->getMatrixCols();
+                const int vectors = rowMajor ? uniform.type.matrixRows : uniform.type.matrixCols;
                 return GetActiveUniformMatrixStride(index) * vectors;
             }
             return 16; // scalars and vectors: std140 rounds the element stride up to a vec4
@@ -272,15 +322,12 @@ namespace MobileGL::MG_State::GLState {
         // check suffices; the getUniformBlock() fallback is defensive for a config that instead leaves
         // an inheriting member's layoutMatrix == ElmNone.
         GLint GetActiveUniformIsRowMajor(Uint index) const {
-            const auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
+            const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return 0;
-            const glslang::TType* type = uniform.getType();
-            if (type == nullptr || !type->isMatrix()) return 0;
-            glslang::TLayoutMatrix layoutMatrix = type->getQualifier().layoutMatrix;
-            if (layoutMatrix == glslang::ElmNone) {
-                layoutMatrix = Artifacts().program->getUniformBlock(uniform.index).getType()->getQualifier().layoutMatrix;
-            }
-            return (layoutMatrix == glslang::ElmRowMajor) ? 1 : 0;
+            if (!uniform.type.isMatrix) return 0;
+            // layoutMatrix is already resolved against the owning block's qualifier at
+            // snapshot time, so the getUniformBlock() fallback this used to carry is gone.
+            return (uniform.type.layoutMatrix == static_cast<Int>(glslang::ElmRowMajor)) ? 1 : 0;
         }
 
         // GL_UNIFORM_MATRIX_STRIDE: byte stride between columns (col-major) / rows (row-major) of a
@@ -290,16 +337,11 @@ namespace MobileGL::MG_State::GLState {
         // out as std140 (packed/shared are coerced), so this matches the offsets glslang reports. For
         // every GL 3.3 float matrix this evaluates to 16, independent of majorness.
         GLint GetActiveUniformMatrixStride(Uint index) const {
-            const auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
+            const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return -1;
-            const glslang::TType* type = uniform.getType();
-            if (type == nullptr || !type->isMatrix()) return 0;
-            glslang::TLayoutMatrix layoutMatrix = type->getQualifier().layoutMatrix;
-            if (layoutMatrix == glslang::ElmNone) {
-                layoutMatrix = Artifacts().program->getUniformBlock(uniform.index).getType()->getQualifier().layoutMatrix;
-            }
-            const bool rowMajor = (layoutMatrix == glslang::ElmRowMajor);
-            const int strideVectorComponents = rowMajor ? type->getMatrixCols() : type->getMatrixRows();
+            if (!uniform.type.isMatrix) return 0;
+            const bool rowMajor = (uniform.type.layoutMatrix == static_cast<Int>(glslang::ElmRowMajor));
+            const int strideVectorComponents = rowMajor ? uniform.type.matrixCols : uniform.type.matrixRows;
             constexpr int scalarSize = 4; // GL 3.3 core uniform matrices are float
             const int vectorAlignment = (strideVectorComponents <= 1)   ? scalarSize
                                         : (strideVectorComponents == 2) ? 2 * scalarSize
@@ -307,21 +349,39 @@ namespace MobileGL::MG_State::GLState {
             return (vectorAlignment + 15) & ~15; // std140 round-up to a vec4
         }
 
-        const glslang::TType* GetUniformTType(Uint location) const {
-            auto& uniform = Artifacts().program->getUniform(Artifacts().uniformIndexInTProgram[location]);
-            return uniform.getType();
+        // The flattened type of the uniform at `location`. This is what replaced
+        // GetUniformTType(): the same information, owned by the program instead of by a
+        // glslang pool, so it stays valid for a link served from the L1 translation memo.
+        const TypeFacts& GetUniformTypeFacts(Uint location) const {
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).type;
         }
 
-        Bool IsUniformOpaqueAtLocation(Uint location) const { return GetUniformTType(location)->isOpaque(); }
+        // Replaces GetUniformTType(), which used to hand a raw glslang::TType* - into a
+        // pool the program no longer necessarily owns - out to the DirectGLES image-format
+        // bake. These are the only three things any caller ever read off it.
+        Bool UniformHasDeclaredImageFormat(Uint location) const {
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).type.hasFormat;
+        }
+        Uint GetUniformDeclaredImageFormat(Uint location) const {
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).type.layoutFormat;
+        }
+        // Matrix column count, 0 for a non-matrix. The global-UBO fallback allocator sizes a
+        // matrix slot from it.
+        Int GetUniformMatrixColumns(Uint location) const {
+            const auto& uniform = UniformAt(Artifacts().uniformIndexInTProgram[location]);
+            return uniform.type.isMatrix ? uniform.type.matrixCols : 0;
+        }
+
+        Bool IsUniformOpaqueAtLocation(Uint location) const {
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).type.isOpaque;
+        }
 
         const String& GetUniformName(Uint location) const {
-            auto& uniform = Artifacts().program->getUniform(Artifacts().uniformIndexInTProgram[location]);
-            return uniform.name;
+            return UniformAt(Artifacts().uniformIndexInTProgram[location]).name;
         }
 
         const String& GetActiveUniformName(Uint index) const {
-            auto& uniform = Artifacts().program->getUniform(TProgramUniformIndex(index));
-            return uniform.name;
+            return UniformAt(TProgramUniformIndex(index)).name;
         }
         // Sentinel for a uniform location without global-UBO backing storage (should not
         // survive linking: GenerateBinary falls back to tail-allocated scratch storage).
@@ -355,17 +415,17 @@ namespace MobileGL::MG_State::GLState {
         // would, half its GL type size, and a `dmat4` is padded like any other matrix. Anything
         // reading or writing a whole uniform's storage - a bounds check, a copy between two
         // programs' shadows - wants this rather than GetUniformSizesInBytes.
-        static SizeT UniformStorageSpanInBytes(const glslang::TType* type, SizeT tightSize) {
-            if (type != nullptr && type->isMatrix()) {
-                return static_cast<SizeT>(type->getMatrixCols()) * 4 * sizeof(Float);
+        static SizeT UniformStorageSpanInBytes(const TypeFacts& type, SizeT tightSize) {
+            if (type.isMatrix) {
+                return static_cast<SizeT>(type.matrixCols) * 4 * sizeof(Float);
             }
-            if (type != nullptr && type->getBasicType() == glslang::EbtDouble) {
+            if (type.isDouble) {
                 return tightSize / 2;
             }
             return tightSize;
         }
         SizeT GetUniformStorageSpanInBytes(Uint location) const {
-            return UniformStorageSpanInBytes(GetUniformTType(location), GetUniformSizesInBytes(location));
+            return UniformStorageSpanInBytes(GetUniformTypeFacts(location), GetUniformSizesInBytes(location));
         }
 
         // ---- "written since link": the per-location dirty set the pipeline composite mirrors from ----
@@ -476,14 +536,14 @@ namespace MobileGL::MG_State::GLState {
             return mask;
         }
         Uint32 GetActiveFragmentOutputLocationMask() const {
-            if (!Artifacts().program) {
+            if (Artifacts().pipeOutputReflection.empty()) {
                 return 0;
             }
 
             Uint32 mask = 0;
-            const Int outputCount = Artifacts().program->getNumPipeOutputs();
+            const Int outputCount = static_cast<Int>(Artifacts().pipeOutputReflection.size());
             for (Int index = 0; index < outputCount; ++index) {
-                const Int location = static_cast<Int>(Artifacts().program->getPipeOutput(index).layoutLocation());
+                const Int location = Artifacts().pipeOutputReflection[index].location;
                 if (location >= 0 && location < 32) {
                     mask |= (1u << location);
                 }
@@ -491,38 +551,34 @@ namespace MobileGL::MG_State::GLState {
             return mask;
         }
         Int GetActiveFragmentOutputCount() const {
-            return Artifacts().program ? Artifacts().program->getNumPipeOutputs() : 0;
+            return static_cast<Int>(Artifacts().pipeOutputReflection.size());
         }
         const String& GetActiveFragmentOutputName(Uint index) const {
-            MOBILEGL_ASSERT(Artifacts().program != nullptr, "ProgramObject::GetActiveFragmentOutputName: program is null");
-            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().program->getNumPipeOutputs()),
+            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().pipeOutputReflection.size()),
                             "ProgramObject::GetActiveFragmentOutputName: index=%u out of range", index);
-            return Artifacts().program->getPipeOutput(static_cast<Int>(index)).name;
+            return Artifacts().pipeOutputReflection[index].name;
         }
         Int GetFragmentOutputLocation(Uint index) const {
-            MOBILEGL_ASSERT(Artifacts().program != nullptr, "ProgramObject::GetFragmentOutputLocation: program is null");
-            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().program->getNumPipeOutputs()),
+            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().pipeOutputReflection.size()),
                             "ProgramObject::GetFragmentOutputLocation: index=%u out of range",
                             index);
-            return static_cast<Int>(Artifacts().program->getPipeOutput(static_cast<Int>(index)).layoutLocation());
+            return Artifacts().pipeOutputReflection[index].location;
         }
         GLint GetActiveFragmentOutputArraySize(Uint index) const {
-            MOBILEGL_ASSERT(Artifacts().program != nullptr, "ProgramObject::GetActiveFragmentOutputArraySize: program is null");
-            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().program->getNumPipeOutputs()),
+            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().pipeOutputReflection.size()),
                             "ProgramObject::GetActiveFragmentOutputArraySize: index=%u out of range", index);
-            return Artifacts().program->getPipeOutput(static_cast<Int>(index)).size;
+            return Artifacts().pipeOutputReflection[index].size;
         }
         GLenum GetFragmentOutputType(Uint index) const {
-            MOBILEGL_ASSERT(Artifacts().program != nullptr, "ProgramObject::GetFragmentOutputType: program is null");
-            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().program->getNumPipeOutputs()),
+            MOBILEGL_ASSERT(index < static_cast<Uint>(Artifacts().pipeOutputReflection.size()),
                             "ProgramObject::GetFragmentOutputType: index=%u out of range",
                             index);
-            return Artifacts().program->getPipeOutput(static_cast<Int>(index)).glDefineType;
+            return Artifacts().pipeOutputReflection[index].glDefineType;
         }
         GLenum GetAttribType(Uint index) const { return Artifacts().attribTypes[index]; }
         const String& GetAttribName(Uint index) const { return Artifacts().attribs[index]; }
-        GLenum GetActiveAttribType(Uint index) const { return Artifacts().program->getPipeInput(static_cast<Int>(index)).glDefineType; }
-        GLint GetActiveAttribArraySize(Uint index) const { return Artifacts().program->getPipeInput(static_cast<Int>(index)).size; }
+        GLenum GetActiveAttribType(Uint index) const { return Artifacts().pipeInputReflection[index].glDefineType; }
+        GLint GetActiveAttribArraySize(Uint index) const { return Artifacts().pipeInputReflection[index].size; }
         // The Vulkan-semantics parse reflects the vertex builtins under their SPIR-V names;
         // GL must keep reporting the GL spellings (glGetActiveAttrib and the program-input
         // resource queries enumerate builtins).
@@ -534,7 +590,7 @@ namespace MobileGL::MG_State::GLState {
             return name;
         }
         const String& GetActiveAttribName(Uint index) const {
-            return NormalizeBuiltinPipeInputName(Artifacts().program->getPipeInput(static_cast<Int>(index)).name);
+            return NormalizeBuiltinPipeInputName(Artifacts().pipeInputReflection[index].name);
         }
         // PHASE B, all three (see EnsureSpirvJoined): the shadow buffer's layout is decided
         // by the OPTIMIZED SPIR-V, so it does not exist until the SPIR-V job has settled - and
@@ -627,7 +683,7 @@ namespace MobileGL::MG_State::GLState {
             // which means the change is only honoured by regenerating the program. That
             // regeneration is gated on link-shaped versions, so without a counter that moves
             // here the new unit would never reach the driver.
-            if (const glslang::TType* type = GetUniformTType(location); type != nullptr && type->isImage()) {
+            if (GetUniformTypeFacts(location).isImage) {
                 ++m_imageUnitVersion;
             }
         }
@@ -703,19 +759,16 @@ namespace MobileGL::MG_State::GLState {
         // this after a failed glGetAttribLocation, and reached it as soon as the CopyTexImage2D
         // throw ahead of it stopped killing the run first.
         Int GetActiveAtomicCounterCount() const {
-            const auto& program = Artifacts().program;
-            return program ? program->getNumAtomicCounters() : 0;
+            return Artifacts().atomicCounterCount;
         }
         Int GetActiveAttributesCount() const {
-            const auto& program = Artifacts().program;
-            return program ? program->getNumPipeInputs() : 0;
+            return static_cast<Int>(Artifacts().pipeInputReflection.size());
         }
         // GL-visible uniform blocks only: the synthesized MGL_GLOBAL_UBO the relaxed parse
         // materializes for default-block uniforms is filtered out by DoReflection.
         Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Artifacts().glBlockIndexToTProgram.size()); }
         GLuint GetComputeLocalSize(Uint dim) const {
-            const auto& program = Artifacts().program;
-            return program ? program->getLocalSize(static_cast<Int>(dim)) : 0;
+            return dim < 3u ? Artifacts().computeLocalSize[dim] : 0u;
         }
         Int GetActiveAttributesMaxLength() const { return Artifacts().attribInNameMaxLength; }
         Int GetActiveUniformBlocksMaxNameLength() const { return Artifacts().uniformBlockNameMaxLength; }
@@ -739,11 +792,11 @@ namespace MobileGL::MG_State::GLState {
             // (like a std140 struct) occupies a vec4-rounded size, and that is what the
             // backend compiles: ES drivers reject draws whose bound UBO range is smaller
             // than the block (a block ending in ivec3 reported 12 while the driver needs 16).
-            return (Artifacts().program->getUniformBlock(Artifacts().glBlockIndexToTProgram[index]).size + 15u) & ~15u;
+            return (static_cast<Uint>(BlockAt(Artifacts().glBlockIndexToTProgram[index]).size) + 15u) & ~15u;
         }
 
         const String& GetUniformBlockName(Uint index) const {
-            auto& ubo = Artifacts().program->getUniformBlock(Artifacts().glBlockIndexToTProgram[index]);
+            const auto& ubo = BlockAt(Artifacts().glBlockIndexToTProgram[index]);
             return ubo.name;
         }
 
@@ -774,7 +827,7 @@ namespace MobileGL::MG_State::GLState {
         }
 
         Bool IsUniformBlockReferencedByStage(Uint index, EShLanguage stage) const {
-            const auto& ubo = Artifacts().program->getUniformBlock(Artifacts().glBlockIndexToTProgram[index]);
+            const auto& ubo = BlockAt(Artifacts().glBlockIndexToTProgram[index]);
             const auto stageMask = static_cast<EShLanguageMask>(1 << stage);
             return (ubo.stages & stageMask) != 0;
         }
@@ -909,8 +962,45 @@ namespace MobileGL::MG_State::GLState {
         // what makes "every read of link output joins the pending link" a property the
         // compiler checks rather than a review item - a new reader cannot spell the field
         // without going through the gate.
+        // ---- the owned mirror of glslang's reflection ----
+        //
+        // WHY THIS EXISTS. Every GL query about a linked program used to be answered by
+        // asking the live glslang::TProgram - program->getUniform(i).getType()->isMatrix()
+        // and friends. That made the TProgram part of the program's PERMANENT state, which
+        // in turn made the whole front end (parse + link) unskippable: the L1 shader
+        // translation memo could hand back the SPIR-V but the reflection still had to be
+        // rebuilt from a freshly parsed AST.
+        //
+        // These three tables are a snapshot of everything the query surface ever reads off
+        // the TProgram, in PLAIN OWNED VALUES - no TType*, no TString, nothing pointing into
+        // a glslang pool. Taken once at the tail of DoReflection (SnapshotGlslangReflection),
+        // they are copyable, immutable after the link, and safe to memoize and share between
+        // ProgramObjects and threads. Once they are filled, `program` is dead weight to
+        // everything except DoReflection itself.
+        //
+        // INDEXED BY TPROGRAM INDEX, deliberately: that is the space uniformIndexInTProgram,
+        // glUniformIndexToTProgram and tProgramUniformIndexToGl already speak, so every
+        // accessor that used to call program->getUniform(i) indexes uniformReflection[i]
+        // instead, unchanged in every other respect.
+
         struct LinkArtifacts {
+            // Live only between LinkProgram() and the end of DoReflection. Everything after
+            // that reads the owned mirror below; a link served from the L1 memo never
+            // constructs one at all, so this is null for such a program and MUST NOT be
+            // dereferenced outside DoReflection.
             SharedPtr<glslang::TProgram> program;
+
+            // The owned reflection snapshot. Indexed by TProgram index; see the structs above.
+            Vector<UniformReflection> uniformReflection;
+            Vector<BlockReflection> blockReflection;
+            Vector<PipeInputReflection> pipeInputReflection;
+            Vector<PipeOutputReflection> pipeOutputReflection;
+            // Program-level scalars glslang answers off the linked intermediates.
+            Int atomicCounterCount = 0;
+            Array<GLuint, 3> computeLocalSize{};
+            // Replaces program->getUniformIndex(name). Maps the reflected name to its
+            // TProgram uniform index.
+            UnorderedMap<String, Int> uniformIndexByName;
 
             // Attributes (Vertex in)
             Vector<String> attribs;
@@ -1057,12 +1147,24 @@ namespace MobileGL::MG_State::GLState {
         // for both. GL 3.3 core uniforms are always sized. Takes a TProgram uniform index (the space
         // the artifacts' uniformIndexInTProgram stores).
         static GLint GetUniformArraySizeByTIndex(const LinkArtifacts& artifacts, Int tIndex) {
-            const auto& uniform = artifacts.program->getUniform(tIndex);
-            const glslang::TType* type = uniform.getType();
-            if (type != nullptr && type->isSizedArray()) {
-                return type->getOuterArraySize();
+            return UniformAtIn(artifacts, tIndex).arraySize;
+        }
+
+        // Bounds-checked mirror lookup. Out of range yields a default-constructed entry
+        // rather than UB, which is the same shape the phase-B getters use: a program whose
+        // reflection is missing must stay answerable, not crash the query surface.
+        static const UniformReflection& UniformAtIn(const LinkArtifacts& artifacts, Int tIndex) {
+            static const UniformReflection kEmpty;
+            if (tIndex < 0 || static_cast<SizeT>(tIndex) >= artifacts.uniformReflection.size()) return kEmpty;
+            return artifacts.uniformReflection[tIndex];
+        }
+        const UniformReflection& UniformAt(Int tIndex) const { return UniformAtIn(Artifacts(), tIndex); }
+        const BlockReflection& BlockAt(Int tBlockIndex) const {
+            static const BlockReflection kEmpty;
+            if (tBlockIndex < 0 || static_cast<SizeT>(tBlockIndex) >= Artifacts().blockReflection.size()) {
+                return kEmpty;
             }
-            return uniform.size < 1 ? 1 : uniform.size;
+            return Artifacts().blockReflection[tBlockIndex];
         }
 
         // Blocks until a pending link has published its artifacts. Public because a few call
