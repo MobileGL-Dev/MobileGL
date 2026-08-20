@@ -247,6 +247,19 @@ endif()
 set(MGL_ITEST_VULKAN_ENV ${MGL_ITEST_COMMON_ENV})
 if (MOBILEGL_ITEST_VK_ICD)
     list(APPEND MGL_ITEST_VULKAN_ENV "VK_ICD_FILENAMES=${MOBILEGL_ITEST_VK_ICD}")
+    # The three iterationRP repairs are tri-state quirks that default to device
+    # auto-detection, and lavapipe is not on any auto list - so on lavapipe the
+    # iterationRP scenarios run unrepaired and Program 203 misses its golden
+    # output. CI's integration-gpu job exports these three by hand; pinning them
+    # to the ICD instead means a local `ctest -L integration-gpu` measures the
+    # same thing the gate does, with no environment to remember.
+    if (MOBILEGL_ITEST_VK_ICD MATCHES "lvp_icd|lavapipe")
+        message(STATUS "Integration tests: lavapipe ICD - forcing the iterationRP repairs on")
+        list(APPEND MGL_ITEST_VULKAN_ENV
+            "MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1"
+            "MOBILEGL_DERIVE_NUM_SUBGROUPS=1"
+            "MOBILEGL_ITERATIONRP_FIX_BARRIER=1")
+    endif()
 endif()
 
 # The ENVIRONMENT test property is itself a `;`-list, and gtest_discover_tests
