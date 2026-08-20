@@ -152,8 +152,10 @@ namespace {
     // a program over a limit, empty for one within them.
     static MobileGL::String ValidateImageUniformLimits(
         glslang::TProgram& reflection, const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using MobileGL::Array;
         using MobileGL::Int;
         using MobileGL::SizeT;
+        using MobileGL::UnorderedMap;
 
         static constexpr EShLanguage kStages[] = {EShLangVertex,   EShLangTessControl, EShLangTessEvaluation,
                                                   EShLangGeometry, EShLangFragment,    EShLangCompute};
@@ -169,7 +171,19 @@ namespace {
                                          env.params.MaxFragmentImageUniforms,
                                          env.params.MaxComputeImageUniforms};
 
-        Int counts[kStageCount] = {};
+        // Reflection spells an image ARRAY one of two ways, and which one it picks depends on how
+        // the shader indexed it: a variable index makes glslang expand the array into one entry
+        // per element ("u_image[0]".."u_image[8]", each carrying the ELEMENT type), while an
+        // array never dereferenced at all stays a single entry carrying the array type. One
+        // program can even produce both spellings for the same array. So neither counting entries
+        // nor trusting the declared size is right on its own - they are reconciled per declared
+        // name with a max, which is exact for either spelling and cannot double-count the mixture.
+        struct ImageUse {
+            Int entries = 0;  // reflection entries seen for this name in this stage
+            Int declared = 0; // largest element count any of them declared
+        };
+        UnorderedMap<MobileGL::String, Array<ImageUse, kStageCount>> useByName;
+
         const Int uniformCount = reflection.getNumUniformVariables();
         for (Int i = 0; i < uniformCount; ++i) {
             const auto& uniform = reflection.getUniform(i);
@@ -184,11 +198,25 @@ namespace {
             // `stages` is the set of stages that REFERENCE the uniform, which is exactly what GL
             // counts: an image declared in two stages costs a unit in each, and one no stage
             // reads is not active at all and costs nothing.
+            Array<ImageUse, kStageCount>* use = nullptr;
             for (SizeT stage = 0; stage < kStageCount; ++stage) {
                 if ((static_cast<unsigned>(uniform.stages) & (1u << static_cast<unsigned>(kStages[stage]))) == 0) {
                     continue;
                 }
-                counts[stage] += elements;
+                // The one insert this uniform performs, so the reference survives the rest of the
+                // stage loop - a flat hash map relocates on insert, never on read.
+                if (use == nullptr) {
+                    use = &useByName[StripArrayElementSuffix(uniform.name)];
+                }
+                ++(*use)[stage].entries;
+                (*use)[stage].declared = std::max((*use)[stage].declared, elements);
+            }
+        }
+
+        Int counts[kStageCount] = {};
+        for (const auto& entry : useByName) {
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                counts[stage] += std::max(entry.second[stage].entries, entry.second[stage].declared);
             }
         }
 
