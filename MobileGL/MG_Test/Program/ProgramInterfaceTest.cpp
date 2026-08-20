@@ -754,6 +754,77 @@ void main() {
         ClearErrors();
     }
 
+    // GL 4.6 core 7.6 fails the link when a stage's active image uniforms exceed
+    // GL_MAX_*_IMAGE_UNIFORMS, or when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing
+    // counted them - glslang keeps those numbers only so gl_Max*ImageUniforms can expand from
+    // them - so every deliberately-oversized program in
+    // KHR-GL4x.shader_image_load_store.uniform-limits linked cleanly and then rendered nothing.
+    //
+    // Sized off the ADVERTISED limits rather than a constant, because the numbers come from the
+    // active backend and the whole point of the check is that the two agree.
+    TEST_F(ProgramInterfaceTest, ImageUniformsOverAStageLimitFailToLink) {
+        GLint maxFragmentImages = 0;
+        GLint maxCombinedImages = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImages);
+        GetIntegerv(GL_MAX_COMBINED_IMAGE_UNIFORMS, &maxCombinedImages);
+        ClearErrors();
+        ASSERT_GT(maxFragmentImages, 0);
+
+        // The fragment stage is compiled explicitly so a COMPILE failure can never be mistaken
+        // for the link failure under test.
+        const auto linkWithFragmentImages = [](GLint count) {
+            const std::string n = std::to_string(count);
+            const std::string source = std::string(R"(#version 430
+out vec4 color;
+layout(r32i) uniform iimage2D u_image[)") + n + R"(];
+void main() {
+    int value = 1;
+    for (int i = 0; i < )" + n + R"(; ++i) {
+        value = imageAtomicAdd(u_image[i], ivec2(0), value);
+    }
+    color = vec4(float(value));
+}
+)";
+            const char* sourcePtr = source.c_str();
+            const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+            ShaderSource(fs, 1, &sourcePtr, nullptr);
+            CompileShader(fs);
+            GLint compiled = 0;
+            GetShaderiv(fs, GL_COMPILE_STATUS, &compiled);
+            EXPECT_EQ(compiled, GL_TRUE) << "the fragment stage with " << count << " image uniforms must compile";
+
+            const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+            ShaderSource(vs, 1, &kSimpleVs, nullptr);
+            CompileShader(vs);
+
+            const GLuint program = CreateProgram();
+            AttachShader(program, vs);
+            AttachShader(program, fs);
+            LinkProgram(program);
+            return program;
+        };
+
+        const GLuint over = linkWithFragmentImages(maxFragmentImages + 1);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_IMAGE_UNIFORMS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        // Exactly AT the limit is legal and must still link: the comparison is strictly
+        // greater-than, and the conformance suite's combined-stage subcase builds a program that
+        // fills every stage to its own limit and expects it to link whenever the combined limit
+        // can hold them.
+        if (maxFragmentImages <= maxCombinedImages) {
+            const GLuint atLimit = linkWithFragmentImages(maxFragmentImages);
+            ExpectLinked(atLimit);
+            ClearErrors();
+        }
+    }
+
     // glGetProgramiv(GL_ACTIVE_ATOMIC_COUNTER_BUFFERS) and glGetActiveAtomicCounterBufferiv are
     // the pre-4.3 spelling of the interface above, and the spec requires the two to agree.
     // Neither did: the first counted glslang's atomic counter UNIFORMS - zero, because the

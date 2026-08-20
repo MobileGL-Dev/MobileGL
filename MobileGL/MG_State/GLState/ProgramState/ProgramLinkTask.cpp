@@ -134,6 +134,81 @@ namespace {
         return {};
     }
 
+    // GL 4.6 core 7.6: LinkProgram FAILS when a stage's count of active image uniforms exceeds
+    // GL_MAX_{VERTEX,TESS_CONTROL,TESS_EVALUATION,GEOMETRY,FRAGMENT,COMPUTE}_IMAGE_UNIFORMS, or
+    // when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing enforced it: glslang carries
+    // those numbers in TBuiltInResource only so gl_Max*ImageUniforms can expand from them, and
+    // its linker never counts uniforms against them - so a program declaring one image uniform
+    // more than the limit linked cleanly and then rendered nothing.
+    //
+    // The limits are the ones glGetIntegerv answers (MG_Impl/GLImpl/Getter/GL_Getter.cpp), the
+    // hardcoded tessellation zeros included: a program may not exceed a limit the implementation
+    // advertises, whatever the driver underneath would have taken.
+    //
+    // Counts the APPLICATION's image uniforms. The DirectGLES read/write split emits a second
+    // declaration for an image a stage both reads and writes (MG_Backend/DirectGLES/Utils.h), but
+    // that happens in the backend after this link, and counting the expanded set here would
+    // reject programs that are legal by the numbers GL advertises. Returns the info-log line for
+    // a program over a limit, empty for one within them.
+    static MobileGL::String ValidateImageUniformLimits(
+        glslang::TProgram& reflection, const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+
+        static constexpr EShLanguage kStages[] = {EShLangVertex,   EShLangTessControl, EShLangTessEvaluation,
+                                                  EShLangGeometry, EShLangFragment,    EShLangCompute};
+        static constexpr const char* kLimitNames[] = {
+            "GL_MAX_VERTEX_IMAGE_UNIFORMS",   "GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS",
+            "GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS", "GL_MAX_GEOMETRY_IMAGE_UNIFORMS",
+            "GL_MAX_FRAGMENT_IMAGE_UNIFORMS", "GL_MAX_COMPUTE_IMAGE_UNIFORMS"};
+        constexpr SizeT kStageCount = sizeof(kStages) / sizeof(kStages[0]);
+        const Int limits[kStageCount] = {env.params.MaxVertexImageUniforms,
+                                         0,
+                                         0,
+                                         env.params.MaxGeometryImageUniforms,
+                                         env.params.MaxFragmentImageUniforms,
+                                         env.params.MaxComputeImageUniforms};
+
+        Int counts[kStageCount] = {};
+        const Int uniformCount = reflection.getNumUniformVariables();
+        for (Int i = 0; i < uniformCount; ++i) {
+            const auto& uniform = reflection.getUniform(i);
+            const glslang::TType* type = uniform.getType();
+            if (type == nullptr || !type->isImage()) continue;
+            // An array occupies one image unit per element; an unsized one (never indexed, so
+            // never more than the single element glslang kept) counts as one.
+            Int elements = uniform.size > 1 ? uniform.size : 1;
+            if (type->isArray()) {
+                elements = type->isSizedArray() ? type->getCumulativeArraySize() : 1;
+            }
+            // `stages` is the set of stages that REFERENCE the uniform, which is exactly what GL
+            // counts: an image declared in two stages costs a unit in each, and one no stage
+            // reads is not active at all and costs nothing.
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                if ((static_cast<unsigned>(uniform.stages) & (1u << static_cast<unsigned>(kStages[stage]))) == 0) {
+                    continue;
+                }
+                counts[stage] += elements;
+            }
+        }
+
+        Int combined = 0;
+        for (SizeT stage = 0; stage < kStageCount; ++stage) {
+            combined += counts[stage];
+            if (counts[stage] > limits[stage]) {
+                return std::format("This program uses {} active image uniforms in one stage, more than the {} "
+                                   "{} allows.",
+                                   counts[stage], limits[stage], kLimitNames[stage]);
+            }
+        }
+        if (combined > env.params.MaxCombinedImageUniforms) {
+            return std::format("This program uses {} active image uniforms across its stages, more than the {} "
+                               "GL_MAX_COMBINED_IMAGE_UNIFORMS allows.",
+                               combined, env.params.MaxCombinedImageUniforms);
+        }
+        return {};
+    }
+
     static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
         const auto* type = output.getType();
         return type && type->getQualifier().builtIn != glslang::EbvNone;
@@ -680,6 +755,14 @@ namespace MobileGL::MG_State::GLState {
         if (String atomicCounterError = ValidateAtomicCounterLayout(*artifacts.program);
             !atomicCounterError.empty()) {
             artifacts.infoLog = Move(atomicCounterError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
+
+        if (String imageUniformError = ValidateImageUniformLimits(*artifacts.program, env);
+            !imageUniformError.empty()) {
+            artifacts.infoLog = Move(imageUniformError);
             DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
             ProgramObject::ResetLinkArtifacts(artifacts);
             return false;
