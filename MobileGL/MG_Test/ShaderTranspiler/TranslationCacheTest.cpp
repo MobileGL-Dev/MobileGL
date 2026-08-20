@@ -33,6 +33,7 @@
 #include "Init.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
 #include "MG_State/GLState/Core.h"
+#include "MG_State/GLState/ProgramState/ProgramTranslationCache.h"
 #include "MG_Util/ShaderTranspiler/CompileEnv.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
@@ -125,6 +126,8 @@ void main() {
         inputs.stages = stages;
         inputs.shaderCompileFlags = 0;
         inputs.enableSpirvValidation = false;
+        inputs.xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
+        inputs.maxFragmentOutputColorNumber = 8;
         return inputs;
     }
 
@@ -155,6 +158,42 @@ void main() {
         if (!object) return digest;
         for (const auto& module : object->GetGeneratedSpirv()) digest.push_back(DigestOf(module));
         return digest;
+    }
+
+    // Everything the GL query surface says about a linked program, as one string. Used to
+    // assert that a program served from the L1 memo - which never built a TProgram - answers
+    // identically to the one that was parsed.
+    String ReflectionFingerprint(const GLuint program) {
+        const auto& object = MG_State::pGLContext->GetProgramObject(program);
+        if (!object) return String();
+        String out;
+        const Uint uniformCount = object->GetUniformCount();
+        for (Uint i = 0; i < uniformCount; ++i) {
+            out += object->GetActiveUniformName(i);
+            out += ':' + std::to_string(object->GetActiveUniformType(i));
+            out += ':' + std::to_string(object->GetActiveUniformArraySize(i));
+            out += ':' + std::to_string(object->GetActiveUniformBlockIndex(i));
+            out += ':' + std::to_string(object->GetActiveUniformOffset(i));
+            out += ':' + std::to_string(object->GetActiveUniformArrayStride(i));
+            out += ':' + std::to_string(object->GetActiveUniformMatrixStride(i));
+            out += ':' + std::to_string(object->GetActiveUniformIsRowMajor(i));
+            out += '\n';
+        }
+        const Int attribCount = object->GetActiveAttributesCount();
+        for (Int i = 0; i < attribCount; ++i) {
+            out += object->GetActiveAttribName(static_cast<Uint>(i));
+            out += ':' + std::to_string(object->GetActiveAttribType(static_cast<Uint>(i)));
+            out += ':' + std::to_string(object->GetActiveAttribArraySize(static_cast<Uint>(i)));
+            out += '\n';
+        }
+        const Int outputCount = object->GetActiveFragmentOutputCount();
+        for (Int i = 0; i < outputCount; ++i) {
+            out += object->GetActiveFragmentOutputName(static_cast<Uint>(i));
+            out += ':' + std::to_string(object->GetFragmentOutputLocation(static_cast<Uint>(i)));
+            out += ':' + std::to_string(object->GetFragmentOutputType(static_cast<Uint>(i)));
+            out += '\n';
+        }
+        return out;
     }
 
     GLuint MakeShader(const GLenum type, const String& source) {
@@ -383,6 +422,8 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     const UnorderedMap<String, Uint> fragOut{{"fragColor", 1u}};
     const UnorderedMap<String, Uint> fragIndex{{"fragColor", 1u}};
     const UnorderedMap<String, Uint> opaque{{"uTex", 5u}};
+    const Vector<String> xfbVaryings{"vPos", "gl_NextBuffer", "vUv"};
+    const Vector<String> xfbVaryingsReordered{"vUv", "gl_NextBuffer", "vPos"};
 
     const SpirvTranslationKeyInputs base = BaselineSpirvInputs(baseStages);
     const TranslationCacheKey baseKey = BuildSpirvTranslationKey(base);
@@ -449,6 +490,30 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
         SpirvTranslationKeyInputs v = base;
         v.enableSpirvValidation = true;
         variants.emplace_back("enableSpirvValidation", BuildSpirvTranslationKey(v));
+    }
+    // ---- inputs the WIDENED payload pulled into the key ----
+    // They cannot move a word of the generated SPIR-V, but they do shape the reflection the
+    // payload now carries, so they have to split the key. This is the group that would go
+    // stale first if the payload ever grew again without the key following it.
+    {   // glTransformFeedbackVaryings: shapes xfbVaryings / xfbStrides / gsStripTriangles
+        SpirvTranslationKeyInputs v = base;
+        v.requestedXfbVaryings = &xfbVaryings;
+        variants.emplace_back("requestedXfbVaryings", BuildSpirvTranslationKey(v));
+    }
+    {   // ... and its ORDER, which gl_NextBuffer / gl_SkipComponentsN make load-bearing
+        SpirvTranslationKeyInputs v = base;
+        v.requestedXfbVaryings = &xfbVaryingsReordered;
+        variants.emplace_back("requestedXfbVaryings order", BuildSpirvTranslationKey(v));
+    }
+    {   // GL_INTERLEAVED_ATTRIBS vs GL_SEPARATE_ATTRIBS
+        SpirvTranslationKeyInputs v = base;
+        v.xfbBufferMode = GL_SEPARATE_ATTRIBS;
+        variants.emplace_back("xfbBufferMode", BuildSpirvTranslationKey(v));
+    }
+    {   // GL_MAX_DRAW_BUFFERS: decides whether the link is REJECTED at all
+        SpirvTranslationKeyInputs v = base;
+        v.maxFragmentOutputColorNumber = 4;
+        variants.emplace_back("maxFragmentOutputColorNumber", BuildSpirvTranslationKey(v));
     }
 
     for (const auto& [name, key] : variants) {
@@ -578,12 +643,12 @@ TEST_F(TranslationCacheTest, L1MemoizesASecondProgramWithIdenticalSources) {
     const CacheModeScope cacheOn(true);
 
     const String fs = SwizzleLikeFragment("");
-    const TranslationCacheStats before = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
 
     const GLuint first = LinkProgramFromSources(kVertexSource, fs);
-    const TranslationCacheStats afterFirst = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats afterFirst = MG_State::GLState::GetProgramTranslationCache().Stats();
     const GLuint second = LinkProgramFromSources(kVertexSource, fs);
-    const TranslationCacheStats afterSecond = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats afterSecond = MG_State::GLState::GetProgramTranslationCache().Stats();
 
     GLint firstStatus = GL_FALSE;
     GLint secondStatus = GL_FALSE;
@@ -601,6 +666,42 @@ TEST_F(TranslationCacheTest, L1MemoizesASecondProgramWithIdenticalSources) {
     const Vector<Uint64> secondDigest = ProgramSpirvDigest(second);
     ASSERT_EQ(firstDigest.size(), 2u);
     EXPECT_EQ(firstDigest, secondDigest);
+
+    // The payload is the WHOLE front end, so the reflection has to survive it too - the
+    // program served from the memo never built a TProgram to answer these from.
+    EXPECT_EQ(ReflectionFingerprint(first), ReflectionFingerprint(second));
+    EXPECT_FALSE(ReflectionFingerprint(second).empty());
+}
+
+// A hit publishes a program that never had a glslang::TProgram at all. Everything GL can ask
+// about it has to come out of the payload; if any accessor still needed the parse this would
+// answer differently from the program that was parsed.
+TEST_F(TranslationCacheTest, AProgramServedFromTheMemoAnswersTheWholeQuerySurface) {
+    const SyncCompileScope sync;
+    const CacheModeScope cacheOn(true);
+    const String fs = SwizzleLikeFragment("");
+
+    const GLuint parsed = LinkProgramFromSources(kVertexSource, fs);
+    const TranslationCacheStats afterFirst = MG_State::GLState::GetProgramTranslationCache().Stats();
+    const GLuint fromMemo = LinkProgramFromSources(kVertexSource, fs);
+    const TranslationCacheStats afterSecond = MG_State::GLState::GetProgramTranslationCache().Stats();
+    ASSERT_EQ(afterSecond.hits - afterFirst.hits, 1u) << "the second link was not a hit";
+
+    const auto& parsedObject = MG_State::pGLContext->GetProgramObject(parsed);
+    const auto& memoObject = MG_State::pGLContext->GetProgramObject(fromMemo);
+    ASSERT_NE(parsedObject, nullptr);
+    ASSERT_NE(memoObject, nullptr);
+
+    EXPECT_EQ(ReflectionFingerprint(parsed), ReflectionFingerprint(fromMemo));
+    EXPECT_EQ(parsedObject->GetUniformCount(), memoObject->GetUniformCount());
+    EXPECT_EQ(parsedObject->GetActiveAttributesCount(), memoObject->GetActiveAttributesCount());
+    EXPECT_EQ(parsedObject->GetActiveFragmentOutputCount(), memoObject->GetActiveFragmentOutputCount());
+    EXPECT_EQ(parsedObject->GetActiveUniformBlocksCount(), memoObject->GetActiveUniformBlocksCount());
+    // The uniform shadow (phase B's half of the payload) has to arrive as well.
+    for (Uint location = 0; location <= parsedObject->GetMaxUniformLocation(); ++location) {
+        EXPECT_EQ(parsedObject->GetUniformOffset(location), memoObject->GetUniformOffset(location))
+            << "uniform offset at location " << location;
+    }
 }
 
 // The modules a hit hands out must be the modules a from-scratch translation would have
@@ -629,9 +730,9 @@ TEST_F(TranslationCacheTest, L1DoesNotMemoizeAcrossDifferentSources) {
 
     // Prime with one, then link a different one: a miss, not a hit.
     (void)LinkProgramFromSources(kVertexSource, SwizzleLikeFragment(""));
-    const TranslationCacheStats before = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
     (void)LinkProgramFromSources(kVertexSource, SwizzleLikeFragment("i"));
-    const TranslationCacheStats after = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats after = MG_State::GLState::GetProgramTranslationCache().Stats();
 
     EXPECT_EQ(after.hits - before.hits, 0u);
     EXPECT_EQ(after.misses - before.misses, 1u);
@@ -649,9 +750,9 @@ TEST_F(TranslationCacheTest, TheEscapeHatchDisablesL1Entirely) {
     }
 
     const CacheModeScope cacheOff(false);
-    const TranslationCacheStats before = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
     const GLuint program = LinkProgramFromSources(kVertexSource, fs);
-    const TranslationCacheStats after = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats after = MG_State::GLState::GetProgramTranslationCache().Stats();
 
     GLint status = GL_FALSE;
     MG_Impl::GLImpl::GetProgramiv(program, GL_LINK_STATUS, &status);

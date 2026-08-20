@@ -37,6 +37,7 @@
 #include "Init.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
 #include "MG_State/GLState/Core.h"
+#include "MG_State/GLState/ProgramState/ProgramTranslationCache.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/TranslationCache.h"
@@ -220,15 +221,90 @@ static void BM_ProgramLink_CacheOn(benchmark::State& state) {
     const String vs = kVertexSource;
     const String fs = SwizzleLikeFragment("", static_cast<int>(state.range(0)));
     LinkOneProgram(vs, fs); // prime, so the measured loop is the steady state
-    const TranslationCacheStats before = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
     for (auto _ : state) {
         LinkOneProgram(vs, fs);
     }
-    const TranslationCacheStats stats = GetSpirvTranslationCache().Stats();
+    const TranslationCacheStats stats = MG_State::GLState::GetProgramTranslationCache().Stats();
     state.counters["L1_hits"] = static_cast<double>(stats.hits - before.hits);
     state.counters["L1_misses"] = static_cast<double>(stats.misses - before.misses);
 }
 BENCHMARK(BM_ProgramLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
+
+// ---------------------------------------------------------------------------------------
+// L1, the shape the memo actually exists for: MANY PROGRAMS OUT OF THE SAME SHADERS.
+//
+// The pair above deletes its shader objects every iteration, which forces a fresh glslang
+// parse per iteration no matter what the link does - glCompileShader parses, and that is a
+// DIFFERENT entry point from the one L1 memoizes. It is a real workload (what an application
+// that never reuses a shader object pays) but it is the pessimistic one, and the residual it
+// leaves is the parse, not the link.
+//
+// This pair keeps the shader objects alive, so ShaderCompileAdoptionMap can hand a later
+// glCompileShader the earlier one's parse, and the L1 hit then skips the link, mapIO, the
+// SPIR-V, the reflection and the routing outright. That is the
+// KHR-GL33.texture_swizzle.smoke_* shape - 2592 programs over a handful of distinct sources.
+// ---------------------------------------------------------------------------------------
+namespace {
+    struct SharedShaders {
+        GLuint vs = 0;
+        GLuint fs = 0;
+    };
+
+    SharedShaders MakeSharedShaders(const String& vertexSource, const String& fragmentSource) {
+        using namespace MG_Impl::GLImpl;
+        SharedShaders shaders;
+        shaders.vs = CreateShader(GL_VERTEX_SHADER);
+        const char* vsText = vertexSource.c_str();
+        ShaderSource(shaders.vs, 1, &vsText, nullptr);
+        CompileShader(shaders.vs);
+        shaders.fs = CreateShader(GL_FRAGMENT_SHADER);
+        const char* fsText = fragmentSource.c_str();
+        ShaderSource(shaders.fs, 1, &fsText, nullptr);
+        CompileShader(shaders.fs);
+        return shaders;
+    }
+
+    void LinkFromSharedShaders(const SharedShaders& shaders) {
+        using namespace MG_Impl::GLImpl;
+        const GLuint program = CreateProgram();
+        AttachShader(program, shaders.vs);
+        AttachShader(program, shaders.fs);
+        LinkProgram(program);
+        benchmark::DoNotOptimize(program);
+        DeleteProgram(program);
+    }
+} // namespace
+
+static void BM_SharedShaderLink_CacheOff(benchmark::State& state) {
+    MobileGL::Initialize();
+    const SyncCompileScope sync;
+    const CacheModeScope cache(false);
+    const SharedShaders shaders =
+        MakeSharedShaders(kVertexSource, SwizzleLikeFragment("", static_cast<int>(state.range(0))));
+    for (auto _ : state) {
+        LinkFromSharedShaders(shaders);
+    }
+    state.SetLabel("MOBILEGL_SHADER_CACHE=0");
+}
+BENCHMARK(BM_SharedShaderLink_CacheOff)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
+
+static void BM_SharedShaderLink_CacheOn(benchmark::State& state) {
+    MobileGL::Initialize();
+    const SyncCompileScope sync;
+    const CacheModeScope cache(true);
+    const SharedShaders shaders =
+        MakeSharedShaders(kVertexSource, SwizzleLikeFragment("", static_cast<int>(state.range(0))));
+    LinkFromSharedShaders(shaders); // prime, so the measured loop is the steady state
+    const TranslationCacheStats before = MG_State::GLState::GetProgramTranslationCache().Stats();
+    for (auto _ : state) {
+        LinkFromSharedShaders(shaders);
+    }
+    const TranslationCacheStats stats = MG_State::GLState::GetProgramTranslationCache().Stats();
+    state.counters["L1_hits"] = static_cast<double>(stats.hits - before.hits);
+    state.counters["L1_misses"] = static_cast<double>(stats.misses - before.misses);
+}
+BENCHMARK(BM_SharedShaderLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 // ---------------------------------------------------------------------------------------
 // L2, component: the DirectGLES SPIR-V pass chain plus SPIRV-Cross for one stage.
