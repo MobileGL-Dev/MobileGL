@@ -61,7 +61,11 @@ void main() {
     // TEXTURE_ACCESS, one CHANNEL, and an output whose BASIC_TYPE is the only thing that
     // varies within a case. Padded with enough real arithmetic that the translation chain
     // is doing work rather than measuring fixed overheads.
-    String SwizzleLikeFragment(const String& prefix) {
+    // `padLines` = 0 is the honest CTS size: gl3cTextureSwizzleTests' smoke template is a
+    // handful of lines, and that is the workload the memo exists for. The padded variant is
+    // kept alongside it because a shaderpack stage is orders of magnitude bigger, and the
+    // two bracket the ratio the cache is worth in practice.
+    String SwizzleLikeFragment(const String& prefix, const int padLines) {
         String source = "#version 460\n";
         source += "in vec3 vPos;\n";
         source += "in vec2 vUv;\n";
@@ -73,7 +77,7 @@ void main() {
         source += "void main() {\n";
         source += "    vec4 s = texture(uTex, vUv);\n";
         source += "    float acc = s.r;\n";
-        for (int i = 0; i < 120; ++i) {
+        for (int i = 0; i < padLines; ++i) {
             source += "    acc = acc * 1.0001 + sin(acc + " + std::to_string(i) + ".0) * cos(acc);\n";
         }
         source += "    for (int i = 0; i < 8; ++i) acc += uArr[i];\n";
@@ -195,41 +199,44 @@ void main() {
 // ---------------------------------------------------------------------------------------
 // L1, in situ: the full glCompileShader + glLinkProgram path for a repeated program.
 // ---------------------------------------------------------------------------------------
+// Arg(0) = the CTS smoke size; Arg(120) = a heavy stage, bracketing the ratio.
 static void BM_ProgramLink_CacheOff(benchmark::State& state) {
     MobileGL::Initialize();
     const SyncCompileScope sync;
     const CacheModeScope cache(false);
     const String vs = kVertexSource;
-    const String fs = SwizzleLikeFragment("");
+    const String fs = SwizzleLikeFragment("", static_cast<int>(state.range(0)));
     for (auto _ : state) {
         LinkOneProgram(vs, fs);
     }
     state.SetLabel("MOBILEGL_SHADER_CACHE=0");
 }
-BENCHMARK(BM_ProgramLink_CacheOff)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_ProgramLink_CacheOff)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 static void BM_ProgramLink_CacheOn(benchmark::State& state) {
     MobileGL::Initialize();
     const SyncCompileScope sync;
     const CacheModeScope cache(true);
     const String vs = kVertexSource;
-    const String fs = SwizzleLikeFragment("");
+    const String fs = SwizzleLikeFragment("", static_cast<int>(state.range(0)));
     LinkOneProgram(vs, fs); // prime, so the measured loop is the steady state
+    const TranslationCacheStats before = GetSpirvTranslationCache().Stats();
     for (auto _ : state) {
         LinkOneProgram(vs, fs);
     }
     const TranslationCacheStats stats = GetSpirvTranslationCache().Stats();
-    state.counters["L1_hits"] = static_cast<double>(stats.hits);
-    state.counters["L1_misses"] = static_cast<double>(stats.misses);
+    state.counters["L1_hits"] = static_cast<double>(stats.hits - before.hits);
+    state.counters["L1_misses"] = static_cast<double>(stats.misses - before.misses);
 }
-BENCHMARK(BM_ProgramLink_CacheOn)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_ProgramLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 // ---------------------------------------------------------------------------------------
 // L2, component: the DirectGLES SPIR-V pass chain plus SPIRV-Cross for one stage.
 // ---------------------------------------------------------------------------------------
 static void BM_EsslTranspile_CacheOff(benchmark::State& state) {
     MobileGL::Initialize();
-    const Vector<Uint32> spirv = BuildSanitizedFragmentSpirv(SwizzleLikeFragment(""));
+    const Vector<Uint32> spirv =
+        BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
     if (spirv.empty()) {
         state.SkipWithError("could not build the fragment module");
         return;
@@ -244,11 +251,12 @@ static void BM_EsslTranspile_CacheOff(benchmark::State& state) {
     }
     state.SetLabel("MOBILEGL_SHADER_CACHE=0");
 }
-BENCHMARK(BM_EsslTranspile_CacheOff)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_EsslTranspile_CacheOff)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 static void BM_EsslTranspile_CacheOn(benchmark::State& state) {
     MobileGL::Initialize();
-    const Vector<Uint32> spirv = BuildSanitizedFragmentSpirv(SwizzleLikeFragment(""));
+    const Vector<Uint32> spirv =
+        BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
     if (spirv.empty()) {
         state.SkipWithError("could not build the fragment module");
         return;
@@ -273,6 +281,6 @@ static void BM_EsslTranspile_CacheOn(benchmark::State& state) {
     state.counters["L2_hits"] = static_cast<double>(stats.hits);
     state.counters["L2_misses"] = static_cast<double>(stats.misses);
 }
-BENCHMARK(BM_EsslTranspile_CacheOn)->Unit(benchmark::kMicrosecond);
+BENCHMARK(BM_EsslTranspile_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosecond);
 
 BENCHMARK_MAIN();
