@@ -406,9 +406,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return complete;
         }
 
+        // `samples` only reaches the multisample targets; every other target ignores it. The
+        // descending sample walk (ProbeTextureSampleCounts) reuses this whole routine rather than
+        // repeating the gen/bind/completeness/delete dance.
         Bool ProbeTexture(const MG_External::GLESFunctionsTable& gl, TextureTarget target, GLenum internalFormat,
                           GLenum imageFormat, GLenum imageType, TextureInternalFormat logicalFormat,
-                          Bool* outRenderable) {
+                          Bool* outRenderable, Int samples = 1) {
             if (!IsGLESProbeTextureTarget(target) || !gl.glGenTextures || !gl.glBindTexture || !gl.glDeleteTextures) {
                 return false;
             }
@@ -428,10 +431,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const Bool isMultisample = IsGLESProbeMultisampleTarget(target);
             if (isMultisample) {
+                const auto probeSamples = static_cast<GLsizei>(std::max(samples, 1));
                 if (target == TextureTarget::Texture2DMultisample && gl.glTexStorage2DMultisample) {
-                    gl.glTexStorage2DMultisample(glTarget, 1, internalFormat, 1, 1, GL_TRUE);
+                    gl.glTexStorage2DMultisample(glTarget, probeSamples, internalFormat, 1, 1, GL_TRUE);
                 } else if (target == TextureTarget::Texture2DMultisampleArray && gl.glTexStorage3DMultisample) {
-                    gl.glTexStorage3DMultisample(glTarget, 1, internalFormat, 1, 1, 1, GL_TRUE);
+                    gl.glTexStorage3DMultisample(glTarget, probeSamples, internalFormat, 1, 1, 1, GL_TRUE);
                 } else {
                     gl.glBindTexture(glTarget, static_cast<GLuint>(previousBinding));
                     gl.glDeleteTextures(1, &texture);
@@ -520,6 +524,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<Int> sampleCounts;
             for (Int samples = std::max(maxSamples, 1); samples > 1; samples >>= 1) {
                 if (ProbeRenderbuffer(gl, internalFormat, logicalFormat, true, samples)) {
+                    sampleCounts.push_back(samples);
+                }
+            }
+            sampleCounts.push_back(1);
+            return sampleCounts;
+        }
+
+        // The multisample TEXTURE twin of ProbeRenderbufferSampleCounts. It used to be a
+        // hardcoded {1}, which made glGetInternalformativ(GL_SAMPLES) claim a one-sample maximum
+        // for every format on the multisample targets even where glTexImage2DMultisample happily
+        // accepts four - GL 4.6 core 8.8 makes that query the definition of the maximum, so the
+        // two answers cannot both be right. Completeness is required at every count, exactly as
+        // the renderbuffer walk requires it; the caller only reaches here once the one-sample
+        // probe has already succeeded, so 1 terminates the list without being re-probed.
+        Vector<Int> ProbeTextureSampleCounts(const MG_External::GLESFunctionsTable& gl, TextureTarget target,
+                                             GLenum internalFormat, GLenum imageFormat, GLenum imageType,
+                                             TextureInternalFormat logicalFormat, Int maxSamples) {
+            Vector<Int> sampleCounts;
+            for (Int samples = std::max(maxSamples, 1); samples > 1; samples >>= 1) {
+                Bool renderable = false;
+                const Bool created = ProbeTexture(gl, target, internalFormat, imageFormat, imageType, logicalFormat,
+                                                  &renderable, samples);
+                if (created && renderable) {
                     sampleCounts.push_back(samples);
                 }
             }
@@ -627,7 +654,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             AddFullFormatCaps(cache, targetIndex, formatIndex,
                                               BuildTextureCapsFromProbe(logicalFormat, target, nativeRenderable));
                             if (IsGLESProbeMultisampleTarget(target)) {
-                                cache.SampleCounts[targetIndex][formatIndex] = {1};
+                                const Int maxSamples =
+                                    GetGLESFormatMaxSamples(capabilities, logicalFormat, nativeInfo.ImageFormat);
+                                cache.SampleCounts[targetIndex][formatIndex] = ProbeTextureSampleCounts(
+                                    gl, probeTarget, nativeInfo.InternalFormat, nativeInfo.ImageFormat,
+                                    nativeInfo.ImageType, logicalFormat, maxSamples);
                             }
                         }
                         shouldProbeFallback = !nativeCreated || !nativeRenderable;
@@ -645,7 +676,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 LogGLESFormatCaveat(logicalFormat, targetIndex, fallbackInfo);
                             }
                             if (IsGLESProbeMultisampleTarget(target)) {
-                                cache.SampleCounts[targetIndex][formatIndex] = {1};
+                                const Int maxSamples =
+                                    GetGLESFormatMaxSamples(capabilities, logicalFormat, fallbackInfo.ImageFormat);
+                                cache.SampleCounts[targetIndex][formatIndex] = ProbeTextureSampleCounts(
+                                    gl, probeTarget, fallbackInfo.InternalFormat, fallbackInfo.ImageFormat,
+                                    fallbackInfo.ImageType, logicalFormat, maxSamples);
                             }
                         }
                     }
