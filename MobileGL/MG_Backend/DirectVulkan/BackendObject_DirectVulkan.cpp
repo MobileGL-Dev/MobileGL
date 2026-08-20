@@ -905,7 +905,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int maxSupportedDrawBuffers = static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
         m_dynamicParameters.MaxDrawBuffers = std::min(m_vulkanCaps.MaxDrawBuffers, maxSupportedDrawBuffers);
         m_dynamicParameters.MaxColorAttachments = std::min(m_vulkanCaps.MaxColorAttachments, maxSupportedDrawBuffers);
-        m_dynamicParameters.MaxClipDistances = m_vulkanCaps.MaxClipDistances;
+        // Same shape as the image-uniform limits three lines above: maxClipDistances is reported
+        // by every device, but declaring ClipDistance in a module needs the shaderClipDistance
+        // FEATURE, which VulkanRenderer enables exactly where the physical device has it. Without
+        // it the limit describes a capacity no shader may use, so report none.
+        m_dynamicParameters.MaxClipDistances =
+            m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0;
         m_dynamicParameters.MaxViewports = m_vulkanCaps.MaxViewports;
         m_dynamicParameters.MaxViewportWidth = m_vulkanCaps.MaxViewportWidth;
         m_dynamicParameters.MaxViewportHeight = m_vulkanCaps.MaxViewportHeight;

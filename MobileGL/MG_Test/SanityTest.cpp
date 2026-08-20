@@ -643,6 +643,28 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
     EXPECT_EQ(params.MaxComputeImageUniforms, 5);
 }
 
+// maxClipDistances is a LIMIT every Vulkan device reports; declaring ClipDistance in a module
+// needs the shaderClipDistance FEATURE, which is separate and which VulkanRenderer enables only
+// where the physical device has it. Forwarding the limit without the feature advertises eight
+// clip planes no shader may use - the same shape as the image-uniform limits above, and the same
+// shape as the GL_EXT_clip_cull_distance lie on DirectGLES. Not a blanket zero: a device WITH the
+// feature keeps its real number.
+TEST(DirectVulkanSanity, GatesClipDistancesOnTheShaderClipDistanceFeature) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    MG_External::VulkanCapabilities caps;
+    caps.MaxClipDistances = 8;
+
+    caps.SupportsShaderClipDistance = false;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 0);
+
+    caps.SupportsShaderClipDistance = true;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
+}
+
 TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
     using namespace MobileGL;
 

@@ -1275,7 +1275,10 @@ namespace MobileGL {
             Int MaxComputeImageUniforms = 8;
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;
-            Int MaxClipDistances = 8;
+            // Zero is a legal answer, not a placeholder: ES reaches clip distances only through
+            // GL_EXT_clip_cull_distance, so a driver without it has none. See the guarded probe
+            // in FillInGLESCapabilities.
+            Int MaxClipDistances = 0;
             Int MaxViewports = 16;
             Int MaxViewportWidth = 16384;
             Int MaxViewportHeight = 16384;

@@ -1063,7 +1063,15 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxComputeImageUniforms = 8;
         GLint maxDrawBuffers = 8;
         GLint maxColorAttachments = 8;
-        GLint maxClipDistances = 8;
+        // Zero is a legal answer, not a placeholder. GL_MAX_CLIP_DISTANCES exists in ES only as
+        // GL_MAX_CLIP_DISTANCES_EXT under GL_EXT_clip_cull_distance, so on a driver without that
+        // extension there is nowhere to put a clip distance at all: SPIRV-Cross emits
+        // gl_ClipDistance behind an `#extension ... : require` the ESSL compiler rejects, and
+        // DirectGLES has no state to forward the per-distance enables into (see the gate in
+        // DirectGLES::SyncRenderState). Starting at 8 meant a probe that could never run left an
+        // optimistic 8 behind, so the frontend promised eight clip planes and every draw with a
+        // clipping program silently rendered nothing. The guarded probe below only ever widens it.
+        GLint maxClipDistances = 0;
         GLint maxViewports = 16;
         GLfloat minFragmentInterpolationOffset = -0.5f;
         GLfloat maxFragmentInterpolationOffset = 0.4375f;
@@ -1195,7 +1203,30 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
         glesFuncs.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
         glesFuncs.glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &maxColorAttachments);
-        glesFuncs.glGetIntegerv(GL_MAX_CLIP_DISTANCES, &maxClipDistances);
+        // GL_MAX_CLIP_DISTANCES is 0x0D32, which ES only ever spells GL_MAX_CLIP_DISTANCES_EXT and
+        // only ever has under GL_EXT_clip_cull_distance. The extension was already resolved into
+        // caps.SupportsClipDistance a few hundred lines above and is the same flag DirectGLES
+        // gates the CLIP_DISTANCEi enable forwarding on, so ask the driver only where the pname
+        // exists; everywhere else the honest 0 stands and no GL_INVALID_ENUM is left behind for an
+        // unrelated query - or the application's first glGetError - to trip over.
+        if (caps.SupportsClipDistance) {
+            if (glesFuncs.glGetError) {
+                while (glesFuncs.glGetError() != GL_NO_ERROR) {
+                }
+            }
+            glesFuncs.glGetIntegerv(GL_MAX_CLIP_DISTANCES, &maxClipDistances);
+            Bool queryFailed = false;
+            if (glesFuncs.glGetError) {
+                while (glesFuncs.glGetError() != GL_NO_ERROR) {
+                    queryFailed = true;
+                }
+            }
+            if (queryFailed) {
+                MGLOG_W("GL_EXT_clip_cull_distance is advertised but GL_MAX_CLIP_DISTANCES was "
+                        "rejected; reporting no clip distances");
+                maxClipDistances = 0;
+            }
+        }
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxViewportDims);
         glesFuncs.glGetIntegerv(GL_VIEWPORT_SUBPIXEL_BITS, &viewportSubpixelBits);
@@ -1368,7 +1399,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxComputeImageUniforms = maxComputeImageUniforms;
         caps.MaxDrawBuffers = maxDrawBuffers;
         caps.MaxColorAttachments = maxColorAttachments;
-        caps.MaxClipDistances = maxClipDistances;
+        // A driver is free to write nonsense into an out-param it then rejects, and without the
+        // extension the probe above never ran at all - so the flag, not the local, decides.
+        caps.MaxClipDistances = caps.SupportsClipDistance ? std::max(maxClipDistances, 0) : 0;
         caps.MaxViewports = maxViewports;
         caps.MaxViewportWidth = maxViewportDims[0];
         caps.MaxViewportHeight = maxViewportDims[1];
@@ -1450,7 +1483,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_COMPUTE_IMAGE_UNIFORMS: %d", caps.MaxComputeImageUniforms);
         MGLOG_I("    GL_MAX_DRAW_BUFFERS: %d", caps.MaxDrawBuffers);
         MGLOG_I("    GL_MAX_COLOR_ATTACHMENTS: %d", caps.MaxColorAttachments);
-        MGLOG_I("    GL_MAX_CLIP_DISTANCES: %d", caps.MaxClipDistances);
+        // Worth spelling the reason out for the same reason the per-stage storage block counts
+        // are: a zero here is what stops an application's gl_ClipDistance from ever clipping, and
+        // reading it back from an artifact is the difference between "MobileGL dropped my draw"
+        // and "this driver has no clip distances".
+        MGLOG_I("    GL_MAX_CLIP_DISTANCES: %d%s", caps.MaxClipDistances,
+                caps.SupportsClipDistance ? "" : " (no GL_EXT_clip_cull_distance on this driver)");
         MGLOG_I("    GL_MAX_VIEWPORTS: %d", caps.MaxViewports);
         MGLOG_I("    GL_MAX_VIEWPORT_DIMS: [%d, %d]", caps.MaxViewportWidth, caps.MaxViewportHeight);
         MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin,

@@ -96,6 +96,12 @@ namespace MobileGL {
             Bool SupportsVertexPipelineStoresAndAtomics = false;
             Bool SupportsFragmentStoresAndAtomics = false;
             Bool SupportsGeometryShader = false;
+            // VkPhysicalDeviceFeatures::shaderClipDistance. maxClipDistances is a LIMIT and is
+            // reported whatever the feature says, so the limit alone does not mean a module may
+            // declare ClipDistance - VulkanRenderer enables the feature only where the physical
+            // device has it, and without it a shader writing gl_ClipDistance is invalid. Very
+            // widely supported, hence read from the device features and never assumed false.
+            Bool SupportsShaderClipDistance = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Bool SupportsShaderSubgroup = false;
             Uint32 SubgroupSize = 0;

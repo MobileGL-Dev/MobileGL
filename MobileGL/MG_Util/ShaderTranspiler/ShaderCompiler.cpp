@@ -82,7 +82,6 @@ namespace MobileGL {
                 Resources.maxFragmentInputVectors = 15;
                 Resources.minProgramTexelOffset = -8;
                 Resources.maxProgramTexelOffset = 7;
-                Resources.maxClipDistances = 8;
                 Resources.maxComputeUniformComponents = MAX_COMPUTE_UNIFORM_COMPONENTS;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
@@ -173,6 +172,14 @@ namespace MobileGL {
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
                 Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
                 Resources.maxComputeTextureImageUnits = dynamicParameters.MaxComputeTextureImageUnits;
+                // Load-bearing, not cosmetic. glslang rejects gl_ClipDistance[i] for
+                // i >= maxClipDistances (ParseHelper.cpp) and expands gl_MaxClipDistances from the
+                // same number, so tracking the backend limit is what turns "the program links,
+                // the backend's shader compile fails somewhere the frontend never surfaces, and
+                // the draw renders nothing" into an honest glCompileShader error with a log. It is
+                // also what makes glGetIntegerv(GL_MAX_CLIP_DISTANCES) and gl_MaxClipDistances
+                // agree, which KHR-GLxx.clip_distance.coverage compares directly.
+                Resources.maxClipDistances = dynamicParameters.MaxClipDistances;
 
                 // The compute work-group limits are the env's, not the backend parameters': they
                 // are the only ones that come from a REAL indexed driver query, which

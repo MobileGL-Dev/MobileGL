@@ -237,6 +237,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
         caps.SupportsGeometryShader = supportedFeatures.geometryShader == VK_TRUE;
+        caps.SupportsShaderClipDistance = supportedFeatures.shaderClipDistance == VK_TRUE;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(p.limits.maxStorageBufferRange);
         const Bool supportsShaderSubgroup = vk.vkGetPhysicalDeviceProperties2 &&
                                             HasUsableShaderSubgroupSupport(subgroupProps);
@@ -331,6 +332,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsVertexPipelineStoresAndAtomics = false;
         caps.SupportsFragmentStoresAndAtomics = false;
         caps.SupportsGeometryShader = false;
+        caps.SupportsShaderClipDistance = false;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(properties.limits.maxStorageBufferRange);
         caps.SupportsShaderSubgroup = false;
         caps.SubgroupSize = 0;

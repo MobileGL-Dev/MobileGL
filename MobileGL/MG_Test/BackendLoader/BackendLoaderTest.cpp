@@ -45,6 +45,13 @@ namespace {
         GLint maxFragmentSsboBlocks = 9;
         bool tessAndGeometrySsboBlocksQueried = false;
         bool perStageSsboBlockQueryRaisesError = false;
+        // GL_MAX_CLIP_DISTANCES. Not ES core in any version - it exists only as
+        // GL_MAX_CLIP_DISTANCES_EXT under GL_EXT_clip_cull_distance - so asking a driver without
+        // the extension raises GL_INVALID_ENUM and leaves the out-param untouched. The "queried"
+        // flag is what pins the gating; the "raises error" knob is what pins the drain.
+        GLint maxClipDistances = 8;
+        bool maxClipDistancesQueried = false;
+        bool clipDistanceQueryRaisesError = false;
         GLfloat minFragmentInterpolationOffset = -0.75f;
         GLfloat maxFragmentInterpolationOffset = 0.625f;
         GLint fragmentInterpolationOffsetBits = 6;
@@ -159,6 +166,14 @@ namespace {
                 break;
             case GL_MAX_COMPUTE_IMAGE_UNIFORMS:
                 *data = g_fake.maxComputeImageUniforms;
+                break;
+            case GL_MAX_CLIP_DISTANCES:
+                g_fake.maxClipDistancesQueried = true;
+                if (g_fake.clipDistanceQueryRaisesError) {
+                    g_fake.pendingError = GL_INVALID_ENUM;
+                } else {
+                    *data = g_fake.maxClipDistances;
+                }
                 break;
             case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS:
                 g_fake.fragmentInterpolationLimitsQueried = true;
@@ -640,6 +655,64 @@ TEST(PerStageStorageBlockCapabilities, ARejectedQueryIsDrainedAndFallsBackToTheS
     EXPECT_EQ(caps.MaxVertexShaderStorageBlocks, 0);
     EXPECT_EQ(caps.MaxFragmentShaderStorageBlocks, 4);
     EXPECT_EQ(g_fake.pendingError, static_cast<GLenum>(GL_NO_ERROR));
+}
+
+// GL_MAX_CLIP_DISTANCES is the same defect as the per-stage storage blocks above, one pname
+// over: the query does not exist without GL_EXT_clip_cull_distance, so an unguarded probe left
+// an optimistic 8 behind on every ARM driver. Advertising eight clip planes a driver cannot host
+// does not make gl_ClipDistance work - SPIRV-Cross emits it behind an `#extension ... : require`
+// the ESSL compiler rejects, DirectGLES has nowhere to put the per-distance enables, and the
+// draw renders nothing while LINK_STATUS says everything is fine.
+TEST(ClipDistanceCapabilities, NoExtensionMeansNoClipDistancesAndNoQuery) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_FALSE(caps.SupportsClipDistance);
+    EXPECT_EQ(caps.MaxClipDistances, 0);
+    EXPECT_FALSE(g_fake.maxClipDistancesQueried)
+        << "GL_MAX_CLIP_DISTANCES is not ES core; asking for it without the extension only leaks "
+           "a GL_INVALID_ENUM";
+}
+
+// The other half of the same claim, and the one that keeps this from being a blanket zero: a
+// driver that HAS the extension must have its real limit come through untouched. Adreno does,
+// and it passes the clip-distance conformance cases on the strength of it.
+TEST(ClipDistanceCapabilities, TheExtensionIsQueriedAndItsLimitIsReportedVerbatim) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_cull_distance");
+    g_fake.maxClipDistances = 6;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_TRUE(caps.SupportsClipDistance);
+    EXPECT_TRUE(g_fake.maxClipDistancesQueried);
+    EXPECT_EQ(caps.MaxClipDistances, 6);
+}
+
+// A driver that advertises the extension and then refuses the query is a driver fault, not a
+// missing feature - but the answer has to be the honest zero either way, and the error must not
+// be left for the application's first glGetError to find.
+TEST(ClipDistanceCapabilities, ARejectedQueryIsDrainedAndReportsZero) {
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_cull_distance");
+    g_fake.clipDistanceQueryRaisesError = true;
+    const auto funcs = MakeFakeGLESFunctions();
+
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+
+    EXPECT_TRUE(g_fake.maxClipDistancesQueried);
+    EXPECT_EQ(caps.MaxClipDistances, 0);
+    EXPECT_EQ(funcs.glGetError(), GL_NO_ERROR) << "the failed query must not leave an error behind";
 }
 
 TEST(FragmentInterpolationCapabilities, QueriesOnlyWhenSupportedAndPreservesDriverLimits) {

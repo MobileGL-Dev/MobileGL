@@ -151,6 +151,18 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
             }
 
+            // GL_MAX_CLIP_DISTANCES is a real backend answer, not a constant: DirectGLES reports
+            // 0 on a driver without GL_EXT_clip_cull_distance, and DirectVulkan reports 0 without
+            // the shaderClipDistance device feature. On such a stack the shader above cannot
+            // compile - and MUST not, because declaring a clip distance the backend cannot host
+            // is exactly what used to link cleanly and then render nothing. Skip rather than
+            // fail: there is no clipping to assert about.
+            static bool BackendHostsTwoClipDistances() {
+                GLint maxClipDistances = 0;
+                glGetIntegerv(GL_MAX_CLIP_DISTANCES, &maxClipDistances);
+                return maxClipDistances >= 2;
+            }
+
             // Never assume the eight start disabled - see the header note about
             // XfbAfterClipDistanceScenario leaving one on for the rest of the process.
             static void DisableEveryClipDistance() {
@@ -229,6 +241,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
     // The claim: an enabled clip distance removes the fragments where it is negative.
     TEST_F(ClipDistanceScenario, AnEnabledClipDistanceRemovesTheNegativeHalf) {
         if (!Ready()) return;
+        if (!BackendHostsTwoClipDistances()) {
+            GTEST_SKIP() << "this backend advertises no clip distances, so there is nothing to clip with";
+        }
         HeadlessGL& gl = Gl();
         const int width = gl.Width();
         const int height = gl.Height();
@@ -280,6 +295,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
     // draw simply failed - would pass the case above.
     TEST_F(ClipDistanceScenario, ADisabledClipDistanceRemovesNothing) {
         if (!Ready()) return;
+        if (!BackendHostsTwoClipDistances()) {
+            GTEST_SKIP() << "this backend advertises no clip distances, so there is nothing to clip with";
+        }
         HeadlessGL& gl = Gl();
         const int width = gl.Width();
         const int height = gl.Height();
@@ -329,6 +347,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
     // passes both cases above and fails this one.
     TEST_F(ClipDistanceScenario, TheEnablesAreIndependentPerDistance) {
         if (!Ready()) return;
+        if (!BackendHostsTwoClipDistances()) {
+            GTEST_SKIP() << "this backend advertises no clip distances, so there is nothing to clip with";
+        }
         HeadlessGL& gl = Gl();
         const int width = gl.Width();
         const int height = gl.Height();

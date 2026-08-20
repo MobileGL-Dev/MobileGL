@@ -372,6 +372,16 @@ namespace MobileGL {
             Int MaxComputeImageUniforms = 8;
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;
+            // GL_MAX_CLIP_DISTANCES. Zero is a legal answer here, not a placeholder, and a
+            // backend that cannot host a clip distance MUST report it: advertising eight the
+            // backend will refuse does not make gl_ClipDistance work, it only moves the failure
+            // from an honest "unsupported" at query time to a backend shader-compile error the
+            // frontend never surfaces, after which every draw with that program silently renders
+            // nothing. DirectGLES fills it from GL_EXT_clip_cull_distance, DirectVulkan from the
+            // shaderClipDistance device feature. The DEFAULT stays at the GL 4.3 core minimum
+            // because it describes the no-backend case (standalone shader compiles, unit tests),
+            // where there is no device to be honest about and BuildTBuiltInResource still has to
+            // hand glslang a workable gl_MaxClipDistances.
             Int MaxClipDistances = 8;
             Int MaxViewports = 16;
             Int MaxViewportWidth = 16384;
