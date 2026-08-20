@@ -217,10 +217,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // depth/stencil image, which this renderer stores display-side-up: the copy rect then
         // has to be mapped out of GL's bottom-origin space and the copied rows re-oriented on
         // the way back, exactly as the colour ReadPixels path does.
+        // `sourceLayerCount` above 1 says the `height` rows the client is owed are stored as that
+        // many ARRAY LAYERS of a one-row image rather than as rows of one layer - the shape a GL
+        // 1D array has in Vulkan. The two produce byte-identical tightly-packed readbacks, so
+        // only the copy region differs; everything after it is written against `height`.
         void ReadDepthStencilImageToClient(VkImage image, VkFormat vkFormat, VkImageLayout* trackedLayout,
                                            VkImageAspectFlags imageAspect, Uint32 mipLevel, Uint32 baseArrayLayer,
                                            GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
-                                           void* pixels, Bool defaultFramebufferOrientation = false);
+                                           void* pixels, Bool defaultFramebufferOrientation = false,
+                                           Uint32 sourceLayerCount = 1);
         // Same-extent depth blit between images of different depth formats: host
         // round-trip with a per-texel re-encode (see BlitNamedFramebuffer).
         Bool BlitDepthAcrossFormats(FrameContext::FrameData& frame, VkImage srcImage, VkFormat srcFormat,

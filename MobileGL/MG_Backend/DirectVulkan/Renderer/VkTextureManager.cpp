@@ -1636,6 +1636,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        // From here down the size is VULKAN geometry, not GL's: a 1D array's layer count moves
+        // out of the height it occupies GL-side and into z, which is the slot
+        // TryResolveTextureShapeInfo reads arrayLayers from and the only one that leaves
+        // extent.height at the 1 a VK_IMAGE_TYPE_1D image is required to have.
+        texelSize = ToVulkanLevelExtent(texture.GetTarget(), texelSize);
+
         if (!SyncTextureResource(texture, uploadTarget, texelSize, byteSize, mipLevelCount, outResource)) {
             MGLOG_D("%s: SyncTextureResource failed", __func__);
             return false;
@@ -2545,7 +2551,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 uploadItem.target = target;
                 uploadItem.level = level;
                 uploadItem.baseArrayLayer = ResolveUploadArrayLayer(target);
-                uploadItem.texelSize = texelSize;
+                // Vulkan geometry, like the image this stages into (see SyncTexture): a 1D
+                // array's layers move from y to z, where the copy loop's depthSelectsArrayLayer
+                // branch turns them into layerCount. The shadow needs no repacking to follow -
+                // one layer of a 1D array IS one row of `width` texels, so the tight-packed
+                // per-layer copy the swapped size describes reads the same bytes in the same
+                // order as the row-major level it replaces.
+                uploadItem.texelSize = ToVulkanLevelExtent(mipmapTexture.GetTarget(), texelSize);
                 uploadItem.source = source;
                 uploadItem.offset = stagingSize;
                 uploadItem.uploadByteSize = byteSize;
@@ -2582,6 +2594,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 rectTexels += rect.TexelCount();
                             }
                             uploadItem.uploadByteSize = rectTexels * uploadItem.texelBytes;
+                        }
+                        // The boxes came out of the shadow in GL coordinates, where a 1D
+                        // array's layer is the y. They have to follow texelSize across to z or
+                        // they would address rows of an image that now has exactly one, and
+                        // the staging walk would read the wrong bytes for them. Every byte
+                        // count computed above is a product of the three extents, so moving
+                        // the axes leaves all of them alone - and an OFFSET lands on a zero y,
+                        // not on the extent's one, which is why this is spelled out rather than
+                        // handed to ToVulkanLevelExtent.
+                        if (mipmapTexture.GetTarget() == TextureTarget::Texture1DArray) {
+                            uploadItem.regionLo = {uploadItem.regionLo.x(), 0, uploadItem.regionLo.y()};
+                            uploadItem.regionSize = {uploadItem.regionSize.x(), 1,
+                                                     uploadItem.regionSize.y()};
+                            for (auto& rect : uploadItem.rects) {
+                                rect.lo = {rect.lo.x(), 0, rect.lo.y()};
+                                rect.hi = {rect.hi.x(), 1, rect.hi.y()};
+                            }
                         }
                     }
                 }

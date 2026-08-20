@@ -9813,7 +9813,7 @@ void main() {
                                                        VkImageAspectFlags imageAspect, Uint32 mipLevel,
                                                        Uint32 baseArrayLayer, GLint x, GLint y, GLsizei width,
                                                        GLsizei height, GLenum format, GLenum type, void* pixels,
-                                                       Bool defaultFramebufferOrientation) {
+                                                       Bool defaultFramebufferOrientation, Uint32 sourceLayerCount) {
         const Bool wantDepth = format != GL_STENCIL_INDEX;
         const Bool wantStencil = format != GL_DEPTH_COMPONENT;
         auto& frame = m_frameContext.GetCurrent();
@@ -9892,6 +9892,10 @@ void main() {
             if (!mapped) return;
         }
 
+        // See the header: a stack of one-row layers and a single multi-row layer copy out to the
+        // same tightly-packed bytes, so only the region's shape splits the two cases.
+        const Uint32 copyLayerCount = std::max<Uint32>(sourceLayerCount, 1u);
+        const Uint32 copyRowCount = copyLayerCount > 1u ? 1u : copyExtent.height;
         VkBufferImageCopy regions[2]{};
         Uint32 regionCount = 0;
         if (wantDepth) {
@@ -9900,9 +9904,9 @@ void main() {
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
-            region.imageSubresource.layerCount = 1;
+            region.imageSubresource.layerCount = copyLayerCount;
             region.imageOffset = {copyOffset.x, copyOffset.y, 0};
-            region.imageExtent = {copyExtent.width, copyExtent.height, 1};
+            region.imageExtent = {copyExtent.width, copyRowCount, 1};
         }
         if (wantStencil) {
             auto& region = regions[regionCount++];
@@ -9910,9 +9914,9 @@ void main() {
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
             region.imageSubresource.mipLevel = mipLevel;
             region.imageSubresource.baseArrayLayer = baseArrayLayer;
-            region.imageSubresource.layerCount = 1;
+            region.imageSubresource.layerCount = copyLayerCount;
             region.imageOffset = {copyOffset.x, copyOffset.y, 0};
-            region.imageExtent = {copyExtent.width, copyExtent.height, 1};
+            region.imageExtent = {copyExtent.width, copyRowCount, 1};
         }
         vkCmdCopyImageToBuffer(frame.commandBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.GetHandle(),
                                regionCount, regions);
@@ -10147,9 +10151,17 @@ void main() {
                     ? static_cast<Uint32>(textureUploadTarget) -
                         static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX)
                     : 0;
+                // A 1D array's levelSize.y() is its LAYER count, and those layers are the rows
+                // GL wants back - but in Vulkan they are array layers of a one-row image, not
+                // rows of layer 0, so the read has to be told which of the two it is looking at.
+                const Uint32 sourceLayers =
+                    textureObject->GetTarget() == TextureTarget::Texture1DArray
+                        ? static_cast<Uint32>(std::max<Int>(levelSize.y(), 1))
+                        : 1u;
                 ReadDepthStencilImageToClient(resource->image, resource->format, &resource->layout, resource->aspect,
                                               static_cast<Uint32>(level), arrayLayer, 0, 0, levelSize.x(),
-                                              levelSize.y(), format, type, pixels);
+                                              levelSize.y(), format, type, pixels,
+                                              /*defaultFramebufferOrientation=*/false, sourceLayers);
             } else {
                 MGLOG_E_ONCE("DirectVulkan::GetTexImage skipped: color query of a non-color texture");
             }
@@ -10167,12 +10179,19 @@ void main() {
         // destination layout (GL 3.3 section 6.1.4).
         const auto imageTextureTarget = textureObject->GetTarget();
         const Bool is3dImage = imageTextureTarget == TextureTarget::Texture3D;
-        const Bool isArrayImage = imageTextureTarget == TextureTarget::Texture1DArray ||
+        const Bool is1dArrayImage = imageTextureTarget == TextureTarget::Texture1DArray;
+        const Bool isArrayImage = is1dArrayImage ||
                                   imageTextureTarget == TextureTarget::Texture2DArray ||
                                   imageTextureTarget == TextureTarget::TextureCubeMapArray;
         const GLsizei depthSlices = is3dImage ? std::max<GLsizei>(texelSize.z(), 1) : 1;
         const GLsizei arrayLayers = isArrayImage ? static_cast<GLsizei>(resource->arrayLayers) : 1;
-        const GLsizei sliceCount = std::max<GLsizei>(depthSlices * arrayLayers, 1);
+        // A 1D array level comes back as ONE two-dimensional image whose rows are its layers
+        // (GL 4.6 core 8.11.4), so its layers are already counted by `height` above and must not
+        // multiply the slice count the way a 2D-array's or a cube-array's do. Vulkan still keeps
+        // them in arrayLayers on a one-row image, which is what the copy region below says - the
+        // two describe the same tightly-packed bytes.
+        const GLsizei sliceCount =
+            std::max<GLsizei>(depthSlices * (is1dArrayImage ? 1 : arrayLayers), 1);
         if (bufSize >= 0) {
             const Int dstChannels = GetReadbackChannelCount(format);
             if ((type == GL_UNSIGNED_BYTE || type == GL_FLOAT) && dstChannels > 0) {
@@ -10225,7 +10244,8 @@ void main() {
         copyRegion.imageSubresource.mipLevel = static_cast<Uint32>(level);
         copyRegion.imageSubresource.baseArrayLayer = 0;
         copyRegion.imageSubresource.layerCount = static_cast<Uint32>(arrayLayers);
-        copyRegion.imageExtent = {static_cast<Uint32>(width), static_cast<Uint32>(height),
+        copyRegion.imageExtent = {static_cast<Uint32>(width),
+                                  is1dArrayImage ? 1u : static_cast<Uint32>(height),
                                   static_cast<Uint32>(depthSlices)};
         vkCmdCopyImageToBuffer(frame.commandBuffer, resource->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                readback.GetHandle(), 1, &copyRegion);
