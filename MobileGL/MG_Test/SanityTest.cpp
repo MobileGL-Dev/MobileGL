@@ -958,6 +958,15 @@ TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
     EXPECT_EQ(static_cast<GLuint>(reported), buffer);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
+    // The advertised ceiling is also the one glBindBufferBase and the indexed getter enforce.
+    // A limit nothing validates against is how these tables drifted apart in the first place:
+    // the binding-point ARRAY is 36 deep, and it used to be that number an application saw.
+    constexpr GLuint pastLastBinding = static_cast<GLuint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS);
+    MG_Impl::GLImpl::BindBufferBase(GL_ATOMIC_COUNTER_BUFFER, pastLastBinding, buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+    MG_Impl::GLImpl::GetIntegeri_v(GL_ATOMIC_COUNTER_BUFFER_BINDING, pastLastBinding, &reported);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), static_cast<GLenum>(GL_INVALID_VALUE));
+
     // ...and the shading language has to expand the same numbers. Each array is sized by a
     // built-in constant and indexed at its last element with a literal, so the stage only
     // compiles when that constant is at least what glGetIntegerv just reported - which it was

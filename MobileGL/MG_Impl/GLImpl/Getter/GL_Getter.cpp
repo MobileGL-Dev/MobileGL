@@ -80,12 +80,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxTessControlAtomicCounterBuffers = 0;
         constexpr GLint kFrontendMaxTessEvaluationAtomicCounterBuffers = 0;
         constexpr GLint kFrontendMaxVertexAtomicCounterBuffers = 0;
-        // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS / _SIZE. Both come from the shared table above:
-        // the binding count is how many counter buffers a backend can actually address (each one
-        // costs a shader-storage binding point once glslang has lowered the counters onto a
-        // storage block), and the size is the byte offset ceiling a counter may be declared at.
-        constexpr GLint kFrontendMaxAtomicCounterBufferBindings =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS);
+        // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE: the byte offset ceiling a counter may be declared
+        // at. The matching binding count is applied in GetIndexedBufferQueryPointCount, so that
+        // the getter, the indexed queries and glBindBufferBase all share one ceiling.
         constexpr GLint kFrontendMaxAtomicCounterBufferSize =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE);
         // KHR_debug minima (GL 4.6 table 23.66); the debug entry points are stubs, but the
@@ -203,6 +200,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 const Int backendCount =
                     MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxShaderStorageBufferBindings;
                 return std::min(frontendCount, static_cast<SizeT>(std::max(backendCount, 0)));
+            }
+            if (bufferTarget == BufferTarget::AtomicCounter) {
+                // The counter family's binding count is NOT the state layer's array size: a
+                // counter buffer only reaches a shader as a lowered storage block, so what an
+                // implementation can serve is the reserved range, and that number is also what
+                // glslang compiles a layout(binding = N) atomic_uint against. Clamped here so
+                // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, the indexed getters' index check and
+                // glBindBufferBase's all report the same ceiling.
+                return std::min(frontendCount,
+                                static_cast<SizeT>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS));
             }
             return frontendCount;
         }
@@ -2261,12 +2268,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                           static_cast<Uint64>(INT32_MAX)));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS:
-            // NOT the frontend's binding-point array size (36). A counter buffer only reaches a
-            // shader as a lowered storage block, so the number an implementation can serve is
-            // the reserved shader-storage range, and it has to be the same number glslang
-            // compiles a layout(binding = N) atomic_uint against.
-            *params = std::min<GLint>(kFrontendMaxAtomicCounterBufferBindings,
-                                      static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter)));
+            // NOT the frontend's binding-point array size: GetIndexedBufferQueryPointCount
+            // clamps this family to the range a lowered counter block can actually be served
+            // from, which is the same number glslang compiles a layout(binding = N) atomic_uint
+            // against and the same one glBindBufferBase validates an index against.
+            *params = static_cast<GLint>(GetIndexedBufferQueryPointCount(BufferTarget::AtomicCounter));
             break;
         case GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE:
             // The conformance suite splits this evenly across every advertised binding point and
