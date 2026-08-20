@@ -149,7 +149,7 @@ namespace {
         const MobileGL::Int frontendPoints =
             static_cast<MobileGL::Int>(MobileGL::MG_State::GLState::BufferBindingPointCount);
         if (!env.HasBackend()) return frontendPoints;
-        return std::min(frontendPoints, std::max(env.params.MaxShaderStorageBufferBindings, 0));
+        return std::min<MobileGL::Int>(frontendPoints, std::max<MobileGL::Int>(env.params.MaxShaderStorageBufferBindings, 0));
     }
 
     // The half of a compile that depends on nothing but the source text, the stage and the
