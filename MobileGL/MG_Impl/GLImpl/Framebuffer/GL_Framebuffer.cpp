@@ -3153,15 +3153,55 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetNamedFramebufferAttachmentParameteriv_State(framebuffer, attachment, pname, params);
     }
 
+    // The three argument errors GL 4.6 core 18.3.1 asks a blit for. They have to be raised here,
+    // in the backend-independent frontend: DirectGLES drains the driver's error queue around the
+    // blit on purpose (that is how the resolve fallback probes the driver), so an ES-side
+    // rejection never reaches the application and glGetError() answered GL_NO_ERROR for a call
+    // the spec requires to fail (KHR-GL30.api.coverage's glBlitFramebuffer sub-check). DirectVulkan
+    // already dropped the bad-filter and LINEAR-with-depth/stencil calls on the floor with a log
+    // line (VulkanRenderer::BlitFramebuffer), so the only thing that changes for it is that the
+    // error is now visible where the spec says it should be.
+    static Bool ValidateBlitMaskAndFilter(const char* functionName, GLbitfield mask, GLenum filter) {
+        constexpr GLbitfield kBlitMaskBits = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+        if ((mask & ~kBlitMaskBits) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "mask contains bits other than GL_COLOR_BUFFER_BIT, "
+                                             "GL_DEPTH_BUFFER_BIT and GL_STENCIL_BUFFER_BIT."));
+            return false;
+        }
+        if (filter != GL_NEAREST && filter != GL_LINEAR) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "filter must be GL_NEAREST or GL_LINEAR."));
+            return false;
+        }
+        // Depth and stencil have no meaningful interpolation, so GL_LINEAR is rejected outright
+        // rather than downgraded - even when the mask also carries the colour bit.
+        if (filter == GL_LINEAR && (mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "GL_LINEAR filtering is not allowed when mask includes "
+                                             "GL_DEPTH_BUFFER_BIT or GL_STENCIL_BUFFER_BIT."));
+            return false;
+        }
+        return true;
+    }
+
     void BlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1,
                               GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,
                               GLenum filter) {
+        if (!ValidateBlitMaskAndFilter(__func__, mask, filter)) return;
         BlitNamedFramebuffer_State(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
                                    dstY1, mask, filter);
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
+        if (!ValidateBlitMaskAndFilter(__func__, mask, filter)) return;
         BlitFramebuffer_Backend(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 

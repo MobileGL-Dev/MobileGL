@@ -21,6 +21,8 @@
 //   * KHR-GL32.api.coverage - glFenceSync's condition/flags and glWaitSync's flags/timeout.
 //   * KHR-GL31.api.coverage - a draw's mode INVALID_ENUM has to outrank MobileGL's own
 //     no-current-program guard.
+//   * KHR-GL30.api.coverage - glBlitFramebuffer's mask bits, filter enum and the LINEAR-with-
+//     depth/stencil rule.
 // Plus the indexed-getter parity RC-7b is about: glGetBooleani_v / glGetInteger64i_v /
 // glGetFloati_v / glGetDoublei_v must answer every pname glGetIntegeri_v answers.
 //
@@ -36,6 +38,7 @@
 #include "Init.h"
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
@@ -536,6 +539,51 @@ void main() { g_color = vec4(1); }
             // A mode the enum check accepts falls through to the guard, so the INVALID_OPERATION
             // that used to win is still raised for the calls it is actually about.
             {"glDrawArrays with a legal mode and no program bound", [] { DrawArrays(GL_TRIANGLES, 0, 3); },
+             GL_INVALID_OPERATION},
+        });
+    }
+
+    // KHR-GL30.api.coverage's glBlitFramebuffer sub-check. The frontend passed mask and filter
+    // straight through, and DirectGLES drains the driver's error queue around the blit so the ES
+    // rejection never surfaced either - both illegal calls reported GL_NO_ERROR. Every row here
+    // is rejected before the backend function pointer is reached, which is what lets this
+    // GPU-free suite run them at all.
+    TEST_F(NegativeApiErrorsTest, BlitFramebufferRejectsBadMasksAndFilters) {
+        DrainErrors();
+        // The bit the coverage test smuggles in: a legal glMapBufferRange flag, not a blit one.
+        constexpr GLbitfield kForeignBit = GL_MAP_INVALIDATE_BUFFER_BIT;
+
+        RunRows({
+            {"glBlitFramebuffer with a mask bit outside COLOR|DEPTH|STENCIL",
+             [] {
+                 BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit, GL_NEAREST);
+             },
+             GL_INVALID_VALUE},
+            {"glBlitFramebuffer with a filter that is neither GL_NEAREST nor GL_LINEAR",
+             [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NONE); }, GL_INVALID_ENUM},
+            {"glBlitFramebuffer of colour+stencil with GL_LINEAR",
+             [] {
+                 BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_LINEAR);
+             },
+             GL_INVALID_OPERATION},
+            {"glBlitFramebuffer of depth with GL_LINEAR",
+             [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_DEPTH_BUFFER_BIT, GL_LINEAR); },
+             GL_INVALID_OPERATION},
+            // The DSA form has to answer identically.
+            {"glBlitNamedFramebuffer with a mask bit outside COLOR|DEPTH|STENCIL",
+             [] {
+                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit,
+                                      GL_NEAREST);
+             },
+             GL_INVALID_VALUE},
+            {"glBlitNamedFramebuffer with a bad filter",
+             [] { BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NONE); },
+             GL_INVALID_ENUM},
+            {"glBlitNamedFramebuffer of depth+stencil with GL_LINEAR",
+             [] {
+                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16,
+                                      GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_LINEAR);
+             },
              GL_INVALID_OPERATION},
         });
     }
