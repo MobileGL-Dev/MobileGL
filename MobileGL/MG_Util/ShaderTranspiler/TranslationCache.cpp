@@ -99,7 +99,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     TranslationCacheKey BuildSpirvTranslationKey(const SpirvTranslationKeyInputs& inputs) {
         TranslationKeyBuilder builder;
         AppendCommonKeyPrefix(builder, kSpirvKeyTag);
-        builder.Value(inputs.envFingerprint);
+        builder.Value(inputs.frontendFingerprint);
         builder.Value(inputs.shaderCompileFlags);
         builder.Value(static_cast<Uint8>(inputs.enableSpirvValidation));
         builder.Value(static_cast<Uint64>(inputs.stages.size()));

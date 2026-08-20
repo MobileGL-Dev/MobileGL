@@ -22,6 +22,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <functional>
 #include <set>
 #include <string>
 #include <thread>
@@ -120,7 +121,7 @@ void main() {
 
     SpirvTranslationKeyInputs BaselineSpirvInputs(const Vector<SpirvTranslationKeyInputs::Stage>& stages) {
         SpirvTranslationKeyInputs inputs;
-        inputs.envFingerprint = 0x1234'5678'9abc'def0ull;
+        inputs.frontendFingerprint = 0x1234'5678'9abc'def0ull;
         inputs.stages = stages;
         inputs.shaderCompileFlags = 0;
         inputs.enableSpirvValidation = false;
@@ -394,8 +395,8 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
     {   // the environment fingerprint (glslang resource limits, backend identity,
         // advertised extension set, compute limits)
         SpirvTranslationKeyInputs v = base;
-        v.envFingerprint ^= 1ull;
-        variants.emplace_back("envFingerprint", BuildSpirvTranslationKey(v));
+        v.frontendFingerprint ^= 1ull;
+        variants.emplace_back("frontendFingerprint", BuildSpirvTranslationKey(v));
     }
     {   // a stage's source text
         const String otherFs = SwizzleLikeFragment("i");
@@ -459,6 +460,109 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
             EXPECT_FALSE(variants[i].second == variants[j].second)
                 << variants[i].first << " and " << variants[j].first << " produce the same L1 key";
         }
+    }
+}
+
+// =========================================================================================
+// L1 backend-agnosticism: the environment inputs that were REMOVED from the key
+// =========================================================================================
+
+namespace {
+    // Two environments that differ in every way that only steers a BACKEND, and in no way
+    // that reaches glslang.
+    Pair<CompileEnv, CompileEnv> BackendOnlyDifferentEnvs() {
+        CompileEnv a;
+        CompileEnv b;
+        // (1) backend identity - both HAVE a backend, they are just different ones
+        a.backend = BackendType::DirectGLES;
+        b.backend = BackendType::DirectVulkan;
+        // (2) the advertised extension vector, including the fp64 flag's own extension
+        a.advertisedExtensions = {E_GL_ARB_gpu_shader_fp64, E_GL_KHR_debug};
+        b.advertisedExtensions = {};
+        // (3) the compute limits (ValidateComputeLocalSizeLimits only)
+        a.maxComputeWorkGroupSize[0] = 1024;
+        a.maxComputeWorkGroupSize[1] = 1024;
+        a.maxComputeWorkGroupSize[2] = 64;
+        a.maxComputeWorkGroupInvocations = 128;
+        b.maxComputeWorkGroupSize[0] = 2048;
+        b.maxComputeWorkGroupSize[1] = 2048;
+        b.maxComputeWorkGroupSize[2] = 1024;
+        b.maxComputeWorkGroupInvocations = 2048;
+        // (4) a spread of DynamicBackendParameters fields the front end never reads
+        a.params.MaxColorTextureSamples = 1;
+        b.params.MaxColorTextureSamples = 8;
+        a.params.MaxTextureSize = 4096;
+        b.params.MaxTextureSize = 16384;
+        a.params.MaxViewports = 1;
+        b.params.MaxViewports = 16;
+        a.params.MaxUniformBufferBindings = 24;
+        b.params.MaxUniformBufferBindings = 84;
+        a.params.MaxTextureImageUnits = 16;
+        b.params.MaxTextureImageUnits = 32;
+        return {a, b};
+    }
+} // namespace
+
+// THE case that pins L1's backend-agnosticism. Everything moved here is something that
+// only steers a backend transpile, and L2 already keys on the ones that matter there.
+// The old whole-environment fingerprint moves; the front-end one must not.
+TEST_F(TranslationCacheTest, TheFrontendFingerprintIgnoresBackendOnlyDifferences) {
+    const auto [a, b] = BackendOnlyDifferentEnvs();
+
+    EXPECT_NE(ComputeCompileEnvFingerprint(a), ComputeCompileEnvFingerprint(b))
+        << "the whole-environment fingerprint is supposed to notice these; if it does not, "
+           "this case is no longer testing anything";
+    EXPECT_EQ(ComputeFrontendCompileEnvFingerprint(a), ComputeFrontendCompileEnvFingerprint(b))
+        << "a backend-only difference leaked into the front-end fingerprint";
+}
+
+// ... and the same thing one level up: the two environments must produce ONE L1 entry.
+TEST_F(TranslationCacheTest, TwoBackendsCompilingTheSameGlslShareOneL1Entry) {
+    const auto [a, b] = BackendOnlyDifferentEnvs();
+    const String vs = kVertexSource;
+    const String fs = kFragmentSource;
+    const Vector<SpirvTranslationKeyInputs::Stage> stages{{GL_VERTEX_SHADER, vs},
+                                                          {GL_FRAGMENT_SHADER, fs}};
+
+    SpirvTranslationKeyInputs onA = BaselineSpirvInputs(stages);
+    onA.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(a);
+    SpirvTranslationKeyInputs onB = BaselineSpirvInputs(stages);
+    onB.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(b);
+
+    EXPECT_TRUE(BuildSpirvTranslationKey(onA) == BuildSpirvTranslationKey(onB));
+}
+
+// The other direction, one case per input that was KEPT. Each is a limit the front end
+// really consumes - the seven BuildTBuiltInResource copies into TBuiltInResource, plus the
+// two inputs to the reflection vertex-attrib limit - so each must still split the key.
+TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) {
+    const CompileEnv base;
+    const Uint64 baseline = ComputeFrontendCompileEnvFingerprint(base);
+
+    const Vector<Pair<const char*, std::function<void(CompileEnv&)>>> mutations{
+        {"params.MaxImageUnits", [](CompileEnv& e) { e.params.MaxImageUnits += 1; }},
+        {"params.MaxDrawBuffers", [](CompileEnv& e) { e.params.MaxDrawBuffers += 1; }},
+        {"params.MaxVertexImageUniforms", [](CompileEnv& e) { e.params.MaxVertexImageUniforms += 1; }},
+        {"params.MaxGeometryImageUniforms", [](CompileEnv& e) { e.params.MaxGeometryImageUniforms += 1; }},
+        {"params.MaxFragmentImageUniforms", [](CompileEnv& e) { e.params.MaxFragmentImageUniforms += 1; }},
+        {"params.MaxComputeImageUniforms", [](CompileEnv& e) { e.params.MaxComputeImageUniforms += 1; }},
+        {"params.MaxCombinedImageUniforms", [](CompileEnv& e) { e.params.MaxCombinedImageUniforms += 1; }},
+        {"params.MaxVertexAttribs", [](CompileEnv& e) { e.params.MaxVertexAttribs += 1; }},
+        // HasBackend(): with no backend the reflection attrib limit falls back to the
+        // storage capacity rather than the driver's number, so the bit is load-bearing.
+        {"HasBackend", [](CompileEnv& e) { e.backend = BackendType::DirectGLES; }},
+    };
+
+    Vector<Uint64> seen{baseline};
+    for (const auto& [name, mutate] : mutations) {
+        CompileEnv env = base;
+        mutate(env);
+        const Uint64 moved = ComputeFrontendCompileEnvFingerprint(env);
+        EXPECT_NE(moved, baseline) << "moving " << name << " did not move the front-end fingerprint";
+        for (const Uint64 previous : seen) {
+            EXPECT_NE(moved, previous) << name << " collides with an earlier front-end limit";
+        }
+        seen.push_back(moved);
     }
 }
 

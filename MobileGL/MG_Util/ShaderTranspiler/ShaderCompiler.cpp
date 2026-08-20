@@ -89,6 +89,11 @@ namespace MobileGL {
                 Resources.maxComputeWorkGroupSizeX = 1024;
                 Resources.maxComputeWorkGroupSizeY = 1024;
                 // TODO: Drive glslang compute resource limits from the active backend instead of this permissive cap.
+                // WHEN THAT IS DONE: CompileEnv::maxComputeWorkGroupSize and
+                // maxComputeWorkGroupInvocations must also be added to
+                // ComputeFrontendCompileEnvFingerprint(). They are out of the L1 memo key today
+                // ONLY because these maxima are hardcoded here - see the classification comment
+                // on CompileEnv::frontendFingerprint.
                 Resources.maxComputeWorkGroupSizeZ = 1024;
                 Resources.maxComputeUniformComponents = 1024;
                 Resources.maxComputeTextureImageUnits = 16;

@@ -518,7 +518,10 @@ namespace MobileGL::MG_State::GLState {
         if (!ShaderTranslationCacheEnabled()) return {};
 
         SpirvTranslationKeyInputs keyInputs;
-        keyInputs.envFingerprint = env.fingerprint;
+        // The FRONT-END fingerprint, not env.fingerprint: L1 must be shared by two contexts
+        // on different GPUs whenever glslang would produce the same thing for them. See the
+        // classification on CompileEnv::frontendFingerprint.
+        keyInputs.frontendFingerprint = env.frontendFingerprint;
         // Always 0 on both production parse paths (ShaderCompileTask::RunCompilePipeline and
         // ClaimParsedShader's re-parse). In the key regardless, so that a future non-zero
         // value cannot alias a module parsed without it.

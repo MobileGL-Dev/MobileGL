@@ -321,10 +321,19 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // costs on top of the 40 us GlslangToSpv, and gives the backends exactly the
     // bytes they would have got.
     //
+    // L1 IS BACKEND-AGNOSTIC BY CONTRACT. Two contexts on different GPUs compiling
+    // the same GLSL share one L1 entry: nothing that merely steers a BACKEND
+    // transpile (backend identity, GLES/Vulkan capability bits, driver extension
+    // strings, GPU vendor) is allowed in this key - all of that lives in L2's key,
+    // where it belongs. What IS here is the subset of the environment that changes
+    // what glslang itself produces; see CompileEnv::frontendFingerprint for the
+    // field-by-field classification and the evidence behind each call.
+    //
     // WHAT IS IN THE KEY (each one is an input that can change the modules):
-    //   * the CompileEnv fingerprint - covers the glslang resource limits
-    //     (BuildTBuiltInResource reads env->params), the backend identity, the
-    //     advertised extension set and the compute limits;
+    //   * CompileEnv::frontendFingerprint - the glslang resource limits
+    //     BuildTBuiltInResource enforces at parse, plus the two inputs to the
+    //     reflection vertex-attrib limit. NOT CompileEnv::fingerprint, which also
+    //     covers backend identity and the advertised extension vector;
     //   * per stage, in link order: the GL stage enum and the FULL preprocessed
     //     source, which is literally the text ParseShaderSource was given;
     //   * the four link-time request maps mapIO resolves against
@@ -355,7 +364,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             StringView preprocessedSource;
         };
 
-        Uint64 envFingerprint = 0;
+        // CompileEnv::frontendFingerprint, NEVER CompileEnv::fingerprint - see the
+        // backend-agnosticism note above.
+        Uint64 frontendFingerprint = 0;
         Vector<Stage> stages;
         const UnorderedMap<String, Uint>* explicitVertexInLocations = nullptr;
         const UnorderedMap<String, Uint>* explicitFragmentOutLocations = nullptr;

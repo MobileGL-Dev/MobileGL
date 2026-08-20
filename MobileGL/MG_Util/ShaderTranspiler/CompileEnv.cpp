@@ -41,6 +41,30 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         return state;
     }
 
+    Uint64 ComputeFrontendCompileEnvFingerprint(const CompileEnv& env) {
+        Uint64 state = 0xff51afd7ed558ccdull;
+        // The seven limits BuildTBuiltInResource copies into TBuiltInResource. Enumerated
+        // ONE BY ONE rather than hashed as a struct, deliberately: hashing all of
+        // DynamicBackendParameters would drag ~50 backend-only limits into a key that is
+        // supposed to be backend-agnostic, and every one of them would be a false miss.
+        // Keep this list in step with BuildTBuiltInResource.
+        HashValue(state, env.params.MaxImageUnits);
+        HashValue(state, env.params.MaxDrawBuffers);
+        HashValue(state, env.params.MaxVertexImageUniforms);
+        HashValue(state, env.params.MaxGeometryImageUniforms);
+        HashValue(state, env.params.MaxFragmentImageUniforms);
+        HashValue(state, env.params.MaxComputeImageUniforms);
+        HashValue(state, env.params.MaxCombinedImageUniforms);
+        // The two inputs to GetReflectionVertexAttribLimit. Hashed as inputs rather than as
+        // the resolved limit so this stays in one translation unit; that is coarser (two
+        // envs whose MaxVertexAttribs both exceed the storage capacity resolve to the same
+        // limit yet hash differently) but coarser means a false MISS, never a false hit.
+        HashValue(state, env.params.MaxVertexAttribs);
+        const Uint8 hasBackend = env.HasBackend() ? 1u : 0u;
+        HashValue(state, hasBackend);
+        return state;
+    }
+
     SharedPtr<const CompileEnv> CaptureCompileEnv() {
         auto env = MakeShared<CompileEnv>();
 
@@ -73,6 +97,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
                           : kFrontendMaxComputeWorkGroupInvocations;
 
         env->fingerprint = ComputeCompileEnvFingerprint(*env);
+        env->frontendFingerprint = ComputeFrontendCompileEnvFingerprint(*env);
         return env;
     }
 
@@ -82,6 +107,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         static const SharedPtr<const CompileEnv> kDefault = [] {
             auto env = MakeShared<CompileEnv>();
             env->fingerprint = ComputeCompileEnvFingerprint(*env);
+            env->frontendFingerprint = ComputeFrontendCompileEnvFingerprint(*env);
             return SharedPtr<const CompileEnv>(Move(env));
         }();
         return kDefault;

@@ -48,6 +48,50 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
         Uint64 fingerprint = 0;   // set by CaptureCompileEnv()
 
+        // The FRONT-END half of the environment: the subset of the fields above that can
+        // change what glslang PRODUCES - the SPIR-V or the reflection - as opposed to what a
+        // BACKEND later does with the result. This, and never `fingerprint`, is what the L1
+        // shader translation memo keys on, because L1 is backend-agnostic BY CONTRACT: two
+        // contexts on different GPUs compiling the same GLSL must share one L1 entry.
+        //
+        // WHAT IS IN IT (audited; re-audit whenever a new env read appears in the front end):
+        //   * the seven DynamicBackendParameters fields BuildTBuiltInResource actually copies
+        //     into TBuiltInResource - MaxImageUnits, MaxDrawBuffers, MaxVertexImageUniforms,
+        //     MaxGeometryImageUniforms, MaxFragmentImageUniforms, MaxComputeImageUniforms,
+        //     MaxCombinedImageUniforms. glslang enforces those at parse, so they decide
+        //     whether a shader compiles at all and can change the link result.
+        //   * MaxVertexAttribs and the HasBackend() bit: the two inputs to ProgramLinkTask's
+        //     GetReflectionVertexAttribLimit, which bounds how many vertex input locations
+        //     reflection records - so they change the REFLECTION the memo carries.
+        // Both are backend-DERIVED but front-end-CONSUMED. Dropping them would be a
+        // miscompile, not a backend leak: a driver with 16 vertex attribs and one with 32
+        // genuinely reflect the same GLSL differently.
+        //
+        // WHAT IS DELIBERATELY OUT:
+        //   * `backend` beyond the HasBackend() bit. Nothing in the parse, the link or
+        //     GlslangToSpv branches on which backend is active - ShaderAttrib::flags is 0 on
+        //     both production parse paths (ShaderCompileTask::RunCompilePipeline and
+        //     ClaimParsedShader). Backend identity steers the TRANSPILE, which is L2's key.
+        //   * `advertisedExtensions`. Its only front-end consumer is ShaderSourceProcessor's
+        //     FilterUnsupportedGpuShaderInt64, which REWRITES THE SOURCE TEXT - and the
+        //     preprocessed text is in the L1 key verbatim, a strictly finer discriminator
+        //     than the extension list. (E_GL_ARB_gpu_shader_fp64 is never read by the front
+        //     end at all: MOBILEGL_ADVERTISE_FP64 only adds it to the extension STRING the
+        //     application queries, and DemoteFloat64Pass runs unconditionally either way, so
+        //     fp64 GLSL translates identically with the flag on or off.)
+        //   * the other ~50 DynamicBackendParameters fields: read by the GL getters and by
+        //     the backends, never by the parse, the link or reflection.
+        //   * maxComputeWorkGroupSize / maxComputeWorkGroupInvocations. Consumed ONLY by
+        //     ValidateComputeLocalSizeLimits, a pre-parse ACCEPT/REJECT gate. A rejected
+        //     shader fails its compile, so its program never reaches the tail of the link and
+        //     no L1 entry is ever created under a rejecting environment; an accepted one
+        //     produces the same SPIR-V under any limits, because BuildTBuiltInResource
+        //     HARDCODES the compute maxima instead of reading these.
+        //     THIS ONE IS A REACHABILITY ARGUMENT, NOT AN INDEPENDENCE ONE. If the TODO in
+        //     BuildTBuiltInResource ("Drive glslang compute resource limits from the active
+        //     backend") is ever done, these MUST move into this fingerprint.
+        Uint64 frontendFingerprint = 0;   // set by CaptureCompileEnv()
+
         Bool HasBackend() const { return backend != BackendType::Unknown; }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
@@ -61,6 +105,12 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // Hashes every semantically relevant member. Public so a test can assert that two
     // different envs really do produce different P0b cache keys.
     Uint64 ComputeCompileEnvFingerprint(const CompileEnv& env);
+
+    // The backend-agnostic half; see CompileEnv::frontendFingerprint for the classification
+    // and the evidence behind each call. Public so a test can assert both directions: that a
+    // backend-only difference produces the SAME value (which is what pins L1's
+    // backend-agnosticism) and that a front-end limit produces a different one.
+    Uint64 ComputeFrontendCompileEnvFingerprint(const CompileEnv& env);
 
     // GL thread only: this is where the GL_MAX_COMPUTE_WORK_GROUP_SIZE queries live now.
     SharedPtr<const CompileEnv> CaptureCompileEnv();
