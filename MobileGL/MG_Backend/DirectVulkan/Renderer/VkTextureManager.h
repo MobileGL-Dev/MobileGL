@@ -206,6 +206,12 @@ public:
         // as defense-in-depth: any path that grows the level set (which resizes the sampled view)
         // busts the skip even if it failed to bump the content version.
         Uint32 syncedMipLevelCount = 0;
+        // Snapshot of ITextureObject::GetShapeVersion() at the last successful sync. The content
+        // version alone does NOT cover a re-specification: glTexImage2D(..., nullptr) on an
+        // already-defined level changes its size or format and dirties no texel, so it moves the
+        // shape version and nothing else. Without this in the early-out key the image, its views
+        // and therefore imageSize() all keep answering with the texture's PREVIOUS shape.
+        Uint64 syncedShapeVersion = 0;
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -237,6 +243,7 @@ public:
             std::swap(this->lastRecordingGeneration, that.lastRecordingGeneration);
             std::swap(this->syncedContentVersion, that.syncedContentVersion);
             std::swap(this->syncedMipLevelCount, that.syncedMipLevelCount);
+            std::swap(this->syncedShapeVersion, that.syncedShapeVersion);
         }
 
         void Reset() {
@@ -300,6 +307,7 @@ public:
             syncedTextureParamsVersion = 0;
             syncedContentVersion = 0;
             syncedMipLevelCount = 0;
+            syncedShapeVersion = 0;
         }
 
         ~TextureResource() {

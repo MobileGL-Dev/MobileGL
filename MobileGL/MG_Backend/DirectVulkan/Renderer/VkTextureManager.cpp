@@ -1494,6 +1494,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto* mipTexture = MG_State::GLState::AsMipmapTexture(&texture);
         const Uint32 mipLevelCount = mipTexture != nullptr ? mipTexture->GetMipmapLevelCount() : 0u;
         return resource.syncedContentVersion != texture.GetContentVersion() ||
+               resource.syncedShapeVersion != texture.GetShapeVersion() ||
                resource.syncedTextureParamsVersion != texture.GetTextureParamsVersion() ||
                resource.syncedMipLevelCount != mipLevelCount;
     }
@@ -1593,11 +1594,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VkTextureManager::SyncTexture(MG_State::GLState::ITextureObject &texture,
                                        TextureResource &outResource) {
         // Cross-draw fast path: if the resource is already built and neither the texture's
-        // pixel content (bumped in MarkStorageDirty) nor its params changed since the last
-        // sync, there is nothing to re-check or re-upload - skip CheckMipmapCompleteness,
-        // SyncTextureResource, SyncTextureViews and the per-level dirty scan. Layout is
-        // maintained separately by the transition path, so the resource still reflects truth.
+        // pixel content (bumped in MarkStorageDirty), its SHAPE (bumped in BumpShapeVersion)
+        // nor its params changed since the last sync, there is nothing to re-check or
+        // re-upload - skip CheckMipmapCompleteness, SyncTextureResource, SyncTextureViews and
+        // the per-level dirty scan. Layout is maintained separately by the transition path, so
+        // the resource still reflects truth. The shape version is NOT redundant with the
+        // content one: glTexImage2D(..., nullptr) re-specifies a level's size or format
+        // without dirtying a texel, which is exactly how a re-specified image-unit texture used
+        // to keep reporting its old imageSize().
         const Uint64 syncingContentVersion = texture.GetContentVersion();
+        const Uint64 syncingShapeVersion = texture.GetShapeVersion();
         const auto* syncingMipTexture = MG_State::GLState::AsMipmapTexture(&texture);
         const Uint32 syncingMipLevelCount =
             syncingMipTexture != nullptr ? syncingMipTexture->GetMipmapLevelCount() : 0u;
@@ -1609,6 +1615,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_storageImageTextures.find(MakeTextureIdentity(&texture)) != m_storageImageTextures.end();
         if (outResource.image != VK_NULL_HANDLE && !storageUpgradePending &&
             outResource.syncedContentVersion == syncingContentVersion &&
+            outResource.syncedShapeVersion == syncingShapeVersion &&
             outResource.syncedTextureParamsVersion == texture.GetTextureParamsVersion() &&
             outResource.syncedMipLevelCount == syncingMipLevelCount) {
             return true;
@@ -1660,6 +1667,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!hasDirtyMipLevel) {
             outResource.syncedContentVersion = syncingContentVersion;
             outResource.syncedMipLevelCount = syncingMipLevelCount;
+            outResource.syncedShapeVersion = syncingShapeVersion;
             return true;
         }
 
@@ -1669,6 +1677,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         outResource.syncedContentVersion = syncingContentVersion;
         outResource.syncedMipLevelCount = syncingMipLevelCount;
+        outResource.syncedShapeVersion = syncingShapeVersion;
         return true;
     }
 
