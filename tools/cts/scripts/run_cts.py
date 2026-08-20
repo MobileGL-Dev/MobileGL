@@ -86,6 +86,19 @@ def main():
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--device-dir", default="/data/local/tmp/mgcts")
     ap.add_argument("--surface", default="fbo", help="--deqp-surface-type value")
+    # Without an explicit size, dEQP's FboRenderContext sizes the wrapper FBO to
+    # GL_MAX_RENDERBUFFER_SIZE (16384^2 here) and size-derived test allocations
+    # explode (a 4-sample 16K depth texture alone is 4 GiB).
+    ap.add_argument("--surface-size", type=int, default=256,
+                    help="--deqp-surface-width/height value")
+    # With DONT_CARE depth/stencil bits dEQP's FboRenderContext picks the first entry of
+    # its own format list, GL_DEPTH32F_STENCIL8. framebuffer_blit meanwhile hardcodes
+    # GL_DEPTH24_STENCIL8 for its own buffers whenever it detects an FBO surface, then
+    # blits depth between the two - which the spec forbids for mismatched formats, so a
+    # conformant driver has to fail it. Asking for a config the test agrees with avoids
+    # the contradiction instead of papering over it.
+    ap.add_argument("--gl-config-name", default="rgba8888d24s8",
+                    help="--deqp-gl-config-name value (empty string to leave it unset)")
     ap.add_argument("--max-rounds", type=int, default=4000)
     ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
@@ -151,14 +164,22 @@ def main():
         adb(args.serial, "shell", f"rm -f {dev_qpa}", timeout=60)
 
         extra_env = "".join(f"{kv} " for kv in args.env)
+        config_flag = (
+            f"--deqp-gl-config-name={args.gl_config_name} " if args.gl_config_name else ""
+        )
+        # The trailing sync makes the qpa durable: a hard GPU hang reboots the
+        # device, and f2fs rolls back unsynced writes, silently eating the log.
         cmd = (
             f"cd {args.device_dir} && "
             f"MOBILEGL_BACKEND_TYPE={args.backend} LD_LIBRARY_PATH=. {extra_env}"
             f"./glcts --deqp-caselist-file={dev_list} "
             f"--deqp-surface-type={args.surface} "
+            f"--deqp-surface-width={args.surface_size} "
+            f"--deqp-surface-height={args.surface_size} "
+            f"{config_flag}"
             f"--deqp-terminate-on-device-lost=disable "
             f"--deqp-log-images=disable --deqp-log-shader-sources=disable "
-            f"--deqp-log-filename={dev_qpa} > /dev/null 2>&1; echo RC=$?"
+            f"--deqp-log-filename={dev_qpa} > /dev/null 2>&1; rc=$?; sync; echo RC=$rc"
         )
         run = adb(args.serial, "shell", cmd, timeout=args.chunk_timeout)
         if run.returncode == 124:
@@ -224,9 +245,16 @@ def main():
                       f"to label the rest of the suite as crashes.", file=sys.stderr)
                 break
 
+            # No log at all. If the device rebooted, the first unrun case took the
+            # whole device down (a reboot can also roll back the freshly created
+            # qpa on f2fs) - that is a hang to quarantine, not a process crash.
             victim = remaining[0]
-            print(f"[run_cts] no output at all; recording {victim} as Crash")
-            crashed.append(victim)
+            if rebooted:
+                print(f"[run_cts] DEVICE HANG in {victim} (no log at all) - quarantining it")
+                hung.append(victim)
+            else:
+                print(f"[run_cts] no output at all; recording {victim} as Crash")
+                crashed.append(victim)
             done.add(victim)
             progressed = 1
 
