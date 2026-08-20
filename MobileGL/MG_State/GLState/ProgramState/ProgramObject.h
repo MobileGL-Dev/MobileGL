@@ -29,6 +29,9 @@ namespace MobileGL::MG_State::GLState {
         // AST, so a POD covers the whole surface exactly.
         struct TypeFacts {
             Bool isArray = false;
+            // A runtime-sized array (a storage block's unsized trailing member) is an array
+            // that is NOT sized; GL_ARRAY_SIZE reports 0 for it.
+            Bool isSizedArray = false;
             Bool isMatrix = false;
             Bool isVector = false;
             Bool isOpaque = false;
@@ -908,8 +911,6 @@ namespace MobileGL::MG_State::GLState {
         // (MG_Impl/GLImpl/Program/ProgramInterface.cpp), which has to enumerate buffer
         // blocks, buffer variables, atomic counters and per-stage reference masks. Null
         // until a link has succeeded. Read through the join gate like everything else.
-        const glslang::TProgram* GetReflection() const { return Artifacts().program.get(); }
-
         Int GetShaderIndexByStage(ShaderStage stage) const {
             auto it = std::find_if(m_shaders.begin(), m_shaders.end(), [stage](const SharedPtr<ShaderObject>& shader) {
                 return shader->GetShaderStage() == stage;
@@ -996,6 +997,11 @@ namespace MobileGL::MG_State::GLState {
             Vector<PipeInputReflection> pipeInputReflection;
             Vector<PipeOutputReflection> pipeOutputReflection;
             // Program-level scalars glslang answers off the linked intermediates.
+            // Whether the program's LAST stage is the fragment stage. A color number - and so a
+            // color index - exists only there; a separable tess/geometry/vertex program's
+            // outputs are varyings and must report -1 (KHR-GL43.program_interface_query.
+            // separate-programs-tess-control).
+            Bool lastStageIsFragment = false;
             Int atomicCounterCount = 0;
             Array<GLuint, 3> computeLocalSize{};
             // Replaces program->getUniformIndex(name). Maps the reflected name to its
@@ -1131,6 +1137,14 @@ namespace MobileGL::MG_State::GLState {
         // use this at all - it assigns a whole default-constructed LinkArtifacts, where the
         // ordering is explicit and nothing is exempt.
         static void ResetLinkArtifacts(LinkArtifacts& artifacts);
+
+        // The owned reflection snapshot, for the program-interface query layer. Replaces
+        // GetReflection(), which handed out the live glslang::TProgram - the last thing that
+        // forced a linked program to keep its parse alive.
+        const LinkArtifacts& GetLinkReflection() const {
+            EnsureLinkJoined();
+            return Artifacts();
+        }
 
         static Bool IsValidUniformLocation(const LinkArtifacts& artifacts, Int location) {
             if (location < 0 || location > static_cast<Int>(artifacts.maxUniformLocation)) return false;

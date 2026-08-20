@@ -48,6 +48,7 @@ namespace {
         MobileGL::MG_State::GLState::ProgramObject::TypeFacts facts;
         if (type == nullptr) return facts;
         facts.isArray = type->isArray();
+        facts.isSizedArray = type->isSizedArray();
         facts.isMatrix = type->isMatrix();
         facts.isVector = type->isVector();
         facts.isOpaque = type->isOpaque();
@@ -1166,6 +1167,7 @@ namespace MobileGL::MG_State::GLState {
             artifacts.pipeOutputReflection.push_back(MakeResourceReflection(program.getPipeOutput(i)));
         }
 
+        artifacts.lastStageIsFragment = program.getIntermediate(EShLangFragment) != nullptr;
         artifacts.atomicCounterCount = program.getNumAtomicCounters();
         for (Uint dim = 0; dim < 3u; ++dim) {
             artifacts.computeLocalSize[dim] = program.getLocalSize(static_cast<Int>(dim));
