@@ -76,9 +76,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         GLsizei height, GLint border);
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
-    void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+    void CopyImageSubData(const CopyImageEndpoint& src,
                           GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                          const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                          const CopyImageEndpoint& dst,
                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
     void GenerateMipmap(GLenum target);

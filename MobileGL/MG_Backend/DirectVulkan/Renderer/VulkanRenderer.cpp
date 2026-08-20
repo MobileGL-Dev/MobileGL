@@ -8869,7 +8869,7 @@ void main() {
         // A mixed 2D-array <-> 3D pair is legal because maintenance1 - core since Vulkan 1.1 -
         // relaxed the old "layerCounts must match" rule into "the 3D side's extent.depth must
         // equal the array side's layerCount".
-        struct CopyImageEndpoint {
+        struct CopyImageSliceMapping {
             // True for a VK_IMAGE_TYPE_3D image, i.e. slices ride the z axis, not the layer axis.
             Bool slicesAreDepth = false;
             // The GL z offset, kept in whichever field this endpoint's image type reads it from.
@@ -8883,13 +8883,35 @@ void main() {
             Int32 OffsetZ() const { return slicesAreDepth ? static_cast<Int32>(baseSlice) : 0; }
         };
 
-        Bool TryResolveCopyImageEndpoint(TextureTarget target,
-                                         const VkTextureManager::TextureResource& resource, Uint32 mipLevel,
-                                         GLint glZ, GLsizei glDepth, CopyImageEndpoint& outEndpoint) {
+        // The Vulkan image one glCopyImageSubData endpoint names, after the two object kinds GL
+        // 4.6 core 18.3.2 allows have been collapsed onto the fields this copy reads. A
+        // renderbuffer is a single-level, single-layer 2D image, so its shape answers are
+        // constants rather than a mip walk. `trackedLayout` points AT the owning resource's own
+        // layout field - both resource maps are node-based, so the pointer survives the further
+        // lookups the clear materialization below makes.
+        struct CopyImageVkImage {
+            Bool isRenderbuffer = false;
+            VkImage image = VK_NULL_HANDLE;
+            VkImageLayout* trackedLayout = nullptr;
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_NONE;
+            Uint32 mipLevels = 1;
+            VkExtent2D extent = {0, 0};
+            Uint32 depth = 1;
+            Uint32 arrayLayers = 1;
+        };
+
+        Bool TryResolveCopyImageSliceMapping(TextureTarget target, const CopyImageVkImage& image, Uint32 mipLevel,
+                                             GLint glZ, GLsizei glDepth, CopyImageSliceMapping& outMapping) {
             if (glZ < 0 || glDepth <= 0) {
                 return false;
             }
             const Uint32 baseSlice = static_cast<Uint32>(glZ);
+            if (image.isRenderbuffer) {
+                // A renderbuffer holds one 2D image and nothing else; GL still requires the
+                // z/depth pair and it can only name that one slice.
+                outMapping = {};
+                return baseSlice == 0 && glDepth == 1;
+            }
             switch (target) {
             case TextureTarget::Texture1D:
             case TextureTarget::Texture2D:
@@ -8897,12 +8919,12 @@ void main() {
             case TextureTarget::Texture2DMultisample:
                 // Not layered at all: GL still requires the z/depth pair, and it can only name the
                 // one slice these targets have.
-                outEndpoint = {};
+                outMapping = {};
                 return baseSlice == 0 && glDepth == 1;
             case TextureTarget::Texture3D:
-                outEndpoint.slicesAreDepth = true;
-                outEndpoint.baseSlice = baseSlice;
-                outEndpoint.availableSlices = std::max(1u, resource.depth >> mipLevel);
+                outMapping.slicesAreDepth = true;
+                outMapping.baseSlice = baseSlice;
+                outMapping.availableSlices = std::max(1u, image.depth >> mipLevel);
                 return true;
             case TextureTarget::Texture2DArray:
             case TextureTarget::Texture2DMultisampleArray:
@@ -8911,9 +8933,9 @@ void main() {
                 // A cube map is an array of six faces here (see TryResolveTextureShapeInfo), and GL
                 // numbers its faces on the same z axis an array texture numbers its layers, so both
                 // arrive as a plain layer range.
-                outEndpoint.slicesAreDepth = false;
-                outEndpoint.baseSlice = baseSlice;
-                outEndpoint.availableSlices = resource.arrayLayers;
+                outMapping.slicesAreDepth = false;
+                outMapping.baseSlice = baseSlice;
+                outMapping.availableSlices = image.arrayLayers;
                 return true;
             default:
                 // GL_TEXTURE_1D_ARRAY carries its layers on the Y axis (srcY/srcHeight), which
@@ -8923,15 +8945,20 @@ void main() {
                 return false;
             }
         }
+
+        Uint CopyImageEndpointName(const CopyImageEndpoint& endpoint) {
+            if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetExternalIndex();
+            return endpoint.Texture ? endpoint.Texture->GetExternalIndex() : 0u;
+        }
     } // namespace
 
-    void VulkanRenderer::CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+    void VulkanRenderer::CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
                                           GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                          const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                          const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        MOBILEGL_ASSERT(srcTexture != nullptr && dstTexture != nullptr,
-                        "CopyImageSubData requires valid source and destination textures.");
+        MOBILEGL_ASSERT(srcEndpoint.Exists() && dstEndpoint.Exists(),
+                        "CopyImageSubData requires valid source and destination images.");
         // The frontend already declines a zero or negative extent, so anything else here is a
         // caller MobileGL wrote - but it still reaches vkCmdCopyImage in a release build, and a
         // zero extent.depth is as invalid as a zero width.
@@ -8948,9 +8975,9 @@ void main() {
         // and an overlap check). Refused outright, and refused for real rather than through an
         // assertion the release build drops: recording the pair anyway is a validation error and,
         // on a tiler, a copy whose source has already been overwritten.
-        if (srcTexture.get() == dstTexture.get()) {
-            MGLOG_E_ONCE("%s: in-place copy on textureId=%d is not supported; declining the copy", __func__,
-                         srcTexture->GetExternalIndex());
+        if (srcEndpoint.Texture == dstEndpoint.Texture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
+            MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
+                         CopyImageEndpointName(srcEndpoint));
             return;
         }
 
@@ -8963,8 +8990,42 @@ void main() {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
-        auto* srcResource = m_textureManager->SyncTextureAndGetDescriptor(*srcTexture);
-        auto* dstResource = m_textureManager->SyncTextureAndGetDescriptor(*dstTexture);
+        // One resolver for both object kinds. The texture arm is the same
+        // SyncTextureAndGetDescriptor the copy always used; the renderbuffer arm goes through the
+        // render-pass manager, which is where a renderbuffer's VkImage lives.
+        const auto resolveImage = [this](const CopyImageEndpoint& endpoint, CopyImageVkImage& out) {
+            if (endpoint.IsRenderbuffer()) {
+                auto* resource = m_renderPassManager->GetOrCreateRenderbufferResource(endpoint.Renderbuffer);
+                if (resource == nullptr) return false;
+                out.isRenderbuffer = true;
+                out.image = resource->image;
+                out.trackedLayout = &resource->layout;
+                out.aspect = resource->aspect;
+                out.mipLevels = 1;
+                out.extent = resource->extent;
+                out.depth = 1;
+                out.arrayLayers = 1;
+                return out.image != VK_NULL_HANDLE;
+            }
+            // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
+            // reaches here - but the assertion that says so is compiled out of a release build.
+            if (endpoint.Texture == nullptr) return false;
+            auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*endpoint.Texture);
+            if (resource == nullptr) return false;
+            out.isRenderbuffer = false;
+            out.image = resource->image;
+            out.trackedLayout = &resource->layout;
+            out.aspect = resource->aspect;
+            out.mipLevels = resource->mipLevels;
+            out.extent = resource->extent;
+            out.depth = resource->depth;
+            out.arrayLayers = resource->arrayLayers;
+            return true;
+        };
+        CopyImageVkImage srcImage{};
+        CopyImageVkImage dstImage{};
+        const Bool srcResolved = resolveImage(srcEndpoint, srcImage);
+        const Bool dstResolved = resolveImage(dstEndpoint, dstImage);
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
         // dereferenced right below (lavapipe) and a mip level the VkImage does not have handed
@@ -8980,29 +9041,29 @@ void main() {
         // The frontend validator (ValidateTextureLevelExists) is what produces the
         // GL_INVALID_VALUE the application is actually owed. This guard exists so the next gap
         // up there declines a copy instead of taking the process down.
-        if (srcResource == nullptr || dstResource == nullptr) {
-            MGLOG_E_ONCE("%s: source or destination texture failed to sync; declining the copy", __func__);
+        if (!srcResolved || !dstResolved) {
+            MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
             return;
         }
-        if (srcLevel < 0 || dstLevel < 0 || static_cast<Uint32>(srcLevel) >= srcResource->mipLevels ||
-            static_cast<Uint32>(dstLevel) >= dstResource->mipLevels) {
+        if (srcLevel < 0 || dstLevel < 0 || static_cast<Uint32>(srcLevel) >= srcImage.mipLevels ||
+            static_cast<Uint32>(dstLevel) >= dstImage.mipLevels) {
             MGLOG_E_ONCE("%s: mip level out of range (src %d of %u, dst %d of %u); declining the copy", __func__,
-                         srcLevel, srcResource->mipLevels, dstLevel, dstResource->mipLevels);
+                         srcLevel, srcImage.mipLevels, dstLevel, dstImage.mipLevels);
             return;
         }
         const VkImageAspectFlags copyAspectMask =
-            srcResource->aspect & dstResource->aspect &
+            srcImage.aspect & dstImage.aspect &
             (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
         MOBILEGL_ASSERT(copyAspectMask != 0 &&
-                        (srcResource->aspect & copyAspectMask) == srcResource->aspect &&
-                        (dstResource->aspect & copyAspectMask) == dstResource->aspect,
+                        (srcImage.aspect & copyAspectMask) == srcImage.aspect &&
+                        (dstImage.aspect & copyAspectMask) == dstImage.aspect,
                         "CopyImageSubData source and destination aspects are incompatible.");
         const Uint32 srcMipLevel = static_cast<Uint32>(srcLevel);
         const Uint32 dstMipLevel = static_cast<Uint32>(dstLevel);
-        const Uint32 srcMipWidth = std::max(1u, srcResource->extent.width >> srcMipLevel);
-        const Uint32 srcMipHeight = std::max(1u, srcResource->extent.height >> srcMipLevel);
-        const Uint32 dstMipWidth = std::max(1u, dstResource->extent.width >> dstMipLevel);
-        const Uint32 dstMipHeight = std::max(1u, dstResource->extent.height >> dstMipLevel);
+        const Uint32 srcMipWidth = std::max(1u, srcImage.extent.width >> srcMipLevel);
+        const Uint32 srcMipHeight = std::max(1u, srcImage.extent.height >> srcMipLevel);
+        const Uint32 dstMipWidth = std::max(1u, dstImage.extent.width >> dstMipLevel);
+        const Uint32 dstMipHeight = std::max(1u, dstImage.extent.height >> dstMipLevel);
         // Promoted for the same reason as the level range above, and it is the same bug class:
         // a VkImageCopy whose region runs past the image is an out-of-bounds promise to the
         // driver, and the frontend does not check the region at all (there is a CTS sibling,
@@ -9025,10 +9086,10 @@ void main() {
         // here: every target whose slices this function can address on one of the two Vulkan axes.
         // A refusal has to be a real decline, not an assertion - the assertion compiled to nothing
         // in a release build and the unsupported shape reached vkCmdCopyImage anyway.
-        CopyImageEndpoint srcEndpoint;
-        CopyImageEndpoint dstEndpoint;
-        if (!TryResolveCopyImageEndpoint(srcTextureTarget, *srcResource, srcMipLevel, srcZ, srcDepth, srcEndpoint) ||
-            !TryResolveCopyImageEndpoint(dstTextureTarget, *dstResource, dstMipLevel, dstZ, srcDepth, dstEndpoint)) {
+        CopyImageSliceMapping srcSlices;
+        CopyImageSliceMapping dstSlices;
+        if (!TryResolveCopyImageSliceMapping(srcTextureTarget, srcImage, srcMipLevel, srcZ, srcDepth, srcSlices) ||
+            !TryResolveCopyImageSliceMapping(dstTextureTarget, dstImage, dstMipLevel, dstZ, srcDepth, dstSlices)) {
             MGLOG_E_ONCE("%s: unsupported target pair src=%s dst=%s (srcZ=%d dstZ=%d depth=%d); declining the copy",
                          __func__, MG_Util::ConvertTextureTargetToString(srcTextureTarget).c_str(),
                          MG_Util::ConvertTextureTargetToString(dstTextureTarget).c_str(), srcZ, dstZ, srcDepth);
@@ -9039,40 +9100,53 @@ void main() {
         // shrinks) and a 3D texture by the selected level's depth (which every level halves), so
         // both come from the endpoint that resolved them.
         const Uint32 copySliceCount = static_cast<Uint32>(srcDepth);
-        if (srcEndpoint.baseSlice + copySliceCount > srcEndpoint.availableSlices ||
-            dstEndpoint.baseSlice + copySliceCount > dstEndpoint.availableSlices) {
+        if (srcSlices.baseSlice + copySliceCount > srcSlices.availableSlices ||
+            dstSlices.baseSlice + copySliceCount > dstSlices.availableSlices) {
             MGLOG_E_ONCE("%s: slice range outside image bounds (srcZ=%d of %u, dstZ=%d of %u, depth=%d); "
                          "declining the copy",
-                         __func__, srcZ, srcEndpoint.availableSlices, dstZ, dstEndpoint.availableSlices, srcDepth);
+                         __func__, srcZ, srcSlices.availableSlices, dstZ, dstSlices.availableSlices, srcDepth);
             return;
         }
 
-        const Bool clearReady = MaterializePendingClearForTexture(frame.commandBuffer, *srcTexture);
-        MOBILEGL_ASSERT(clearReady, "%s: failed to materialize pending clear for source textureId=%d",
-                        __func__, srcTexture->GetExternalIndex());
+        const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
+            if (endpoint.IsRenderbuffer()) {
+                return MaterializePendingClearForRenderbuffer(frame.commandBuffer, endpoint.Renderbuffer);
+            }
+            return MaterializePendingClearForTexture(frame.commandBuffer, *endpoint.Texture);
+        };
+        const Bool clearReady = materializeClear(srcEndpoint);
+        MOBILEGL_ASSERT(clearReady, "%s: failed to materialize pending clear for source objectId=%u",
+                        __func__, CopyImageEndpointName(srcEndpoint));
         // A clear still parked on the destination would otherwise materialize AFTER this copy and
         // wipe the texels it just wrote.
-        const Bool dstClearReady = MaterializePendingClearForTexture(frame.commandBuffer, *dstTexture);
-        MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination textureId=%d",
-                        __func__, dstTexture->GetExternalIndex());
+        const Bool dstClearReady = materializeClear(dstEndpoint);
+        MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination objectId=%u",
+                        __func__, CopyImageEndpointName(dstEndpoint));
 
-        const VkImageLayout srcOriginalLayout = srcResource->layout;
-        const VkImageLayout dstOriginalLayout = dstResource->layout;
+        const VkImageLayout srcOriginalLayout = *srcImage.trackedLayout;
+        const VkImageLayout dstOriginalLayout = *dstImage.trackedLayout;
         // A layout of UNDEFINED means nothing has ever been written to the image, which on the
         // SOURCE side is glTexStorage without an upload: legal GL, and the texels it copies are
         // undefined by the same spec sentence that lets the application ask. Both sides therefore
         // take the same shape - transition the whole image out of UNDEFINED and settle it on a
         // real layout afterwards, since UNDEFINED is not a layout a barrier may transition BACK to.
-        const auto resolveRestoreLayout = [copyAspectMask](VkImageLayout originalLayout) {
+        // A renderbuffer settles on its ATTACHMENT layout instead: it is never sampled, and that is
+        // the layout MaterializePendingClearForRenderbuffer leaves it in.
+        const auto resolveRestoreLayout = [copyAspectMask](VkImageLayout originalLayout, Bool isRenderbuffer) {
             if (originalLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
                 return originalLayout;
             }
-            return (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const Bool depthStencil =
+                (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+            if (isRenderbuffer) {
+                return depthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            }
+            return depthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         };
-        const VkImageLayout srcRestoreLayout = resolveRestoreLayout(srcOriginalLayout);
-        const VkImageLayout dstRestoreLayout = resolveRestoreLayout(dstOriginalLayout);
+        const VkImageLayout srcRestoreLayout = resolveRestoreLayout(srcOriginalLayout, srcImage.isRenderbuffer);
+        const VkImageLayout dstRestoreLayout = resolveRestoreLayout(dstOriginalLayout, dstImage.isRenderbuffer);
 
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
@@ -9083,15 +9157,15 @@ void main() {
         // [baseSlice, baseSlice + depth) the slice mapping above hands the copy.
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcResource->image, srcResource->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
-                srcResource->aspect, 0, srcResource->mipLevels);
+                srcImage.aspect, 0, srcImage.mipLevels);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition undefined source image", __func__);
-            srcCopyLayout = srcResource->layout;
+            srcCopyLayout = *srcImage.trackedLayout;
         } else {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcResource->image, srcCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                frame.commandBuffer, srcImage.image, srcCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, copyAspectMask, srcMipLevel, 1);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition source image", __func__);
@@ -9103,15 +9177,15 @@ void main() {
         VkImageLayout dstCopyLayout = dstOriginalLayout;
         if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstResource->image, dstResource->layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-                dstResource->aspect, 0, dstResource->mipLevels);
+                dstImage.aspect, 0, dstImage.mipLevels);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition undefined destination image", __func__);
-            dstCopyLayout = dstResource->layout;
+            dstCopyLayout = *dstImage.trackedLayout;
         } else {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstResource->image, dstCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                frame.commandBuffer, dstImage.image, dstCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, copyAspectMask, dstMipLevel, 1);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition destination image", __func__);
@@ -9121,18 +9195,18 @@ void main() {
         // on extent.depth as soon as either endpoint IS: a 3D image's subresource is always the
         // single layer (0, 1) and its slices are counted by the depth of the copy extent. With two
         // non-3D endpoints both layer counts carry it and extent.depth stays 1.
-        const Bool copyCrossesDepthAxis = srcEndpoint.slicesAreDepth || dstEndpoint.slicesAreDepth;
+        const Bool copyCrossesDepthAxis = srcSlices.slicesAreDepth || dstSlices.slicesAreDepth;
         VkImageCopy copyRegion{};
         copyRegion.srcSubresource.aspectMask = copyAspectMask;
         copyRegion.srcSubresource.mipLevel = srcMipLevel;
-        copyRegion.srcSubresource.baseArrayLayer = srcEndpoint.BaseArrayLayer();
-        copyRegion.srcSubresource.layerCount = srcEndpoint.slicesAreDepth ? 1u : copySliceCount;
-        copyRegion.srcOffset = {srcX, srcY, srcEndpoint.OffsetZ()};
+        copyRegion.srcSubresource.baseArrayLayer = srcSlices.BaseArrayLayer();
+        copyRegion.srcSubresource.layerCount = srcSlices.slicesAreDepth ? 1u : copySliceCount;
+        copyRegion.srcOffset = {srcX, srcY, srcSlices.OffsetZ()};
         copyRegion.dstSubresource.aspectMask = copyAspectMask;
         copyRegion.dstSubresource.mipLevel = dstMipLevel;
-        copyRegion.dstSubresource.baseArrayLayer = dstEndpoint.BaseArrayLayer();
-        copyRegion.dstSubresource.layerCount = dstEndpoint.slicesAreDepth ? 1u : copySliceCount;
-        copyRegion.dstOffset = {dstX, dstY, dstEndpoint.OffsetZ()};
+        copyRegion.dstSubresource.baseArrayLayer = dstSlices.BaseArrayLayer();
+        copyRegion.dstSubresource.layerCount = dstSlices.slicesAreDepth ? 1u : copySliceCount;
+        copyRegion.dstOffset = {dstX, dstY, dstSlices.OffsetZ()};
         copyRegion.extent = {static_cast<Uint32>(srcWidth), static_cast<Uint32>(srcHeight),
                              copyCrossesDepthAxis ? copySliceCount : 1u};
         MGLOG_D("CopyImageSubData: src(target=%s level=%u layer=%u+%u z=%d) -> dst(target=%s level=%u layer=%u+%u "
@@ -9143,8 +9217,8 @@ void main() {
                 copyRegion.dstSubresource.baseArrayLayer, copyRegion.dstSubresource.layerCount,
                 copyRegion.dstOffset.z, srcWidth, srcHeight, copyRegion.extent.depth);
         vkCmdCopyImage(frame.commandBuffer,
-                       srcResource->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       dstResource->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       srcImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       dstImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        1, &copyRegion);
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
@@ -9152,14 +9226,14 @@ void main() {
         GetImageTransitionDestinationState(srcRestoreLayout, srcRestoreStageMask, srcRestoreAccessMask);
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcResource->image, srcResource->layout, srcRestoreLayout,
+                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
                 VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask,
-                srcResource->aspect, 0, srcResource->mipLevels);
+                srcImage.aspect, 0, srcImage.mipLevels);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore undefined source image layout", __func__);
         } else {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcResource->image, srcCopyLayout, srcRestoreLayout,
+                frame.commandBuffer, srcImage.image, srcCopyLayout, srcRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
                 VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccessMask, copyAspectMask, srcMipLevel, 1);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore source image layout", __func__);
@@ -9170,14 +9244,14 @@ void main() {
         GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStageMask, dstRestoreAccessMask);
         if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstResource->image, dstResource->layout, dstRestoreLayout,
+                frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
                 VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask,
-                dstResource->aspect, 0, dstResource->mipLevels);
+                dstImage.aspect, 0, dstImage.mipLevels);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore undefined destination image layout", __func__);
         } else {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstResource->image, dstCopyLayout, dstRestoreLayout,
+                frame.commandBuffer, dstImage.image, dstCopyLayout, dstRestoreLayout,
                 VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
                 VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel, 1);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore destination image layout", __func__);

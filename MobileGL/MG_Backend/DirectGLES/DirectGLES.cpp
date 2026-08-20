@@ -5708,27 +5708,87 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The 1D-array case is not just a rename: GL addresses its layers with y/height while the
     // ES 2D array that backs it addresses them with z/depth, so the two axes swap with the
     // target.
+    //
+    // GL_RENDERBUFFER is the exception that must NOT be translated: ES 3.2 core (and
+    // GL_EXT_copy_image) take it as a srcTarget/dstTarget verbatim, while
+    // ConvertGLEnumToTextureTarget answers Unknown for it and the translation below would hand
+    // the driver GL_UNKNOWN_MGL.
     struct GLESCopyImageEndpoint {
         GLenum target = GL_TEXTURE_2D;
+        // Exactly one of the two is set. The backend object is kept rather than its id, because
+        // the id is only stable until the OTHER endpoint syncs (a sync can re-mint a texture),
+        // so it is read at the point of use.
+        SharedPtr<TextureImpl::BackendTextureObject> texture;
+        SharedPtr<RenderbufferImpl::BackendRenderbufferObject> renderbuffer;
         GLint x = 0;
         GLint y = 0;
         GLint z = 0;
+
+        Bool IsRenderbuffer() const { return renderbuffer != nullptr; }
+        GLuint Name() const {
+            if (renderbuffer) return renderbuffer->GetBackendRenderbufferId();
+            return texture ? texture->GetBackendTextureId() : 0u;
+        }
     };
 
-    static GLESCopyImageEndpoint MakeGLESCopyImageEndpoint(GLenum appTarget, GLint x, GLint y, GLint z) {
-        const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
-        GLESCopyImageEndpoint endpoint{};
-        endpoint.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
-        if (stateTarget == TextureTarget::Texture1DArray) {
-            endpoint.x = x;
-            endpoint.y = 0;
-            endpoint.z = y;
-            return endpoint;
+    // The renderbuffer twin of TextureImpl::SyncTextureObjectToBackend: the same
+    // find-or-create-then-sync the framebuffer attachment walk does (see SyncAttachmentObject),
+    // reachable from a path that has a renderbuffer but no framebuffer.
+    static SharedPtr<RenderbufferImpl::BackendRenderbufferObject> SyncRenderbufferObjectToBackend(
+        const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbufferObject) {
+        if (!renderbufferObject) return nullptr;
+        SharedPtr<RenderbufferImpl::BackendRenderbufferObject> backendRenderbufferObject;
+        if (auto* slot = RenderbufferImpl::g_backendRenderbufferObjects.Find(renderbufferObject.get())) {
+            backendRenderbufferObject = *slot;
+        } else {
+            auto& newSlot = RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbufferObject);
+            if (!newSlot) {
+                newSlot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+            }
+            backendRenderbufferObject = newSlot;
         }
-        endpoint.x = x;
-        endpoint.y = y;
-        endpoint.z = z;
-        return endpoint;
+        backendRenderbufferObject->SyncToBackend(renderbufferObject);
+        return backendRenderbufferObject;
+    }
+
+    static Bool MakeGLESCopyImageEndpoint(const CopyImageEndpoint& endpoint, GLenum appTarget, GLint x, GLint y,
+                                          GLint z, GLESCopyImageEndpoint& out) {
+        if (endpoint.IsRenderbuffer()) {
+            out.renderbuffer = SyncRenderbufferObjectToBackend(endpoint.Renderbuffer);
+            if (!out.renderbuffer) return false;
+            out.target = GL_RENDERBUFFER;
+            out.x = x;
+            out.y = y;
+            out.z = z;
+            return true;
+        }
+        // BY VALUE, not by reference. SyncTextureObjectToBackend hands back a reference to a
+        // slot inside the backend texture registry, and the second call mutates that very map:
+        // GetOrCreate indexes it (an insert relocates entries - by rehashing, and also by
+        // robin-hood displacement well under the load factor), and Find drops any
+        // entry whose state object has expired - which, with the map open-addressed and erasing
+        // by shifting the probe cluster backwards, relocates entries other than the erased one.
+        // Either way a reference taken by the first call is stale by the time the second returns,
+        // and it is read four more times below. Copying the SharedPtr costs two refcount bumps on
+        // a path that is already doing a texture copy.
+        // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
+        // reaches here - but the assertion that says so is compiled out of a release build, and
+        // SyncTextureObjectToBackend would register a null state object.
+        if (!endpoint.Texture) return false;
+        out.texture = TextureImpl::SyncTextureObjectToBackend(endpoint.Texture);
+        if (!out.texture) return false;
+        const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
+        out.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
+        if (stateTarget == TextureTarget::Texture1DArray) {
+            out.x = x;
+            out.y = 0;
+            out.z = y;
+            return true;
+        }
+        out.x = x;
+        out.y = y;
+        out.z = z;
+        return true;
     }
 
     // The region extent swaps the same two axes for a 1D array, and does so for whichever side
@@ -5744,85 +5804,172 @@ namespace MobileGL::MG_Backend::DirectGLES {
         std::swap(height, depth);
     }
 
-    void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
-                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                          const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
-                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        // BY VALUE, not by reference. SyncTextureObjectToBackend hands back a reference to a
-        // slot inside the backend texture registry, and the second call mutates that very map:
-        // GetOrCreate indexes it (an insert relocates entries - by rehashing, and also by
-        // robin-hood displacement well under the load factor), and Find drops any
-        // entry whose state object has expired - which, with the map open-addressed and erasing
-        // by shifting the probe cluster backwards, relocates entries other than the erased one.
-        // Either way a reference taken by the first call is stale by the time the second returns,
-        // and it is read four more times below. Copying the SharedPtr costs two refcount bumps on
-        // a path that is already doing a texture copy.
-        const SharedPtr<TextureImpl::BackendTextureObject> srcBackendTexture =
-            TextureImpl::SyncTextureObjectToBackend(srcTexture);
-        const SharedPtr<TextureImpl::BackendTextureObject> dstBackendTexture =
-            TextureImpl::SyncTextureObjectToBackend(dstTexture);
-        // The DirectVulkan half of this entry point died exactly here, on a texture whose sync
-        // produced nothing - and it died in a release build, where the MOBILEGL_ASSERT that was
-        // supposed to catch it expands to nothing. The four GetBackendTextureId() calls below
-        // are the same dereference. The frontend validator is what keeps this unreachable and
-        // what reports the error the application is owed; declining is only how a future gap up
-        // there stops being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
-        if (!srcBackendTexture || !dstBackendTexture) {
-            MGLOG_E_ONCE("%s: source or destination texture failed to sync; declining the copy", __func__);
+    static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
+        if (endpoint.IsRenderbuffer()) return endpoint.Renderbuffer->GetInternalFormat();
+        return endpoint.Texture ? endpoint.Texture->GetFormat() : TextureInternalFormat::Unknown;
+    }
+
+    // Whether this endpoint's CPU shadow can be addressed texel-exactly by the mirror below: one
+    // upload target (so not a cube map, whose six chains the z axis selects between) and layers on
+    // the z axis (GL_TEXTURE_1D_ARRAY carries them on y).
+    static Bool CanMirrorCopyImageShadow(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        if (!texture) return false;
+        if (texture->GetTarget() == TextureTarget::Texture1DArray) return false;
+        return texture->GetUploadTargets().size() == 1;
+    }
+
+    // glCopyImageSubData is defined as a raw texel-block move, so for a destination whose CPU
+    // shadow has to stay authoritative - a packed format with redundant encodings, where a GPU
+    // readback can only answer with RE-ENCODED words (see the verbatim branch in GetTexImage) -
+    // the same move is replayed on the shadow. Nothing is marked dirty: the driver copy already
+    // put these texels on the GPU, and flagging the level would only schedule a redundant upload
+    // back over them.
+    //
+    // Declined, leaving the shadow exactly as it was, for every shape whose bytes this cannot
+    // address exactly - a renderbuffer (no shadow at all), a cube or 1D-array endpoint, a level
+    // whose shadow is missing or not a plain texel grid, a region outside either level, or a
+    // self-copy within one level, where the row copies could overlap.
+    static void MirrorCopyImageIntoDestinationShadow(const CopyImageEndpoint& srcEndpoint, GLint srcLevel, GLint srcX,
+                                                     GLint srcY, GLint srcZ, const CopyImageEndpoint& dstEndpoint,
+                                                     GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                                                     GLsizei width, GLsizei height, GLsizei depth) {
+        if (!CanMirrorCopyImageShadow(srcEndpoint.Texture) || !CanMirrorCopyImageShadow(dstEndpoint.Texture)) return;
+        if (srcEndpoint.Texture == dstEndpoint.Texture && srcLevel == dstLevel) return;
+        if (width <= 0 || height <= 0 || depth <= 0) return;
+        if (srcLevel < 0 || dstLevel < 0 || srcX < 0 || srcY < 0 || srcZ < 0 || dstX < 0 || dstY < 0 || dstZ < 0) {
+            return;
+        }
+        auto* srcMipmap = MG_State::GLState::AsMipmapTexture(srcEndpoint.Texture.get());
+        auto* dstMipmap = MG_State::GLState::AsMipmapTexture(dstEndpoint.Texture.get());
+        if (!srcMipmap || !dstMipmap) return;
+
+        const auto srcUploadTarget = srcEndpoint.Texture->GetUploadTargets()[0];
+        const auto dstUploadTarget = dstEndpoint.Texture->GetUploadTargets()[0];
+        const IntVec3 srcSize = srcMipmap->GetMipmapTexelSize(srcUploadTarget, static_cast<Uint>(srcLevel));
+        const IntVec3 dstSize = dstMipmap->GetMipmapTexelSize(dstUploadTarget, static_cast<Uint>(dstLevel));
+        const SizeT srcSlices = static_cast<SizeT>(std::max(srcSize.z(), 1));
+        const SizeT dstSlices = static_cast<SizeT>(std::max(dstSize.z(), 1));
+        if (srcSize.x() <= 0 || srcSize.y() <= 0 || dstSize.x() <= 0 || dstSize.y() <= 0) return;
+        const SizeT srcTexels = static_cast<SizeT>(srcSize.x()) * static_cast<SizeT>(srcSize.y()) * srcSlices;
+        const SizeT dstTexels = static_cast<SizeT>(dstSize.x()) * static_cast<SizeT>(dstSize.y()) * dstSlices;
+        const SizeT srcBytes = srcMipmap->GetMipmapByteSize(srcUploadTarget, static_cast<Uint>(srcLevel));
+        const SizeT dstBytes = dstMipmap->GetMipmapByteSize(dstUploadTarget, static_cast<Uint>(dstLevel));
+        // A shadow that is not exactly texels x texelSize bytes is one this cannot index (a
+        // compressed blob, or a level whose allocation disagrees with its recorded extent).
+        const SizeT texelBytes = srcTexels == 0 ? 0 : srcBytes / srcTexels;
+        if (texelBytes == 0 || srcBytes != srcTexels * texelBytes || dstTexels == 0 ||
+            dstBytes != dstTexels * texelBytes) {
+            return;
+        }
+        if (static_cast<SizeT>(srcX) + width > static_cast<SizeT>(srcSize.x()) ||
+            static_cast<SizeT>(srcY) + height > static_cast<SizeT>(srcSize.y()) ||
+            static_cast<SizeT>(srcZ) + depth > srcSlices ||
+            static_cast<SizeT>(dstX) + width > static_cast<SizeT>(dstSize.x()) ||
+            static_cast<SizeT>(dstY) + height > static_cast<SizeT>(dstSize.y()) ||
+            static_cast<SizeT>(dstZ) + depth > dstSlices) {
             return;
         }
 
-        const GLESCopyImageEndpoint src = MakeGLESCopyImageEndpoint(srcTarget, srcX, srcY, srcZ);
-        const GLESCopyImageEndpoint dst = MakeGLESCopyImageEndpoint(dstTarget, dstX, dstY, dstZ);
+        const auto* srcBase = static_cast<const Uint8*>(
+            srcMipmap->MapMipmapData(srcUploadTarget, static_cast<Uint>(srcLevel)));
+        auto* dstBase = static_cast<Uint8*>(dstMipmap->MapMipmapData(dstUploadTarget, static_cast<Uint>(dstLevel)));
+        if (!srcBase || !dstBase) return;
+
+        const SizeT rowBytes = static_cast<SizeT>(width) * texelBytes;
+        for (GLsizei slice = 0; slice < depth; ++slice) {
+            for (GLsizei row = 0; row < height; ++row) {
+                const SizeT srcOffset = ((static_cast<SizeT>(srcZ + slice) * static_cast<SizeT>(srcSize.y()) +
+                                          static_cast<SizeT>(srcY + row)) *
+                                             static_cast<SizeT>(srcSize.x()) +
+                                         static_cast<SizeT>(srcX)) *
+                                        texelBytes;
+                const SizeT dstOffset = ((static_cast<SizeT>(dstZ + slice) * static_cast<SizeT>(dstSize.y()) +
+                                          static_cast<SizeT>(dstY + row)) *
+                                             static_cast<SizeT>(dstSize.x()) +
+                                         static_cast<SizeT>(dstX)) *
+                                        texelBytes;
+                Memcpy(dstBase + dstOffset, srcBase + srcOffset, rowBytes);
+            }
+        }
+        MGLOG_D("CopyImageSubData: mirrored %dx%dx%d texels into the destination's CPU shadow", width, height,
+                depth);
+    }
+
+    void CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
+                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                          const CopyImageEndpoint& dstEndpoint,
+                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+        GLESCopyImageEndpoint src{};
+        GLESCopyImageEndpoint dst{};
+        // The DirectVulkan half of this entry point died exactly here, on a texture whose sync
+        // produced nothing - and it died in a release build, where the MOBILEGL_ASSERT that was
+        // supposed to catch it expands to nothing. The four Name() calls below are the same
+        // dereference. The frontend validator is what keeps this unreachable and what reports
+        // the error the application is owed; declining is only how a future gap up there stops
+        // being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
+        if (!MakeGLESCopyImageEndpoint(srcEndpoint, srcTarget, srcX, srcY, srcZ, src) ||
+            !MakeGLESCopyImageEndpoint(dstEndpoint, dstTarget, dstX, dstY, dstZ, dst)) {
+            MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
+            return;
+        }
+
         GLsizei copyHeight = srcHeight;
         GLsizei copyDepth = srcDepth;
         ApplyGLESCopyImageExtent(srcTarget, dstTarget, copyHeight, copyDepth);
 
-        const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcTexture->GetFormat());
-        const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstTexture->GetFormat());
-        const Bool srcStencil = MG_Util::IsStencilFormatInternalFormat(srcTexture->GetFormat());
-        const Bool dstStencil = MG_Util::IsStencilFormatInternalFormat(dstTexture->GetFormat());
-        if (srcIsDepth || dstIsDepth || srcStencil || dstStencil) {
+        const TextureInternalFormat srcFormat = GetCopyImageEndpointFormat(srcEndpoint);
+        const TextureInternalFormat dstFormat = GetCopyImageEndpointFormat(dstEndpoint);
+        // Both emulation fallbacks below are written against TEXTURE ids and texture targets, so
+        // an endpoint that is a renderbuffer takes the native ES copy - which accepts
+        // GL_RENDERBUFFER on both sides - and reports rather than mis-dispatches if the driver
+        // turns it down.
+        const Bool anyRenderbuffer = src.IsRenderbuffer() || dst.IsRenderbuffer();
+
+        const Bool srcIsDepth = MG_Util::IsDepthFormatInternalFormat(srcFormat);
+        const Bool dstIsDepth = MG_Util::IsDepthFormatInternalFormat(dstFormat);
+        const Bool srcStencil = MG_Util::IsStencilFormatInternalFormat(srcFormat);
+        const Bool dstStencil = MG_Util::IsStencilFormatInternalFormat(dstFormat);
+        if (!anyRenderbuffer && (srcIsDepth || dstIsDepth || srcStencil || dstStencil)) {
             MOBILEGL_ASSERT(srcIsDepth && dstIsDepth && !srcStencil && !dstStencil,
                             "DirectGLES CopyImageSubData only supports depth-only image copies.");
             MOBILEGL_ASSERT(src.target == GL_TEXTURE_2D && dst.target == GL_TEXTURE_2D,
                             "DirectGLES depth CopyImageSubData only supports GL_TEXTURE_2D.");
             MOBILEGL_ASSERT(src.z == 0 && dst.z == 0 && copyDepth == 1,
                             "DirectGLES depth CopyImageSubData only supports single-layer copies.");
-            BlitDepthTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, src.x, src.y, srcWidth, copyHeight,
-                               dstBackendTexture->GetBackendTextureId(), dstLevel, dst.x, dst.y, srcWidth, copyHeight);
+            BlitDepthTexture2D(src.Name(), srcLevel, src.x, src.y, srcWidth, copyHeight,
+                               dst.Name(), dstLevel, dst.x, dst.y, srcWidth, copyHeight);
             return;
         }
 
-        if (srcTexture->GetFormat() == TextureInternalFormat::R32F ||
-            dstTexture->GetFormat() == TextureInternalFormat::R32F) {
+        if (!anyRenderbuffer &&
+            (srcFormat == TextureInternalFormat::R32F || dstFormat == TextureInternalFormat::R32F)) {
             // The single glGetError below decides the fallback dispatch, and
             // ErrorLopper::Clear is compiled out at the default log level - drain
             // with the always-live helper so a stale flag cannot misroute a
             // succeeded native copy into the 2D-only fallback.
             ClearGLErrors();
-            g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), src.target, srcLevel, src.x, src.y, src.z,
-                                           dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y, dst.z,
+            g_GLESFuncs.glCopyImageSubData(src.Name(), src.target, srcLevel, src.x, src.y, src.z,
+                                           dst.Name(), dst.target, dstLevel, dst.x, dst.y, dst.z,
                                            srcWidth, copyHeight, copyDepth);
             const GLenum copyImageError = g_GLESFuncs.glGetError();
             if (copyImageError == GL_NO_ERROR) {
                 return;
             }
-            MOBILEGL_ASSERT(IsColorOnlyFormat(srcTexture->GetFormat()) && IsColorOnlyFormat(dstTexture->GetFormat()),
+            MOBILEGL_ASSERT(IsColorOnlyFormat(srcFormat) && IsColorOnlyFormat(dstFormat),
                             "DirectGLES CopyImageSubData only supports color-only or depth-only copies.");
             MOBILEGL_ASSERT(src.target == GL_TEXTURE_2D && dst.target == GL_TEXTURE_2D,
                             "DirectGLES color CopyImageSubData only supports GL_TEXTURE_2D.");
             MOBILEGL_ASSERT(src.z == 0 && dst.z == 0 && copyDepth == 1,
                             "DirectGLES color CopyImageSubData only supports single-layer copies.");
-            CopyR32FTexture2D(srcBackendTexture->GetBackendTextureId(), srcLevel, src.x, src.y, srcWidth, copyHeight,
-                              dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y);
+            CopyR32FTexture2D(src.Name(), srcLevel, src.x, src.y, srcWidth, copyHeight,
+                              dst.Name(), dst.target, dstLevel, dst.x, dst.y);
             return;
         }
 
         ClearGLErrors();
-        g_GLESFuncs.glCopyImageSubData(srcBackendTexture->GetBackendTextureId(), src.target, srcLevel, src.x, src.y, src.z,
-                                       dstBackendTexture->GetBackendTextureId(), dst.target, dstLevel, dst.x, dst.y, dst.z,
+        g_GLESFuncs.glCopyImageSubData(src.Name(), src.target, srcLevel, src.x, src.y, src.z,
+                                       dst.Name(), dst.target, dstLevel, dst.x, dst.y, dst.z,
                                        srcWidth, copyHeight, copyDepth);
         // Every error condition glCopyImageSubData has was already ruled out by the frontend
         // validator, so a driver error here is an internal invariant violation, not something
@@ -5838,6 +5985,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                          MG_Util::ConvertGLEnumToString(dst.target).c_str(),
                          MG_Util::ConvertGLEnumToString(dstTarget).c_str());
             MOBILEGL_ASSERT(false, "glCopyImageSubData failed after frontend validation accepted the request.");
+            return;
+        }
+        // The copy landed on the GPU. For a destination whose readback cannot be bit-exact the
+        // CPU shadow is what glGetTexImage answers from, so it has to follow the same move -
+        // otherwise it hands back whatever the level held before this copy.
+        if (MG_Util::PixelStoreProcessor::HasRedundantPackedEncoding(dstFormat)) {
+            MirrorCopyImageIntoDestinationShadow(srcEndpoint, srcLevel, srcX, srcY, srcZ, dstEndpoint, dstLevel,
+                                                 dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth);
         }
     }
 
@@ -7761,6 +7916,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               backendAttachTarget == GL_TEXTURE_CUBE_MAP_ARRAY;
             const GLsizei sliceCount = std::max(size.z(), 1);
             const Bool multiSlice = size.z() > 1;
+            // glGetTexImage answers with the STORED texels, and for a packed format whose encoding
+            // is not unique the GPU route below cannot: it reads GL_RGBA/GL_FLOAT and re-encodes,
+            // which canonicalizes an RGB9_E5 shared exponent (0xf8fc0000 -> 0xe7e00000 - the same
+            // value 8064, different words), and the conformance suite compares the words
+            // ("CopyImageSubData modified contents of source image"). The scratch FBO does NOT
+            // decide this for us: Adreno reports an RGB9_E5 colour attachment complete, so the
+            // shadow branch further down was unreachable. Serve the verbatim-word pairs from the
+            // shadow first and keep the GPU attempts as the fallback for a level the shadow never
+            // received. Every other format still prefers the GPU, so a rendered-into texture is
+            // unaffected; RGB9_E5 is not colour-renderable, so its shadow stays authoritative -
+            // and the one path that GPU-writes it, CopyImageSubData, mirrors itself into the
+            // shadow for exactly this reason.
+            const Bool verbatimPackedShadowRead =
+                MG_Util::PixelStoreProcessor::HasRedundantPackedEncoding(textureObject->GetFormat()) &&
+                MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                    textureObject->GetFormat(), MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                    MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+            if (verbatimPackedShadowRead &&
+                GetTexImageViaShadowConversion(textureMipmapObject,
+                                               MG_Util::ConvertGLEnumToTextureUploadTarget(target), level, size.x(),
+                                               size.y(), sliceCount, format, type, pixels, applyPackImageParams)) {
+                MGLOG_D("GetTexImage: finished via shadow conversion (verbatim packed words)");
+                return;
+            }
             // A multi-slice read used to go to the CPU shadow outright, on the grounds that the
             // scratch FBO can only expose one layer at a time. But the shadow only holds what was
             // uploaded, so every slice that was rendered to came back stale - which is exactly what

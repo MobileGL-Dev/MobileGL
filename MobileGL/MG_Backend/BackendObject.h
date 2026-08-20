@@ -14,6 +14,7 @@ namespace MobileGL {
     namespace MG_State::GLState {
         class FramebufferObject;
         class ITextureObject;
+        class RenderbufferObject;
     }
 
     enum class BackendType {
@@ -24,6 +25,19 @@ namespace MobileGL {
     };
 
     namespace MG_Backend {
+        // One endpoint of a glCopyImageSubData. GL 4.6 core 18.3.2 accepts GL_RENDERBUFFER
+        // alongside the ten whole-image texture targets, and a renderbuffer name lives in a
+        // namespace of its own - so an endpoint is a sum type, not an ITextureObject. At most
+        // one of the two pointers is set; neither is set when the name named nothing, which is
+        // the INVALID_VALUE the frontend validator reports.
+        struct CopyImageEndpoint {
+            SharedPtr<MG_State::GLState::ITextureObject> Texture;
+            SharedPtr<MG_State::GLState::RenderbufferObject> Renderbuffer;
+
+            Bool IsRenderbuffer() const { return Renderbuffer != nullptr; }
+            Bool Exists() const { return Texture != nullptr || Renderbuffer != nullptr; }
+        };
+
         enum class FormatCapability : Uint64 {
             Creatable = 1ull << 0,
 
@@ -160,9 +174,9 @@ namespace MobileGL {
                                    GLsizei height, GLint border);
             void (*CopyTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                       GLsizei width, GLsizei height);
-            void (*CopyImageSubData)(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+            void (*CopyImageSubData)(const CopyImageEndpoint& src,
                                      GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                     const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                                     const CopyImageEndpoint& dst,
                                      GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                      GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
             void (*GenerateMipmap)(GLenum target);

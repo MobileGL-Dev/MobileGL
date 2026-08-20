@@ -124,6 +124,9 @@ namespace MobileGL {
             case TextureInternalFormat::DepthComponent32F:
             case TextureInternalFormat::Depth24Stencil8:
             case TextureInternalFormat::Depth32FStencil8:
+            // Already sized: both GL_STENCIL_INDEX8 and the unsized GL_STENCIL_INDEX resolve here,
+            // and there is only one stencil storage to infer.
+            case TextureInternalFormat::StencilIndex8:
                 return internalformat;
             // probably we should assume unorm here?
             case TextureInternalFormat::RGBA: {
