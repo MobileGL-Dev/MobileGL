@@ -135,6 +135,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                        [] { std::atexit(+[] { g_processTeardown = true; }); });
     }
 
+    Bool VertexStageStorageBlockUsable(Int maxVertexShaderStorageBlocks) {
+        // One block is all the indirect-params view needs, so this is a >= 1 test and not a
+        // budget calculation. Negative is treated as unusable rather than clamped: a driver
+        // that leaves the out-param untouched is telling us nothing, and guessing "yes" here
+        // is what produces an unlinkable program.
+        return maxVertexShaderStorageBlocks >= 1;
+    }
+
+    static Bool CanUseVertexStageStorageBlock() {
+        return VertexStageStorageBlockUsable(g_GLESCapabilities.MaxVertexShaderStorageBlocks);
+    }
+
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType) {
         if (shaderType != GL_VERTEX_SHADER || source.find("gl_BaseInstance") == String::npos) {
             return source;
@@ -207,9 +219,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int paramsBinding = g_GLESCapabilities.MaxShaderStorageBufferBindings > 0
                                           ? g_GLESCapabilities.MaxShaderStorageBufferBindings - 1
                                           : 0;
+            // The whole indirect half of this machinery is a storage block read from the VERTEX
+            // stage, and a storage block in the vertex stage is optional in both APIs: the
+            // minimum for GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS is 0 (GL 4.6 table 23.64, ES 3.2
+            // table 21.44) and ARM's GLES driver takes that allowance - a Mali-G925 reports 0.
+            // Emitting the block anyway does not make it work; it makes the program UNLINKABLE
+            // ("The number of vertex shader storage blocks (1) is greater than the maximum
+            // number allowed (0)"), and because the frontend's LINK_STATUS is glslang's and not
+            // the driver's, the application never learns: every draw with that program silently
+            // renders nothing. Dropping just the indirect half costs strictly less.
+            const Bool canReadIndirectParamsFromVertexStage = CanUseVertexStageStorageBlock();
             String machinery;
             if (source.find(String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";") == String::npos) {
                 machinery += String("uniform highp int ") + BASE_INSTANCE_UNIFORM_NAME + ";\n";
+            }
+            if (!canReadIndirectParamsFromVertexStage) {
+                // Degraded, but contained and loud. gl_BaseInstance collapses to the plain
+                // mg_BaseInstance uniform, which the non-indirect draw entry points do set
+                // correctly - so ordinary instanced draws are unaffected. What is lost is the
+                // per-command baseInstance of an INDIRECT draw, which lives in the (possibly
+                // GPU-written) command buffer and can only be read through this block: those
+                // draws now see the last uniform value rather than their own command's. No
+                // alternative path is attempted, deliberately - there is nowhere else in the
+                // vertex stage to read a GPU-written buffer from.
+                //
+                // MGLOG_E_ONCE, not _D: this silently changes rendering for exactly the
+                // workloads (Create/Flywheel indirect instancing) whose bug reports are
+                // impossible to read without it, and once per process is bounded.
+                MGLOG_E_ONCE("gl_BaseInstance: this driver reports GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = %d, so the "
+                             "%s storage block an indirect draw's baseInstance must be read through cannot be "
+                             "declared in the vertex stage. Dropping indirect baseInstance support: non-indirect "
+                             "draws are correct, indirect draws will see a stale per-command baseInstance.",
+                             g_GLESCapabilities.MaxVertexShaderStorageBlocks, INDIRECT_PARAMS_BLOCK_NAME);
+                if (rebaseInstanceId) {
+                    // Without the block there is no per-command baseInstance to subtract, and
+                    // the uniform is the same value the define below resolves to, so rebasing
+                    // by it would cancel the base out of gl_InstanceID twice.
+                    machinery += String("#define ") + ZERO_BASED_INSTANCE_ID_NAME + " gl_InstanceID\n";
+                }
+                machinery += String("#define ") + BASE_INSTANCE_LOWERED_NAME + " (" + BASE_INSTANCE_UNIFORM_NAME + ")";
+                source.replace(pos, declaration.size(), machinery);
+                break;
             }
             machinery += String("uniform highp int ") + BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ";\n";
             machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) +

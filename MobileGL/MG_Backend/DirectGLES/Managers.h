@@ -21,6 +21,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType);
 
+    // Whether a vertex shader may declare a storage block at all, given what the host driver
+    // reports for GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS. Pure, and separated from the capability
+    // global purely so the decision can be tested without one.
+    //
+    // The indirect half of the gl_BaseInstance lowering in PromoteDrawParameterGlobalsToUniforms
+    // is the only thing that needs this, and it needs exactly one block. A driver reporting 0 is
+    // conformant - the minimum is 0 in GL 4.6 table 23.64 and ES 3.2 table 21.44 - and ARM's
+    // GLES driver does report 0, so this is a live path, not a defensive one.
+    Bool VertexStageStorageBlockUsable(Int maxVertexShaderStorageBlocks);
+
     // True once the process has entered exit(): past that point the EGL library and
     // the driver may already be unloaded, so a backend twin's destructor must not
     // call into g_GLESFuncs (the observed crash is a jump through an unmapped driver
