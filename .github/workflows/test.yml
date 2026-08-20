@@ -265,6 +265,9 @@ jobs:
         # crash stack without burning a CI round on an in-workflow debugger.
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
+          MOBILEGL_DERIVE_NUM_SUBGROUPS: "1"
+          MOBILEGL_ITERATIONRP_FIX_BARRIER: "1"
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
