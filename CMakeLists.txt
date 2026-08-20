@@ -463,7 +463,7 @@ set(MOBILEGL_INCLUDE_DIR
         # Header-only submodule: no add_subdirectory, no link target. Only
         # MG_Util/Async/ShaderCompilePool.cpp includes it, and it stays behind that file's
         # pimpl so no consumer target needs this path.
-        ${CMAKE_SOURCE_DIR}/3rdparty/asio/asio/include
+        ${CMAKE_SOURCE_DIR}/3rdparty/asio/include
 )
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
