@@ -18,6 +18,7 @@
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
 #include <atomic>
@@ -79,6 +80,8 @@ namespace MobileGL {
             // fordebug build gets one line per level saying how the run went.
             MG_Util::ShaderTranspiler::LogShaderTranslationCacheStats();
             MG_Util::ShaderTranspiler::ClearShaderTranslationCaches();
+            MG_State::GLState::LogProgramTranslationCacheStats();
+            MG_State::GLState::ClearProgramTranslationCache();
             MG_Backend::gBackendFunctionsTable = {};
             g_isInitialized = false;
             if (logLifecycle) {

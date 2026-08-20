@@ -34,13 +34,17 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // bits, and folding them into one key would make every DirectGLES capability a
     // reason to miss on the frontend half as well.
     //
-    // WHAT IS DELIBERATELY NOT MEMOIZED: the glslang parse and the glslang link.
-    // Both produce a TShader/TProgram, and the frontend's whole GL query surface
-    // (ProgramObject::LinkArtifacts, BuildGlobalUboRouting) is built by asking that
-    // TProgram questions - so skipping them means caching a live glslang object
-    // graph and sharing it between ProgramObjects, which is a different change with
-    // its own aliasing and consume-once hazards. See the report in the branch
-    // history; the parse is ~50% of the per-stage cost and is the next campaign.
+    // AN L1 HIT SKIPS THE WHOLE FRONT END - the glslang parse, the link and mapIO,
+    // GlslangToSpv, spirv-opt, buildReflection and the global-UBO routing. No
+    // TShader and no TProgram is constructed. That is possible because the payload
+    // is the whole front-end OUTPUT (LinkArtifacts + SpirvArtifacts, both plain
+    // owned data) rather than the SPIR-V alone, and because the GL query surface no
+    // longer reads a live TProgram to answer anything - see
+    // ProgramObject::UniformReflection and ProgramLinkTask::SnapshotGlslangReflection.
+    // Caching the live glslang object graph instead would have been the other way to
+    // get here, and was rejected: TObjectReflection::type points into the TProgram's
+    // own pool allocator, so sharing one between ProgramObjects is an aliasing and
+    // consume-once hazard.
     //
     // CORRECTNESS RULE, non-negotiable. A wrong hit is a silently miscompiled
     // shader - far worse than a slow one. So:
@@ -109,6 +113,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
         // std::set is already ordered, but it gets the same length prefix.
         void NameSet(const std::set<String>& names);
+        // ORDER-SENSITIVE, unlike NameMap: a transform-feedback capture list is a sequence,
+        // and gl_NextBuffer / gl_SkipComponentsN make its order load-bearing.
+        void TextList(const Vector<String>& values);
 
         const String& Blob() const { return m_blob; }
         String Take() { return Move(m_blob); }
@@ -351,13 +358,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // vertex stage's outputs, so a stage's SPIR-V is NOT a function of that
     // stage's source alone. A per-stage key here would be exactly the silent
     // miscompile this cache must never produce.
-    struct SpirvTranslationResult {
-        // One module per stage, in the same order as ProgramLinkTask's
-        // spirvHandoff.shaderTypes.
-        Vector<Vector<Uint32>> modules;
-    };
-    using SpirvTranslationResultPtr = SharedPtr<const SpirvTranslationResult>;
-
     struct SpirvTranslationKeyInputs {
         struct Stage {
             GLenum type = 0;
@@ -374,17 +374,26 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         const UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
         Uint32 shaderCompileFlags = 0;
         Bool enableSpirvValidation = false;
+        // ---- inputs that only matter because the PAYLOAD now carries the reflection ----
+        // When the payload was SPIR-V alone these were provably irrelevant: transform
+        // feedback is resolved by READING the linked intermediates and never writes an XFB
+        // qualifier, and the fragment-output limit is a link-failure gate, so neither can
+        // move a single word of the generated module. Both DO shape LinkArtifacts
+        // (xfbVaryings / xfbStrides / xfbBufferMode / gsStripTriangles, and whether the link
+        // is rejected at all), so widening the payload to the whole front end pulled them
+        // into the key. Widening a payload means widening the key.
+        const Vector<String>* requestedXfbVaryings = nullptr;
+        Uint32 xfbBufferMode = 0;
+        Int32 maxFragmentOutputColorNumber = 0;
     };
 
     TranslationCacheKey BuildSpirvTranslationKey(const SpirvTranslationKeyInputs& inputs);
-    SizeT SpirvTranslationResultBytes(const SpirvTranslationResult& result);
 
-    // Process-global, and safe to be: the CompileEnv fingerprint is in the key, so
-    // a module computed under one context's limits can never be handed to another
-    // context with different ones. Global rather than per-context because the
-    // producer (ProgramSpirvTask) runs on a pool worker and must not reach
-    // MG_State::pGLContext.
-    BoundedTranslationCache<SpirvTranslationResult>& GetSpirvTranslationCache();
+    // The L1 PAYLOAD and its cache instance live in
+    // MG_State/GLState/ProgramState/ProgramTranslationCache.h, not here: the payload is a
+    // whole ProgramObject::LinkArtifacts + SpirvArtifacts, and MG_Util must not depend on
+    // MG_State. Only the key - which is plain bytes - is built here, so both layers agree on
+    // one definition of "the same front-end input".
 
     // =======================================================================
     // L2 - the BACK END: sanitized SPIR-V -> DirectGLES ESSL payload.

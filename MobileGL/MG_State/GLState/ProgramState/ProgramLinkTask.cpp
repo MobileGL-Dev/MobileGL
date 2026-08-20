@@ -8,6 +8,8 @@
 
 #include "ProgramLinkTask.h"
 
+#include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
+
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -373,6 +375,20 @@ namespace MobileGL::MG_State::GLState {
 
         MGLOG_D("ProgramObject %u: Link body start, shaders to link: %zu", in.externalIndex, in.shaders.size());
 
+        if (!ValidateAttachedShaders()) return;
+
+        // The two merges below read the COMPILE snapshots only - no parsed shader - so they
+        // run before the L1 probe, which needs the merged opaque bindings in its key.
+        MergeShaderSideChannels();
+        if (!artifacts.infoLog.empty()) return; // a conflicting explicit uniform location
+
+        // ---- L1 of the shader translation memo ----
+        // Everything below this point - the parse, the link, mapIO, GlslangToSpv, spirv-opt,
+        // buildReflection and the global-UBO routing - is what a hit skips. See
+        // ProgramTranslationCache.h.
+        spirvHandoff.spirvCacheKey = BuildSpirvCacheKey(env);
+        if (TryPublishFromTranslationCache()) return;
+
         Vector<SharedPtr<glslang::TShader>> shaders;
         if (!ConsumeShaders(shaders)) return;
 
@@ -396,30 +412,6 @@ namespace MobileGL::MG_State::GLState {
                                                 });
                 if (known != artifacts.uniformInitialValues.end()) continue;
                 artifacts.uniformInitialValues.push_back(initializer);
-            }
-        }
-
-        // Merge the shaders' lexically extracted explicit uniform locations. The same
-        // uniform declared in several stages must agree on its location (config-A glslang
-        // enforced this at mapIO; the relaxed parse no longer sees the qualifiers).
-        for (const auto& shader : in.shaders) {
-            const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);
-            for (const auto& [name, location] : compiled.explicitUniformLocations) {
-                const auto [it, inserted] = artifacts.linkedExplicitUniformLocations.emplace(name, location);
-                if (!inserted && it->second != location) {
-                    artifacts.infoLog = std::format(
-                        "Uniform '{}' is declared with conflicting explicit locations ({} and {}) "
-                        "across stages.",
-                        name, it->second, location);
-                    DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
-                    return;
-                }
-            }
-            // Sampler/image layout(binding = N) initial units, likewise invisible to the
-            // relaxed parse. Stage order matches the old per-stage mapIO capture, so a
-            // name declared in several stages keeps the last stage's binding as before.
-            for (const auto& [name, binding] : compiled.explicitOpaqueBindings) {
-                artifacts.explicitOpaqueUniformBindings[name] = binding;
             }
         }
 
@@ -570,7 +562,14 @@ namespace MobileGL::MG_State::GLState {
         spirvHandoff.reflection.uniformReflection = artifacts.uniformReflection;
         spirvHandoff.reflection.blockReflection = artifacts.blockReflection;
         spirvHandoff.reflection.tProgramBlockIndexToGl = artifacts.tProgramBlockIndexToGl;
-        spirvHandoff.spirvCacheKey = BuildSpirvCacheKey(env);
+        // Phase B pairs this with its own SpirvArtifacts to insert the completed front end.
+        // A COPY, because the GL-thread join moves `artifacts` out of this node before phase B
+        // runs - and with the TProgram dropped, because a memo must never hold a glslang arena.
+        if (spirvHandoff.spirvCacheKey.Valid()) {
+            auto forCache = MakeShared<ProgramObject::LinkArtifacts>(artifacts);
+            forCache->program.reset();
+            spirvHandoff.linkArtifactsForCache = Move(forCache);
+        }
         spirvHandoff.ready = true;
         MGLOG_D("ProgramObject %u: phase A done, %zu module(s) handed to the SPIR-V job", in.externalIndex,
                 spirvHandoff.shaderTypes.size());
@@ -579,12 +578,9 @@ namespace MobileGL::MG_State::GLState {
     // The L1 key. Every input below is one that can change the SPIR-V this program
     // generates; see the key inventory on SpirvTranslationKeyInputs.
     //
-    // Deliberately NOT keyed on: the transform-feedback request
-    // (ResolveTransformFeedbackVaryings only READS the linked intermediates - it sets no
-    // XFB qualifier, and the ESSL capture rename happens in the backend, behind L2's own
-    // key), the fragment-output count limit (a link-failure gate, never an emission input),
-    // and reflection (verified non-mutating on this glslang pin; see the ordering note in
-    // RunBody).
+    // Deliberately NOT keyed on: nothing that only steers a BACKEND transpile - see the
+    // classification on CompileEnv::frontendFingerprint, and L2's own key in
+    // MG_Util/ShaderTranspiler/TranslationCache.h.
     MG_Util::ShaderTranspiler::TranslationCacheKey ProgramLinkTask::BuildSpirvCacheKey(
         const MG_Util::ShaderTranspiler::CompileEnv& env) const {
         using namespace MG_Util::ShaderTranspiler;
@@ -617,12 +613,78 @@ namespace MobileGL::MG_State::GLState {
         keyInputs.explicitFragmentOutLocations = &in.explicitFragDataLocation;
         keyInputs.explicitFragmentOutIndices = &in.explicitFragDataIndex;
         keyInputs.explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings;
+        // In the key ONLY because the payload now carries the reflection: transform feedback
+        // is resolved by reading the linked intermediates and never perturbs the generated
+        // SPIR-V, but it does shape xfbVaryings / xfbStrides / xfbBufferMode /
+        // gsStripTriangles, and maxFragmentOutputColorNumber decides whether the link is
+        // rejected at all. Widening a payload means widening the key.
+        keyInputs.requestedXfbVaryings = &in.requestedXfbVaryings;
+        keyInputs.xfbBufferMode = static_cast<Uint32>(in.requestedXfbBufferMode);
+        keyInputs.maxFragmentOutputColorNumber = in.maxFragmentOutputColorNumber;
         return BuildSpirvTranslationKey(keyInputs);
     }
 
-    Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {
-        outShaders.assign(in.shaders.size(), nullptr);
+    // The link rejections that need nothing but the compile snapshots. They run before the
+    // L1 memo is consulted, so a hit can never paper over a program that must fail to link.
+    // The two lexical side channels the relaxed parse cannot provide, merged across stages:
+    // explicit default-block uniform locations (which must agree, or the link fails) and
+    // sampler/image layout(binding = N) initial units. Reads the COMPILE snapshots only, so
+    // it is legal - and necessary - before any shader is parsed: the merged bindings are part
+    // of the L1 memo key.
+    void ProgramLinkTask::MergeShaderSideChannels() {
+        // Merge the shaders' lexically extracted explicit uniform locations. The same
+        // uniform declared in several stages must agree on its location (config-A glslang
+        // enforced this at mapIO; the relaxed parse no longer sees the qualifiers).
+        for (const auto& shader : in.shaders) {
+            const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);
+            for (const auto& [name, location] : compiled.explicitUniformLocations) {
+                const auto [it, inserted] = artifacts.linkedExplicitUniformLocations.emplace(name, location);
+                if (!inserted && it->second != location) {
+                    artifacts.infoLog = std::format(
+                        "Uniform '{}' is declared with conflicting explicit locations ({} and {}) "
+                        "across stages.",
+                        name, it->second, location);
+                    DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+                    return;
+                }
+            }
+            // Sampler/image layout(binding = N) initial units, likewise invisible to the
+            // relaxed parse. Stage order matches the old per-stage mapIO capture, so a
+            // name declared in several stages keeps the last stage's binding as before.
+            for (const auto& [name, binding] : compiled.explicitOpaqueBindings) {
+                artifacts.explicitOpaqueUniformBindings[name] = binding;
+            }
+        }
 
+    }
+
+    // An L1 hit: the entire front end, published without constructing a TShader or a
+    // TProgram. Everything here is a copy out of plain owned data - `link.program` is null in
+    // the payload by construction, and nothing reads it any more.
+    Bool ProgramLinkTask::TryPublishFromTranslationCache() {
+        if (!spirvHandoff.spirvCacheKey.Valid()) return false;
+        const ProgramTranslationResultPtr hit =
+            GetProgramTranslationCache().Find(spirvHandoff.spirvCacheKey);
+        if (!hit) return false;
+
+        artifacts = hit->link;
+        spirvHandoff.shaderTypes.resize(in.shaders.size());
+        for (SizeT i = 0; i < in.shaders.size(); i++) {
+            spirvHandoff.shaderTypes[i] = MG_Util::ConvertShaderStageToGLEnum(in.shaders[i].stage);
+        }
+        // An ALIASING SharedPtr: it points at the payload's SpirvArtifacts while sharing
+        // ownership of the whole payload, so phase B publishes them without a second copy and
+        // without any chance of the entry being evicted from under it.
+        spirvHandoff.cachedSpirv =
+            SharedPtr<const ProgramObject::SpirvArtifacts>(hit, &hit->spirv);
+        spirvHandoff.ready = true;
+        MGLOG_D("ProgramObject %u: L1 cache hit - the whole front end was reused; no parse, no "
+                "link, no SPIR-V generation",
+                in.externalIndex);
+        return true;
+    }
+
+    Bool ProgramLinkTask::ValidateAttachedShaders() {
         // GL 4.6 core 7.3: a compute shader may only be linked with other compute shaders -
         // the compute pipeline has no other stages to link against, so a program that mixes
         // them must fail to link (KHR-GL43.compute_shader.api-program).
@@ -644,8 +706,6 @@ namespace MobileGL::MG_State::GLState {
             const LinkShaderInput& input = in.shaders[i];
             const GLenum shaderType = MG_Util::ConvertShaderStageToGLEnum(input.stage);
             const ShaderCompileArtifacts& compiled = CompiledArtifacts(input.compiled);
-            MGLOG_D("ProgramObject %u: Preparing shader[%zu] stage %s", in.externalIndex, i,
-                    MG_Util::ConvertGLEnumToString(shaderType).c_str());
 
             if (!compiled.compileStatus) {
                 // The compile log LEADS the quoted source, and that order is load-bearing:
@@ -664,6 +724,17 @@ namespace MobileGL::MG_State::GLState {
                                      in.externalIndex, i, artifacts.infoLog));
                 return false;
             }
+        }
+        return true;
+    }
+
+    Bool ProgramLinkTask::ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders) {
+        outShaders.assign(in.shaders.size(), nullptr);
+        for (SizeT i = 0; i < in.shaders.size(); i++) {
+            const LinkShaderInput& input = in.shaders[i];
+            const GLenum shaderType = MG_Util::ConvertShaderStageToGLEnum(input.stage);
+            MGLOG_D("ProgramObject %u: Preparing shader[%zu] stage %s", in.externalIndex, i,
+                    MG_Util::ConvertGLEnumToString(shaderType).c_str());
             String reparseLog;
             outShaders[i] = input.compiled->ClaimParsedShader(reparseLog);
             if (!outShaders[i]) {
