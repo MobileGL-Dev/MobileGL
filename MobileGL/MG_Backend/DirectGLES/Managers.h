@@ -129,7 +129,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Twin creation is the moment a driver-owned id starts needing a guarded
             // destructor; cold path, so the once-guard costs nothing per draw.
             EnsureProcessTeardownSentinel();
+            // Sweep BEFORE the entry reference below exists: the map is open-addressed and an
+            // erase relocates the rest of the probe cluster, so collecting once that reference
+            // is taken would invalidate it. The sweep is therefore owed from an earlier call
+            // rather than triggered by this one.
+            if (m_creationTick >= kCreationGCInterval) {
+                m_creationTick = 0;
+                CollectGarbage();
+            }
+            const SizeT entryCountBeforeInsert = m_entries.size();
             auto& entry = m_entries[stateObj.get()];
+            if (m_entries.size() != entryCountBeforeInsert) {
+                // A key the registry has never held. Nothing tells the backend that a texture or
+                // renderbuffer was DELETED - the twin, and the driver storage it owns, lives
+                // until a collection - and CollectGarbageIfNeeded is ticked only from the
+                // per-draw sync paths, which a CTS-shaped workload runs about ten times per
+                // case. 1024 of those ticks then span ~100 cases, so ~100 cases' worth of dead
+                // (and, for this suite, gigabyte-sized) objects stay allocated at once. Object
+                // CHURN rather than draw count is what makes the sweep urgent, so a twin the
+                // registry has never seen ticks it too - and it does so on the path that is
+                // about to allocate, which is exactly when the memory is needed.
+                ++m_creationTick;
+            }
             if (entry.stateRef.expired()) {
                 // The previous owner of this address is gone and the allocator handed it
                 // to a new object: its twin describes ids the new state object never made.
@@ -203,8 +224,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     private:
         static constexpr Uint32 kGCInterval = 1024;
+        // Creations are far rarer than draws, so this counts in a much smaller unit than
+        // kGCInterval does.
+        static constexpr Uint32 kCreationGCInterval = 64;
         BackendMap m_entries;
         Uint32 m_gcTick = 0;
+        Uint32 m_creationTick = 0;
         Bool m_isCollecting = false;
     };
 

@@ -5655,6 +5655,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum glInternalFormat, glType, glFormat;
             TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
 
+            // The allocation is deferred to here, so an ES driver that refuses it (a
+            // multi-gigabyte renderbuffer is refused routinely) used to leave m_isInitialized
+            // true over a renderbuffer with no storage and say nothing at all: the attachment
+            // then rendered nowhere. Drain first so the check cannot pick up an unrelated stale
+            // flag, and report GL_OUT_OF_MEMORY to the application. The error lands on whatever
+            // entry point triggered the sync rather than on glRenderbufferStorage itself, which
+            // is where the deferred model puts it - still far better than silence.
+            DebugImpl::ErrorLopper::Clear();
             if (samples > 0) {
                 // Same clamp as the multisample texture path: the frontend accepts the count it
                 // advertised, the driver only takes the count it supports for this format, and
@@ -5668,6 +5676,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
                                                   static_cast<GLsizei>(height));
             }
+            if (g_GLESFuncs.glGetError() == GL_OUT_OF_MEMORY) {
+                MGLOG_E_ONCE("Renderbuffer %u storage allocation ran out of memory: %dx%d, samples=%d, format=%s",
+                             stateRBOObject->GetExternalIndex(), width, height, samples,
+                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
+                if (MG_State::pGLContext) {
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::OutOfMemory,
+                        MakeUnique<GenericErrorInfo>("DirectGLES", "BackendRenderbufferObject::SyncToBackend",
+                                                     "The ES driver could not allocate the renderbuffer storage."));
+                }
+            }
+            DebugImpl::ErrorLopper::Clear();
 
             m_cacheInternalFormat = internalFormat;
             m_cacheWidth = width;
