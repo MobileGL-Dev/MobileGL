@@ -7684,6 +7684,149 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
+    // ---- Bit-exact readback of a 32-bit packed colour level ---------------------------------------
+    //
+    // glGetTexImage of a packed format read with its OWN client type owes the application the words
+    // the image HOLDS, and neither of the two routes above can promise that once anything other than
+    // a glTexImage has written the level:
+    //
+    //   * the colour-attachment route reads GL_RGBA/GL_FLOAT and re-encodes, which canonicalizes an
+    //     RGB9_E5 shared exponent (0xf8fc0000 -> 0xe7e00000, same value, different bits) and
+    //     collapses an R11F_G11F_B10F NaN to the canonical payload 1
+    //     (MG_Util::EncodeFloatToUnsignedSmallFloat) - and a copy-image from RGB9_E5 lands exactly
+    //     such a NaN in the 10-bit blue field every time, because the source's shared-exponent
+    //     field is all ones;
+    //   * the CPU shadow only ever holds what was UPLOADED, so for a level glCopyImageSubData wrote
+    //     it answers with the PRE-COPY contents. MirrorCopyImageIntoDestinationShadow patches that
+    //     up for the shapes it can address texel-exactly and declines for the rest - a renderbuffer
+    //     source (which has no shadow to mirror from at all), a cube or 1D-array endpoint, a
+    //     self-copy - and the decline is silent, so the stale words are served as truth.
+    //
+    // glCopyImageSubData is a raw texel-block move and EXT_copy_image puts every 32-bit colour
+    // format in one compatibility class, so copying the level into a scratch GL_R32UI image and
+    // reading THAT back as unsigned integers hands over the stored words themselves, whoever wrote
+    // them. This is what lets the shadow stop being the authority for these formats: it is tried
+    // first, and every step reports rather than guesses, so a driver that turns any of it down
+    // simply leaves the old shadow/attachment fallbacks to run.
+    static GLuint g_packedWordScratchTextureId = 0;
+    static GLsizei g_packedWordScratchWidth = 0;
+    static GLsizei g_packedWordScratchHeight = 0;
+
+    // Grow-only, so a readback sweep over a mip chain allocates once. Zero when the driver refused
+    // the storage, which is a decline and not an error.
+    static GLuint EnsurePackedWordScratchTexture(GLsizei width, GLsizei height) {
+        if (g_packedWordScratchTextureId != 0 && g_packedWordScratchWidth >= width &&
+            g_packedWordScratchHeight >= height) {
+            return g_packedWordScratchTextureId;
+        }
+        const GLsizei newWidth = std::max(width, g_packedWordScratchWidth);
+        const GLsizei newHeight = std::max(height, g_packedWordScratchHeight);
+        if (g_packedWordScratchTextureId != 0) {
+            // A scratch FBO may still name the old id, and the driver is free to hand the same
+            // number back for the replacement - which would false-skip the re-attach.
+            ScratchFBOImpl::NoteTextureIdDeleted(g_packedWordScratchTextureId);
+            g_GLESFuncs.glDeleteTextures(1, &g_packedWordScratchTextureId);
+            g_packedWordScratchTextureId = 0;
+            g_packedWordScratchWidth = 0;
+            g_packedWordScratchHeight = 0;
+        }
+        GLuint texture = 0;
+        g_GLESFuncs.glGenTextures(1, &texture);
+        if (texture == 0) return 0;
+
+        ClearGLErrors();
+        TextureImpl::ActivateTextureUnit(TextureImpl::TempTextureUnit);
+        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, texture);
+        // Immutable single-level storage: glCopyImageSubData wants a complete image, and
+        // glTexStorage clamps TEXTURE_MAX_LEVEL, which is what makes a one-level texture complete
+        // under the default mipmapping filter.
+        g_GLESFuncs.glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32UI, newWidth, newHeight);
+        const GLenum storageError = g_GLESFuncs.glGetError();
+        // Re-bind whatever the binding cache says lives on the temp unit, so the cache stays
+        // truthful without a driver query (same discipline as CopyR32FTexture2D).
+        auto* cachedBound = TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
+                                                            [static_cast<SizeT>(TextureTarget::Texture2D)];
+        g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, cachedBound ? cachedBound->GetBackendTextureId() : 0);
+        if (storageError != GL_NO_ERROR) {
+            g_GLESFuncs.glDeleteTextures(1, &texture);
+            MGLOG_D("GetTexImage: no %dx%d GL_R32UI scratch image (%s); the verbatim word readback is unavailable",
+                    newWidth, newHeight, MG_Util::ConvertGLEnumToString(storageError).c_str());
+            return 0;
+        }
+        g_packedWordScratchTextureId = texture;
+        g_packedWordScratchWidth = newWidth;
+        g_packedWordScratchHeight = newHeight;
+        return texture;
+    }
+
+    static void ReleasePackedWordScratchTexture() {
+        // The ES context (and the name with it) is gone; deleting here would target a recycled
+        // name in the successor context.
+        g_packedWordScratchTextureId = 0;
+        g_packedWordScratchWidth = 0;
+        g_packedWordScratchHeight = 0;
+    }
+
+    // One slice of `backendTarget`'s level, as width*height stored 32-bit words in `outWords`.
+    static Bool ReadPackedLevelWordsViaScratch(GLuint texture, GLenum backendTarget, GLint level, GLint slice,
+                                               GLsizei width, GLsizei height, Uint32* outWords) {
+        if (texture == 0 || outWords == nullptr || width <= 0 || height <= 0 || level < 0 || slice < 0) return false;
+        if (!g_GLESFuncs.glCopyImageSubData) return false;
+
+        // Horizontal bands, so neither the scratch image nor the staging buffer scales with the
+        // level. The scratch is grow-only on purpose - a sweep down a mip chain must not
+        // reallocate per level - which without a band cap would leave a 4096x4096 readback's
+        // 64 MiB image parked for the rest of the process. The cap is 1 MiB of GL_R32UI, with
+        // 4 MiB of staging behind it because the read lands four words per texel.
+        constexpr SizeT kMaxScratchTexels = SizeT{1} << 18;
+        const GLsizei bandRows = std::max<GLsizei>(
+            1, static_cast<GLsizei>(std::min<SizeT>(kMaxScratchTexels / static_cast<SizeT>(width),
+                                                    static_cast<SizeT>(height))));
+        const GLuint scratch = EnsurePackedWordScratchTexture(width, bandRows);
+        if (scratch == 0) return false;
+
+        ScopedFramebufferBinding readBinding(/*saveRead=*/true, /*saveDraw=*/false);
+        auto& scratchFB = ScratchFBOImpl::BlitReadFramebuffer();
+        FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, ScratchFBOImpl::EnsureId(scratchFB));
+        ScratchFBOImpl::EnsureColorAttachment2D(scratchFB, GL_READ_FRAMEBUFFER, scratch, GL_TEXTURE_2D, 0);
+        ScratchFBOImpl::EnsureReadBuffer(scratchFB, GL_COLOR_ATTACHMENT0);
+        if (g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            MGLOG_D("GetTexImage: the GL_R32UI scratch attachment is incomplete; falling back");
+            return false;
+        }
+
+        // GL_RGBA_INTEGER/GL_UNSIGNED_INT is the one combination ES guarantees for an integer
+        // colour buffer, so the read lands four words per texel and the red one is compacted out
+        // here. The PACK scope is the tight default rather than the application's, so a row comes
+        // back packed at exactly `width * 4` words. One glGetError covers the whole loop: it
+        // accumulates, and a failure anywhere means the caller falls back rather than trusting a
+        // partial result.
+        const SizeT wordsPerRow = static_cast<SizeT>(width) * 4;
+        Vector<Uint32> staging(static_cast<SizeT>(bandRows) * wordsPerRow);
+        ScopedPixelPackBuffer packBuffer(0);
+        ScopedPackState packState(PixelStoreImpl::PackState{4, 0, 0, 0});
+        ClearGLErrors();
+        for (GLsizei y = 0; y < height; y += bandRows) {
+            const GLsizei rows = std::min(bandRows, height - y);
+            g_GLESFuncs.glCopyImageSubData(texture, backendTarget, level, 0, y, slice, scratch, GL_TEXTURE_2D, 0, 0,
+                                           0, 0, width, rows, 1);
+            g_GLESFuncs.glReadPixels(0, 0, width, rows, GL_RGBA_INTEGER, GL_UNSIGNED_INT, staging.data());
+            for (GLsizei row = 0; row < rows; ++row) {
+                const Uint32* srcRow = staging.data() + static_cast<SizeT>(row) * wordsPerRow;
+                Uint32* dstRow = outWords + static_cast<SizeT>(y + row) * static_cast<SizeT>(width);
+                for (GLsizei x = 0; x < width; ++x) dstRow[x] = srcRow[static_cast<SizeT>(x) * 4];
+            }
+        }
+        const GLenum error = g_GLESFuncs.glGetError();
+        if (error != GL_NO_ERROR) {
+            MGLOG_D("GetTexImage: the GL_R32UI word readback of %s was refused (%s); falling back",
+                    MG_Util::ConvertGLEnumToString(backendTarget).c_str(),
+                    MG_Util::ConvertGLEnumToString(error).c_str());
+            return false;
+        }
+        return true;
+    }
+
     static Bool IsLegacyNativeReadPixelsFormat(GLenum format) {
         return format == GL_RGBA || format == GL_RGBA_INTEGER || format == GL_RED || format == GL_RED_INTEGER ||
                format == GL_DEPTH_COMPONENT || format == GL_STENCIL_INDEX || format == GL_DEPTH_STENCIL;
@@ -8058,17 +8201,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // value 8064, different words), and the conformance suite compares the words
             // ("CopyImageSubData modified contents of source image"). The scratch FBO does NOT
             // decide this for us: Adreno reports an RGB9_E5 colour attachment complete, so the
-            // shadow branch further down was unreachable. Serve the verbatim-word pairs from the
-            // shadow first and keep the GPU attempts as the fallback for a level the shadow never
-            // received. Every other format still prefers the GPU, so a rendered-into texture is
-            // unaffected; RGB9_E5 is not colour-renderable, so its shadow stays authoritative -
-            // and the one path that GPU-writes it, CopyImageSubData, mirrors itself into the
-            // shadow for exactly this reason.
+            // shadow branch further down was unreachable. Every other format still prefers the
+            // GPU, so a rendered-into texture is unaffected.
+            const Bool rawPackedWordRead = MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                textureObject->GetFormat(), MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+            // ...and the GPU CAN answer with the stored words after all, for any 32-bit packed
+            // format and whoever wrote the level, by going through a scratch GL_R32UI image (see
+            // ReadPackedLevelWordsViaScratch). Preferred over both routes below because it is the
+            // only one that is right for a level glCopyImageSubData wrote: the shadow may never
+            // have seen that write, and re-encoding the attachment cannot reproduce an RGB9_E5
+            // shared exponent or an R11F_G11F_B10F NaN payload. A multisample image is excluded
+            // because copy-image requires matching sample counts.
+            if (rawPackedWordRead && textureObject->GetSamples() == 0) {
+                // Copy-image addresses a cube map as ONE image with the face on z, where
+                // glGetTexImage names the face in its target.
+                const auto readUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+                const GLint copyBaseSlice =
+                    (readUploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+                     readUploadTarget <= TextureUploadTarget::CubeMapNegativeZ)
+                        ? static_cast<GLint>(readUploadTarget) -
+                              static_cast<GLint>(TextureUploadTarget::CubeMapPositiveX)
+                        : 0;
+                const GLenum copyTarget =
+                    TextureImpl::ConvertTextureTargetToBackendGLEnum(textureObject->GetTarget());
+                const SizeT sliceWords = static_cast<SizeT>(size.x()) * static_cast<SizeT>(size.y());
+                Vector<Uint32> words(sliceWords * static_cast<SizeT>(sliceCount));
+                Bool allSlicesRead = true;
+                for (GLsizei slice = 0; slice < sliceCount && allSlicesRead; ++slice) {
+                    allSlicesRead = ReadPackedLevelWordsViaScratch(backendTexId, copyTarget, level,
+                                                                   copyBaseSlice + slice, size.x(), size.y(),
+                                                                   words.data() + sliceWords * static_cast<SizeT>(slice));
+                }
+                if (allSlicesRead &&
+                    ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(words.data()), size.x(),
+                                                           size.y(), sliceCount, type, pixels,
+                                                           applyPackImageParams)) {
+                    MGLOG_D("GetTexImage: finished %d slice(s) via the bit-exact GL_R32UI word readback", sliceCount);
+                    return;
+                }
+            }
+            // The last resort for the one format the attachment route can never answer for: the
+            // shadow is only right while nothing but a glTexImage has written the level, which is
+            // why CopyImageSubData mirrors itself into it where it can.
             const Bool verbatimPackedShadowRead =
                 MG_Util::PixelStoreProcessor::HasRedundantPackedEncoding(textureObject->GetFormat()) &&
-                MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
-                    textureObject->GetFormat(), MG_Util::ConvertGLEnumToTextureInputFormat(format),
-                    MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+                rawPackedWordRead;
             if (verbatimPackedShadowRead &&
                 GetTexImageViaShadowConversion(textureMipmapObject,
                                                MG_Util::ConvertGLEnumToTextureUploadTarget(target), level, size.x(),
@@ -9262,6 +9440,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         XfbImpl::OnBackendContextDestroyed();
         MultiDrawImpl::OnBackendContextDestroyed();
         ScratchFBOImpl::OnBackendContextDestroyed();
+        ReleasePackedWordScratchTexture();
         FramebufferImpl::InvalidateFramebufferBindingCache();
         VertexArrayImpl::InvalidateVAOBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
