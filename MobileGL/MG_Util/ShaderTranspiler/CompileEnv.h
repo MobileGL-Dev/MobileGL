@@ -12,6 +12,18 @@
 #include <MG_Backend/BackendObject.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
+    // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE core minimums (GL 4.6 core table 23.45), in ONE
+    // place because three separate readers have to agree on them: CaptureCompileEnv (which floors
+    // the backend's answer at them), GL_Getter (which answers the same query the same way) and
+    // BuildTBuiltInResource (whose gl_MaxComputeWorkGroup* constants a shader compares against
+    // the query - KHR-GL43.compute_shader.max does exactly that). They used to be three copies,
+    // and the z one disagreed: glslang compiled against 1024 while the context advertised 64.
+    inline constexpr Uint MIN_COMPUTE_WORK_GROUP_COUNT[3] = {65535, 65535, 65535};
+    inline constexpr Uint MIN_COMPUTE_WORK_GROUP_SIZE[3] = {1024, 1024, 64};
+    // GL_MAX_COMPUTE_UNIFORM_COMPONENTS, the same invariant with no backend input: the number
+    // glGetIntegerv answers and the number gl_MaxComputeUniformComponents expands to.
+    inline constexpr Int MAX_COMPUTE_UNIFORM_COMPONENTS = 1024;
+
     // everything outside (stage, source) this reads - advertised extensions and backend limits -
     // so the transformation is a pure function of its three arguments and can run on a worker
     // thread.
@@ -34,7 +46,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     struct CompileEnv {
         // --- compute limits: the ONLY former real-driver read in the pipeline ---
         // GL_MAX_COMPUTE_WORK_GROUP_SIZE, already max()'d with the frontend minimum.
-        Uint maxComputeWorkGroupSize[3] = {1024, 1024, 64};
+        Uint maxComputeWorkGroupSize[3] = {MIN_COMPUTE_WORK_GROUP_SIZE[0], MIN_COMPUTE_WORK_GROUP_SIZE[1],
+                                           MIN_COMPUTE_WORK_GROUP_SIZE[2]};
+        // GL_MAX_COMPUTE_WORK_GROUP_COUNT, likewise. Carried for the same reason the size is:
+        // gl_MaxComputeWorkGroupCount expands from it at parse time, so the compile pipeline
+        // needs the number the context advertises without reaching back to the live backend.
+        Uint maxComputeWorkGroupCount[3] = {MIN_COMPUTE_WORK_GROUP_COUNT[0], MIN_COMPUTE_WORK_GROUP_COUNT[1],
+                                            MIN_COMPUTE_WORK_GROUP_COUNT[2]};
         // GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, likewise.
         Uint64 maxComputeWorkGroupInvocations = 1024;
 

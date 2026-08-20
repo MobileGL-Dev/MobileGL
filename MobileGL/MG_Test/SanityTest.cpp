@@ -994,6 +994,68 @@ void main() {
     MG_State::pGLContext = Move(previousContext);
 }
 
+// KHR-GL43.compute_shader.max: the test queries every GL_MAX_COMPUTE_* value through the API and
+// then makes a compute shader compare the matching gl_MaxCompute* constant against it. The two
+// used to be independent tables and gl_MaxComputeWorkGroupSize.z disagreed - glslang compiled
+// against a permissive 1024 while the context advertises the 64 the GL 4.6 minimum (and every ES
+// driver) reports.
+TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+
+    GLint size[3] = {0, 0, 0};
+    GLint count[3] = {0, 0, 0};
+    for (GLuint index = 0; index < 3; ++index) {
+        MG_Impl::GLImpl::GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, index, &size[index]);
+        MG_Impl::GLImpl::GetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, index, &count[index]);
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A negative array size is a compile error, so the stage only compiles when EVERY component
+    // of both built-in constants equals what the query above reported. Two-sided by construction:
+    // a resource table that is too permissive fails it exactly like one that is too tight.
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+const int mgAgree = (gl_MaxComputeWorkGroupSize == ivec3()" +
+                         std::to_string(size[0]) + ", " + std::to_string(size[1]) + ", " +
+                         std::to_string(size[2]) + R"() &&
+                     gl_MaxComputeWorkGroupCount == ivec3()" +
+                         std::to_string(count[0]) + ", " + std::to_string(count[1]) + ", " +
+                         std::to_string(count[2]) + R"()) ? 1 : -1;
+int mgProbe[mgAgree];
+void main() {
+    mgProbe[0] = 0;
+}
+)";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = source,
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    // The z ceiling is also what glslang checks a declared local_size_z against, so it has to
+    // reject one invocation past the advertised limit and accept the limit itself.
+    const String atLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2]) +
+                           ") in;\nvoid main() {}\n";
+    const String pastLimit = "#version 430 core\nlayout(local_size_z = " + std::to_string(size[2] + 1) +
+                             ") in;\nvoid main() {}\n";
+    EXPECT_TRUE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = atLimit,
+    }));
+    EXPECT_FALSE(MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_COMPUTE_SHADER,
+        .sourceStr = pastLimit,
+    }));
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     using namespace MobileGL;
 

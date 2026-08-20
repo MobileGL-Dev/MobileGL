@@ -83,14 +83,7 @@ namespace MobileGL {
                 Resources.minProgramTexelOffset = -8;
                 Resources.maxProgramTexelOffset = 7;
                 Resources.maxClipDistances = 8;
-                Resources.maxComputeWorkGroupCountX = 65535;
-                Resources.maxComputeWorkGroupCountY = 65535;
-                Resources.maxComputeWorkGroupCountZ = 65535;
-                Resources.maxComputeWorkGroupSizeX = 1024;
-                Resources.maxComputeWorkGroupSizeY = 1024;
-                // TODO: Drive glslang compute resource limits from the active backend instead of this permissive cap.
-                Resources.maxComputeWorkGroupSizeZ = 1024;
-                Resources.maxComputeUniformComponents = 1024;
+                Resources.maxComputeUniformComponents = MAX_COMPUTE_UNIFORM_COMPONENTS;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
                 Resources.maxComputeAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
@@ -179,6 +172,25 @@ namespace MobileGL {
                 Resources.maxFragmentImageUniforms = dynamicParameters.MaxFragmentImageUniforms;
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
                 Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
+                Resources.maxComputeTextureImageUnits = dynamicParameters.MaxComputeTextureImageUnits;
+
+                // The compute work-group limits are the env's, not the backend parameters': they
+                // are the only ones that come from a REAL indexed driver query, which
+                // CaptureCompileEnv already issued once on the GL thread and floored at the core
+                // minimum exactly as GL_Getter does. Reading the same snapshot here is what makes
+                // gl_MaxComputeWorkGroupSize and glGetIntegeri_v agree by construction
+                // (KHR-GL43.compute_shader.max compares them); the z component was 1024 here
+                // against the 64 every ES driver reports. A null env is the standalone/test entry
+                // point, which has no context to have queried one - the core minimums stand, which
+                // is what a default-constructed CompileEnv carries anyway.
+                const Uint* maxWorkGroupSize = env ? env->maxComputeWorkGroupSize : MIN_COMPUTE_WORK_GROUP_SIZE;
+                const Uint* maxWorkGroupCount = env ? env->maxComputeWorkGroupCount : MIN_COMPUTE_WORK_GROUP_COUNT;
+                Resources.maxComputeWorkGroupSizeX = static_cast<int>(maxWorkGroupSize[0]);
+                Resources.maxComputeWorkGroupSizeY = static_cast<int>(maxWorkGroupSize[1]);
+                Resources.maxComputeWorkGroupSizeZ = static_cast<int>(maxWorkGroupSize[2]);
+                Resources.maxComputeWorkGroupCountX = static_cast<int>(maxWorkGroupCount[0]);
+                Resources.maxComputeWorkGroupCountY = static_cast<int>(maxWorkGroupCount[1]);
+                Resources.maxComputeWorkGroupCountZ = static_cast<int>(maxWorkGroupCount[2]);
 
                 Resources.limits.nonInductiveForLoops = true;
                 Resources.limits.whileLoops = true;

@@ -47,7 +47,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        constexpr GLint kFrontendMaxComputeUniformComponents = 1024;
+        // Shared with the glslang resource table for the same reason as the atomic-counter
+        // limits below: gl_MaxComputeUniformComponents expands from BuildTBuiltInResource.
+        constexpr GLint kFrontendMaxComputeUniformComponents =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_COMPUTE_UNIFORM_COMPONENTS);
         // Every atomic-counter limit is shared with the glslang resource table
         // (BuildTBuiltInResource) through MG_Util/ShaderTranspiler/Types.h: GL 4.6 requires
         // glGetIntegerv and the gl_MaxAtomicCounter* built-in constants to agree, and the two
@@ -118,12 +121,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendSubpixelBits = 4;
         constexpr GLint kFrontendMaxSamples = 4;
 
+        // The floors under GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE. Shared with the compile
+        // pipeline (CaptureCompileEnv floors the same driver answers at them, and
+        // BuildTBuiltInResource expands gl_MaxComputeWorkGroup* from the result), because a
+        // shader is allowed to compare the built-in constant against this query.
         constexpr GLint GetMinComputeWorkGroupCount(GLuint index) {
-            return index < 3 ? 65535 : 0;
+            return index < 3 ? static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_COMPUTE_WORK_GROUP_COUNT[index]) : 0;
         }
 
         constexpr GLint GetMinComputeWorkGroupSize(GLuint index) {
-            return index < 2 ? 1024 : (index == 2 ? 64 : 0);
+            return index < 3 ? static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_COMPUTE_WORK_GROUP_SIZE[index]) : 0;
         }
 
         GLint GetMaxCombinedUniformComponents(GLint maxDefaultUniformComponents, GLint maxUniformBlocks,
