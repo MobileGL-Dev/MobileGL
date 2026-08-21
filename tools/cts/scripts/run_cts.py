@@ -57,6 +57,39 @@ def mem_available_kb(serial):
     return int(m.group(1)) if m else None
 
 
+def core_max_frequencies(serial):
+    r = adb(serial, "shell",
+            "for d in /sys/devices/system/cpu/cpu*/cpufreq; do "
+            "cat $d/cpuinfo_max_freq 2>/dev/null || echo 0; done", timeout=30)
+    freqs = [int(x) for x in re.findall(r"\d+", r.stdout or "")]
+    return freqs if freqs and max(freqs) > 0 else []
+
+
+def derive_cpu_mask(serial, mode):
+    """taskset mask for `mode`: 'prime' (fastest core only) or 'fast' (fast cluster).
+
+    Measured on the Mali G925, one texture_swizzle smoke case, two rounds in opposite
+    orders: unpinned 13.50/13.74 s, fast cluster 10.22/9.89 s, prime core 6.82/4.38 s.
+    Peak thread count was 11 in every configuration, so pinning does NOT cost MobileGL
+    any of its compile-pool parallelism - the unpinned run is simply losing to the
+    scheduler parking a CPU-bound load on the little cluster.
+    """
+    freqs = core_max_frequencies(serial)
+    if not freqs:
+        return None
+    top = max(freqs)
+    if mode == "prime":
+        # The single fastest core. Fastest of the three in measurement, though with the
+        # widest spread, which is why it is opt-in rather than the default.
+        return f"{1 << freqs.index(top):x}"
+    cutoff = top * 0.7
+    mask = 0
+    for cpu, freq in enumerate(freqs):
+        if freq >= cutoff:
+            mask |= 1 << cpu
+    return f"{mask:x}" if mask else None
+
+
 def completed_cases(qpa_path):
     """Return (finished_case_names, last_started_case_or_None).
 
@@ -99,6 +132,20 @@ def main():
     # the contradiction instead of papering over it.
     ap.add_argument("--gl-config-name", default="rgba8888d24s8",
                     help="--deqp-gl-config-name value (empty string to leave it unset)")
+    # A CTS run is CPU-bound (measured: cpu/wall = 93% on a texture_swizzle smoke case,
+    # which spends its time in glslang and spirv-tools, not in the driver), and Android's
+    # scheduler parks that load on the little cluster. Measured on the Mali G925 device,
+    # one smoke case: unpinned 16 s, cores 4-7 6 s, core 7 alone 5 s (unpinned re-run 16 s,
+    # so this is not drift). Pinning is worth 2.7-3.2x, and a NARROWER mask was faster,
+    # not slower - the compile pool's parallelism does not pay for the cross-core migration
+    # once the translation cache absorbs most of the compiles. "auto" keeps every core
+    # within 70% of the fastest, which drops the little cluster; that leaves room to run
+    # shards on separate cores, which is worth more than the last 20%.
+    ap.add_argument("--cpu-mask", default="fast",
+                    help="CPU affinity for glcts: 'fast' (every core within 70%% of the "
+                         "fastest, i.e. the big cluster), 'prime' (the single fastest core, "
+                         "quickest measured but with the widest spread), 'none' (leave "
+                         "affinity alone), or an explicit taskset hex mask")
     ap.add_argument("--max-rounds", type=int, default=4000)
     ap.add_argument("--max-empty-streak", type=int, default=64,
                     help="abort after this many consecutive chunks that produce no log at all")
@@ -127,6 +174,16 @@ def main():
 
     total = len(remaining)
     print(f"[run_cts] {args.backend} on {args.serial}: {total} cases")
+
+    cpu_mask = None
+    if args.cpu_mask in ("fast", "prime", "auto"):  # auto kept as an alias for fast
+        cpu_mask = derive_cpu_mask(args.serial, "prime" if args.cpu_mask == "prime" else "fast")
+        if cpu_mask is None:
+            print("[run_cts] could not read cpufreq; leaving affinity alone", file=sys.stderr)
+    elif args.cpu_mask != "none":
+        cpu_mask = args.cpu_mask
+    if cpu_mask:
+        print(f"[run_cts] pinning glcts to CPU mask 0x{cpu_mask} (--cpu-mask {args.cpu_mask})")
 
     crashed = []
     hung = []
@@ -167,12 +224,13 @@ def main():
         config_flag = (
             f"--deqp-gl-config-name={args.gl_config_name} " if args.gl_config_name else ""
         )
+        taskset_prefix = f"taskset {cpu_mask} " if cpu_mask else ""
         # The trailing sync makes the qpa durable: a hard GPU hang reboots the
         # device, and f2fs rolls back unsynced writes, silently eating the log.
         cmd = (
             f"cd {args.device_dir} && "
             f"MOBILEGL_BACKEND_TYPE={args.backend} LD_LIBRARY_PATH=. {extra_env}"
-            f"./glcts --deqp-caselist-file={dev_list} "
+            f"{taskset_prefix}./glcts --deqp-caselist-file={dev_list} "
             f"--deqp-surface-type={args.surface} "
             f"--deqp-surface-width={args.surface_size} "
             f"--deqp-surface-height={args.surface_size} "
