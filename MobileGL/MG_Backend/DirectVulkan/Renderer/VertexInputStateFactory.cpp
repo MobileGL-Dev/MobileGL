@@ -111,7 +111,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkFormat sourceVkFormat =
                 ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
             VertexStreamConversion conversion = VertexStreamConversion::None;
-            if (sourceVkFormat == VK_FORMAT_UNDEFINED && attr.Type == DataType::Float64) {
+            // Gated on the SAME flag ToVkVertexFormat gates its 64-bit path on, and that is
+            // load-bearing rather than belt-and-braces: the narrowing is only correct because
+            // DemoteFloat64Pass already turned the shader's `dvec` input into a `vec`, and that
+            // pass runs precisely when the backend declares no 64-bit vertex support. With the
+            // flag set, a dvec3/dvec4 is declined by ToVkVertexFormat AND left 64-bit in the
+            // module, so a float32 stream would be fed to a Float64 input.
+            const Bool narrowFloat64Arrays =
+                MG_Backend::pActiveBackendObject == nullptr ||
+                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes;
+            if (sourceVkFormat == VK_FORMAT_UNDEFINED && attr.Type == DataType::Float64 && narrowFloat64Arrays) {
                 // No native 64-bit fetch here (see ToVkVertexFormat's Float64 case), but the
                 // source bytes are ordinary IEEE-754 doubles and DemoteFloat64Pass has already
                 // narrowed every dvec input to a vec, so the array is narrowed to match rather
