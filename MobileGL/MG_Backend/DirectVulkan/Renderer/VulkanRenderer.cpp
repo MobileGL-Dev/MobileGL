@@ -972,6 +972,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // The fetch half of the fp64 demotion the shader side already does unconditionally
+    // (DemoteFloat64Pass): the source bytes are ordinary IEEE-754 doubles, so a GL_DOUBLE array is
+    // deinterleaved into a tightly packed float32 stream rather than dropped. `normalized` is not
+    // consulted - GL ignores it for floating-point array types.
+    static Bool ConvertFloat64VertexStreamToFloat32(
+        const MG_State::GLState::VertexAttribute& attribute,
+        const Uint8* sourceData,
+        SizeT sourceStride,
+        SizeT elementCount,
+        Vector<Float>& outData) {
+        if (sourceData == nullptr || attribute.Size < 1 || attribute.Size > 4 || sourceStride == 0) {
+            return false;
+        }
+
+        const SizeT componentCount = static_cast<SizeT>(attribute.Size);
+        outData.resize(elementCount * componentCount);
+        for (SizeT element = 0; element < elementCount; ++element) {
+            const Uint8* sourceElement = sourceData + element * sourceStride;
+            Float* destinationElement = outData.data() + element * componentCount;
+            for (SizeT component = 0; component < componentCount; ++component) {
+                // GL byte strides and offsets are arbitrary, so no component carries an 8-byte
+                // alignment guarantee; copy it out before narrowing it.
+                Double value = 0.0;
+                Memcpy(&value, sourceElement + component * sizeof(Double), sizeof(Double));
+                destinationElement[component] = static_cast<Float>(value);
+            }
+        }
+        return true;
+    }
+
     static Bool RepackVertexStream(const Uint8* sourceData,
                                    SizeT sourceStride,
                                    SizeT elementSize,
@@ -3590,6 +3620,14 @@ void main() {
             case VertexInputStateFactory::VertexStreamConversion::ScaledIntegerToFloat32:
                 if (!ConvertScaledIntegerVertexStreamToFloat32(attribute, sourceData, sourceStride,
                                                                elementCount, m_vertexConversionScratch)) {
+                    return false;
+                }
+                uploadData = m_vertexConversionScratch.data();
+                uploadSize = static_cast<VkDeviceSize>(m_vertexConversionScratch.size() * sizeof(Float));
+                break;
+            case VertexInputStateFactory::VertexStreamConversion::Float64ToFloat32:
+                if (!ConvertFloat64VertexStreamToFloat32(attribute, sourceData, sourceStride, elementCount,
+                                                         m_vertexConversionScratch)) {
                     return false;
                 }
                 uploadData = m_vertexConversionScratch.data();

@@ -1576,6 +1576,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT componentSize = GetDataTypeSize(type);
                 return componentSize == 0 ? 0 : componentSize * static_cast<SizeT>(size);
             }
+
+            // Deinterleaves elementCount elements of componentCount doubles into a tightly packed
+            // float32 stream - the fetch half of the fp64 demotion the shader side already does
+            // unconditionally (DemoteFloat64Pass). GL byte strides and offsets are arbitrary, so
+            // no component carries an 8-byte alignment guarantee and each is copied out before it
+            // is narrowed.
+            void NarrowDoubleStreamToFloat32(const Uint8* sourceBase, SizeT sourceStride, SizeT componentCount,
+                                             SizeT elementCount, Vector<Float>& outData) {
+                outData.resize(elementCount * componentCount);
+                for (SizeT element = 0; element < elementCount; ++element) {
+                    const Uint8* sourceElement = sourceBase + element * sourceStride;
+                    Float* destinationElement = outData.data() + element * componentCount;
+                    for (SizeT component = 0; component < componentCount; ++component) {
+                        Double value = 0.0;
+                        Memcpy(&value, sourceElement + component * sizeof(Double), sizeof(Double));
+                        destinationElement[component] = static_cast<Float>(value);
+                    }
+                }
+            }
         } // namespace
 
         BackendVertexArrayObject::BackendVertexArrayObject() {
@@ -1583,6 +1602,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             m_clientAttributeBufferIds.fill(0);
+            m_convertedAttributeBufferIds.fill(0);
             g_GLESFuncs.glGenVertexArrays(1, &m_backendVAOId);
             if (m_backendVAOId == 0) {
                 MGLOG_E_ONCE("Failed to generate vertex array object.");
@@ -1602,6 +1622,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_backendVAOId = 0;
             }
             for (auto& bufferId : m_clientAttributeBufferIds) {
+                if (bufferId != 0) {
+                    BufferImpl::NoteBufferIdDeleted(bufferId);
+                    g_GLESFuncs.glDeleteBuffers(1, &bufferId);
+                    bufferId = 0;
+                }
+            }
+            for (auto& bufferId : m_convertedAttributeBufferIds) {
                 if (bufferId != 0) {
                     BufferImpl::NoteBufferIdDeleted(bufferId);
                     g_GLESFuncs.glDeleteBuffers(1, &bufferId);
@@ -1776,10 +1803,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // that never calls a *BaseInstance entry point never pays for this compare.
             const Uint32 fetchBaseInstance = g_pendingFetchBaseInstance;
             const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
-            const Bool emitAttributes = attributesDirty || baseInstanceDirty;
+            // A narrowed GL_DOUBLE stream is derived from the source buffer's CONTENT, and no
+            // VAO version moves when an app writes into a buffer, so the version gate cannot
+            // prove such a stream is still current. Re-walk while one is live; the walk itself
+            // re-checks the buffer's change serial and only re-converts on a real move.
+            const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedFloat64Attribute;
             if (!emitAttributes && !indexBufferDirty) {
                 return;
             }
+            m_hasConvertedFloat64Attribute = false;
 
             Bind();
 
@@ -1805,34 +1837,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                m_syncedAttributeVersions[attribIndex].FormatVersion;
                 Bool needsSyncBuffer = bufferIdsRemitted || allAttributeVersions[attribIndex].BufferVersion !=
                                                                m_syncedAttributeVersions[attribIndex].BufferVersion;
-                if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
-
-                // This is where a 64-bit array actually stops. glVertexAttribLFormat is a legal call
-                // in a GL 4.3 context and the frontend RECORDS its format (the state queries have to
-                // answer), so IsLong does arrive here - what this backend cannot do is FEED it:
-                // SupportsFloat64VertexAttributes is false because ES has no GL_DOUBLE vertex format
-                // and ESSL has no fp64 type, and passing GL_DOUBLE to glVertexAttribPointer would
-                // only raise GL_INVALID_ENUM on the real driver. Disabling rather than merely
-                // skipping matters: becoming long bumps FormatVersion, not SwitchVersion, so the
-                // enable/disable block above will not run again and an already-enabled array would
-                // stay enabled with no pointer and no ARRAY_BUFFER binding - which ES 3.1+ makes an
-                // INVALID_OPERATION at draw.
+                // This is where a 64-bit array is narrowed. glVertexAttribLFormat is a legal call in
+                // a GL 4.3 context and the frontend RECORDS its format (the state queries have to
+                // answer), so IsLong does arrive here - what this backend cannot do is feed it at
+                // full precision: ES has no GL_DOUBLE vertex FORMAT and ESSL has no fp64 type, and
+                // passing GL_DOUBLE to glVertexAttribPointer would only raise GL_INVALID_ENUM on the
+                // real driver. But the FORMAT is the only 64-bit thing here: the source bytes are
+                // ordinary IEEE-754 doubles, and MobileGL already narrows every fp64 value in every
+                // shader (DemoteFloat64Pass) and every glUniform*d the same way, so the array is
+                // deinterleaved into a float32 stream and fetched as GL_FLOAT rather than dropped.
+                // glVertexAttribFormat(GL_DOUBLE) asks for exactly that conversion anyway; the L form
+                // asks for more precision than any backend here can give, and gets the same stream.
                 //
-                // IsLong is not the only way a 64-bit array gets here: glVertexAttribFormat
-                // with GL_DOUBLE asks for doubles in memory CONVERTED to float, so it is not
-                // long, is not declined by the frontend, and still has no ES vertex format.
-                // Leaving that one enabled did not merely raise INVALID_ENUM - the Adreno
-                // driver dereferenced null inside the next draw and took the process with it
-                // (SIGSEGV in libGLESv2_adreno, KHR-GL43.vertex_attrib_binding.basic-input-case4),
-                // because the array stayed enabled with no pointer the failed call could set.
-                // The type test therefore covers the storage, not the spelling.
+                // The conversion is deliberately NOT behind the version gate below: it is derived
+                // from buffer CONTENT, which no VAO version covers. Its own memo (keyed on the
+                // source buffer's change serial) is what keeps the repeat cost down.
+                //
+                // When no stream can be built the array is DISABLED rather than left alone. That
+                // matters: becoming long bumps FormatVersion, not SwitchVersion, so the
+                // enable/disable block above will not run again and an already-enabled array would
+                // stay enabled with no pointer and no ARRAY_BUFFER binding - which did not merely
+                // raise INVALID_ENUM but had the Adreno driver dereference null inside the next draw
+                // and take the process with it (SIGSEGV in libGLESv2_adreno,
+                // KHR-GL43.vertex_attrib_binding.basic-input-case4).
                 if (attrib.IsLong || attrib.Type == DataType::Float64) {
-                    MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array, which this "
-                            "backend cannot feed - disabling the array",
-                            attribIndex);
+                    if (attrib.Enabled && attrib.Type == DataType::Float64 &&
+                        SyncFloat64AttributeAsFloat32(attribIndex, attrib, fetchBaseInstance)) {
+                        m_hasConvertedFloat64Attribute = true;
+                        // Explicit, not redundant: an earlier walk that could not build the stream
+                        // disabled this array, and becoming feedable again bumps no SwitchVersion,
+                        // so the enable/disable block above would never turn it back on.
+                        g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
+                        g_GLESFuncs.glVertexAttribDivisor(attribIndex, attrib.Divisor);
+                        continue;
+                    }
+                    if (attrib.Enabled) {
+                        MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array whose source "
+                                "stream could not be narrowed to float32 - disabling the array",
+                                attribIndex);
+                    }
                     g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
                     continue;
                 }
+
+                if (!needsSyncFormat && !needsSyncBuffer && !needsSyncBaseInstance) continue;
 
                 // A resolved stride of zero is the binding model's "never advance" (see
                 // VertexAttribute::Stride) and glVertexAttribPointer cannot say it - a zero
@@ -1956,11 +2004,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                // Same reason as SyncToBackend, including why the test is on the storage rather
-                // than on IsLong: there is no ES vertex format for a 64-bit array, and this path
-                // only ever reaches glVertexAttribPointer/IPointer.
+                // Same narrowing as SyncToBackend (the long note lives there), with the draw's own
+                // fetch range standing in for the buffer extent a client array does not have. The
+                // upload starts at element 0 so `first` keeps indexing the stream, exactly as the
+                // unconverted upload below does. The test is on the storage rather than on IsLong
+                // because glVertexAttribFormat(GL_DOUBLE) is 64-bit data without being long.
                 if (attrib.IsLong || attrib.Type == DataType::Float64) {
-                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    const auto* sourceBase = reinterpret_cast<const Uint8*>(attrib.Offset);
+                    if (attrib.Type != DataType::Float64 || sourceBase == nullptr || attrib.Size < 1 ||
+                        attrib.Size > 4) {
+                        g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                        continue;
+                    }
+
+                    auto& bufferId = m_clientAttributeBufferIds[attribIndex];
+                    if (bufferId == 0) {
+                        g_GLESFuncs.glGenBuffers(1, &bufferId);
+                        if (bufferId == 0) {
+                            MGLOG_E_ONCE("Failed to create client-side vertex attribute upload buffer.");
+                            g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                            continue;
+                        }
+                    }
+
+                    const SizeT componentCount = static_cast<SizeT>(attrib.Size);
+                    const SizeT sourceElementSize = componentCount * sizeof(Double);
+                    // A client array only ever reaches here through a pointer call, whose stride 0
+                    // the frontend already resolved to the element size, so this is a guard rather
+                    // than a case (VertexAttribute::Stride).
+                    const SizeT sourceStride =
+                        attrib.Stride > 0 ? static_cast<SizeT>(attrib.Stride) : sourceElementSize;
+                    const SizeT elementCount = static_cast<SizeT>(first) + static_cast<SizeT>(count);
+                    Vector<Float> converted;
+                    NarrowDoubleStreamToFloat32(sourceBase, sourceStride, componentCount, elementCount, converted);
+
+                    BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
+                    g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER,
+                                             static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
+                                             converted.data(), GL_STREAM_DRAW);
+                    // GL ignores `normalized` for floating-point array types, so it is not
+                    // forwarded here either.
+                    g_GLESFuncs.glVertexAttribPointer(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
+                                                      static_cast<GLsizei>(componentCount * sizeof(Float)),
+                                                      nullptr);
+                    g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
                     continue;
                 }
 
@@ -1998,6 +2085,120 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+        }
+
+        Bool BackendVertexArrayObject::SyncFloat64AttributeAsFloat32(
+            Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib, Uint32 fetchBaseInstance) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (attribIndex >= m_convertedAttributeBufferIds.size() || attrib.Size < 1 || attrib.Size > 4) {
+                return false;
+            }
+            const auto& bufferObject = attrib.Buffer;
+            if (!bufferObject) {
+                // A client-memory 64-bit array is narrowed on the draw path instead, which is the
+                // only place its fetch range is known (SyncClientSideAttributesForDrawArrays).
+                return false;
+            }
+
+            // The frontend shadow is what the conversion reads, so a shader write that has not
+            // been pulled back yet has to land first. A no-op unless one is outstanding.
+            bufferObject->SyncGpuWrites();
+            const Uint8* const sourceBase = bufferObject->MappedData();
+            const SizeT sourceSize = bufferObject->GetSize();
+            if (sourceBase == nullptr || attrib.Offset >= sourceSize) {
+                return false;
+            }
+
+            const SizeT componentCount = static_cast<SizeT>(attrib.Size);
+            const SizeT sourceElementSize = componentCount * sizeof(Double);
+            const SizeT available = sourceSize - attrib.Offset;
+            if (available < sourceElementSize) {
+                return false;
+            }
+
+            // A resolved stride of zero is the binding model's "never advance" (see
+            // VertexAttribute::Stride): exactly one element exists and every vertex reads it, so
+            // exactly one is converted. Otherwise the array's extent is the source buffer's own -
+            // SyncToBackend has no draw range, and a whole-array conversion is affordable because
+            // it is memoised on the buffer's change serial and 64-bit arrays are vanishingly rare.
+            const Bool neverAdvances = attrib.Stride <= 0;
+            const SizeT sourceStride = neverAdvances ? sourceElementSize : static_cast<SizeT>(attrib.Stride);
+            const SizeT elementCount = neverAdvances ? 1 : ((available - sourceElementSize) / sourceStride) + 1;
+
+            // baseInstance shifts the ELEMENT index of a divisor'd array, and one element of the
+            // converted stream is componentCount floats. A zero stride never advances, so no
+            // shift can move it. A shift past the array's own extent has no source data at all.
+            const SizeT firstElement = (fetchBaseInstance != 0 && attrib.Divisor != 0 && !neverAdvances)
+                                           ? static_cast<SizeT>(fetchBaseInstance)
+                                           : 0;
+            if (firstElement >= elementCount) {
+                return false;
+            }
+
+            auto& stream = m_convertedAttributeStreams[attribIndex];
+            Uint& convertedBufferId = m_convertedAttributeBufferIds[attribIndex];
+            const Uint64 sourceLifetimeId = bufferObject->GetLifetimeId();
+            const Uint64 sourceChangeSerial = bufferObject->GetChangeSerial();
+            // A persistent map is written through the pointer, with no API call to bump the change
+            // serial (see BufferObject::SyncPersistentMappedRange), so its serial cannot prove the
+            // converted copy is still current and the memo is never trusted for one.
+            const Bool memoHit =
+                stream.valid && convertedBufferId != 0 && !bufferObject->IsBackendPersistentMapped() &&
+                stream.sourceLifetimeId == sourceLifetimeId && stream.sourceChangeSerial == sourceChangeSerial &&
+                stream.sourceOffset == attrib.Offset && stream.sourceStride == sourceStride &&
+                stream.componentCount == componentCount && stream.elementCount == elementCount;
+            if (!memoHit) {
+                if (convertedBufferId == 0) {
+                    g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
+                    if (convertedBufferId == 0) {
+                        MGLOG_E_ONCE("Failed to create the float32 scratch buffer for the 64-bit vertex array at "
+                                     "attribute %u.",
+                                     attribIndex);
+                        return false;
+                    }
+                }
+                Vector<Float> converted;
+                NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
+                                            converted);
+                BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
+                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER,
+                                         static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
+                                         converted.data(), GL_STREAM_DRAW);
+                stream.valid = true;
+                stream.sourceLifetimeId = sourceLifetimeId;
+                stream.sourceChangeSerial = sourceChangeSerial;
+                stream.sourceOffset = attrib.Offset;
+                stream.sourceStride = sourceStride;
+                stream.componentCount = componentCount;
+                stream.elementCount = elementCount;
+                MGLOG_D("DirectGLES: narrowed the 64-bit vertex array at attribute %u to %zu float32 element(s).",
+                        attribIndex, elementCount);
+            }
+
+            const SizeT convertedElementSize = componentCount * sizeof(Float);
+            if (neverAdvances) {
+                // Only the binding-point API can say "stride 0": glVertexAttribPointer's zero
+                // means "tightly packed" instead, i.e. the opposite, and would walk the driver
+                // straight off the end of the single converted element.
+                if (!HasVertexBindingApi()) {
+                    return false;
+                }
+                g_GLESFuncs.glVertexAttribFormat(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE, 0);
+                g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
+                g_GLESFuncs.glBindVertexBuffer(attribIndex, convertedBufferId, 0, 0);
+                return true;
+            }
+
+            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
+            // `normalized` is deliberately GL_FALSE rather than attrib.Normalized: GL ignores it
+            // for floating-point array types, and honouring it would scale the fetched values
+            // (KHR-GL43.vertex_attrib_binding.basic-input-case5 passes GL_TRUE and expects 10/20).
+            g_GLESFuncs.glVertexAttribPointer(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
+                                              static_cast<GLsizei>(convertedElementSize),
+                                              (const void*)(firstElement * convertedElementSize));
+            return true;
         }
 
         StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>

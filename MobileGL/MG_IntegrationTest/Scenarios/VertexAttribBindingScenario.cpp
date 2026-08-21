@@ -673,4 +673,86 @@ void main() {
         glDeleteProgram(program);
     }
 
+    // A GL_DOUBLE array is NARROWED to float32 and fetched, not dropped. No backend here has a
+    // 64-bit vertex format, but glVertexAttribFormat(GL_DOUBLE) is defined as "doubles in memory,
+    // converted to float" and the shader input is a plain vec4 either way, so nothing about fp64
+    // is needed - only the fetch conversion (KHR-GL43.vertex_attrib_binding.basic-input-case4).
+    // Every value here is exact in float32, so the capture is an equality test.
+    TEST_F(VertexAttribBindingScenario, DoubleArrayIsFetchedAtFloat32Precision) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        const double vertices[] = {100.0, 200.0, 300.0, 400.0};
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBindVertexBuffer(0, vbo, 0, 2 * static_cast<GLsizei>(sizeof(double)));
+        glVertexAttribFormat(1, 2, GL_DOUBLE, GL_FALSE, 0);
+        glVertexAttribBinding(1, 0);
+        glEnableVertexAttribArray(1);
+
+        const std::vector<float> data = CapturePoints(m_program, m_xfbo, 2, 1);
+        EXPECT_TRUE(Vec4Is(data, 0, 1, 100.0f, 200.0f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 1, 300.0f, 400.0f, 0.0f, 1.0f));
+
+        glDisableVertexAttribArray(1);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    // GL ignores `normalized` for floating-point array types, GL_DOUBLE included: the fetched
+    // values are the raw ones, not scaled into [0,1]. A conversion that forwarded the flag would
+    // return zeros here (KHR-GL43.vertex_attrib_binding.basic-input-case5).
+    TEST_F(VertexAttribBindingScenario, NormalizedIsIgnoredForDoubleArrays) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        const double vertices[] = {0.0, 10.0, 20.0, 0.0};
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBindVertexBuffer(0, vbo, 0, 4 * static_cast<GLsizei>(sizeof(double)));
+        glVertexAttribFormat(2, 4, GL_DOUBLE, GL_TRUE, 0);
+        glVertexAttribBinding(2, 0);
+        glEnableVertexAttribArray(2);
+
+        const std::vector<float> data = CapturePoints(m_program, m_xfbo, 1, 1);
+        EXPECT_TRUE(Vec4Is(data, 0, 2, 0.0f, 10.0f, 20.0f, 0.0f));
+
+        glDisableVertexAttribArray(2);
+        glDeleteBuffers(1, &vbo);
+    }
+
+    // The LONG form asks for more precision than any backend here can give and gets the same
+    // float32 stream. IsLong must not gate the narrowing off
+    // (KHR-GL43.vertex_attrib_binding.advanced-bindingUpdate feeds its dvec3 this way).
+    TEST_F(VertexAttribBindingScenario, LongDoubleArrayIsFetchedAtFloat32Precision) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        const double vertices[] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBindVertexBuffer(0, vbo, 0, 3 * static_cast<GLsizei>(sizeof(double)));
+        glVertexAttribLFormat(3, 3, GL_DOUBLE, 0);
+        glVertexAttribBinding(3, 0);
+        glEnableVertexAttribArray(3);
+
+        const std::vector<float> data = CapturePoints(m_program, m_xfbo, 2, 1);
+        EXPECT_TRUE(Vec4Is(data, 0, 3, 1.0f, 2.0f, 3.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 3, 4.0f, 5.0f, 6.0f, 1.0f));
+
+        glDisableVertexAttribArray(3);
+        glDeleteBuffers(1, &vbo);
+    }
+
 } // namespace MGITest
