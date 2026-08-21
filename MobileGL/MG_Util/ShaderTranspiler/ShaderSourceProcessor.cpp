@@ -1218,6 +1218,22 @@ namespace MobileGL {
             }
 
             namespace {
+                // The layout qualifiers a shader storage block may legally carry WITHOUT a
+                // value. GLSL 4.60 4.4.5: a buffer block's layout list holds the memory-layout
+                // and matrix-order identifiers below, plus binding/offset/align, which are
+                // spelled `name = value` and so never reach this test. Anything else bare in
+                // such a list is not GLSL - on the unexpanded text this scanner reads, it is a
+                // macro, and a macro may expand to the binding itself.
+                bool IsBufferBlockLayoutIdentifier(const String& text) {
+                    static const char* kLayoutIdentifiers[] = {
+                        "shared", "packed", "std140", "std430", "row_major", "column_major",
+                    };
+                    for (const char* identifier : kLayoutIdentifiers) {
+                        if (text == identifier) return true;
+                    }
+                    return false;
+                }
+
                 bool IsNonLayoutQualifierKeyword(const String& text) {
                     static const char* kQualifiers[] = {
                         "highp",    "mediump",  "lowp",     "precise",  "const",    "flat",
@@ -1569,12 +1585,27 @@ namespace MobileGL {
                 // Several layout(...) lists may precede one declaration and the later one wins -
                 // the same accumulate-then-consume shape FindShaderStorageBindingViolation uses.
                 long long binding = -1;
+                // Set when the run carries something this scanner cannot read as a binding but
+                // which MAY BE ONE. THE TEXT SCANNED HERE IS NOT MACRO-EXPANDED - MobileGL's
+                // preprocessing rewrites the source, it does not run the C preprocessor, so
+                // `#define`s and their uses both survive into it. `binding = SOME_MACRO` is
+                // therefore the common spelling in real shader packs, not an exotic one
+                // (Flywheel's indirect engine writes every one of its blocks that way), and
+                // reading "no literal" as "no binding" DEFAULTS AWAY a binding the shader
+                // really declared: every such block would be seeded to 0 and alias there. Doubt
+                // is resolved by dropping the name, which restores the pre-seeding behaviour
+                // for exactly the declarations this scanner cannot read.
+                bool unreadableQualifier = false;
                 long long literal = 0;
+                const auto endRun = [&binding, &unreadableQualifier]() {
+                    binding = -1;
+                    unreadableQualifier = false;
+                };
                 for (SizeT pos = 0; pos < count; ++pos) {
                     const String& text = tokens[pos].text;
                     if (text == "{") {
                         ++braceDepth;
-                        binding = -1;
+                        endRun();
                         continue;
                     }
                     if (text == "}") {
@@ -1594,11 +1625,27 @@ namespace MobileGL {
                                 ++parenDepth;
                             } else if (layoutToken == ")") {
                                 --parenDepth;
-                            } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < count &&
-                                       tokens[j + 1].text == "=" &&
-                                       ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
-                                binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
+                            } else if (parenDepth != 1) {
+                                // Nested parentheses belong to some entry's value expression,
+                                // which is not a literal - the entry itself is judged below.
+                            } else if (layoutToken == "binding" && j + 2 < count && tokens[j + 1].text == "=") {
+                                if (ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                    binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
+                                } else {
+                                    // A binding IS declared here; its value is just spelled as
+                                    // something this scanner does not evaluate (a macro, a
+                                    // const, an expression). The one thing it certainly is not
+                                    // is absent.
+                                    unreadableQualifier = true;
+                                }
                                 j += 2;
+                            } else if (IsIdentifierToken(tokens[j]) && !IsBufferBlockLayoutIdentifier(layoutToken) &&
+                                       !(j + 1 < count && tokens[j + 1].text == "=")) {
+                                // A bare identifier that is none of the layout qualifiers a
+                                // buffer block may legally carry. On unexpanded text that is a
+                                // macro, and a macro may well be the binding
+                                // (`layout(std430, MY_BINDING) buffer B {...}`).
+                                unreadableQualifier = true;
                             }
                             ++j;
                         }
@@ -1614,16 +1661,25 @@ namespace MobileGL {
                         // fall through and keep today's behaviour.
                         if (pos + 2 < count && IsIdentifierToken(tokens[pos + 1]) &&
                             tokens[pos + 2].text == "{") {
-                            (binding < 0 ? names : qualified).insert(tokens[pos + 1].text);
+                            // The token immediately before `buffer` is the last of the run. A
+                            // non-keyword identifier there is a macro standing in for the whole
+                            // qualifier list (`SSBO_QUALIFIER buffer B {...}`), so it may carry
+                            // the binding just as an unreadable layout entry may.
+                            const bool macroQualifier = pos > 0 && IsIdentifierToken(tokens[pos - 1]) &&
+                                                        !IsNonLayoutQualifierKeyword(tokens[pos - 1].text);
+                            const bool unqualified = binding < 0 && !unreadableQualifier && !macroQualifier;
+                            (unqualified ? names : qualified).insert(tokens[pos + 1].text);
                         }
-                        binding = -1;
+                        endRun();
                         continue;
                     }
 
                     // Qualifiers may sit between the layout list and the `buffer` keyword;
                     // anything else ends the run, so a binding never leaks onto an unrelated
                     // declaration - and, just as importantly, the ABSENCE of one never does.
-                    if (!IsNonLayoutQualifierKeyword(text)) binding = -1;
+                    // Ending the run clears the doubt with it: the unreadable qualifier belonged
+                    // to the declaration that just ended, not to whatever follows.
+                    if (!IsNonLayoutQualifierKeyword(text)) endRun();
                 }
                 for (const String& name : qualified) {
                     names.erase(name);
