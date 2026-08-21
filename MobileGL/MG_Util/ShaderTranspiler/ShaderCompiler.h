@@ -170,6 +170,18 @@ namespace MobileGL {
                 static bool LegalizeStorageBlockArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
                                                                      Vector<uint32_t>& outputBinary,
                                                                      bool enableSpirvValidation = false);
+                // Collapses each synthesized gl_AtomicCounterBlock_<N> into one uint array at
+                // offset 0, re-indexing every counter access to the element that used to sit at
+                // its byte offset. glslang preserves the application's layout(offset = N) as the
+                // member's Offset decoration, no std140/std430 layout can express a first member
+                // at a non-zero offset, and GLSL ES has no member layout(offset=) - so SPIRV-Cross
+                // throws and takes the whole stage with it. DirectGLES transpile path only.
+                // Copies the input through untouched when every counter block is already packed
+                // naturally, which is every shader that omits the offset qualifier. See
+                // FlattenAtomicCounterBlockPass.
+                static bool FlattenAtomicCounterBlockOffsetsForEssl(const Vector<Uint32>& inputBinary,
+                                                                    Vector<uint32_t>& outputBinary,
+                                                                    bool enableSpirvValidation = false);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,

@@ -5458,6 +5458,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &blockArrayIndexSpirv;
                 }
 
+                // glslang kept the application's layout(offset = N) on the atomic counters it
+                // lowered onto gl_AtomicCounterBlock_<N>, and no std140/std430 layout can put
+                // member 0 anywhere but offset 0 - so SPIRV-Cross throws ("cannot be expressed as
+                // neither std430 nor std140") and the stage never reaches the driver. Collapse the
+                // block into one uint array at offset 0 and re-index each counter to the element
+                // that used to be at its byte offset; the buffer then stays bound whole, which it
+                // has to (GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT is 32 on this device, so an
+                // 8-byte bind offset is not expressible). BEFORE SetAtomicCounterBlockBindings
+                // below, which only moves the block's BINDING and needs the block intact.
+                Vector<unsigned int> atomicCounterSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::FlattenAtomicCounterBlockOffsetsForEssl(
+                        *effectiveSpirv, atomicCounterSpirv, enableSpirvValidation) &&
+                    !atomicCounterSpirv.empty()) {
+                    effectiveSpirv = &atomicCounterSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 

@@ -42,6 +42,7 @@
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
 #include "SpirvPasses/LegalizeFragmentOutputIndexPass.h"
 #include "SpirvPasses/LegalizeStorageBlockArrayIndexPass.h"
+#include "SpirvPasses/FlattenAtomicCounterBlockPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 #include "source/opt/build_module.h"
@@ -1006,6 +1007,26 @@ namespace MobileGL {
                                  "this shader");
                 }
                 return true;
+            }
+
+            bool ShaderCompiler::FlattenAtomicCounterBlockOffsetsForEssl(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const bool enableSpirvValidation) {
+                using namespace spvtools;
+
+                // Detection gates everything: a module with no atomic counter, or one whose
+                // counters sit at their natural std430 offsets - which is every shader that omits
+                // the offset qualifier - pays one BuildModule and is handed back byte for byte.
+                if (!FlattenAtomicCounterBlockPass::BinaryHasOffsetAtomicCounterBlock(inputBinary)) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FlattenAtomicCounterBlockPass::CreateFlattenAtomicCounterBlockPass());
+
+                return RunOptimizerChecked("FlattenAtomicCounterBlockOffsetsForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary,
