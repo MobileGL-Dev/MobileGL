@@ -2556,6 +2556,9 @@ TEST_F(ProgramTest, UniformBlockProgramInterfaceMatchesTheUniformBlockList) {
     EXPECT_EQ(GetProgramResourceIndex(program, GL_UNIFORM_BLOCK, "AVeryLongStorageBlockName"), GL_INVALID_INDEX);
     EXPECT_NE(GetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "AVeryLongStorageBlockName"),
               GL_INVALID_INDEX);
+    // ... and the buffer variable by GL_BUFFER_VARIABLE, not GL_UNIFORM.
+    EXPECT_NE(GetProgramResourceIndex(program, GL_BUFFER_VARIABLE, "storageVec"), GL_INVALID_INDEX);
+    EXPECT_EQ(GetProgramResourceIndex(program, GL_UNIFORM, "storageVec"), GL_INVALID_INDEX);
 
     for (const char* blockName : {"Blk", "Blk2"}) {
         const GLuint interfaceIndex = GetProgramResourceIndex(program, GL_UNIFORM_BLOCK, blockName);
@@ -2576,6 +2579,66 @@ TEST_F(ProgramTest, UniformBlockProgramInterfaceMatchesTheUniformBlockList) {
         GetActiveUniformBlockiv(program, interfaceIndex, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &viaBlockiv);
         EXPECT_EQ(memberIndex, viaBlockiv) << blockName;
     }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// GL 4.6 core 7.3.1 / 7.6: a buffer variable is not a uniform - it lives in the
+// GL_BUFFER_VARIABLE interface - so it must not appear in GL_ACTIVE_UNIFORMS,
+// glGetActiveUniform, glGetUniformIndices or glGetActiveUniformsiv. An ATOMIC COUNTER, by
+// contrast, IS a uniform (of type GL_UNSIGNED_INT_ATOMIC_COUNTER) and must stay enumerated.
+TEST_F(ProgramTest, ActiveUniformsExcludeBufferVariablesButKeepAtomicCounters) {
+    GLuint program = LinkVsFsProgram(kMixedBlockKindsVs, kMixedBlockKindsFs);
+
+    GLint activeUniforms = -1;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    ASSERT_EQ(activeUniforms, 4)
+        << "uboVec, uboVec2[0], uScale and counter - storageVec is a buffer variable";
+
+    // Neither spelling of the buffer variable is a uniform index.
+    EXPECT_EQ(UniformIndexByName(program, "storageVec"), GL_INVALID_INDEX);
+    EXPECT_EQ(UniformIndexByName(program, "AVeryLongStorageBlockName.storageVec"), GL_INVALID_INDEX);
+    // The location half of the same rule (already landed) must stay consistent with it.
+    EXPECT_EQ(GetUniformLocation(program, "storageVec"), -1);
+
+    char nameBuf[128] = "";
+    for (GLint i = 0; i < activeUniforms; ++i) {
+        GLsizei nameLen = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        GetActiveUniform(program, static_cast<GLuint>(i), sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
+        EXPECT_EQ(std::string(nameBuf).find("storageVec"), std::string::npos)
+            << "buffer variable enumerated as active uniform " << i << ": " << nameBuf;
+    }
+
+    // The counter is still a uniform, still reports the atomic-counter type, has no owning
+    // uniform block, and still points at its atomic counter BUFFER.
+    const GLuint counter = UniformIndexByName(program, "counter");
+    ASSERT_NE(counter, GL_INVALID_INDEX);
+    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_TYPE),
+              static_cast<GLint>(GL_UNSIGNED_INT_ATOMIC_COUNTER));
+    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_BLOCK_INDEX), -1);
+    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX), 0);
+    EXPECT_EQ(QueryUniformiv(program, counter, GL_UNIFORM_OFFSET), 0);
+    EXPECT_EQ(GetUniformLocation(program, "counter"), -1);
+
+    // GL_ACTIVE_ATOMIC_COUNTER_BUFFERS indexes into the GL uniform index space, so the
+    // counter index it reports has to be the one glGetUniformIndices just handed out.
+    GLint counterBuffers = -1;
+    GetProgramiv(program, GL_ACTIVE_ATOMIC_COUNTER_BUFFERS, &counterBuffers);
+    ASSERT_EQ(counterBuffers, 1);
+    GLint counterCount = -1;
+    GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTERS, &counterCount);
+    ASSERT_EQ(counterCount, 1);
+    GLint counterIndex = -1;
+    GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES,
+                                   &counterIndex);
+    EXPECT_EQ(static_cast<GLuint>(counterIndex), counter);
+    GLint counterBinding = -1;
+    GetActiveAtomicCounterBufferiv(program, 0, GL_ATOMIC_COUNTER_BUFFER_BINDING, &counterBinding);
+    EXPECT_EQ(counterBinding, 1);
+
+    // The default-block uniform is untouched by either filter.
+    EXPECT_NE(GetUniformLocation(program, "uScale"), -1);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 

@@ -1081,10 +1081,30 @@ namespace MobileGL::MG_State::GLState {
         const auto isNamedBlockMember = [&isGlobalUboMember](const glslang::TObjectReflection& uniform) {
             return uniform.index >= 0 && !isGlobalUboMember(uniform);
         };
+        // A member of a BUFFER block is a buffer variable, not a uniform: GL 4.6 core 7.3.1
+        // gives it the GL_BUFFER_VARIABLE interface and 7.6 keeps it out of GL_ACTIVE_UNIFORMS,
+        // glGetActiveUniform, glGetUniformIndices and glGetActiveUniformsiv. The relaxed parse
+        // reflects it as a uniform anyway (no EShReflectionSeparateBuffers), so drop it from the
+        // GL index space here - the same place the dead default-block uniforms are dropped, and
+        // the counterpart of the location half already handled by isNamedBlockMember below.
+        //
+        // Atomic counters are NOT in this set even though their synthesized owner is a buffer
+        // block: an atomic_uint IS a uniform (of type GL_UNSIGNED_INT_ATOMIC_COUNTER), and
+        // KHR-GL43.shader_atomic_counters.basic-program-query enumerates it as one.
+        const auto isBufferVariable = [this](const glslang::TObjectReflection& uniform) {
+            if (uniform.index < 0 || uniform.index >= artifacts.program->getNumUniformBlocks()) return false;
+            return IsStorageBlock(artifacts.program->getUniformBlock(uniform.index));
+        };
         for (Int i = 0; i < tProgramUniformCount; i++) {
             const auto& uniform = artifacts.program->getUniform(i);
             if (isGlobalUboMember(uniform) && uniform.stages == 0) {
                 MGLOG_D("ProgramObject %u: Reflection - dead default-block uniform '%s' filtered from the GL "
+                        "surface",
+                        in.externalIndex, uniform.name.c_str());
+                continue;
+            }
+            if (isBufferVariable(uniform)) {
+                MGLOG_D("ProgramObject %u: Reflection - buffer variable '%s' filtered from the GL uniform "
                         "surface",
                         in.externalIndex, uniform.name.c_str());
                 continue;

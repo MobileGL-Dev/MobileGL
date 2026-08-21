@@ -328,15 +328,25 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                                              const ProgramObject::LinkArtifacts& reflection, Model& model,
                                              const Vector<BlockKind>& blockKind,
                                              const Vector<Int>& blockInterfaceIndex) {
-            const Uint uniformCount = program.GetUniformCount();
-            for (Uint glIndex = 0; glIndex < uniformCount; ++glIndex) {
-                const Int tIndex = program.TProgramUniformIndex(glIndex);
+            // Walks the TPROGRAM uniform space, not the GL one. A buffer variable is not a GL
+            // uniform (GL 4.6 core 7.3.1) and DoReflection therefore keeps it out of the GL
+            // active-uniform index space - but GL_BUFFER_VARIABLE still has to enumerate it, and
+            // this is the only place that does. GL uniforms keep their GL index as their
+            // GL_UNIFORM resource index: the GL space is a subsequence of this one, so pushing
+            // the GL-visible entries in this order preserves the correspondence.
+            const Int tUniformCount = static_cast<Int>(reflection.uniformReflection.size());
+            for (Int tIndex = 0; tIndex < tUniformCount; ++tIndex) {
                 const auto& refl = ProgramObject::UniformAtIn(reflection, tIndex);
                 const auto& type = refl.type;
                 const Int owner = refl.index;
                 const BlockKind kind = (owner >= 0 && owner < static_cast<Int>(blockKind.size()))
                                            ? blockKind[owner]
                                            : BlockKind::GlobalUbo;
+                const Int glIndex = program.GlUniformIndexFromTProgram(tIndex);
+                // Everything except a buffer variable is enumerated through the GL space, so a
+                // uniform the relaxed parse swept out of it (a declared-but-dead default-block
+                // one) stays out of GL_UNIFORM too.
+                if (kind != BlockKind::Storage && glIndex < 0) continue;
 
                 Resource resource;
                 resource.name = refl.name;
@@ -369,11 +379,12 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                     resource.atomicCounterBufferIndex = blockInterfaceIndex[owner];
                     resource.location = -1;
                 } else {
-                    resource.blockIndex = program.GetActiveUniformBlockIndex(glIndex);
-                    resource.offset = program.GetActiveUniformOffset(glIndex);
-                    resource.arrayStride = program.GetActiveUniformArrayStride(glIndex);
-                    resource.matrixStride = program.GetActiveUniformMatrixStride(glIndex);
-                    resource.isRowMajor = program.GetActiveUniformIsRowMajor(glIndex);
+                    const Uint glUniformIndex = static_cast<Uint>(glIndex);
+                    resource.blockIndex = program.GetActiveUniformBlockIndex(glUniformIndex);
+                    resource.offset = program.GetActiveUniformOffset(glUniformIndex);
+                    resource.arrayStride = program.GetActiveUniformArrayStride(glUniformIndex);
+                    resource.matrixStride = program.GetActiveUniformMatrixStride(glUniformIndex);
+                    resource.isRowMajor = program.GetActiveUniformIsRowMajor(glUniformIndex);
                     // A member of a named uniform block has no location, whatever the
                     // frontend's own location table says (it hands one out to every uniform
                     // so glUniform* can address block members through the global UBO).
