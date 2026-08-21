@@ -3169,9 +3169,9 @@ void main() { fragColor = vec4(pow(uBase, 2.2), 1.0); }
 //   Layer 1 - the same shader object re-sourced with byte-identical text keeps its
 //             compiled state, and glCompileShader on it is a no-op.
 //   Layer 2 - two DIFFERENT shader objects holding byte-identical text share the
-//             source-only half of the pipeline (preprocess + lexical checks +
-//             side-channel extraction) through the context's ShaderPreprocessCache,
-//             while each still gets its own glslang parse.
+//             source-only half of the pipeline (preprocess + the lexical rejection
+//             checks) through the context's ShaderPreprocessCache, while each still
+//             gets its own glslang parse.
 // ---------------------------------------------------------------------------
 namespace {
     const char* kP0bVs = R"(#version 330 core

@@ -155,7 +155,7 @@ namespace MobileGL::MG_State::GLState {
         //
         // The failure case is covered too: the info log stays queryable because nothing is
         // cleared. And if the stored TShader already fed a link, the no-op leaves
-        // preprocessedSource and both side-channel maps intact, which is precisely what
+        // preprocessedSource and the explicit-location snapshot intact, which is precisely what
         // ClaimParsedShader's on-demand re-parse needs - a real recompile would have handed
         // the next link a fresh parse, the no-op hands it a fresh re-parse of the identical
         // source instead. Same result, one parse either way.

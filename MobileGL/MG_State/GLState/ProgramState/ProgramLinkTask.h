@@ -120,10 +120,9 @@ namespace MobileGL::MG_State::GLState {
             // L1 shader-translation memo key for this program's SPIR-V (see
             // MG_Util/ShaderTranspiler/TranslationCache.h). Built HERE, at the tail of phase
             // A, and not by phase B - two reasons, both structural:
-            //   * the key covers the four link-time request maps and the merged opaque
-            //     bindings, and one of those (explicitOpaqueUniformBindings) lives in
-            //     `artifacts`, which phase B is forbidden to read because the GL-thread join
-            //     moves it out from under phase B;
+            //   * the key covers the three link-time request maps, which live in `in` - and
+            //     it has to be built before the link, because a hit is what makes the link
+            //     unnecessary;
             //   * built once, it serves both the lookup and the insert, so the program's
             //     sources are copied into the blob exactly once per link.
             // Invalid (null blob) when the cache is disabled, or when a stage arrived
@@ -168,10 +167,11 @@ namespace MobileGL::MG_State::GLState {
         // with any other, and an attached shader that failed to compile. Split out of
         // ConsumeShaders so they still run - in the same order, with the same diagnostics -
         // BEFORE the L1 memo is consulted, rather than behind a hit that would skip them.
-        // The two lexical side channels the relaxed parse cannot provide, merged across
-        // stages. Reads the compile snapshots only, so it runs before any parse - the merged
-        // opaque bindings are part of the L1 memo key. Sets artifacts.infoLog and leaves
-        // linkStatus false when two stages disagree on an explicit uniform location.
+        // Merges the per-stage explicit default-block uniform locations glslang recorded at
+        // compile time. Reads the compile snapshots only, so it runs before any parse - and
+        // before the L1 memo, so a hit can never paper over a program that must fail to link.
+        // Sets artifacts.infoLog and leaves linkStatus false when two stages disagree on an
+        // explicit uniform location.
         void MergeShaderSideChannels();
         Bool ValidateAttachedShaders();
         Bool ConsumeShaders(Vector<SharedPtr<glslang::TShader>>& outShaders);

@@ -877,7 +877,7 @@ TEST_F(AsyncSpirvPhaseTest, AsyncOffAndAsyncOnProduceIdenticalSpirvAndShadow) {
     // The ASYNC arm runs FIRST, deliberately. Both arms must compile the same source text for
     // their SPIR-V to be comparable, and the first arm to run is the one that pays for the
     // cold path: it misses the per-context ShaderPreprocessCache and therefore executes
-    // PreprocessShaderSource, the reserved-identifier scan and both lexical extractions. Run
+    // PreprocessShaderSource and the lexical rejection scans. Run
     // the sync arm first and the async arm becomes a cache hit that never runs any of that on
     // a worker - which is exactly the half this case exists to compare.
     const SingleWorkerScope oneWorker;
