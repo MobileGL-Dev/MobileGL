@@ -3758,7 +3758,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // glTexImage2D(GL_TEXTURE_1D_ARRAY, w, layers) writes it instead - layers on y - so the
         // two views have to be told apart here. Measuring y against the LAYER count is what let
         // srcY = 14 on a 16-wide, 16-layer 1D array come back GL_NO_ERROR
-        // (KHR-GL43.copy_image.non_existent_mipmap / the src_test_case y variants); the CTS is
+        // (KHR-GL43.copy_image.exceeding_boundaries, the src_test_case y variants); the CTS is
         // unambiguous about the convention, forcing height = 1 for 1D and 1D_ARRAY and listing
         // 1D_ARRAY as multilayer.
         //
