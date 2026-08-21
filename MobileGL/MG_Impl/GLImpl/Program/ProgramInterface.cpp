@@ -305,13 +305,17 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             // GL_UNIFORM_BLOCK keeps the index space glUniformBlockBinding and
             // glGetActiveUniformBlockiv already use, so an index handed out here is usable
             // with them (which is exactly what the CTS does).
-            const Int glBlockCount = program.GetActiveUniformBlocksCount();
+            const Int glBlockCount = program.GetGlUniformBlockCount();
             for (Int glIndex = 0; glIndex < glBlockCount; ++glIndex) {
+                // The block-space index the block-keyed accessors want; the two spaces differ
+                // whenever the program also has a storage or atomic counter block, which
+                // glslang files under the same reflection list (no EShReflectionSeparateBuffers).
+                const Int blockIndex = program.BlockIndexFromGlUniformBlock(static_cast<Uint>(glIndex));
                 Resource resource;
-                resource.name = program.GetUniformBlockName(glIndex);
-                resource.bufferBinding = static_cast<GLint>(program.GetUniformBlockBinding(glIndex));
-                resource.bufferDataSize = static_cast<GLint>(program.GetUBOSizeAt(glIndex));
-                const Int tIndex = program.TProgramBlockIndex(static_cast<Uint>(glIndex));
+                resource.name = program.GetUniformBlockName(static_cast<Uint>(blockIndex));
+                resource.bufferBinding = static_cast<GLint>(program.GetUniformBlockBinding(static_cast<Uint>(blockIndex)));
+                resource.bufferDataSize = static_cast<GLint>(program.GetUBOSizeAt(static_cast<Uint>(blockIndex)));
+                const Int tIndex = program.TProgramBlockIndex(static_cast<Uint>(blockIndex));
                 if (tIndex >= 0 && tIndex < blockCount) {
                     resource.stages = UniformBlockStages(reflection.blockReflection[tIndex],
                                                       stagesFromMembers, tIndex);
@@ -324,15 +328,25 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                                              const ProgramObject::LinkArtifacts& reflection, Model& model,
                                              const Vector<BlockKind>& blockKind,
                                              const Vector<Int>& blockInterfaceIndex) {
-            const Uint uniformCount = program.GetUniformCount();
-            for (Uint glIndex = 0; glIndex < uniformCount; ++glIndex) {
-                const Int tIndex = program.TProgramUniformIndex(glIndex);
+            // Walks the TPROGRAM uniform space, not the GL one. A buffer variable is not a GL
+            // uniform (GL 4.6 core 7.3.1) and DoReflection therefore keeps it out of the GL
+            // active-uniform index space - but GL_BUFFER_VARIABLE still has to enumerate it, and
+            // this is the only place that does. GL uniforms keep their GL index as their
+            // GL_UNIFORM resource index: the GL space is a subsequence of this one, so pushing
+            // the GL-visible entries in this order preserves the correspondence.
+            const Int tUniformCount = static_cast<Int>(reflection.uniformReflection.size());
+            for (Int tIndex = 0; tIndex < tUniformCount; ++tIndex) {
                 const auto& refl = ProgramObject::UniformAtIn(reflection, tIndex);
                 const auto& type = refl.type;
                 const Int owner = refl.index;
                 const BlockKind kind = (owner >= 0 && owner < static_cast<Int>(blockKind.size()))
                                            ? blockKind[owner]
                                            : BlockKind::GlobalUbo;
+                const Int glIndex = program.GlUniformIndexFromTProgram(tIndex);
+                // Everything except a buffer variable is enumerated through the GL space, so a
+                // uniform the relaxed parse swept out of it (a declared-but-dead default-block
+                // one) stays out of GL_UNIFORM too.
+                if (kind != BlockKind::Storage && glIndex < 0) continue;
 
                 Resource resource;
                 resource.name = refl.name;
@@ -365,11 +379,12 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                     resource.atomicCounterBufferIndex = blockInterfaceIndex[owner];
                     resource.location = -1;
                 } else {
-                    resource.blockIndex = program.GetActiveUniformBlockIndex(glIndex);
-                    resource.offset = program.GetActiveUniformOffset(glIndex);
-                    resource.arrayStride = program.GetActiveUniformArrayStride(glIndex);
-                    resource.matrixStride = program.GetActiveUniformMatrixStride(glIndex);
-                    resource.isRowMajor = program.GetActiveUniformIsRowMajor(glIndex);
+                    const Uint glUniformIndex = static_cast<Uint>(glIndex);
+                    resource.blockIndex = program.GetActiveUniformBlockIndex(glUniformIndex);
+                    resource.offset = program.GetActiveUniformOffset(glUniformIndex);
+                    resource.arrayStride = program.GetActiveUniformArrayStride(glUniformIndex);
+                    resource.matrixStride = program.GetActiveUniformMatrixStride(glUniformIndex);
+                    resource.isRowMajor = program.GetActiveUniformIsRowMajor(glUniformIndex);
                     // A member of a named uniform block has no location, whatever the
                     // frontend's own location table says (it hands one out to every uniform
                     // so glUniform* can address block members through the global UBO).
@@ -388,12 +403,16 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                         static_cast<GLuint>(i));
                 }
             }
-            for (SizeT blockIndex = 0; blockIndex < model.uniformBlocks.size(); ++blockIndex) {
+            for (SizeT glBlockIndex = 0; glBlockIndex < model.uniformBlocks.size(); ++glBlockIndex) {
                 // Members of an arrayed block are reflected once, against instance [0].
-                const Int owner = static_cast<Int>(program.GetUniformBlockMemberOwnerIndex(static_cast<Uint>(blockIndex)));
+                // GetUniformBlockMemberOwnerIndex takes and answers BLOCK indices, while
+                // Resource::blockIndex is a GL_UNIFORM_BLOCK index, so translate both ways.
+                const Int blockIndex = program.BlockIndexFromGlUniformBlock(static_cast<Uint>(glBlockIndex));
+                const Int owner = program.GlUniformBlockIndexFromBlock(
+                    static_cast<Int>(program.GetUniformBlockMemberOwnerIndex(static_cast<Uint>(blockIndex))));
                 for (SizeT i = 0; i < model.uniforms.size(); ++i) {
                     if (model.uniforms[i].blockIndex == owner) {
-                        model.uniformBlocks[blockIndex].activeVariables.push_back(static_cast<GLuint>(i));
+                        model.uniformBlocks[glBlockIndex].activeVariables.push_back(static_cast<GLuint>(i));
                     }
                 }
             }

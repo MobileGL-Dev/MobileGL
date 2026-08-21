@@ -129,6 +129,34 @@ namespace {
         return element;
     }
 
+    // Blocks come out of reflection in three kinds and only one of them is a GL uniform block.
+    // The same split ProgramInterface::ClassifyBlock makes (it reads the flattened
+    // TypeFacts::isBuffer, which is this very qualifier), reachable here from the live TProgram
+    // because the block index spaces are built before the reflection snapshot exists.
+
+    // The transpiler lowers every atomic_uint onto a synthesized "gl_AtomicCounterBlock_<binding>"
+    // buffer block, which reflection then reports as an ordinary block. It is not one: GL
+    // enumerates it through GL_ACTIVE_ATOMIC_COUNTER_BUFFERS instead.
+    static MobileGL::Bool IsAtomicCounterBlockName(const MobileGL::String& name) {
+        namespace Transpiler = MobileGL::MG_Util::ShaderTranspiler;
+        const MobileGL::SizeT prefixLength = std::strlen(Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX);
+        return name.compare(0, prefixLength, Transpiler::ATOMIC_COUNTER_BLOCK_PREFIX) == 0;
+    }
+
+    // A shader storage block: GL enumerates it through GL_SHADER_STORAGE_BLOCK and its members
+    // through GL_BUFFER_VARIABLE. The counter blocks above are buffer blocks too, hence the
+    // exclusion. A block whose type reflection did not survive is treated as a uniform block,
+    // which is what every caller assumed before this classification existed.
+    static MobileGL::Bool IsStorageBlock(const glslang::TObjectReflection& block) {
+        if (IsAtomicCounterBlockName(block.name)) return false;
+        const glslang::TType* type = block.getType();
+        return type != nullptr && type->getQualifier().storage == glslang::EvqBuffer;
+    }
+
+    static MobileGL::Bool IsGlUniformBlock(const glslang::TObjectReflection& block) {
+        return !IsAtomicCounterBlockName(block.name) && !IsStorageBlock(block);
+    }
+
     // GL 4.6 core 7.7 / ARB_shader_atomic_counters: within one binding no two atomic counters
     // may occupy the same bytes, every offset is a multiple of 4, and no counter may reach past
     // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE. glslang enforces all three in fixOffset(), which the
@@ -1009,6 +1037,30 @@ namespace MobileGL::MG_State::GLState {
             artifacts.glBlockIndexToTProgram.push_back(i);
         }
 
+        // The GL_UNIFORM_BLOCK subsequence of that space. MobileGL does not pass
+        // EShReflectionSeparateBuffers to buildReflection above, so glslang files BUFFER blocks
+        // under indexToUniformBlock as well and the list just built also holds every shader
+        // storage block and every synthesized gl_AtomicCounterBlock_N. GL 4.6 core 7.6 says
+        // GL_ACTIVE_UNIFORM_BLOCKS / glGetActiveUniformBlockiv / glGetUniformBlockIndex see
+        // uniform blocks and nothing else; an atomic counter buffer is enumerated by
+        // GL_ACTIVE_ATOMIC_COUNTER_BUFFERS and a storage block by GL_SHADER_STORAGE_BLOCK.
+        //
+        // A SECOND space rather than a filter of the first, deliberately: the block space is
+        // what the backends walk (DirectGLES hands out one ESSL uniform-buffer binding point per
+        // entry as it goes) and what "tProgramBlockIndexToGl[i] < 0 means MGL_GLOBAL_UBO" reads,
+        // and neither may move.
+        artifacts.blockIndexToGlUniformBlock.assign(artifacts.glBlockIndexToTProgram.size(), -1);
+        artifacts.glUniformBlockIndexToBlock.clear();
+        for (SizeT blockIndex = 0; blockIndex < artifacts.glBlockIndexToTProgram.size(); ++blockIndex) {
+            const auto& block = artifacts.program->getUniformBlock(artifacts.glBlockIndexToTProgram[blockIndex]);
+            if (!IsGlUniformBlock(block)) continue;
+            artifacts.blockIndexToGlUniformBlock[blockIndex] =
+                static_cast<Int>(artifacts.glUniformBlockIndexToBlock.size());
+            artifacts.glUniformBlockIndexToBlock.push_back(static_cast<Int>(blockIndex));
+        }
+        MGLOG_D("ProgramObject %u: Reflection - %zu block(s), %zu of them GL uniform blocks", in.externalIndex,
+                artifacts.glBlockIndexToTProgram.size(), artifacts.glUniformBlockIndexToBlock.size());
+
         // ------------ Uniforms (GL Plain) ----------------
         // The relaxed parse sweeps every DECLARED default-block uniform into
         // MGL_GLOBAL_UBO whether or not any stage reads it. GL requires a
@@ -1029,10 +1081,30 @@ namespace MobileGL::MG_State::GLState {
         const auto isNamedBlockMember = [&isGlobalUboMember](const glslang::TObjectReflection& uniform) {
             return uniform.index >= 0 && !isGlobalUboMember(uniform);
         };
+        // A member of a BUFFER block is a buffer variable, not a uniform: GL 4.6 core 7.3.1
+        // gives it the GL_BUFFER_VARIABLE interface and 7.6 keeps it out of GL_ACTIVE_UNIFORMS,
+        // glGetActiveUniform, glGetUniformIndices and glGetActiveUniformsiv. The relaxed parse
+        // reflects it as a uniform anyway (no EShReflectionSeparateBuffers), so drop it from the
+        // GL index space here - the same place the dead default-block uniforms are dropped, and
+        // the counterpart of the location half already handled by isNamedBlockMember below.
+        //
+        // Atomic counters are NOT in this set even though their synthesized owner is a buffer
+        // block: an atomic_uint IS a uniform (of type GL_UNSIGNED_INT_ATOMIC_COUNTER), and
+        // KHR-GL43.shader_atomic_counters.basic-program-query enumerates it as one.
+        const auto isBufferVariable = [this](const glslang::TObjectReflection& uniform) {
+            if (uniform.index < 0 || uniform.index >= artifacts.program->getNumUniformBlocks()) return false;
+            return IsStorageBlock(artifacts.program->getUniformBlock(uniform.index));
+        };
         for (Int i = 0; i < tProgramUniformCount; i++) {
             const auto& uniform = artifacts.program->getUniform(i);
             if (isGlobalUboMember(uniform) && uniform.stages == 0) {
                 MGLOG_D("ProgramObject %u: Reflection - dead default-block uniform '%s' filtered from the GL "
+                        "surface",
+                        in.externalIndex, uniform.name.c_str());
+                continue;
+            }
+            if (isBufferVariable(uniform)) {
+                MGLOG_D("ProgramObject %u: Reflection - buffer variable '%s' filtered from the GL uniform "
                         "surface",
                         in.externalIndex, uniform.name.c_str());
                 continue;
@@ -1472,14 +1544,21 @@ namespace MobileGL::MG_State::GLState {
         }
 
         // ---------- UBO ----------
-        // GL-visible blocks only (MGL_GLOBAL_UBO was filtered out above).
+        // The BLOCK space (MGL_GLOBAL_UBO was filtered out above, storage and atomic counter
+        // blocks were not): these tables are what the backends index, and what the GL
+        // uniform-block entry points reach after translating out of the GL_UNIFORM_BLOCK space.
         const Int uboCount = static_cast<Int>(artifacts.glBlockIndexToTProgram.size());
         MGLOG_D("ProgramObject %u: Reflection - uniform block count (UBO) = %d", in.externalIndex, uboCount);
         artifacts.uniformBlockBinding.resize(uboCount, -1);
         for (Int i = 0; i < uboCount; i++) {
             auto& ubo = artifacts.program->getUniformBlock(artifacts.glBlockIndexToTProgram[i]);
-            artifacts.uniformBlockNameMaxLength =
-                std::max(artifacts.uniformBlockNameMaxLength, (Int)ubo.name.length());
+            // GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH is measured over the names
+            // glGetActiveUniformBlockName can report, so only the GL uniform blocks count -
+            // a long storage-block name must not size the caller's buffer.
+            if (artifacts.blockIndexToGlUniformBlock[i] >= 0) {
+                artifacts.uniformBlockNameMaxLength =
+                    std::max(artifacts.uniformBlockNameMaxLength, (Int)ubo.name.length());
+            }
             artifacts.uniformBlockIndexByName[ubo.name] = i;
             // if there's binding defined in shader as layout(binding = ...),
             // retrieve it here.

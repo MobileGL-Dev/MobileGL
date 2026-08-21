@@ -331,6 +331,8 @@ namespace MobileGL::MG_State::GLState {
         artifacts.tProgramUniformIndexToGl.clear();
         artifacts.glBlockIndexToTProgram.clear();
         artifacts.tProgramBlockIndexToGl.clear();
+        artifacts.glUniformBlockIndexToBlock.clear();
+        artifacts.blockIndexToGlUniformBlock.clear();
         artifacts.linkedExplicitUniformLocations.clear();
         artifacts.uniformInitialValues.clear();
         artifacts.uniformIndexInTProgram.clear();
