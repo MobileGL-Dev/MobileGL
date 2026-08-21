@@ -373,6 +373,13 @@ namespace MobileGL::MG_State::GLState {
             const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return -1;
             if (!uniform.type.isArray) return 0;
+            // An atomic counter reaches the std140 branch below only because the transpiler
+            // lowered it onto a synthesized block; the buffer it actually addresses is an
+            // ATOMIC COUNTER buffer, whose elements are tightly packed uints (GL 4.6 core 7.6:
+            // "each counter is a single 4-byte value"). Its array stride is therefore 4, not the
+            // vec4 round-up std140 would apply
+            // (KHR-GL43.shader_atomic_counters.basic-program-query wants 4 for ac_counter67[0]).
+            if (IsActiveUniformAtomicCounter(index)) return 4;
             if (uniform.type.isMatrix) {
                 const bool rowMajor = GetActiveUniformIsRowMajor(index) != 0;
                 const int vectors = rowMajor ? uniform.type.matrixRows : uniform.type.matrixCols;
@@ -1125,7 +1132,20 @@ namespace MobileGL::MG_State::GLState {
             Vector<Int> uniformBlockBinding;
             // glShaderStorageBlockBinding overrides, keyed by GL block name. See
             // SetShaderStorageBlockBinding for why this one is by name and not by index.
+            //
+            // ALSO SEEDED AT LINK, by ProgramLinkTask::SeedDefaultStorageBlockBindings, with the
+            // GL-mandated binding 0 for every storage block whose shader declared no
+            // layout(binding = N). Those blocks have no other way to be told apart from a block
+            // that declared one: glslang's IO mapper invents a binding and writes it into the
+            // qualifier, so the reflection reports the invention. A seed is therefore "GL's
+            // default binding for this block", and a later glShaderStorageBlockBinding simply
+            // overwrites it - default and rebind travel one path.
             UnorderedMap<String, Int> shaderStorageBlockBinding;
+            // Block type names of the storage blocks the program's shaders declared with NO
+            // layout(binding = N), merged across stages by MergeShaderSideChannels. Input to the
+            // seeding above; see ExtractStorageBlocksWithoutExplicitBinding for why it has to be
+            // captured lexically.
+            std::set<String> storageBlocksWithoutBinding;
 
             Uint activeUniformCount = 0;
             Uint maxUniformLocation = 0;

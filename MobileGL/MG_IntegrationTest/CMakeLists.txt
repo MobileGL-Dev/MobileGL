@@ -81,11 +81,14 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageLoadStoreSsoScenario.cpp
     Scenarios/ImageTargetKindScenario.cpp
     Scenarios/ImageFormatQualifierScenario.cpp
+    Scenarios/NonCoreImageFormatScenario.cpp
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/IoBlockNameCollisionScenario.cpp
     Scenarios/TessellationDrawModeScenario.cpp
+    Scenarios/GeometryDrawModeScenario.cpp
+    Scenarios/FormatlessImageBakeScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp

@@ -2282,6 +2282,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
+            // The storage this re-mints may also be CHANNEL WIDENED (a GL_RG32F image is not
+            // bindable on this driver at all, so it becomes a GL_RGBA32F carrying two channels),
+            // and a widened texture's sampled view has to answer the channels the logical format
+            // does not have with 0 and 1 - which is a swizzle. The parameter sync is gated on the
+            // frontend's params version, which this transition does not move, so without the
+            // override an application that never touched GL_TEXTURE_SWIZZLE_* would keep the
+            // driver at its defaults and sample the carrier's surplus channels raw.
+            m_forceTextureParamsResync = true;
         }
 
         void BackendTextureObject::RecreateBackendTexture() {
@@ -2579,7 +2587,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                 Vector<Uint8>& widenedData, Bool integerData) {
             Uint8 oneBits[8] = {};
             SizeT componentSize = 0;
-            if (componentCount != 3 || data == nullptr || byteSize == 0 ||
+            // One and two source components as well as three: the image-format widening carries
+            // GL_R8UI in a GL_RGBA8UI and GL_RG32F in a GL_RGBA32F (see
+            // TextureImpl::GetImageBindableStorageWidening), and their surplus channels take the
+            // same values the three-channel case gives its single added one - zeroes, and the
+            // format's implied 1 in alpha.
+            if (componentCount == 0 || componentCount > 3 || data == nullptr || byteSize == 0 ||
                 !GetUploadComponentOneBits(uploadType, integerData, oneBits, &componentSize)) {
                 return data;
             }
@@ -2606,7 +2619,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Memcpy(dst, src, srcTexelBytes);
                     src += srcTexelBytes;
                 }
-                Memcpy(dst + srcTexelBytes, oneBits, componentSize);
+                // ALWAYS at component 3, never at `componentCount`: GL's implied 1 is the ALPHA
+                // channel, and a one- or two-component source leaves the channels between it and
+                // alpha at the zero `assign` already wrote. For three components the two
+                // expressions coincide, which is what this used to be written as.
+                Memcpy(dst + componentSize * 3, oneBits, componentSize);
             }
             return widenedData.data();
         }
@@ -2687,6 +2704,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              : byteSize;
             return PrepareChannelWidenedUpload(componentCount, texelSize, uploadData, uploadByteSize, uploadType,
                                                widenedData, IsIntegerWidenableFormat(format));
+        }
+
+        // The transfer half of the image-format widening: an image-bindable texture whose ES
+        // storage was widened to a core carrier is described to the driver as a four-component
+        // transfer, so its one- or two-component client data has to be repacked the same way the
+        // three-channel colour-renderable widening repacks its own.
+        //
+        // Composes with PrepareFallbackUpload rather than replacing it, and the composition is a
+        // no-op by construction: none of the seventeen widened formats is a three-channel one
+        // (GetWidenableClientComponentCount reports 0 for every one of them), and the SNORM
+        // shadow-to-float conversion only fires for a GL_FLOAT transfer type, which the widened
+        // triple never picks for the two SNORM8 formats. So the shadow reaches this untouched and
+        // one repack is all that runs.
+        static const void* PrepareImageWidenedUpload(const TextureImpl::ImageBindableStorageWidening& widening,
+                                                     const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                     Vector<Uint8>& widenedData) {
+            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels >= 4) {
+                return data;
+            }
+            return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
+                                               widenedData, widening.IntegerData);
+        }
+
+        // Overwrites the (internal format, format, type) triple GenerateTextureFormatInfo chose
+        // with the widened carrier's. Deliberately unconditional on anything but the widening
+        // itself: whatever renderability fallback the triple carried, an image the driver refuses
+        // to bind is useless, so the image constraint wins.
+        static void ApplyImageBindableStorageWidening(const TextureImpl::ImageBindableStorageWidening& widening,
+                                                      GLenum* inOutInternalFormat, GLenum* inOutFormat,
+                                                      GLenum* inOutType) {
+            if (!widening) {
+                return;
+            }
+            if (inOutInternalFormat) *inOutInternalFormat = widening.InternalFormat;
+            if (inOutFormat) *inOutFormat = widening.Format;
+            if (inOutType) *inOutType = widening.Type;
         }
 
         // RGB565/RGB5_A1 shadow data is stored as 8-bit unorm; uploading it as GL_UNSIGNED_BYTE
@@ -2884,6 +2937,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Bind(target);
                 }
 
+                // Only a texture that is actually image-bound pays for the widening: it doubles
+                // or quadruples the storage, and RequireImageBindableStorage is sticky, so a
+                // texture that is merely sampled keeps its narrow format for life. See
+                // TextureImpl::GetImageBindableStorageWidening for what widens and why.
+                const TextureImpl::ImageBindableStorageWidening imageWidening =
+                    m_imageBindableStorageRequired
+                        ? TextureImpl::GetImageBindableStorageWidening(textureMipmapObject->GetFormat())
+                        : TextureImpl::ImageBindableStorageWidening{};
+
                 const Bool canAppendMipmaps =
                     m_isInitialized &&
                     !m_imageBindableStorageRequired &&
@@ -2989,6 +3051,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
+                    ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
 
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
@@ -3104,6 +3167,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     uploadData =
                                         PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
                                                                 uploadData, levelByteSize, &glType, packedUploadData);
+                                    Vector<Uint8> imageWidenedUploadData;
+                                    uploadData = PrepareImageWidenedUpload(imageWidening, levelTexelSize, uploadData,
+                                                                           levelByteSize, imageWidenedUploadData);
 
                                     DebugImpl::ErrorLopper::Clear();
                                     BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
@@ -3243,6 +3309,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
+                    // The storage this level is being written into was widened when it was minted
+                    // (see above), so the transfer pair has to describe the carrier here too - ES
+                    // requires glTexSubImage's `format` to match the storage's base internal
+                    // format, so a GL_RG upload into a GL_RGBA32F image is GL_INVALID_OPERATION.
+                    ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     ScopedDefaultUnpackState unpackState;
                     for (auto& uploadTarget : uploadTargets) {
@@ -3281,6 +3352,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             Vector<Uint8> packedUploadData;
                             uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
                                                                  uploadData, byteSize, &glType, packedUploadData);
+                            // Leaves `uploadData` pointing at its own buffer when it fires, which
+                            // is exactly what takes the sub-rect fast path below out of play: that
+                            // path strides into the SHADOW, and the widened texels are four
+                            // components wide where the shadow's are one or two.
+                            Vector<Uint8> imageWidenedUploadData;
+                            uploadData = PrepareImageWidenedUpload(imageWidening, texelSize, uploadData, byteSize,
+                                                                   imageWidenedUploadData);
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), texelSize);
                             // Sub-rect upload: when only a region of the level changed (a
@@ -3723,6 +3801,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (SizeT channel = 0; channel < 4; ++channel) {
                     if (swizzleParams[channel] == TextureSwizzleParam::Alpha) {
                         swizzleParams[channel] = TextureSwizzleParam::One;
+                    }
+                }
+            }
+            // The same composition for the image-format widening, which can add TWO or THREE
+            // channels rather than one (GL_R8UI carried in a GL_RGBA8UI). GL reads a channel the
+            // format does not have as 0, except alpha, which reads as 1 - so a sampler must see
+            // those constants and not whatever the widened storage holds. The upload and the
+            // shader's own store mask already keep them at exactly these values; this covers
+            // storage nothing has written yet (glTexStorage with no upload), whose surplus
+            // channels are undefined. Composed with the application's own swizzle for the same
+            // reason as the alpha case above: GL_TEXTURE_SWIZZLE names a SOURCE channel of the
+            // logical texel, so it is the source that is substituted, never the destination.
+            if (const auto imageWidening =
+                    m_imageBindableStorageRequired
+                        ? TextureImpl::GetImageBindableStorageWidening(stateTextureObject->GetFormat())
+                        : TextureImpl::ImageBindableStorageWidening{}) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    switch (swizzleParams[channel]) {
+                    case TextureSwizzleParam::Green:
+                        if (imageWidening.SourceChannels < 2) swizzleParams[channel] = TextureSwizzleParam::Zero;
+                        break;
+                    case TextureSwizzleParam::Blue:
+                        if (imageWidening.SourceChannels < 3) swizzleParams[channel] = TextureSwizzleParam::Zero;
+                        break;
+                    case TextureSwizzleParam::Alpha:
+                        if (imageWidening.SourceChannels < 4) swizzleParams[channel] = TextureSwizzleParam::One;
+                        break;
+                    default:
+                        break;
                     }
                 }
             }
@@ -5042,6 +5149,56 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return false;
                 }
             }
+
+            // The GL internal format a glslang layout format names, for the seventeen non-core
+            // formats WidenImageFormatsForEssl carries exactly plus nothing else: the only
+            // question asked of it is "does this DECLARED format widen", and answering 0 for
+            // everything else is the same "no" a non-widenable format gets. Kept as its own
+            // switch rather than routed through the frontend's enum converters because a
+            // TLayoutFormat is a glslang value and the reflection snapshot stores it raw.
+            Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
+                switch (format) {
+                case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
+                case glslang::ElfRg16f: return 0x822F;    // GL_RG16F
+                case glslang::ElfR16f: return 0x822D;     // GL_R16F
+                case glslang::ElfRg8: return 0x822B;      // GL_RG8
+                case glslang::ElfR8: return 0x8229;       // GL_R8
+                case glslang::ElfRg8Snorm: return 0x8F95; // GL_RG8_SNORM
+                case glslang::ElfR8Snorm: return 0x8F94;  // GL_R8_SNORM
+                case glslang::ElfRg32i: return 0x823B;    // GL_RG32I
+                case glslang::ElfRg16i: return 0x8239;    // GL_RG16I
+                case glslang::ElfR16i: return 0x8233;     // GL_R16I
+                case glslang::ElfRg8i: return 0x8237;     // GL_RG8I
+                case glslang::ElfR8i: return 0x8231;      // GL_R8I
+                case glslang::ElfRg32ui: return 0x823C;   // GL_RG32UI
+                case glslang::ElfRg16ui: return 0x823A;   // GL_RG16UI
+                case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
+                case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
+                case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                default:
+                    return 0;
+                }
+            }
+
+            // Whether the ESSL chain will re-declare an image of this format in a core carrier
+            // and mask its accesses (WidenImageFormatsForEssl). The same rule
+            // TextureImpl::GetImageBindableStorageWidening applies to the storage and the bind -
+            // the three layers move together or the shader addresses a texel size the storage
+            // does not have.
+            //
+            // Without GL_NV_image_formats there is no legal spelling for any non-core format, so
+            // everything carriable widens. WITH the extension only the formats SPIRV-Cross
+            // refuses to print do: it throws for its is_desktop_only_format set instead of
+            // emitting a token, and the throw loses the stage however willing the driver was.
+            Bool ImageFormatWillBeWidened(Uint glInternalFormat) {
+                if (glInternalFormat == 0) return false;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(glInternalFormat) == 0) {
+                    return false;
+                }
+                return !g_GLESCapabilities.SupportsExtendedImageFormats ||
+                       !MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(
+                           glInternalFormat);
+            }
         } // namespace
 
         // What the format bake needs from the frontend, collected in one walk of the uniform
@@ -5074,17 +5231,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
                 const auto& type = stateProgramObject.GetUniformTypeFacts(loc);
                 if (type.hasFormat) {
-                    // Declared, and therefore left exactly as written - but a non-core spelling
-                    // still needs the extension directive to survive the ES compiler.
-                    if (!IsCoreEsslLayoutFormat(static_cast<glslang::TLayoutFormat>(type.layoutFormat))) {
-                        inputs.needsExtendedImageFormats = true;
-                        if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
-                            // From the OWNED TypeFacts, not from a live TType: the reflection
-                            // snapshot already carries the declared layout format, and there is
-                            // no glslang object to ask on a translation-cache L1 hit.
-                            recordUnspellableFormat(
-                                name, glslang::TQualifier::getLayoutFormatString(
-                                          static_cast<glslang::TLayoutFormat>(type.layoutFormat)));
+                    // Declared, and therefore never overridden by the BAKE - but a non-core
+                    // spelling still has to become legal ESSL somehow.
+                    const auto declaredFormat = static_cast<glslang::TLayoutFormat>(type.layoutFormat);
+                    if (!IsCoreEsslLayoutFormat(declaredFormat)) {
+                        // Seventeen of the twenty-six non-core formats are re-declared in the core
+                        // format that carries them exactly, with every access masked back to the
+                        // channels GL says they have (WidenImageFormatsForEssl, and the matching
+                        // storage/bind widening in TextureImpl). Those need neither the extension
+                        // nor the diagnostic: there IS a legal spelling for them now.
+                        if (ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
+                            inputs.declaresWidenableImageFormat = true;
+                        } else {
+                            inputs.needsExtendedImageFormats = true;
+                            if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                                // From the OWNED TypeFacts, not from a live TType: the reflection
+                                // snapshot already carries the declared layout format, and there
+                                // is no glslang object to ask on a translation-cache L1 hit.
+                                recordUnspellableFormat(
+                                    name, glslang::TQualifier::getLayoutFormatString(declaredFormat));
+                            }
                         }
                     }
                     continue;
@@ -5102,20 +5268,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (boundFormat == 0) continue;
                 if (!MG_Util::ShaderTranspiler::ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(boundFormat)) {
-                    // Outside the GLSL ES core set, so the emitted ESSL only compiles with
-                    // GL_NV_image_formats. Without the extension there is no legal spelling at
-                    // all, and baking one would trade a "no format qualifier" compile error for
-                    // an "unsupported format" one - so the image is left format-less. Its unit
-                    // stays in the key, so a rebind to a core format still rebuilds and works.
-                    if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
-                        MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
-                                "core cannot spell and this driver has no GL_NV_image_formats for.",
+                    // The same three-way split the DECLARED branch above makes, and it has to be
+                    // the same one: a format-less image is baked with the bound format, so from
+                    // WidenImageFormatsForEssl's point of view the two routes hand it identical
+                    // modules and must arm it identically.
+                    if (ImageFormatWillBeWidened(boundFormat)) {
+                        // The bake writes this format INTO the module, so the widening that runs
+                        // straight after has to be armed for it even though nothing DECLARED it -
+                        // and armed WHETHER OR NOT the driver has GL_NV_image_formats. SPIRV-Cross
+                        // throws for its is_desktop_only_format set the moment it targets ESSL,
+                        // however willing the driver was, so the extension decides HOW MUCH gets
+                        // widened (widenOnlyUnprintableImageFormats) and never WHETHER. Arming
+                        // this only on the no-extension path left the shader half of the widening
+                        // switched off while TextureImpl's storage/bind half - which keys on
+                        // SpirvCrossCanPrintEsslImageFormat, not on the driver bit - still ran:
+                        // the stage threw, the program linked without it, and every dispatch
+                        // silently did nothing. That is the whole of
+                        // KHR-GL43.stencil_texturing.functional's compute half, whose uni_image is
+                        // a format-less uimage2D bound to an R8UI texture.
+                        inputs.declaresWidenableImageFormat = true;
+                    } else if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                        // Outside the GLSL ES core set, with no GL_NV_image_formats to spell it
+                        // and no core format that carries it exactly: there is no legal ESSL for
+                        // this stage at all. Leaving the image format-LESS is NOT a softer
+                        // failure: all three test devices reject a format-less image declaration
+                        // outright ("all images have to define layout format"), readonly and
+                        // writeonly alike, so it trades one hard compile error for another. The
+                        // unit stays in the rebuild key either way, so a rebind to a spellable
+                        // format still rebuilds and works.
+                        MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which "
+                                "GLSL ES core cannot spell, this driver has no GL_NV_image_formats for, and "
+                                "no core format carries exactly.",
                                 name.c_str(), unit, boundFormat);
                         recordUnspellableFormat(
                             name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
                         continue;
+                    } else {
+                        inputs.needsExtendedImageFormats = true;
                     }
-                    inputs.needsExtendedImageFormats = true;
                 }
                 const String baseName = ImageUniformBaseName(name);
                 const auto existing = inputs.glFormatByUniformName.find(baseName);
@@ -5147,6 +5337,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(entry.second)) {
                     continue;
                 }
+                // A format the widening carries stays on the module route even though SPIRV-Cross
+                // would not print it: by the time SPIRV-Cross sees the declaration it names the
+                // core carrier, which it does print. Writing the narrow spelling into the text
+                // instead would put back exactly the token the driver rejects.
+                if (ImageFormatWillBeWidened(entry.second)) {
+                    continue;
+                }
                 String spelling = MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(entry.second);
                 if (spelling.empty()) continue; // no image-format spelling at all; nothing to write
                 inputs.esslFormatQualifierByUniformName.emplace(entry.first, Move(spelling));
@@ -5168,6 +5365,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         unspellableCount > 1 ? " (and it is not the only image uniform affected)" : "");
             }
             return inputs;
+        }
+
+        // Every image ARRAY whose elements the application did NOT leave on units consecutive from
+        // element zero - the only shape ESSL can spell, since an image unit there comes solely
+        // from the one layout(binding=N) an array declaration carries. Desktop GL assigns them
+        // per element with glUniform1i, which ES makes an INVALID_OPERATION on an image uniform,
+        // so there is nothing to fix at the API end and the emitted text has to carry it
+        // (RemapImageArrayElementUnits). Empty for every program that does not do this, which is
+        // very nearly all of them - one walk of the reflection and no allocation in that case.
+        Vector<ImageArrayUnitPlan> CollectNonConsecutiveImageArrayPlans(
+            const MG_State::GLState::ProgramObject& stateProgramObject) {
+            Vector<ImageArrayUnitPlan> plans;
+            const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
+            for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
+                const auto& name = stateProgramObject.GetUniformName(loc);
+                if (name.empty()) continue;
+                if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
+                // Reflection repeats the array's "g_image[0]" spelling at EVERY location the array
+                // spans, so only the location that name resolves back to is the array itself.
+                if (stateProgramObject.GetUniformLocation(name) != static_cast<Int>(loc)) continue;
+                const String baseName = ImageUniformBaseName(name);
+                if (baseName == name) continue; // a scalar image: one binding says it all
+
+                ImageArrayUnitPlan plan;
+                plan.name = baseName;
+                for (Uint element = loc; element <= maxUniformLoc &&
+                                         stateProgramObject.UniformLocationsAliasSameUniform(
+                                             static_cast<Int>(loc), static_cast<Int>(element));
+                     ++element) {
+                    plan.units.push_back(stateProgramObject.GetUniformSamplerOrImageUnitIndex(element));
+                }
+                if (plan.units.size() < 2) continue;
+
+                Bool consecutive = true;
+                for (SizeT element = 0; element < plan.units.size(); ++element) {
+                    if (plan.units[element] != plan.units[0] + static_cast<Int>(element)) {
+                        consecutive = false;
+                        break;
+                    }
+                }
+                // What ESSL does unaided is already right; leaving these out is what keeps the
+                // emitted text of every ordinary image shader byte-identical to before.
+                if (consecutive) continue;
+                plans.push_back(Move(plan));
+            }
+            return plans;
         }
 
         Uint64 BackendProgramObjectImpl::ComputeImageUnitFormatSignature() const {
@@ -5197,8 +5440,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Reads (audited): the arguments; g_GLESCapabilities.{SupportsViewportArray,
         // MaxSamples, MaxColorTextureSamples, MaxIntegerSamples, MaxDepthTextureSamples,
-        // SupportsNoperspectiveInterpolation, GLESVersion} (the last via
-        // ResolveBackendEsslVersion); and m_backendProgramId, for a log line only.
+        // SupportsNoperspectiveInterpolation, SupportsExtendedImageFormats, GLESVersion}
+        // (the last via ResolveBackendEsslVersion); and m_backendProgramId, for a log line only.
         //
         // Deliberately NOT in here, and therefore NOT in the key: the text-level passes that
         // follow in SyncToBackend. They are cheap string work and they read a long tail of
@@ -5255,6 +5498,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
                 g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
                 g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
+            // The image-format widening is armed on EVERY driver, so its probe has to ride the
+            // shared parse rather than add one: it is asked of every stage of every program, and
+            // a BuildModule per stage per gate is exactly what cost compile-heavy CTS cases ~10%
+            // before this struct existed. What differs per driver is only HOW MUCH it widens -
+            // everything carriable where there is no GL_NV_image_formats to spell the narrow
+            // format, and only the formats SPIRV-Cross refuses to print where there is.
+            const Bool widenOnlyUnprintableImageFormats = g_GLESCapabilities.SupportsExtendedImageFormats;
             MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
             if (viewportLoweringArmed || sampleClampArmed) {
                 spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
@@ -5425,6 +5675,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &arrayImageSpirv;
             }
 
+            // The SAMPLER half of the same 1D story, and a defect one layer deeper than the one
+            // above. SPIRV-Cross DOES widen a 1D sampler's coordinate for ES - it just prints the
+            // OFFSET and the two GRADIENT operands with the arity the desktop shader spelled, so
+            // textureLodOffset(sampler1DArray, vec2, float, int) is emitted against a
+            // sampler2DArray and the driver answers "no matching overloaded function found",
+            // losing the stage and silently no-oping every dispatch that used it. Widening the
+            // operands alone would be an INVALID module (the validator derives the required arity
+            // from the image's own Dim), so the pass moves the type to 2D and widens coordinate,
+            // offset and gradients together.
+            //
+            // NO KEY MATERIAL, by the same test LegalizeResourceArrayIndexingForEssl passes:
+            // it takes the module and nothing else, no capability bit arms it, and it self-gates
+            // on the module's own content (BinaryHasOffsetOrGrad1DSampledImage). The module is
+            // already the largest thing in the L2 key, so it is covered completely.
+            Vector<unsigned int> sampled1DSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DSampledImagesForEssl(
+                    *effectiveSpirv, sampled1DSpirv, enableSpirvValidation) &&
+                !sampled1DSpirv.empty()) {
+                effectiveSpirv = &sampled1DSpirv;
+            }
+
             // GLSL ES has no format-less image: `writeonly uniform uimage2D` is legal desktop
             // GLSL 4.2 and an Adreno ES compile error ("all images have to define layout
             // format"), which loses the whole program. Give each such image the format the
@@ -5445,6 +5716,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &imageFormatSpirv;
             }
 
+            // GL has forty image formats and GLSL ES core has thirteen; the other twenty-seven
+            // reach ES only through GL_NV_image_formats, which no tested driver advertises. A
+            // shader declaring one of them has NO legal ESSL spelling at all - SPIRV-Cross throws
+            // for some of them and the driver rejects the token for the rest ("'rg32f' : not a
+            // legal layout qualifier id"), and dropping the qualifier is refused too ("all images
+            // have to define layout format") - so the stage is lost and every draw with the
+            // program silently renders nothing. Seventeen of them widen EXACTLY into a core format
+            // of the same per-channel width, and this rewrites those declarations to the carrier
+            // and masks every access back to the channels GL says the format has. The other nine
+            // have no exact carrier and keep the honest diagnostic
+            // CollectImageFormatBakeInputs emits.
+            //
+            // A driver that HAS GL_NV_image_formats still needs part of this. SPIRV-Cross throws
+            // for its is_desktop_only_format set when it targets ESSL rather than printing a
+            // token, and the throw loses the stage however willing the driver was - Mesa
+            // advertises the extension and `layout(r8ui) uimage2D` lost its whole program there
+            // until the widening ran for it too. So the driver bit decides HOW MUCH is widened,
+            // never WHETHER.
+            //
+            // AFTER the bake above, deliberately: a format-less image whose unit holds a non-core
+            // format is baked with that format and widened here, so both routes end in the same
+            // place and there is no second widening rule for baked declarations.
+            //
+            // KEY MATERIAL: g_GLESCapabilities.SupportsExtendedImageFormats, which selects the
+            // mode - see EsslTranslationKeyInputs::supportsExtendedImageFormats. The pass takes
+            // no other input: what it rewrites is a pure function of the module's own declared
+            // formats and that mode, and the module is already the largest thing in the L2 key.
+            // The ARMING flag is deliberately NOT key material: it only decides whether the pass
+            // runs, and the module below is adopted only when the pass actually changed the bytes
+            // - so a program-wide flag that over-arms a stage costs an optimizer round trip and
+            // changes no output.
+            //
+            // DirectVulkan is deliberately not given this: it takes the declared format natively
+            // and resolves the descriptor's view format from the same bind state.
+            Vector<unsigned int> widenedImageFormatSpirv;
+            if (imageFormatBake.declaresWidenableImageFormat &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::WidenImageFormatsForEssl(
+                    *effectiveSpirv, widenedImageFormatSpirv, widenOnlyUnprintableImageFormats,
+                    enableSpirvValidation) &&
+                !widenedImageFormatSpirv.empty() && widenedImageFormatSpirv != *effectiveSpirv) {
+                effectiveSpirv = &widenedImageFormatSpirv;
+            }
+
             // GLSL ES demands a constant integral expression to index a fragment output
             // array; SPIR-V does not, so a shader that writes coeff[i] from a loop
             // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
@@ -5461,24 +5775,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &outputIndexSpirv;
             }
 
-            // Same rule, different resource, every stage: GL 4.3 lets an array of storage
-            // blocks be indexed with any dynamically-uniform expression, GLSL ES keeps the
-            // ES 3.1 constant-expression rule, and the Qualcomm compiler enforces it
+            // Same rule, two more resources, every stage: desktop GL lets an array of
+            // storage blocks and an array of image uniforms be indexed with any
+            // dynamically-uniform expression, GLSL ES keeps the ES 3.1
+            // constant-expression rule for both, and the drivers enforce it - Qualcomm
             // ("indexing into an SSBO array using a non-constant expression is not
-            // permitted") - losing the stage, the program, and every dispatch that used
-            // it, while the frontend keeps reporting the link glslang performed. Fold or
-            // lower the index here, on the ESSL path only: the same module is legal for
-            // DirectVulkan, which binds the array as one descriptor array.
+            // permitted"), Mesa ("image arrays indexed with non-constant expressions are
+            // forbidden in GLSL ES") - losing the stage, the program, and every draw or
+            // dispatch that used it, while the frontend keeps reporting the link glslang
+            // performed. Fold or lower the index here, on the ESSL path only: the same
+            // module is legal for DirectVulkan, which binds the array as one descriptor
+            // array.
+            //
+            // The image half is also what makes RemapImageArrayElementUnits below possible
+            // at all: that pass rewrites `g_image[k]` into a per-element declaration, and it
+            // can only do that once every k the emitted ESSL spells is a literal.
             //
             // NO KEY MATERIAL, and that is a conclusion rather than an omission: this takes the
             // module and nothing else - no capability bit arms it, no per-program plan steers
             // it - and it self-gates on the module's own content
-            // (BinaryHasDynamicStorageBlockArrayIndexing). The module is already the largest
+            // (BinaryHasDynamicResourceArrayIndexing). The module is already the largest
             // thing in the L2 key, so it is fully covered. Contrast LowerViewportIndexForEssl,
             // whose signature is equally module-only but which SupportsViewportArray ARMS -
             // that bit is in the key precisely because of it.
             Vector<unsigned int> blockArrayIndexSpirv;
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeStorageBlockArrayIndexingForEssl(
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeResourceArrayIndexingForEssl(
                     *effectiveSpirv, blockArrayIndexSpirv, enableSpirvValidation) &&
                 !blockArrayIndexSpirv.empty()) {
                 effectiveSpirv = &blockArrayIndexSpirv;
@@ -5560,6 +5881,123 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // GL 4.6 core 11.2.2 lets a program have a tessellation EVALUATION shader and no CONTROL
+        // shader: the input patch is passed through unmodified and the levels come from the
+        // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state. OpenGL ES 3.2 has no such
+        // state and no such allowance - it rejects the program at link, and with an EMPTY info
+        // log, which was verified on an Adreno 830 with no MobileGL in the process (TES-only:
+        // link=0, log empty; the same shaders plus any TCS: link=1, with or without the SSBO and
+        // atomic counter the failing conformance case also declares). The frontend's own glslang
+        // link succeeds, so GL_LINK_STATUS reads TRUE, program 0 is bound in its place, and every
+        // draw silently renders nothing - a black framebuffer, an atomic counter still at 0 and
+        // an untouched SSBO, with no error anywhere.
+        //
+        // So the missing stage is synthesized and attached here, alongside the program's own.
+        // DirectVulkan already does exactly this for the same structural reason
+        // (ProgramFactory::BuildPassthroughTessControlSource), so this completes the pair rather
+        // than inventing an approach.
+        //
+        // Nothing that works today can be harmed by it: it fires ONLY for a program that has an
+        // evaluation stage and no control stage, and every such program fails to link on ES right
+        // now. The worst case is that the synthesized stage fails to compile or link, which leaves
+        // the program exactly as dead as it already was - but with a driver log that says why,
+        // where today there is an empty one.
+        void BackendProgramObjectImpl::AttachPassthroughTessControlStage(
+            const MG_State::GLState::ProgramObject& stateProgramObject, const Int tessEvalShaderIndex,
+            const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
+            const String& tessEvalStageEssl) {
+            // PATCH_VERTICES is dynamic state, and it decides the synthesized stage's output
+            // patch size - so a program built for one value is stale for another. Recorded here
+            // and compared on the draw path (SyncCurrentProgram), the same shape as the
+            // storage-block and image-format signatures next to it.
+            const Uint patchVertices = MG_State::pGLContext != nullptr
+                                           ? MG_State::pGLContext->GetPatchVertices()
+                                           : 3u;
+            m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
+
+            if (tessEvalShaderIndex < 0 ||
+                static_cast<SizeT>(tessEvalShaderIndex) >= shaderSpirvs.size()) {
+                MGLOG_E("Program %u has a tessellation evaluation stage with no control stage, but no "
+                        "SPIR-V for it; the pass-through control stage GL describes cannot be checked, so "
+                        "the program is left to fail its ES link.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            // The one shape the pass-through cannot stand in for. It forwards gl_Position and
+            // nothing else, so an evaluation stage that reads a user-defined varying or a
+            // per-patch input - both of which carry a Location, where every built-in it needs
+            // does not - would start reading undefined values the moment a control stage sat
+            // between it and the vertex stage. Declining keeps that from being silent; it is the
+            // identical rule DirectVulkan applies in ReflectPassthroughTessControlNeed.
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::ModuleReadsLocatedInput(
+                    shaderSpirvs[static_cast<SizeT>(tessEvalShaderIndex)])) {
+                MGLOG_E("Program %u has a tessellation evaluation stage with no control stage AND reads a "
+                        "user-defined input through it; a synthesized pass-through control stage cannot "
+                        "forward that, so the program is declined rather than fed an undefined varying.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            // Mirrored from the neighbours rather than fixed: whether SPIRV-Cross redeclares
+            // gl_PerVertex, and with which members, depends on what the application's shaders
+            // touched, and a synthesized stage that redeclares a DIFFERENT shape than the stage
+            // it feeds is an ES link error against a program with no other problem. gl_in copies
+            // the vertex stage's OUT block (that is what arrives) and gl_out the evaluation
+            // stage's IN block (that is what is expected). A neighbour that redeclared nothing
+            // yields an empty list, which leaves the driver's own built-in declaration in place -
+            // which is exactly what matching it requires.
+            const String inMembers =
+                ExtractPerVertexBlockMembers(vertexStageEssl, /*input=*/false).value_or(String());
+            const String outMembers =
+                ExtractPerVertexBlockMembers(tessEvalStageEssl, /*input=*/true).value_or(String());
+
+            const String source =
+                BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices, inMembers, outMembers);
+
+            const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
+            if (backendShaderId == 0) {
+                MGLOG_E("Failed to create the synthesized pass-through tessellation control shader for "
+                        "program %u.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            const char* sourceCStr = source.c_str();
+            MGLOG_D("Synthesized pass-through tessellation control stage for program %u (patch vertices "
+                    "%u):\n%s",
+                    stateProgramObject.GetExternalIndex(), patchVertices, sourceCStr);
+            g_GLESFuncs.glShaderSource(backendShaderId, 1, &sourceCStr, nullptr);
+            g_GLESFuncs.glCompileShader(backendShaderId);
+
+            // GL_FALSE, not GL_TRUE, for the reason the per-stage loop states: an unwritten
+            // out-param must read as "compile failed" and never as a silent success.
+            GLint compileStatus = GL_FALSE;
+            g_GLESFuncs.glGetShaderiv(backendShaderId, GL_COMPILE_STATUS, &compileStatus);
+            if (compileStatus == GL_FALSE) {
+                GLint logLength = 0;
+                g_GLESFuncs.glGetShaderiv(backendShaderId, GL_INFO_LOG_LENGTH, &logLength);
+                if (logLength < 0) logLength = 0;
+                Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
+                g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
+                log.back() = '\0';
+                MGLOG_E("The synthesized pass-through tessellation control stage failed to compile for "
+                        "program %u. Driver log: %s\nSource:\n%s",
+                        stateProgramObject.GetExternalIndex(), log.data(), sourceCStr);
+                m_backendProgramUsable = false;
+                g_GLESFuncs.glDeleteShader(backendShaderId);
+                return;
+            }
+
+            g_GLESFuncs.glAttachShader(m_backendProgramId, backendShaderId);
+            // Same ownership handover as every other stage: glDeleteShader only FLAGS, so this is
+            // what makes the program own it and what keeps a relink from leaking it.
+            g_GLESFuncs.glDeleteShader(backendShaderId);
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -5605,6 +6043,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // reading it afterwards - resolves the same slot for the same GL binding.
             m_atomicCounterGlBindings.clear();
             m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
+            // Re-established by AttachPassthroughTessControlStage below when this program needs
+            // one; cleared first so a program that stops needing one (a relink that now attaches
+            // a real control stage) does not keep comparing against a stale patch size.
+            m_passthroughTessControlPatchVertices = -1;
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
@@ -5617,6 +6059,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         "different bound formats; left format-less.",
                         conflicted.c_str(), stateProgramObject->GetExternalIndex());
             }
+            // ...and once more for image ARRAYS whose per-element units are not consecutive, which
+            // ESSL has no way to express in one declaration. Program-wide, like the bake, and read
+            // from the same snapshot of the reflection; the per-stage rewrite happens below.
+            const Vector<ImageArrayUnitPlan> nonConsecutiveImageArrays =
+                CollectNonConsecutiveImageArrayPlans(*stateProgramObject);
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -5738,6 +6185,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return candidate;
             };
 
+            // Desktop GL makes the tessellation CONTROL stage optional; OpenGL ES 3.2 rejects a
+            // program that has an evaluation stage without one, with an empty info log. When that
+            // is this program's shape, one is synthesized below - and it has to be spelled to
+            // MATCH the two stages it sits between, so their emitted ESSL is kept here as it is
+            // produced. Empty for every program that has a control stage of its own, which is
+            // all but a handful.
+            Bool hasTessEvalStage = false;
+            Bool hasTessControlStage = false;
+            Int tessEvalShaderIndex = -1;
+            String vertexStageEssl;
+            String tessEvalStageEssl;
+            for (int index = 0; index < attachedShaders.size(); ++index) {
+                const auto stage = attachedShaders[index]->GetShaderStage();
+                if (stage == ShaderStage::TessControl) hasTessControlStage = true;
+                if (stage == ShaderStage::TessEval) {
+                    hasTessEvalStage = true;
+                    tessEvalShaderIndex = index;
+                }
+            }
+            const Bool needsPassthroughTessControl = hasTessEvalStage && !hasTessControlStage;
+
             for (int index = 0; index < attachedShaders.size(); ++index) {
                 auto& shader = attachedShaders[index];
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage());
@@ -5781,6 +6249,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 esslKeyInputs.supportsViewportArray = g_GLESCapabilities.SupportsViewportArray;
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
+                esslKeyInputs.supportsExtendedImageFormats =
+                    g_GLESCapabilities.SupportsExtendedImageFormats;
                 esslKeyInputs.maxColorTextureSamples = g_GLESCapabilities.MaxColorTextureSamples;
                 esslKeyInputs.maxIntegerSamples = g_GLESCapabilities.MaxIntegerSamples;
                 esslKeyInputs.maxDepthTextureSamples = g_GLESCapabilities.MaxDepthTextureSamples;
@@ -5945,6 +6415,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // strip, so both halves of a split image inherit the format.
                 source = BakeImageFormatQualifiers(std::move(source),
                                                    imageFormatBake.esslFormatQualifierByUniformName);
+                // An image ARRAY whose elements do not sit on consecutive units cannot be spelled
+                // by the single layout(binding=N) the rebind above stamped: ESSL gives element k
+                // the unit N+k and there is no glUniform1i to correct it with. Split the array
+                // into one scalar declaration per element, each with its own binding. AFTER the
+                // rebind and the format bake, both of which look the array up by its GL uniform
+                // name and need the binding already there; BEFORE the read+write split, so an
+                // element that is both read and written is split with its own binding on it.
+                if (!nonConsecutiveImageArrays.empty()) {
+                    Vector<String> declinedImageArrays;
+                    source = RemapImageArrayElementUnits(source, nonConsecutiveImageArrays,
+                                                         &declinedImageArrays);
+                    for (const auto& declined : declinedImageArrays) {
+                        // MGLOG_E, unlatched, like the transpile- and compile-failure diagnostics
+                        // around it: this is the "linked, drew, produced wrong numbers, said
+                        // nothing" shape that cost earlier waves whole days, and one line per
+                        // declined array is bounded by program count. There is no honest GL answer
+                        // to give instead - the frontend has already reported LINK_STATUS = true.
+                        MGLOG_E("Image array %s. Its elements address image units GLSL ES cannot be made to reach "
+                                "from one declaration, so this stage will read and write the WRONG units. State "
+                                "program ID: %u, stage: %s.",
+                                declined.c_str(), stateProgramObject->GetExternalIndex(),
+                                MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+                    }
+                }
                 // Wedged between those two on purpose:
                 //  * AFTER RebindImageUniformsToFrontendUnits, so the binding it copies onto
                 //    both halves of a split image is already the frontend texture unit (and so
@@ -5953,6 +6447,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //    declaration and preserves its binding - an image unit cannot be set from
                 //    the API in ES, so the qualifier is the only binding mechanism there is,
                 //    and both halves of the pair have to still be carrying theirs when it runs.
+                // Takes no stage: the qualifier it adds is a decision about THIS text's accesses
+                // and the rename that keeps two stages from declaring one image uniform
+                // differently is keyed on that same decision, so two stages that agree still
+                // share one uniform (see the location-budget note on the pass).
                 Uint splitImageUniformCount = 0;
                 source = SplitReadWriteImageUniforms(source, &splitImageUniformCount);
                 if (splitImageUniformCount != 0) {
@@ -6035,7 +6533,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // MobileGL creates without an owning wrapper to destroy it.
                 g_GLESFuncs.glDeleteShader(backendShaderId);
 
+                // Kept AFTER every text-level pass, so what the synthesized control stage mirrors
+                // is the text the driver actually sees, not an intermediate form.
+                if (needsPassthroughTessControl) {
+                    if (glShaderType == GL_VERTEX_SHADER) {
+                        vertexStageEssl = source;
+                    } else if (glShaderType == GL_TESS_EVALUATION_SHADER) {
+                        tessEvalStageEssl = source;
+                    }
+                }
+
                 MGLOG_D("Processed shader source length: %zu", source.length());
+            }
+
+            if (needsPassthroughTessControl) {
+                AttachPassthroughTessControlStage(*stateProgramObject, tessEvalShaderIndex, shaderSpirvs,
+                                                  vertexStageEssl, tessEvalStageEssl);
             }
 
             // A counter buffer declared by several stages was recorded once per stage; the draw

@@ -52,6 +52,10 @@ namespace MobileGL {
                 // lowering, whose cost is the array length rather than the trip count, takes
                 // it instead. Real shaders of this shape (Minecraft 26.3's OIT coefficient
                 // writer included) iterate a handful of times.
+                //
+                // This is a budget for the whole NEST, not for one loop: marking a loop for
+                // unrolling means marking its ancestors too (see MarkLoopsForUnroll), and the
+                // copies they produce multiply.
                 constexpr size_t kMaxUnrolledIterations = 64;
 
                 struct DynamicIndexUse {
@@ -228,12 +232,17 @@ namespace MobileGL {
                     return false;
                 }
 
-                // Whether fully unrolling |loop| is bounded work. The trip count is read the
-                // same way the stock unroller reads it, so a loop this declines to measure is
-                // one CanPerformUnroll would refuse anyway - the hint would be inert on it,
-                // and the fallback lowering is what handles it. Requires the induction
-                // variable to already be an OpPhi, which is why this runs after ssa-rewrite.
-                bool IsBoundedUnrollCandidate(spvtools::opt::Loop* loop) {
+                // |loop|'s trip count, when it has a measurable one, in *outIterations. The
+                // count is read the same way the stock unroller reads it, so a loop this
+                // declines to measure is one CanPerformUnroll would refuse anyway - the hint
+                // would be inert on it, and the fallback lowering is what handles it. Requires
+                // the induction variable to already be an OpPhi, which is why this runs after
+                // ssa-rewrite.
+                //
+                // A count of zero is reported as unmeasurable: it means nothing this pass can
+                // multiply a nest's budget by, and a loop that never runs is not one whose
+                // subscript needs folding.
+                bool TryGetUnrollTripCount(spvtools::opt::Loop* loop, size_t* outIterations) {
                     const spvtools::opt::BasicBlock* condition = loop->FindConditionBlock();
                     if (condition == nullptr) {
                         return false;
@@ -243,10 +252,12 @@ namespace MobileGL {
                         return false;
                     }
                     size_t iterations = 0;
-                    if (!loop->FindNumberOfIterations(induction, &*condition->ctail(), &iterations)) {
+                    if (!loop->FindNumberOfIterations(induction, &*condition->ctail(), &iterations) ||
+                        iterations == 0) {
                         return false;
                     }
-                    return iterations <= kMaxUnrolledIterations;
+                    *outIterations = iterations;
+                    return true;
                 }
             } // namespace
 
@@ -287,25 +298,51 @@ namespace MobileGL {
                         continue;
                     }
 
+                    // The offending chain's own loop AND every loop enclosing it, because
+                    // SPIRV-Tools only ever unrolls an INNERMOST loop and because the index that
+                    // has to become a literal may be an outer loop's induction variable.
+                    //
+                    // Marking a whole nest means the unrolled body count is the PRODUCT of its
+                    // trip counts, so the budget is spent as the walk climbs rather than tested
+                    // loop by loop - a nest of three levels each individually inside the cap is
+                    // its CUBE, which is neither bounded nor anything the fold chain downstream
+                    // can absorb. Same defect, same shape, and the same reasoning as
+                    // LegalizeResourceArrayIndexPass::MarkLoopsForUnroll, which is where it was
+                    // first measured; the two walks are deliberately identical.
+                    //
+                    // Every exit is a BREAK rather than a skip-and-keep-climbing: a loop that
+                    // cannot be marked is a gap the unroller cannot cross, which makes every
+                    // mark above it dead weight. Falling out of the unroll path costs nothing
+                    // correctness-wise - LowerToConstantSwitch still legalizes the chain, at a
+                    // cost proportional to the output array's length.
                     spvtools::opt::LoopDescriptor* loops = irContext->GetLoopDescriptor(function);
+                    size_t nestIterations = 1;
                     for (spvtools::opt::Loop* loop = (*loops)[block->id()]; loop != nullptr;
                          loop = loop->GetParent()) {
-                        if (!IsBoundedUnrollCandidate(loop)) {
-                            continue;
+                        size_t iterations = 0;
+                        if (!TryGetUnrollTripCount(loop, &iterations)) {
+                            break;
+                        }
+                        // Division, not multiplication, so the test itself cannot overflow.
+                        if (iterations > kMaxUnrolledIterations / nestIterations) {
+                            break;
                         }
                         Instruction* mergeInst = loop->GetHeaderBlock()->GetLoopMergeInst();
                         // Only a bare `None` control is promoted, and only when no extra
                         // literal (PartialCount, PeelCount, ...) follows it: the unroller
                         // tests the control word for equality with Unroll, so ORing the bit
                         // into a control that already carries something - DontUnroll above
-                        // all - would neither unroll nor mean what it says.
+                        // all - would neither unroll nor mean what it says. An `Unroll` this
+                        // pass itself already wrote for another chain in the same nest ends the
+                        // walk too: everything above it was considered on that pass through.
                         if (mergeInst == nullptr || mergeInst->NumOperands() != 3 ||
                             mergeInst->GetSingleWordOperand(2) !=
                                 static_cast<uint32_t>(spv::LoopControlMask::MaskNone)) {
-                            continue;
+                            break;
                         }
                         mergeInst->SetOperand(
                             2, {static_cast<uint32_t>(spv::LoopControlMask::Unroll)});
+                        nestIterations *= iterations;
                         modified = true;
                     }
                 }

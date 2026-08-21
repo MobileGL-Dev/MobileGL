@@ -17,8 +17,16 @@
 
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ExtractPerVertexBlockMembers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_ARRAY_ELEMENT_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_READONLY_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_SPLIT_READ_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
@@ -37,7 +45,18 @@ namespace {
         return count;
     }
 
+    // The pass tags the name of every declaration it rewrites with the REPAIR it applied, so the
+    // expectations have to spell the tag that matches how the fixture uses the image.
+    String RoAlias(const String& name) { return String(IMAGE_READONLY_ALIAS_PREFIX) + name; }
+    String WoAlias(const String& name) { return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name; }
+    String RwAlias(const String& name) { return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name; }
+    // The writeonly half is minted from the ALREADY access-tagged name, so it carries both.
     String WriteAlias(const String& name) { return String(IMAGE_WRITE_ALIAS_PREFIX) + name; }
+    String SplitWriteAlias(const String& name) { return WriteAlias(RwAlias(name)); }
+    // The scalar RemapImageArrayElementUnits declares for one element of a split image array.
+    String Elem(const String& name, Int element) {
+        return String(IMAGE_ARRAY_ELEMENT_PREFIX) + name + "_" + std::to_string(element);
+    }
 } // namespace
 
 // The bug the pass exists for. SPIRV-Cross speculatively marks every storage image
@@ -61,14 +80,19 @@ void main()
     // Both halves: same binding, same format, same type - which is what makes two image
     // variables on one image unit legal - and both `coherent`, which is what makes the store
     // through one of them visible to the load through the other.
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D goku;"));
-    EXPECT_TRUE(Contains(
-        out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";"));
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " +
+                                  RwAlias("goku") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " +
+                                  SplitWriteAlias("goku") + ";"))
+        << out;
 
-    // The load keeps the original name, the store moves to the writeonly half.
-    EXPECT_TRUE(Contains(out, "imageLoad(goku,"));
-    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("goku") + ","));
+    // The load goes to the readonly half, the store to the writeonly one, and neither is called
+    // what the application called it any more.
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ","));
+    EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ","));
     EXPECT_FALSE(Contains(out, "imageStore(goku,"));
+    EXPECT_FALSE(Contains(out, "imageLoad(goku,"));
 }
 
 // The split has to survive RemoveLayoutBinding, which runs straight after it: an ES image
@@ -98,7 +122,10 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray trunks;"));
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " +
+                                  RoAlias("trunks") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("trunks") + ","));
     EXPECT_FALSE(Contains(out, "writeonly"));
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
     EXPECT_EQ(CountOf(out, "image2DArray"), 1u);
@@ -113,7 +140,10 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D gohan;"));
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("gohan") + ","));
     EXPECT_FALSE(Contains(out, "readonly"));
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
 }
@@ -140,6 +170,9 @@ void main()
     imageStore(writer, ivec2(0), imageLoad(reader, ivec2(0)));
 }
 )";
+    // Untouched means UNRENAMED too: a declaration that already carries its qualifier in the
+    // source carries the SAME one in every stage, so there is no cross-stage mismatch to break up
+    // and renaming it would only churn the text.
     EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
@@ -154,11 +187,14 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D gohan[3];"));
-    EXPECT_TRUE(Contains(
-        out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("gohan") + "[3];"));
-    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("gohan") + "[1],"));
-    EXPECT_TRUE(Contains(out, "imageLoad(gohan[2],"));
+    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " +
+                                  RwAlias("gohan") + "[3];"))
+        << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " +
+                                  SplitWriteAlias("gohan") + "[3];"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("gohan") + "[1],"));
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("gohan") + "[2],"));
 }
 
 // The rewrite is by identifier, not by substring: "goku" must not reach into "goku_hd", and
@@ -177,14 +213,19 @@ void main()
     const String out = SplitReadWriteImageUniforms(source);
 
     // goku is read+write -> split (and coherent with it); goku_hd is write-only -> qualified in
-    // place, not split, and left non-coherent because nothing aliases it.
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D goku;"));
-    EXPECT_TRUE(Contains(
-        out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";"));
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D goku_hd;"));
-    EXPECT_TRUE(Contains(out, "imageStore(goku_hd,"));
-    EXPECT_FALSE(Contains(out, WriteAlias("goku") + "_hd"));
-    EXPECT_FALSE(Contains(out, WriteAlias("goku_hd")));
+    // place, not split, and left non-coherent because nothing aliases it. Both are renamed.
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " +
+                                  RwAlias("goku") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " +
+                                  SplitWriteAlias("goku") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " +
+                                  WoAlias("goku_hd") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("goku_hd") + ","));
+    EXPECT_FALSE(Contains(out, SplitWriteAlias("goku") + "_hd"));
+    EXPECT_FALSE(Contains(out, SplitWriteAlias("goku_hd")));
 }
 
 // Other qualifiers belong to both halves, and the memory qualifier goes where SPIRV-Cross
@@ -198,9 +239,11 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D goku;"));
+    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";"))
+        << out;
     EXPECT_TRUE(
-        Contains(out, "uniform writeonly coherent restrict highp image2D " + WriteAlias("goku") + ";"));
+        Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
+        << out;
     // ...and the coherent the split adds is not a SECOND one: a repeated memory qualifier is a
     // compile error in ESSL, so the source's own has to be recognized.
     EXPECT_EQ(CountOf(out, "coherent"), 2u);
@@ -225,12 +268,13 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D goku;")) << out;
-    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + WriteAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
+        << out;
     // Exactly the two halves of the pair, and nothing else: the store-only image is repaired in
     // place, has no alias to stay visible to, and must not pay for uncached access.
     EXPECT_EQ(CountOf(out, "coherent"), 2u);
-    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D storeOnly;")) << out;
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + WoAlias("storeOnly") + ";")) << out;
 }
 
 // The ORDERING half of the split, which `coherent` alone does not buy. Coherent makes the store
@@ -253,9 +297,11 @@ void main()
 )";
     const String out = SplitReadWriteImageUniforms(source);
 
-    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("goku") + ", ivec2(0), vec4(1.0)); memoryBarrierImage();"))
+    EXPECT_TRUE(
+        Contains(out, "imageStore(" + SplitWriteAlias("goku") + ", ivec2(0), vec4(1.0)); memoryBarrierImage();"))
         << out;
-    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("goku") + ", ivec2(0), vec4(2.0)); memoryBarrierImage();"))
+    EXPECT_TRUE(
+        Contains(out, "imageStore(" + SplitWriteAlias("goku") + ", ivec2(0), vec4(2.0)); memoryBarrierImage();"))
         << out;
     // One per store, not one per shader and not one per load.
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 2u) << out;
@@ -273,7 +319,7 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D storeOnly;")) << out;
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + WoAlias("storeOnly") + ";")) << out;
     EXPECT_FALSE(Contains(out, "memoryBarrierImage")) << out;
 }
 
@@ -289,7 +335,9 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "max(imageLoad(gohan[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();")) << out;
+    EXPECT_TRUE(Contains(out, "max(imageLoad(" + RwAlias("gohan") +
+                                  "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
+        << out;
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
 }
 
@@ -340,25 +388,38 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D sizeOnly;"));
+    EXPECT_TRUE(Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " +
+                                  RoAlias("sizeOnly") + ";"))
+        << out;
+    // The rename has to reach imageSize too, or the declaration and its only use stop agreeing.
+    EXPECT_TRUE(Contains(out, "imageSize(" + RoAlias("sizeOnly") + ")")) << out;
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
 }
 
-// The alias must not land on an identifier the shader already uses.
-TEST(SplitReadWriteImageUniformsTest, AliasNameAvoidsAnExistingIdentifier) {
-    const String source = R"(#version 320 es
-layout(binding = 6, rgba8) uniform highp image2D taken;
-highp vec4 mg_imageWrite_taken;
-void main()
-{
-    imageStore(taken, ivec2(0), imageLoad(taken, ivec2(0)) + mg_imageWrite_taken);
-}
-)";
+// Neither minted name may land on an identifier the shader already uses - and there are two of
+// them now, the access-tagged name of the repaired declaration and the writeonly half built on
+// top of it. Both collisions are exercised at once.
+TEST(SplitReadWriteImageUniformsTest, AliasNamesAvoidExistingIdentifiers) {
+    const String stageCollision = RwAlias("taken");
+    const String writeCollision = SplitWriteAlias("taken");
+    const String source = "#version 320 es\n"
+                          "layout(binding = 6, rgba8) uniform highp image2D taken;\n"
+                          "highp vec4 " +
+                          stageCollision + ";\nhighp vec4 " + writeCollision +
+                          ";\nvoid main()\n{\n"
+                          "    imageStore(taken, ivec2(0), imageLoad(taken, ivec2(0)) + " +
+                          stageCollision + " + " + writeCollision + ");\n}\n";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_FALSE(Contains(out, "image2D " + WriteAlias("taken") + ";"));
-    EXPECT_TRUE(Contains(out, "image2D " + WriteAlias("taken") + "X;"));
-    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("taken") + "X,"));
-    EXPECT_TRUE(Contains(out, "+ mg_imageWrite_taken)"));
+
+    EXPECT_FALSE(Contains(out, "image2D " + stageCollision + ";")) << out;
+    EXPECT_FALSE(Contains(out, "image2D " + writeCollision + ";")) << out;
+    EXPECT_TRUE(Contains(out, "image2D " + stageCollision + "X;")) << out;
+    EXPECT_TRUE(Contains(out, "image2D " + writeCollision + "X;")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + writeCollision + "X,")) << out;
+    EXPECT_TRUE(Contains(out, "imageLoad(" + stageCollision + "X,")) << out;
+    // ...and the globals that forced the suffix are still themselves.
+    EXPECT_TRUE(Contains(out, "highp vec4 " + stageCollision + ";")) << out;
+    EXPECT_TRUE(Contains(out, "highp vec4 " + writeCollision + ";")) << out;
 }
 
 // A use the pass cannot account for (here: the image handed to a user function) means it
@@ -372,6 +433,9 @@ void main()
     imageStore(passed, ivec2(0), helper(passed));
 }
 )";
+    // Declining means declining EVERYTHING: no qualifier, and no rename either. A rename that
+    // moved the declaration but not the use inside helper() would be a compile error rather than
+    // the wrong-but-compiling shader this pass refuses to guess at.
     EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
@@ -385,6 +449,407 @@ void main()
 }
 )";
     EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
+}
+
+// The defect the rename exists for. The pass sees ONE stage at a time and picks the memory
+// qualifier from the accesses in THAT stage, so a vertex shader that only stores and a fragment
+// shader that only loads the same image came out `writeonly g_image` and `readonly g_image` -
+// two declarations of one uniform name that GLSL requires to be identical. Adreno merges them
+// and silently discards the vertex-stage stores (advanced-memory-dependentInvocation reads back
+// the untouched zeros, with LINK_STATUS = 1 and an empty driver log). Tagging by the repair
+// leaves nothing to merge.
+TEST(SplitReadWriteImageUniformsTest, StagesThatUseAnImageDifferentlyGetDifferentNames) {
+    const String vertexSource = R"(#version 320 es
+layout(binding = 0, rgba32f) uniform coherent highp image2D g_image;
+void main()
+{
+    imageStore(g_image, ivec2(0), vec4(1.0));
+    gl_Position = vec4(0.0);
+}
+)";
+    const String fragmentSource = R"(#version 320 es
+layout(binding = 0, rgba32f) uniform coherent highp image2D g_image;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = imageLoad(g_image, ivec2(0));
+}
+)";
+    const String vsOut = SplitReadWriteImageUniforms(vertexSource);
+    const String fsOut = SplitReadWriteImageUniforms(fragmentSource);
+
+    const String vsName = WoAlias("g_image");
+    const String fsName = RoAlias("g_image");
+    EXPECT_NE(vsName, fsName);
+    EXPECT_TRUE(Contains(vsOut, "uniform writeonly coherent highp image2D " + vsName + ";")) << vsOut;
+    EXPECT_TRUE(Contains(fsOut, "uniform readonly coherent highp image2D " + fsName + ";")) << fsOut;
+    EXPECT_TRUE(Contains(vsOut, "imageStore(" + vsName + ",")) << vsOut;
+    EXPECT_TRUE(Contains(fsOut, "imageLoad(" + fsName + ",")) << fsOut;
+    // The whole point: after the rewrite the two stages no longer declare a common name, so
+    // there is nothing for a linker to merge and mis-qualify.
+    EXPECT_FALSE(Contains(vsOut, fsName)) << vsOut;
+    EXPECT_FALSE(Contains(fsOut, vsName)) << fsOut;
+    // Both bindings are untouched - the image unit is still the same one.
+    EXPECT_TRUE(Contains(vsOut, "binding = 0"));
+    EXPECT_TRUE(Contains(fsOut, "binding = 0"));
+}
+
+// The other side of that coin, and the one a per-STAGE tag got wrong. Two stages that use the
+// image the same way emit byte-identical declarations, so they must arrive at ONE shared name:
+// Adreno allocates an image LOCATION per distinct uniform, and giving each stage its own name
+// multiplied a program's image-uniform count by the number of stages that mention it - which is
+// how the five stages of KHR-GL43.shading_language_420pack.binding_images_texture_type_* went
+// from 6 image uniforms to 30 and drew "Error: Image Image location or component exceeds max
+// allowed." out of the Adreno 830 linker, with LINK_STATUS = TRUE already published by the
+// frontend and every draw silently doing nothing.
+TEST(SplitReadWriteImageUniformsTest, StagesThatUseAnImageAlikeShareOneName) {
+    const String vertexSource = R"(#version 320 es
+layout(binding = 1, rgba8) uniform highp image2D goku;
+void main()
+{
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+    gl_Position = vec4(0.0);
+}
+)";
+    const String fragmentSource = R"(#version 320 es
+layout(binding = 1, rgba8) uniform highp image2D goku;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+    mg_FragColor = vec4(0.0);
+}
+)";
+    const String vsOut = SplitReadWriteImageUniforms(vertexSource);
+    const String fsOut = SplitReadWriteImageUniforms(fragmentSource);
+
+    // One name, arrived at independently by two different stages, so the linker merges them
+    // back into the single image uniform the application declared.
+    for (const String& out : {vsOut, fsOut}) {
+        EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
+        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
+            << out;
+        EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ",")) << out;
+        EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ",")) << out;
+    }
+}
+
+// One tag per repair, all three distinct, and each a legal identifier stem.
+TEST(SplitReadWriteImageUniformsTest, EveryAccessTagIsDistinct) {
+    const String prefixes[] = {String(IMAGE_READONLY_ALIAS_PREFIX), String(IMAGE_WRITEONLY_ALIAS_PREFIX),
+                               String(IMAGE_SPLIT_READ_ALIAS_PREFIX), String(IMAGE_WRITE_ALIAS_PREFIX)};
+    Vector<String> seenPrefixes;
+    for (const String& prefix : prefixes) {
+        // A GLSL identifier may not contain "__" (GLSL ES 3.20 3.7), and the prefix is glued
+        // straight onto a name that may itself start with '_'.
+        EXPECT_EQ(prefix.find("__"), String::npos) << prefix;
+        for (const String& seen : seenPrefixes) {
+            EXPECT_NE(seen, prefix) << prefix;
+            // Nor may one be a prefix of another: the write half is minted on top of an
+            // already-tagged name, so a shared stem would let two repairs collide.
+            EXPECT_NE(prefix.rfind(seen, 0), 0u) << prefix << " vs " << seen;
+        }
+        seenPrefixes.push_back(prefix);
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// RemapImageArrayElementUnits
+//
+// ES takes an image unit only from layout(binding=N), and one declaration carries one of them,
+// so an image array's elements land on N, N+1, N+2, ... Desktop GL lets an application point
+// each element wherever it likes with glUniform1i, which ES makes an INVALID_OPERATION on an
+// image uniform - there is no API side to fix, so the emitted text has to carry it.
+
+namespace {
+    // The advanced-sso-simple shape: a four-element image array on units 0, 2, 4, 6. The
+    // subscripts are literals because LegalizeResourceArrayIndexingForEssl has already folded
+    // the conformance case's `for (int i = 0; i < g_image.length(); ++i)` - ESSL forbids a
+    // non-constant image-array subscript outright, so a loop counter never reaches this pass.
+    const char* const kSsoImageArrayFS = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[4];
+void main()
+{
+    imageStore(g_image[0], ivec2(gl_FragCoord.xy), vec4(1.0));
+    imageStore(g_image[1], ivec2(gl_FragCoord.xy), vec4(1.0));
+    imageStore(g_image[2], ivec2(gl_FragCoord.xy), vec4(1.0));
+    imageStore(g_image[3], ivec2(gl_FragCoord.xy), vec4(1.0));
+}
+)";
+
+    ImageArrayUnitPlan Plan(const String& name, const Vector<Int>& units) {
+        ImageArrayUnitPlan plan;
+        plan.name = name;
+        plan.units = units;
+        return plan;
+    }
+} // namespace
+
+// The defect, end to end. Elements 0..3 need units 0, 2, 4, 6, so the array becomes four scalars
+// carrying those four bindings. Before this, the single stamped binding sent the four elements to
+// units 0, 1, 2, 3.
+TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsSplitIntoOneScalarPerElement) {
+    Vector<String> declined;
+    const String out =
+        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, &declined);
+
+    EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
+    const Int units[4] = {0, 2, 4, 6};
+    for (Int element = 0; element < 4; ++element) {
+        EXPECT_TRUE(Contains(out, "layout(rgba32f, binding = " + std::to_string(units[element]) +
+                                      ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
+            << out;
+        EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", element) + ", ivec2(gl_FragCoord.xy)"))
+            << out;
+    }
+    // The array is gone entirely; nothing may still address units 0,1,2,3 through it.
+    EXPECT_FALSE(Contains(out, "image2D g_image[4];")) << out;
+    EXPECT_FALSE(Contains(out, "g_image[")) << out;
+    // Exactly the four image uniforms the application declared - what the earlier widening cost
+    // was the whole SPAN, seven here, which is the budget failure mode this shape removes.
+    EXPECT_EQ(CountOf(out, "image2D "), 4u) << out;
+}
+
+// The other program of the same conformance case: units 1, 3, 5, 7 in the application's own
+// element ORDER, which is what carries the assignment, so it must NOT be sorted or rebased.
+TEST(RemapImageArrayElementUnitsTest, EachElementCarriesTheUnitTheApplicationGaveIt) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 3) uniform writeonly highp image2D g_image[4];
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(2.0));
+    imageStore(g_image[3], ivec2(0), vec4(2.0));
+}
+)";
+    const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {3, 1, 7, 5})});
+    const Int units[4] = {3, 1, 7, 5};
+    for (Int element = 0; element < 4; ++element) {
+        EXPECT_TRUE(Contains(out, "binding = " + std::to_string(units[element]) +
+                                      ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
+            << out;
+    }
+    // Only elements 0 and 3 are ever accessed; elements 1 and 2 are declared and unused, because
+    // the reflection says the array has four of them.
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 0) + ", ivec2(0)")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 3) + ", ivec2(0)")) << out;
+}
+
+// Consecutive-from-element-zero is exactly what ESSL does unaided, so the emitted text of an
+// ordinary image shader must come out byte-identical. The caller filters these; the pass must
+// not depend on that.
+TEST(RemapImageArrayElementUnitsTest, ConsecutiveUnitsAreLeftCompletelyAlone) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 2) uniform writeonly highp image2D g_image[3];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), vec4(1.0));
+}
+)";
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {2, 3, 4})}), source);
+    // ...and so is a plan for an array this stage does not declare at all: the reflection is
+    // program-wide, the pass runs per stage.
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("other_image", {0, 4})}), source);
+}
+
+// A subscript that is not a literal names no element, so there is no scalar to rewrite it to.
+// It should never arrive - LegalizeResourceArrayIndexingForEssl runs first and ESSL rejects the
+// shape outright - but if one does, guessing an element would only change WHICH unit the access
+// reaches wrongly. Decline, loudly, and change nothing.
+TEST(RemapImageArrayElementUnitsTest, ANonLiteralSubscriptIsDeclinedAndNamed) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[4];
+void main()
+{
+    for (int i = 0; i < 4; i++)
+    {
+        imageStore(g_image[i], ivec2(gl_FragCoord.xy), vec4(1.0));
+    }
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 2, 4, 6})}, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+    EXPECT_TRUE(Contains(declined[0], "g_image")) << declined[0];
+
+    // A literal that is out of the reflected range is the same class of mismatch.
+    const String outOfRange = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[5], ivec2(0), vec4(1.0));
+}
+)";
+    Vector<String> outOfRangeDeclined;
+    EXPECT_EQ(RemapImageArrayElementUnits(outOfRange, {Plan("g_image", {0, 5})}, &outOfRangeDeclined),
+              outOfRange);
+    ASSERT_EQ(outOfRangeDeclined.size(), 1u);
+}
+
+// A uint subscript IS a literal element index. SPIRV-Cross prints an index in the type SPIR-V
+// gave it and LegalizeResourceArrayIndexPass mints its per-element constants in the type of the
+// index it replaced, so an array walked by anything unsigned - a `uint` loop counter, or
+// anything derived from gl_LocalInvocationIndex, which is uint by definition - reaches this pass
+// spelled `g_image[0u]`. Refusing the `u` declined the array and left every element on the
+// consecutive units one binding hands out, silently.
+TEST(RemapImageArrayElementUnitsTest, AUintSubscriptIsStillALiteralElementIndex) {
+    const String source = R"(#version 320 es
+layout(local_size_x = 1) in;
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[3];
+void main()
+{
+    imageStore(g_image[0u], ivec2(0), vec4(1.0));
+    imageStore(g_image[2U], ivec2(0), vec4(2.0));
+}
+)";
+    Vector<String> declined;
+    const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4, 8})}, &declined);
+    EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
+
+    EXPECT_TRUE(Contains(out, "binding = 0) uniform writeonly highp image2D " + Elem("g_image", 0) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 4) uniform writeonly highp image2D " + Elem("g_image", 1) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 8) uniform writeonly highp image2D " + Elem("g_image", 2) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 0) + ", ivec2(0), vec4(1.0))")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 2) + ", ivec2(0), vec4(2.0))")) << out;
+    EXPECT_FALSE(Contains(out, "g_image[")) << out;
+}
+
+// ...and the suffix is not a licence to accept anything else that ends in one: `iu` is not a
+// literal, and neither is a bare `u`.
+TEST(RemapImageArrayElementUnitsTest, ASuffixAloneDoesNotMakeAnExpressionALiteral) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void main()
+{
+    highp int iu = 1;
+    imageStore(g_image[iu], ivec2(0), vec4(1.0));
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4})}, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+}
+
+// A use the pass cannot see a subscript on has no element index to rewrite, so splitting the
+// array out from under it would leave it naming a declaration that no longer exists. Decline,
+// loudly, and change nothing.
+TEST(RemapImageArrayElementUnitsTest, AUseWithoutASubscriptIsDeclined) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void helper();
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(1.0));
+    helper(g_image);
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 5})}, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+    EXPECT_TRUE(Contains(declined[0], "g_image")) << declined[0];
+}
+
+// The reflection and the emitted text have to be talking about the same array. If they are not,
+// the pass has misidentified something and must not rewrite on a guess.
+TEST(RemapImageArrayElementUnitsTest, AnExtentThatDisagreesWithTheReflectionIsDeclined) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(1.0));
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4, 8})}, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+}
+
+// The two passes that run after it have to see the split declarations and keep their bindings: an
+// ES image unit cannot be assigned through the API, so the qualifier is the only mechanism there
+// is, and an element that is both read and written is split again into a pair that must BOTH
+// carry that element's own unit.
+TEST(RemapImageArrayElementUnitsTest, TheSplitElementsSurviveTheLaterImagePasses) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 4) uniform highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), imageLoad(g_image[0], ivec2(0)));
+}
+)";
+    String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 6})});
+    out = SplitReadWriteImageUniforms(out);
+    out = RemoveLayoutBinding(out);
+
+    // Element 0 is only ever loaded and element 1 only ever stored, so neither is split into a
+    // pair - but each keeps the unit the application gave it, which the array could not express.
+    EXPECT_TRUE(Contains(out, "binding = 4")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 6")) << out;
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RoAlias(Elem("g_image", 0)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WoAlias(Elem("g_image", 1)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias(Elem("g_image", 1)) + ", ivec2(0), imageLoad(" +
+                                  RoAlias(Elem("g_image", 0)) + ", ivec2(0)))"))
+        << out;
+    // Nothing is left addressing the array.
+    EXPECT_FALSE(Contains(out, "g_image[")) << out;
+}
+
+// The same element both read and written IS split into a coherent pair, and both halves have to
+// inherit that element's binding - the shape the widening used to have to carry on an array.
+TEST(RemapImageArrayElementUnitsTest, AnElementThatIsBothReadAndWrittenIsSplitWithItsOwnBinding) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 4) uniform highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), imageLoad(g_image[1], ivec2(0)));
+    imageStore(g_image[0], ivec2(0), vec4(0.0));
+}
+)";
+    String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 9})});
+    out = SplitReadWriteImageUniforms(out);
+    out = RemoveLayoutBinding(out);
+
+    // Element 1 sits on unit 9, and both halves of its split pair say so.
+    EXPECT_EQ(CountOf(out, "binding = 9"), 2u) << out;
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias(Elem("g_image", 1)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";"))
+        << out;
+    EXPECT_EQ(CountOf(out, "binding = 4"), 1u) << out;
+}
+
+// The gap that let a per-STAGE image rename reach production: every fixture above declares an
+// image ARRAY, and the regression it caused was in the SCALAR images sitting next to one. A
+// scalar with an explicit binding has to come out of the whole chain still on ITS OWN unit,
+// still spelled once, and named the same thing every stage would name it - it is the array that
+// needs repairing, not its neighbour.
+TEST(RemapImageArrayElementUnitsTest, AScalarImageWithItsOwnBindingIsUntouchedByTheArrayRepair) {
+    const String source = R"(#version 320 es
+layout(rgba8, binding = 7) uniform highp image2D goku;
+layout(rgba32f, binding = 4) uniform highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), imageLoad(g_image[0], ivec2(0)));
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+}
+)";
+    Vector<String> declined;
+    String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 9})}, &declined);
+    EXPECT_TRUE(declined.empty());
+    // The array pass may only ever touch the arrays it was handed a plan for.
+    EXPECT_TRUE(Contains(out, "layout(rgba8, binding = 7) uniform highp image2D goku;")) << out;
+
+    out = SplitReadWriteImageUniforms(out);
+    out = RemoveLayoutBinding(out);
+
+    // Unit 7 exactly twice - the two halves of the scalar's own split pair - and nothing has
+    // moved it onto one of the array's units.
+    EXPECT_EQ(CountOf(out, "binding = 7"), 2u) << out;
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
+    // ...and no per-stage tag anywhere: the name a scalar gets is a function of how this text
+    // uses it, so every stage that uses it the same way keeps ONE shared uniform (Adreno spends
+    // an image location per distinct one).
+    EXPECT_FALSE(Contains(out, "mg_imageVs_")) << out;
+    EXPECT_FALSE(Contains(out, "mg_imageFs_")) << out;
+    EXPECT_FALSE(Contains(out, "mg_imageCs_")) << out;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -731,4 +1196,85 @@ void main() { gl_ViewportIndex = 1; imageStore(uni_image, ivec2(0), uvec4(1u)); 
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_NV_image_formats : require\n")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
+}
+
+// --- pass-through tessellation control stage --------------------------------------------------
+//
+// Desktop GL makes the tessellation control stage optional and takes the levels from
+// PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL; ES 3.2 has neither, and rejects a
+// program that has an evaluation stage without a control stage - with an EMPTY info log. The
+// synthesized stage is what stands in, and it has to MIRROR its two neighbours' gl_PerVertex
+// rather than pick a shape, because a redeclaration that disagrees with the stage it feeds is an
+// ES link error against a program that has nothing else wrong with it.
+
+TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel) {
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "");
+    EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "layout(vertices = 4) out;")) << out;
+    EXPECT_TRUE(Contains(out,
+                         "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;"))
+        << out;
+    // All six, unconditionally: writing a level the evaluation stage's domain does not use is
+    // legal and ignored, and it saves the generator from having to know the domain.
+    for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
+                              "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
+        EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
+    }
+    // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
+    // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
+    EXPECT_FALSE(Contains(out, "gl_PerVertex")) << out;
+}
+
+// ES 3.1 reaches tessellation only through the extension; the caller has already established
+// that the driver runs the evaluation stage at all, so the only question is the spelling.
+TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
+    const String out = BuildPassthroughTessControlEssl(310, 3, "", "");
+    EXPECT_EQ(out.find("#version 310 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_shader : require")) << out;
+}
+
+TEST(PassthroughTessControlEsslTest, MirrorsTheNeighboursPerVertexBlocks) {
+    const String inMembers = " highp vec4 gl_Position; highp float gl_PointSize; ";
+    const String outMembers = " highp vec4 gl_Position; ";
+    const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers);
+    EXPECT_TRUE(Contains(out, "in gl_PerVertex {" + inMembers + "} gl_in[gl_MaxPatchVertices];")) << out;
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex {" + outMembers + "} gl_out[];")) << out;
+}
+
+TEST(ExtractPerVertexBlockMembersTest, ReadsEitherDirectionAndOnlyThatDirection) {
+    const String essl = R"(#version 320 es
+in gl_PerVertex { highp vec4 gl_Position; } gl_in[gl_MaxPatchVertices];
+out gl_PerVertex { highp vec4 gl_Position; highp float gl_PointSize; } gl_out[];
+void main() {}
+)";
+    const auto inMembers = ExtractPerVertexBlockMembers(essl, true);
+    ASSERT_TRUE(inMembers.has_value()) << essl;
+    EXPECT_TRUE(Contains(*inMembers, "gl_Position")) << *inMembers;
+    EXPECT_FALSE(Contains(*inMembers, "gl_PointSize"))
+        << "the `in` block must not pick up the `out` block's members: " << *inMembers;
+
+    const auto outMembers = ExtractPerVertexBlockMembers(essl, false);
+    ASSERT_TRUE(outMembers.has_value()) << essl;
+    EXPECT_TRUE(Contains(*outMembers, "gl_PointSize")) << *outMembers;
+}
+
+// A shader that does not redeclare the block must report nothing, so the generator leaves the
+// driver's built-in declaration alone rather than inventing one.
+TEST(ExtractPerVertexBlockMembersTest, ReportsNothingWhenTheBlockIsNotRedeclared) {
+    const String essl = R"(#version 320 es
+layout(quads) in;
+void main() { gl_Position = gl_in[0].gl_Position; }
+)";
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, false).has_value()) << essl;
+}
+
+// "min" ends in "in" and "layout" ends in "out": the direction keyword has to be a whole token
+// immediately before the block name, or an unrelated identifier would be read as a redeclaration.
+TEST(ExtractPerVertexBlockMembersTest, DoesNotMatchAnIdentifierEndingInTheKeyword) {
+    const String essl = R"(#version 320 es
+struct fin gl_PerVertex { highp vec4 gl_Position; };
+void main() {}
+)";
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
 }

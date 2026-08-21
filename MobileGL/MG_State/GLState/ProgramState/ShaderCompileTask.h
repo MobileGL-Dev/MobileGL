@@ -62,6 +62,9 @@ namespace MobileGL::MG_State::GLState {
         String preprocessedSource;
         UnorderedMap<String, Int> explicitUniformLocations;
         UnorderedMap<String, Uint> explicitOpaqueBindings;
+        // Block type names of this stage's shader storage blocks that declared no
+        // layout(binding = N), i.e. the ones GL puts on binding 0.
+        std::set<String> storageBlocksWithoutBinding;
         String infoLog;
         Bool compileStatus = false;
     };

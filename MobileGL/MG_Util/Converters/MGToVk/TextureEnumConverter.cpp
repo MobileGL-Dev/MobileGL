@@ -287,9 +287,17 @@ namespace MobileGL {
             case TexturePixelDataType::UnsignedInt8888Rev:
                 return VK_FORMAT_R8G8B8A8_UINT;
             case TexturePixelDataType::UnsignedInt1010102:
-                return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+                // GL_UNSIGNED_INT_10_10_10_2 is R in bits 22-31, G 12-21, B 2-11, A 0-1 - an
+                // R10G10B10A2 packing Vulkan has no format for at all. Reported as UNDEFINED
+                // rather than as the A2*10*10*10 neighbours below, which are a different
+                // packing: naming one of those would hand a caller a format whose components
+                // sit in the wrong bits.
+                return VK_FORMAT_UNDEFINED;
             case TexturePixelDataType::UnsignedInt2101010Rev:
-                return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+                // A2**B**10G10R10, for the reason spelled out on
+                // ConvertTextureInternalFormatToVkFormat's RGB10A2: _REV puts R in bits 0-9,
+                // which is A2B10G10R10. A2R10G10B10 silently swaps R and B.
+                return VK_FORMAT_A2B10G10R10_UINT_PACK32;
             case TexturePixelDataType::UnsignedInt101111Rev:
                 return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
             case TexturePixelDataType::UnsignedInt5999Rev:

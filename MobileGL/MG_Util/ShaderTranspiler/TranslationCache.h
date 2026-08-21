@@ -566,9 +566,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //
     // Unconditional passes take no input but the module and so need no key material:
     // StripUboMemberRelaxedPrecision, LowerRectImages, Lower1DArrayImages,
-    // LegalizeStorageBlockArrayIndexing and FlattenAtomicCounterBlockOffsets. Each self-gates
-    // on the module's own content and is armed by nothing, so the SPIR-V already in this key
-    // covers them completely.
+    // Lower1DSampledImages, LegalizeResourceArrayIndexing and
+    // FlattenAtomicCounterBlockOffsets. Each self-gates on the module's own content and is
+    // armed by nothing, so the SPIR-V already in this key covers them completely.
     //
     // THE TEST FOR THAT CLAIM IS NOT THE SIGNATURE. LowerViewportIndexForEssl is equally
     // module-only to look at, yet SupportsViewportArray is in this key because that bit ARMS
@@ -602,6 +602,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // --- driver capability bits that arm or steer a pass ---
         Bool supportsViewportArray = false;
         Bool supportsNoperspectiveInterpolation = false;
+        // GL_NV_image_formats. Arms WidenImageFormatsForEssl, which re-declares every storage
+        // image whose format GLSL ES core cannot spell in the core format that carries it and
+        // masks its accesses back - so a driver that HAS the extension and one that does not get
+        // materially different ESSL from the same module.
+        Bool supportsExtendedImageFormats = false;
         Int32 maxColorTextureSamples = 0;
         Int32 maxIntegerSamples = 0;
         Int32 maxDepthTextureSamples = 0;

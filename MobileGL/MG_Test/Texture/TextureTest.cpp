@@ -5212,3 +5212,77 @@ TEST_F(TextureTest, ImageFormatCompatibilityTypeAgreesAcrossEveryTexParameterGet
     MG_Impl::GLImpl::DeleteTextures(1, &texture);
     DrainPendingGlErrors();
 }
+
+// The image-format widening's transfer half. GL has forty image formats and GLSL ES core has
+// thirteen, so an image-bindable GL_R8UI texture is stored as a GL_RGBA8UI and an image-bindable
+// GL_RG32F as a GL_RGBA32F (TextureImpl::GetImageBindableStorageWidening). The driver is then told
+// the transfer is four components wide, and one- or two-component client data has to be repacked to
+// match - with the SAME values GL gives the channels a narrow format does not have, so that a
+// later sample, imageLoad or glGetTexImage cannot tell the carrier from the real thing.
+TEST_F(TextureTest, ImageWidenedUploadExpandsOneAndTwoChannelDataWithGLsMissingChannelValues) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::PrepareChannelWidenedUpload;
+
+    const IntVec3 texelSize(2, 1, 1);
+
+    // GL_RG32F -> GL_RGBA32F. Blue is 0 and alpha 1.0, which is exactly what GL answers for the
+    // two channels an rg32f image does not have.
+    {
+        const Float source[] = {0.25f, -0.5f, 1.5f, -2.5f};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Float*>(
+            PrepareChannelWidenedUpload(2, texelSize, source, sizeof(source), GL_FLOAT, widened, false));
+        ASSERT_NE(result, static_cast<const void*>(source));
+        ASSERT_EQ(widened.size(), 8 * sizeof(Float));
+        const Float expected[] = {0.25f, -0.5f, 0.0f, 1.0f, 1.5f, -2.5f, 0.0f, 1.0f};
+        for (SizeT i = 0; i < 8; ++i) {
+            EXPECT_FLOAT_EQ(result[i], expected[i]) << "component " << i;
+        }
+    }
+
+    // GL_R8UI -> GL_RGBA8UI. Three added channels, and the one in alpha is the INTEGER one: an
+    // integer format's missing alpha reads back as 1, not as the saturated field a normalized
+    // format's does, and GL_UNSIGNED_BYTE serves both classes so the type alone cannot decide.
+    {
+        const Uint8 source[] = {7, 8};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Uint8*>(PrepareChannelWidenedUpload(
+            1, texelSize, source, sizeof(source), GL_UNSIGNED_BYTE, widened, /*integerData=*/true));
+        ASSERT_NE(result, static_cast<const void*>(source));
+        const Uint8 expected[] = {7, 0, 0, 1, 8, 0, 0, 1};
+        ASSERT_EQ(widened.size(), sizeof(expected));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // GL_R8 -> GL_RGBA8, the normalized twin of the case above: same transfer type, saturated one.
+    {
+        const Uint8 source[] = {7, 8};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Uint8*>(PrepareChannelWidenedUpload(
+            1, texelSize, source, sizeof(source), GL_UNSIGNED_BYTE, widened, /*integerData=*/false));
+        const Uint8 expected[] = {7, 0, 0, 0xFF, 8, 0, 0, 0xFF};
+        ASSERT_NE(result, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // GL_RG8_SNORM -> GL_RGBA8_SNORM keeps GL_BYTE, whose 1.0 is the positive maximum.
+    {
+        const Int8 source[] = {-1, 2, 3, -4};
+        Vector<Uint8> widened;
+        const auto* result = static_cast<const Int8*>(
+            PrepareChannelWidenedUpload(2, texelSize, source, sizeof(source), GL_BYTE, widened, false));
+        const Int8 expected[] = {-1, 2, 0, 0x7F, 3, -4, 0, 0x7F};
+        ASSERT_NE(result, static_cast<const void*>(source));
+        EXPECT_EQ(std::memcmp(result, expected, sizeof(expected)), 0);
+    }
+
+    // A four-component source is already the carrier's shape: nothing to repack, and the caller's
+    // sub-rect upload fast path depends on the pointer coming back unchanged when that is so.
+    {
+        const Uint8 source[] = {1, 2, 3, 4, 5, 6, 7, 8};
+        Vector<Uint8> widened;
+        EXPECT_EQ(PrepareChannelWidenedUpload(4, texelSize, source, sizeof(source), GL_UNSIGNED_BYTE, widened,
+                                              false),
+                  static_cast<const void*>(source));
+        EXPECT_TRUE(widened.empty());
+    }
+}

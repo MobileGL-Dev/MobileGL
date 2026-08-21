@@ -71,6 +71,11 @@ namespace MobileGL {
                 // GL_OES_viewport_array AND integer multisample squeezed to 1) the separate
                 // probes made compile-heavy workloads measurably slower - ReservedNames-class
                 // CTS cases paid ~10%. Callers with more than one armed gate use this instead.
+                // The image-format widening deliberately does NOT ride this probe, even though it
+                // is a module question of exactly the same shape. It is armed on every driver, so
+                // a gate answered from the module would put a BuildModule on every stage of every
+                // program - and the frontend's uniform reflection can answer it for free
+                // (PrgramImpl::ImageFormatBakeInputs::declaresWidenableImageFormat).
                 struct SpirvGateFeatures {
                     Bool WritesViewportIndexOutput = false;
                     Bool DeclaresMultisampledImage = false;
@@ -156,18 +161,22 @@ namespace MobileGL {
                 static bool LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
                                                                   Vector<uint32_t>& outputBinary,
                                                              bool enableSpirvValidation = false);
-                // Makes every index into an ARRAY OF SHADER STORAGE BLOCKS a constant integral
-                // expression. GL 4.3 allows any dynamically-uniform index there; the Qualcomm
-                // ES compiler enforces the ES 3.1 constant-expression rule and refuses the whole
-                // stage ("indexing into an SSBO array using a non-constant expression is not
-                // permitted"), which loses the program while the frontend still reports
-                // GL_LINK_STATUS = TRUE. Same two halves as the fragment-output legalization:
-                // fold the loop-derived indices, then lower whatever is genuinely dynamic to a
-                // switch over the array's range. DirectGLES transpile path only - Vulkan has no
-                // such restriction and must keep seeing one descriptor array. Copies the input
-                // through untouched when no block array is indexed dynamically, which is every
-                // shader but a handful. See LegalizeStorageBlockArrayIndexPass.
-                static bool LegalizeStorageBlockArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
+                // Makes every index into an ARRAY OF SHADER STORAGE BLOCKS or an ARRAY OF IMAGE
+                // UNIFORMS a constant integral expression. Desktop GL allows any
+                // dynamically-uniform index in either; ES keeps the ES 3.1
+                // constant-expression rule for both and the drivers refuse the whole stage
+                // ("indexing into an SSBO array using a non-constant expression is not
+                // permitted" on Qualcomm, "image arrays indexed with non-constant expressions
+                // are forbidden in GLSL ES" on Mesa), which loses the program while the
+                // frontend still reports GL_LINK_STATUS = TRUE. Same two halves as the
+                // fragment-output legalization: fold the loop-derived indices, then lower
+                // whatever is genuinely dynamic to a switch over the array's range. SAMPLER
+                // arrays are out of scope - ESSL 3.20 4.1.7 permits them a dynamically-uniform
+                // index. DirectGLES transpile path only - Vulkan has no such restriction and
+                // must keep seeing one descriptor array. Copies the input through untouched
+                // when no such array is indexed dynamically, which is every shader but a
+                // handful. See LegalizeResourceArrayIndexPass.
+                static bool LegalizeResourceArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
                                                                      Vector<uint32_t>& outputBinary,
                                                                      bool enableSpirvValidation = false);
                 // Collapses each synthesized gl_AtomicCounterBlock_<N> into one uint array at
@@ -204,6 +213,19 @@ namespace MobileGL {
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);
+                // The SAMPLED-image counterpart. SPIRV-Cross widens a 1D sampler's COORDINATE for
+                // ES and prints the OFFSET and GRADIENT operands with their original 1D arity, so
+                // textureOffset / textureLodOffset / texelFetchOffset / textureGrad on a
+                // sampler1D(Array) come out with no ESSL overload ("no matching overloaded
+                // function found") and the stage is lost. Rewrites the type to 2D and widens
+                // coordinate, offset and gradients together. DirectGLES transpile path only -
+                // Vulkan has 1D images natively. Copies the input through untouched unless the
+                // module actually carries such an operand on a 1D sampler, so a shader that only
+                // samples or fetches keeps SPIRV-Cross's own correct emission. See
+                // Lower1DSampledImagesPass for what it declines and why.
+                static bool Lower1DSampledImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary,
+                                                        bool enableSpirvValidation = false);
                 // Gives each format-less storage image the format bound to its image unit, so
                 // the emitted ESSL can carry the format layout qualifier GLSL ES requires of
                 // every image and desktop GLSL lets a writeonly declaration omit. `glFormatByName`
@@ -231,6 +253,39 @@ namespace MobileGL {
                 // must not ask BakeImageFormatsForEssl for those, and completes them in the
                 // emitted text instead.
                 static bool SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat);
+                // Re-declares every storage image whose DECLARED format GLSL ES cannot spell in
+                // the core format that carries it exactly, and masks each access back to the
+                // channels the original format has. The 26 formats outside the ES core set have no
+                // legal ESSL spelling on any tested driver (none exposes GL_NV_image_formats), and
+                // a format-less declaration is rejected too, so the stage is otherwise lost
+                // whatever this backend emits. DirectGLES transpile path only - Vulkan takes the
+                // declared format natively. See WidenImageFormatsPass for the table, for the nine
+                // formats it deliberately does NOT widen, and for why the texture storage and the
+                // glBindImageTexture argument have to move with it.
+                // `onlyFormatsSpirvCrossRefusesToPrint` narrows it to the formats that have no
+                // ESSL route even WITH GL_NV_image_formats, because SPIRV-Cross throws for them
+                // rather than printing a token - which is the whole set a driver that advertises
+                // the extension still needs. See WidenImageFormatsPass.
+                static bool WidenImageFormatsForEssl(const Vector<Uint32>& inputBinary,
+                                                     Vector<uint32_t>& outputBinary,
+                                                     bool onlyFormatsSpirvCrossRefusesToPrint = false,
+                                                     bool enableSpirvValidation = false);
+                // Whether the module declares a storage image WidenImageFormatsForEssl would
+                // widen, under the same mode the run would use. Costs its own module parse, so
+                // the transpile path does NOT gate on this - it answers the question from the
+                // frontend's uniform reflection instead, for the reason on SpirvGateFeatures.
+                // Here for tests and for callers that already hold nothing but the binary.
+                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
+                                                         bool onlyFormatsSpirvCrossRefusesToPrint = false);
+                // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
+                // when it needs no widening or cannot be widened exactly. The single source of
+                // truth for all three layers of the emulation: this one answers the shader, and
+                // DirectGLES asks it again for the texture storage and the image bind, so the two
+                // sides cannot drift.
+                static Uint WidenedCoreEsslImageFormat(Uint glInternalFormat);
+                // Channels a GL image internal format really has (1-4), 0 when it is not one of
+                // the forty image formats.
+                static Uint ImageFormatChannelCount(Uint glInternalFormat);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);
@@ -376,6 +431,19 @@ namespace MobileGL {
                 // module (see its header for the two operations that make it decline), which is
                 // what the backends report: no mobile driver can build such a module.
                 static Bool ModuleDeclaresFloat64(const Vector<Uint32>& spirv);
+
+                // True when the module declares an Input variable carrying a Location - i.e. a
+                // user-defined varying or a per-patch input, as opposed to a built-in.
+                //
+                // Asked of a TESSELLATION EVALUATION stage that has no control stage, to decide
+                // whether the pass-through control stage GL 4.6 core 11.2.2 describes can stand
+                // in for the missing one. That stage forwards gl_Position and nothing else, so a
+                // located input - which the vertex stage feeds today and which would stop
+                // arriving once a control stage sat in between - means the program has to be
+                // declined rather than fed an undefined varying. Same rule, same reasoning, as
+                // DirectVulkan's ReflectPassthroughTessControlNeed, which asks SPIRV-Reflect the
+                // identical question for the identical decision.
+                static Bool ModuleReadsLocatedInput(const Vector<Uint32>& spirv);
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

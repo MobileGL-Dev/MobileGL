@@ -12,6 +12,7 @@
 #include "MG_Backend/BackendObjects.h"
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
+#include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
@@ -232,6 +233,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool BackendRenderbufferFormatAddsAlpha(TextureInternalFormat internalFormat) {
             return BackendFormatAddsAlpha(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
+        }
+
+        ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat) {
+            const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            const auto carrier = static_cast<GLenum>(
+                MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
+            if (carrier == 0) {
+                return {};
+            }
+            // EXACTLY the arming WidenImageFormatsForEssl uses, and it has to be: the shader, the
+            // storage and the bind must all widen or none of them may, or the shader addresses a
+            // texel size the storage does not have (which every driver tested accepts silently,
+            // reading and writing out of bounds).
+            //
+            // A driver WITH GL_NV_image_formats can spell the narrow format - but only for the
+            // formats SPIRV-Cross will actually print. It throws for its is_desktop_only_format
+            // set instead of emitting a token, and the throw loses the stage whatever the driver
+            // would have accepted: on Mesa, which advertises the extension, `layout(r8ui)
+            // uimage2D` still lost its whole program until the widening ran for it too.
+            if (g_GLESCapabilities.SupportsExtendedImageFormats &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
+                return {};
+            }
+            ImageBindableStorageWidening widening;
+            widening.InternalFormat = carrier;
+            widening.SourceChannels =
+                MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
+            switch (carrier) {
+            case GL_RGBA32UI:
+            case GL_RGBA16UI:
+            case GL_RGBA8UI:
+            case GL_RGBA32I:
+            case GL_RGBA16I:
+            case GL_RGBA8I:
+                widening.IntegerData = true;
+                break;
+            default:
+                widening.IntegerData = false;
+                break;
+            }
+            // The carrier is a core ES format in every case, so it needs no fallback options of
+            // its own; this call is only here to spell the transfer pair that describes it.
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(carrier, Flags<PixelFormatNormalizeOptionBit>{},
+                                                                  nullptr, &widening.Format, &widening.Type);
+            return widening;
         }
     } // namespace TextureImpl
     namespace PrgramImpl {
@@ -700,6 +746,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        std::optional<String> ExtractPerVertexBlockMembers(const String& essl, const Bool input) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Deliberately a scan for the DECLARATION rather than a regex over the whole text:
+            // "gl_PerVertex" also appears inside the block's own body in some emissions, and the
+            // direction keyword has to be the one immediately preceding the name for the match to
+            // mean what this needs it to mean.
+            const auto isIdentifierChar = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            };
+            const String keyword = input ? String("in") : String("out");
+            SizeT pos = 0;
+            while ((pos = essl.find("gl_PerVertex", pos)) != String::npos) {
+                // Walk back over whitespace to the direction keyword.
+                SizeT before = pos;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1]))) --before;
+                const Bool matches = before >= keyword.size() &&
+                                     essl.compare(before - keyword.size(), keyword.size(), keyword) == 0 &&
+                                     (before == keyword.size() ||
+                                      !isIdentifierChar(essl[before - keyword.size() - 1]));
+                if (!matches) {
+                    pos += 1;
+                    continue;
+                }
+                const SizeT open = essl.find('{', pos);
+                if (open == String::npos) return std::nullopt;
+                const SizeT close = essl.find('}', open);
+                if (close == String::npos) return std::nullopt;
+                return essl.substr(open + 1, close - open - 1);
+            }
+            return std::nullopt;
+        }
+
+        String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
+                                               const String& inPerVertexMembers,
+                                               const String& outPerVertexMembers) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Tessellation is core in ES 3.2 and reachable in 3.1 only through
+            // GL_EXT_tessellation_shader. The caller has already established that the driver runs
+            // the evaluation stage at all, so the only question here is which spelling to use.
+            const Bool core = esslVersion >= 320;
+            String source = "#version " + std::to_string(core ? 320u : 310u) + " es\n";
+            if (!core) {
+                source += "#extension GL_EXT_tessellation_shader : require\n";
+            }
+            source += "precision highp float;\n";
+            source += "precision highp int;\n";
+            source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
+            // Mirrored, never invented. An empty member list means the neighbouring stage did not
+            // redeclare the block either, and the driver's own built-in declaration is then what
+            // both sides agree on - redeclaring here would be the thing that broke the match.
+            if (!inPerVertexMembers.empty()) {
+                source += "in gl_PerVertex {" + inPerVertexMembers + "} gl_in[gl_MaxPatchVertices];\n";
+            }
+            if (!outPerVertexMembers.empty()) {
+                source += "out gl_PerVertex {" + outPerVertexMembers + "} gl_out[];\n";
+            }
+            source += "void main() {\n";
+            // Only gl_Position is forwarded. That is the whole of what the pass-through owes the
+            // evaluation stage: a program whose evaluation stage reads anything else per-vertex
+            // was declined before this was ever called (ModuleReadsLocatedInput), and gl_PointSize
+            // from a tessellation stage is a separate capability on both targets.
+            source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
+            source += "    gl_TessLevelOuter[0] = 1.0;\n";
+            source += "    gl_TessLevelOuter[1] = 1.0;\n";
+            source += "    gl_TessLevelOuter[2] = 1.0;\n";
+            source += "    gl_TessLevelOuter[3] = 1.0;\n";
+            source += "    gl_TessLevelInner[0] = 1.0;\n";
+            source += "    gl_TessLevelInner[1] = 1.0;\n";
+            source += "}\n";
+            return source;
+        }
+
         namespace {
             Bool IsImagePassIdentifierChar(char c) {
                 return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
@@ -811,6 +933,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             struct ImageUniformDecl {
                 String name;
+                String aliasName;   // the repair-tagged name the rewritten declaration takes; empty
+                                    // for a declaration this pass leaves alone
                 String writeName;   // the writeonly half's name, when split
                 String layout;      // raw contents of layout(...)
                 String qualifiers;  // memory/precision qualifiers, normalized, no trailing space
@@ -855,11 +979,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return out;
             }
 
-            // A name for the writeonly half that no identifier in the shader (and no other
-            // half already minted) can collide with.
-            String MakeImageWriteAliasName(const String& name, const String& source,
-                                           const Vector<String>& taken) {
-                String candidate = String(IMAGE_WRITE_ALIAS_PREFIX) + name;
+            // A name for a rewritten declaration that no identifier in the shader (and no other
+            // alias already minted for this stage) can collide with.
+            String MakeImageAliasName(const String& prefix, const String& name, const String& source,
+                                      const Vector<String>& taken) {
+                String candidate = prefix + name;
                 // "__" anywhere in an identifier is reserved (GLSL ES 3.20 3.7), which a name
                 // that already starts with '_' would otherwise produce.
                 for (SizeT doubled = candidate.find("__"); doubled != String::npos;
@@ -904,6 +1028,236 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return after + 1;
             }
         } // namespace
+
+        namespace {
+            // The digits of an array extent or of an element subscript, or -1 for "not a plain
+            // decimal literal".
+            //
+            // One trailing `u`/`U` is PART of the literal rather than grounds for rejection.
+            // SPIRV-Cross prints an index in the type SPIR-V gave it, and
+            // LegalizeResourceArrayIndexPass mints its per-element constants in the type of the
+            // index it replaced (ConstantLikeIndex reads that index's own type_id), so an image
+            // array reached through anything unsigned - `for (uint i = 0u; i < 4u; ++i)`, or any
+            // expression on gl_LocalInvocationIndex, which is uint by definition - arrives here
+            // spelled `g_image[0u]`. Reading that as "not a literal" declined the array and left
+            // it on one layout(binding = N), which hands its elements the consecutive units
+            // N, N+1, ... - exactly the silently-wrong-units defect the split exists to remove.
+            Int ParseNonNegativeIntLiteral(const String& text) {
+                if (text.empty()) return -1;
+                SizeT digitCount = text.size();
+                if (text[digitCount - 1] == 'u' || text[digitCount - 1] == 'U') --digitCount;
+                if (digitCount == 0) return -1;
+                Int value = 0;
+                for (SizeT i = 0; i < digitCount; ++i) {
+                    const char c = text[i];
+                    if (c < '0' || c > '9') return -1;
+                    value = value * 10 + (c - '0');
+                    if (value > 4096) return -1; // no image array is anywhere near this
+                }
+                return value;
+            }
+        } // namespace
+
+        String RemapImageArrayElementUnits(const String& glslCode, const Vector<ImageArrayUnitPlan>& plans,
+                                           Vector<String>* outDeclined) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (outDeclined != nullptr) outDeclined->clear();
+            if (plans.empty() || glslCode.find("image") == String::npos) return glslCode;
+
+            // Same declaration shape as the split pass reads, with the array extent captured.
+            static const std::regex imageDeclRegex(
+                R"(layout\s*\(([^)]*)\)\s*uniform\s+)"
+                R"(((?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*))"
+                R"(([iu]?image[A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[\s*([0-9]*)\s*\])?\s*;)");
+            static const std::regex bindingValueRegex(R"(binding\s*=\s*\d+)");
+
+            struct StageImageDecl {
+                String name;
+                String layout;
+                String qualifiers;
+                String type;
+                Int elementCount = 1;
+                SizeT declStart = 0;
+                SizeT declLength = 0;
+            };
+            // Every image declaration in the stage; the plans are program-wide and name arrays
+            // this stage may not declare at all.
+            Vector<StageImageDecl> decls;
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), imageDeclRegex), last; it != last; ++it) {
+                const std::smatch& match = *it;
+                StageImageDecl decl;
+                decl.layout = match[1].str();
+                decl.qualifiers = NormalizeDeclarationSpacing(match[2].str());
+                decl.type = match[3].str();
+                decl.name = match[4].str();
+                decl.elementCount = match[5].matched ? ParseNonNegativeIntLiteral(match[5].str()) : 1;
+                decl.declStart = static_cast<SizeT>(match.position(0));
+                decl.declLength = match[0].str().size();
+                decls.push_back(Move(decl));
+            }
+
+            Vector<ImageSourceEdit> edits;
+            Vector<String> takenNames;
+            for (const ImageArrayUnitPlan& plan : plans) {
+                const auto decline = [&](const char* why) {
+                    if (outDeclined != nullptr) outDeclined->push_back(plan.name + ": " + why);
+                };
+                if (plan.units.size() < 2) continue;
+
+                const StageImageDecl* decl = nullptr;
+                for (const auto& candidate : decls) {
+                    if (candidate.name == plan.name) {
+                        decl = &candidate;
+                        break;
+                    }
+                }
+                if (decl == nullptr) {
+                    // Absent from this stage entirely is the normal outcome - the reflection is
+                    // program-wide and this pass runs per stage. Named but not RECOGNIZED is not:
+                    // it means the declaration is spelled in some shape the regex above does not
+                    // read, and staying quiet about that is how the wrong units got shipped.
+                    if (ContainsIdentifier(glslCode, plan.name)) {
+                        decline("the stage names it but declares it in a shape this pass cannot read");
+                    }
+                    continue;
+                }
+                if (decl->elementCount < 0 || static_cast<SizeT>(decl->elementCount) != plan.units.size()) {
+                    decline("the emitted array extent disagrees with the reflected element count");
+                    continue;
+                }
+
+                Bool consecutive = true;
+                Bool everyElementHasAUnit = true;
+                for (SizeT element = 0; element < plan.units.size(); ++element) {
+                    const Int unit = plan.units[element];
+                    if (unit < 0) {
+                        everyElementHasAUnit = false;
+                        break;
+                    }
+                    if (unit != plan.units[0] + static_cast<Int>(element)) consecutive = false;
+                }
+                if (!everyElementHasAUnit) {
+                    decline("an element has no image unit");
+                    continue;
+                }
+                // Already exactly what ESSL would do on its own. The caller filters these out;
+                // repeating the test here keeps the pass correct on its own terms.
+                if (consecutive) continue;
+
+                // Every use has to be `name[<literal>]`. The literal is what the split turns
+                // into a name, and by the time this runs there is always one:
+                // LegalizeResourceArrayIndexingForEssl has already folded or lowered every
+                // dynamic image-array subscript in the module, because ESSL forbids one
+                // outright ("image arrays indexed with non-constant expressions are forbidden
+                // in GLSL ES"). A subscript that is still an expression here is therefore a
+                // stage that was never going to compile, and guessing which element it meant
+                // would only change which unit it addressed wrongly.
+                struct ElementUse {
+                    SizeT start;   // the first character of the name
+                    SizeT length;  // through the closing ']'
+                    SizeT element;
+                };
+                Vector<ElementUse> uses;
+                const char* refusal = nullptr;
+                for (SizeT pos = glslCode.find(plan.name); pos != String::npos;
+                     pos = glslCode.find(plan.name, pos + 1)) {
+                    if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue;
+                    const SizeT after = pos + plan.name.size();
+                    if (after < glslCode.size() && IsImagePassIdentifierChar(glslCode[after])) continue;
+                    if (pos >= decl->declStart && pos < decl->declStart + decl->declLength) {
+                        continue; // the declaration's own name
+                    }
+                    const SizeT open = glslCode.find_first_not_of(" \t\r\n", after);
+                    if (open == String::npos || glslCode[open] != '[') {
+                        refusal = "it is reached by something other than a subscript, so there is no "
+                                  "element index to rewrite";
+                        break;
+                    }
+                    Int depth = 0;
+                    SizeT scan = open;
+                    for (; scan < glslCode.size(); ++scan) {
+                        if (glslCode[scan] == '[') {
+                            ++depth;
+                        } else if (glslCode[scan] == ']' && --depth == 0) {
+                            break;
+                        }
+                    }
+                    if (scan >= glslCode.size() || open + 1 >= scan) {
+                        refusal = "it is reached by something other than a subscript, so there is no "
+                                  "element index to rewrite";
+                        break;
+                    }
+                    const Int element = ParseNonNegativeIntLiteral(
+                        NormalizeDeclarationSpacing(glslCode.substr(open + 1, scan - open - 1)));
+                    if (element < 0 || element >= decl->elementCount) {
+                        refusal = "its subscript is not a literal element index, so which unit the "
+                                  "access reaches cannot be decided here";
+                        break;
+                    }
+                    uses.push_back({pos, scan + 1 - pos, static_cast<SizeT>(element)});
+                }
+                if (refusal != nullptr) {
+                    decline(refusal);
+                    continue;
+                }
+
+                // One SCALAR declaration per element, each carrying its own binding. ESSL nails
+                // an ARRAY's elements to consecutive units and offers no way to move them, so
+                // the only spelling that reaches an arbitrary set of units is one declaration
+                // per unit - and with every subscript a literal, every use has exactly one of
+                // them to be rewritten to.
+                //
+                // It costs precisely the image uniforms the application declared, which is why
+                // there is no budget test here: an array of four elements becomes four scalars
+                // however far apart their units are.
+                const SizeT elementCount = plan.units.size();
+                Vector<String> elementNames;
+                String replacement;
+                for (SizeT element = 0; element < elementCount; ++element) {
+                    const String elementName =
+                        MakeImageAliasName(IMAGE_ARRAY_ELEMENT_PREFIX,
+                                           plan.name + "_" + std::to_string(element), glslCode, takenNames);
+                    takenNames.push_back(elementName);
+                    elementNames.push_back(elementName);
+
+                    String layout = decl->layout;
+                    const String bindingText = "binding = " + std::to_string(plan.units[element]);
+                    if (std::regex_search(layout, bindingValueRegex)) {
+                        layout = std::regex_replace(layout, bindingValueRegex, bindingText);
+                    } else {
+                        layout = bindingText + (layout.empty() ? String() : ", " + layout);
+                    }
+                    if (element != 0) replacement += '\n';
+                    replacement += "layout(" + layout + ") uniform ";
+                    if (!decl->qualifiers.empty()) {
+                        replacement += decl->qualifiers;
+                        replacement += ' ';
+                    }
+                    replacement += decl->type + " " + elementName + ";";
+                }
+                edits.push_back({decl->declStart, decl->declLength, Move(replacement)});
+
+                // `name[k]` -> the scalar declared for element k, subscript and all.
+                for (const ElementUse& use : uses) {
+                    edits.push_back({use.start, use.length, elementNames[use.element]});
+                }
+            }
+            if (edits.empty()) return glslCode;
+
+            // Back to front, so an earlier edit's offsets stay valid. No two edits overlap: each
+            // one covers either a whole declaration or a whole `name[k]`, the declaration's own
+            // name is skipped when the uses are collected, and one occurrence of a name yields at
+            // most one edit.
+            std::sort(edits.begin(), edits.end(),
+                      [](const ImageSourceEdit& a, const ImageSourceEdit& b) { return a.start > b.start; });
+            String result = glslCode;
+            for (const ImageSourceEdit& edit : edits) {
+                result.replace(edit.start, edit.length, edit.text);
+            }
+            return result;
+        }
 
         String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount) {
 #ifdef TRACY_ENABLE
@@ -968,13 +1322,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             };
 
             // Walk every `image*(` call and attribute its first argument to a declaration.
-            struct StoreSite {
+            // EVERY recognized use is recorded, not only the stores: a declaration this pass
+            // renames has to take all of its uses with it, and the "every occurrence was one I
+            // saw" check below is what makes the recorded set provably the complete set.
+            struct ImageUseSite {
                 SizeT declIndex;
                 SizeT start;
                 SizeT length;
                 SizeT callOpen; // the '(' of the call this argument belongs to
+                Bool stores;    // an imageStore, i.e. the use a split redirects to the write half
             };
-            Vector<StoreSite> storeSites;
+            Vector<ImageUseSite> useSites;
             for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
                 if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue; // uimage2D, myimageFoo
                 SizeT tokenEnd = pos;
@@ -1019,12 +1377,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 switch (ClassifyImageBuiltin(builtin)) {
                 case ImageBuiltinAccess::Load:
                     decl.loaded = true;
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, false});
                     break;
                 case ImageBuiltinAccess::Store:
                     decl.stored = true;
-                    storeSites.push_back({declIndex, argStart, argEnd - argStart, openParen});
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, true});
                     break;
                 case ImageBuiltinAccess::None:
+                    // imageSize/imageSamples touch nothing, but they still NAME the variable, so
+                    // a rename has to reach them.
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, false});
                     break;
                 default:
                     decl.unknownUse = true;
@@ -1041,12 +1403,54 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             Vector<ImageSourceEdit> edits;
-            Vector<String> takenAliases;
+            Vector<String> takenNames;
             for (auto& decl : decls) {
                 if (decl.unknownUse) continue; // leave it exactly as it was; no guessing
+                // EVERY declaration this pass rewrites is also RENAMED, under the prefix of the
+                // repair it is about to receive - the qualifier below is a decision about ONE
+                // STAGE's accesses, and GLSL requires a uniform declared in two stages to be
+                // declared IDENTICALLY (GLSL 4.3 4.3.9 / GLSL ES 3.20 4.3.9). A shader that
+                // stores to an image in the vertex stage and loads it in the fragment stage gets
+                // `writeonly` on one and `readonly` on the other, and on Adreno the linker merges
+                // the two same-named declarations and SILENTLY DISCARDS the vertex-stage stores:
+                // no GL error, no link log, LINK_STATUS = 1, and the image still holding its
+                // initial contents afterwards
+                // (KHR-GL4x.shader_image_load_store.advanced-memory-dependentInvocation, and any
+                // shader pack that writes an image in one stage to read it in another).
+                //
+                // Keyed on the REPAIR and not on the stage, which is what makes the rename
+                // exactly as wide as the problem. Two stages that use the image the same way
+                // reach the same prefix and emit byte-identical declarations, so they keep ONE
+                // shared uniform and there is nothing mismatched to merge; two that use it
+                // differently reach different prefixes and cannot be merged at all. Tagging by
+                // stage instead also broke the merge - but it broke it for the agreeing stages
+                // too, turning one image uniform into one PER STAGE that names it, and Adreno
+                // allocates image locations per distinct uniform: the five stages of
+                // KHR-GL43.shading_language_420pack.binding_images_texture_type_* went from 6
+                // image uniforms to 30 and the link failed outright with "Error: Image Image
+                // location or component exceeds max allowed." on an Adreno 830, where Mali and
+                // Mesa both accept the same text.
+                //
+                // Nothing downstream reads these names: the two passes that key on the GL uniform
+                // name (RebindImageUniformsToFrontendUnits, BakeImageFormatQualifiers) both run
+                // BEFORE this one, RemoveLayoutBinding recognises an image declaration by its TYPE
+                // token, and CacheResourceLocations skips image uniforms outright because ES image
+                // units come only from layout(binding=N). The declarations this pass LEAVES ALONE -
+                // already readonly/writeonly in the source, or r32f/r32i/r32ui, which need no
+                // qualifier - keep their names, and they are exactly the ones that already match
+                // across stages.
+                const char* aliasPrefix = decl.loaded && decl.stored ? IMAGE_SPLIT_READ_ALIAS_PREFIX
+                                          : decl.stored             ? IMAGE_WRITEONLY_ALIAS_PREFIX
+                                                                    : IMAGE_READONLY_ALIAS_PREFIX;
+                decl.aliasName = MakeImageAliasName(aliasPrefix, decl.name, glslCode, takenNames);
+                takenNames.push_back(decl.aliasName);
                 if (decl.loaded && decl.stored) {
-                    decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
-                    takenAliases.push_back(decl.writeName);
+                    // Minted from the ALREADY access-tagged name, so the write half of a split
+                    // can never collide with the single declaration another stage's repair mints
+                    // for the same image.
+                    decl.writeName =
+                        MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.aliasName, glslCode, takenNames);
+                    takenNames.push_back(decl.writeName);
                     decl.split = true;
                     if (outSplitCount != nullptr) ++*outSplitCount;
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
@@ -1054,24 +1458,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // there is no visibility to restore and no reason to pay for the cache
                     // behaviour.
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.name, /*forceCoherent=*/true) +
+                                     BuildImageDeclaration(decl, "readonly", decl.aliasName,
+                                                           /*forceCoherent=*/true) +
                                          "\n" +
                                          BuildImageDeclaration(decl, "writeonly", decl.writeName,
                                                                /*forceCoherent=*/true)});
                 } else if (decl.stored) {
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "writeonly", decl.name)});
+                                     BuildImageDeclaration(decl, "writeonly", decl.aliasName)});
                 } else {
                     // Loaded only, or only ever handed to imageSize (or unused): readonly is
                     // the qualifier that keeps every one of those legal.
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.name)});
+                                     BuildImageDeclaration(decl, "readonly", decl.aliasName)});
                 }
             }
-            for (const StoreSite& site : storeSites) {
+            for (const ImageUseSite& site : useSites) {
                 const ImageUniformDecl& decl = decls[site.declIndex];
-                if (!decl.split) continue;
-                edits.push_back({site.start, site.length, decl.writeName});
+                // Empty exactly when the declaration was poisoned above and left untouched; its
+                // uses must keep naming the variable that is still called that.
+                if (decl.aliasName.empty()) continue;
+                edits.push_back(
+                    {site.start, site.length, decl.split && site.stores ? decl.writeName : decl.aliasName});
+                if (!decl.split || !site.stores) continue;
                 // ...and an explicit barrier behind it. `coherent` on both halves is what makes
                 // the store VISIBLE to a load through the other variable, but it says nothing
                 // about ORDER within one invocation - and the whole reason a declaration is split

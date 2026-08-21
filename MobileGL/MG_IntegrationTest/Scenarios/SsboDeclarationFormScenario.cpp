@@ -42,10 +42,10 @@
 namespace MGITest {
     namespace {
 
-        // The eight vertex shaders of the conformance sweep, verbatim in shape. Each reads three
-        // vec4 positions out of a storage block on binding 0 and emits them as a triangle that
-        // covers the whole viewport.
-        constexpr const char* kFormVS[8] = {
+        // The eight vertex shaders of the conformance sweep, verbatim in shape, plus a ninth that
+        // is not from the sweep (see form 8). Each reads three vec4 positions out of a storage
+        // block on binding 0 and emits them as a triangle that covers the whole viewport.
+        constexpr const char* kFormVS[9] = {
             // 0 - instance name, no binding qualifier, sized array member
             R"(#version 430 core
 layout(std430) buffer Buffer {
@@ -128,6 +128,38 @@ void main() {
   }
 }
 )",
+            // 8 - NOT from the conformance sweep. An unqualified storage block with a UNIFORM
+            // BLOCK beside it, which is what makes the block's DEFAULT binding observable at all.
+            //
+            // GL 4.3 core 7.8 gives a storage block with no layout(binding = N) a buffer binding
+            // of zero. Forms 0, 1, 3, 4 and 5 above are all unqualified and all pass, but they
+            // cannot prove that rule holds: they are the only resource in their shader, so the
+            // binding glslang's IO mapper invents for them happens to BE zero and the right answer
+            // arrives for the wrong reason.
+            //
+            // Every shader here is parsed as a Vulkan client, so that mapper allocates out of ONE
+            // flat space shared by samplers, images, uniform blocks, storage blocks and the
+            // synthesized global-uniform block (iomapper.cpp resolveBinding takes the `ent.newSet`
+            // branch, and every resource resolves to set 0), and then writes the result back into
+            // the type's qualifier - so the reflection cannot tell an invented binding from a
+            // declared one. Put anything live next to the block and it is pushed off zero, the
+            // draw reads a binding point nothing was ever bound to, and the triangle collapses
+            // with no GL error anywhere. That is
+            // KHR-GL43.compute_shader.resource-ubo's whole failure, in a vertex stage.
+            //
+            // The uniform block is REBOUND explicitly with glUniformBlockBinding, exactly as that
+            // conformance case does. That keeps this case about the storage block's default and
+            // not about the uniform block's - the rebinding path has always worked, and the
+            // uniform-block default is a separate (still open) question.
+            R"(#version 430 core
+layout(std140) uniform ScaleBlock {
+  vec4 factor;
+} g_scale;
+layout(std430) buffer Buffer {
+  vec4 position[3];
+} g_input_buffer;
+void main() { gl_Position = g_input_buffer.position[gl_VertexID] * g_scale.factor; }
+)",
         };
 
         constexpr const char* kFormFS = R"(#version 430 core
@@ -197,6 +229,26 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 const unsigned int program = CompileProgram(kFormVS[form], kFormFS, &error);
                 ASSERT_NE(program, 0u) << "form " << form << " did not build: " << error;
 
+                // Form 8 alone declares a uniform block, and it exists only to occupy a slot the
+                // storage block must not be pushed onto. Bound to a buffer of ones so it scales
+                // the positions by exactly 1 - the block's contribution to the IMAGE is nothing,
+                // and its contribution to the TEST is that it is there at all.
+                GLuint uniformBuffer = 0;
+                if (form == 8) {
+                    const float ones[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                    glGenBuffers(1, &uniformBuffer);
+                    glBindBuffer(GL_UNIFORM_BUFFER, uniformBuffer);
+                    glBufferData(GL_UNIFORM_BUFFER, sizeof(ones), ones, GL_STATIC_DRAW);
+                    glBindBufferBase(GL_UNIFORM_BUFFER, 0, uniformBuffer);
+                    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+                    const GLuint blockIndex = glGetUniformBlockIndex(program, "ScaleBlock");
+                    ASSERT_NE(blockIndex, GL_INVALID_INDEX) << "form 8: the uniform block is not active";
+                    // Explicit, so this case cannot fail on the uniform block's own default
+                    // binding - which is a separate question from the storage block's.
+                    glUniformBlockBinding(program, blockIndex, 0);
+                    ASSERT_EQ(FirstGLError(), 0u) << "form 8: uniform block setup errored";
+                }
+
                 GLuint vao = 0;
                 glGenVertexArrays(1, &vao);
                 glBindVertexArray(vao);
@@ -221,6 +273,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 glDeleteVertexArrays(1, &vao);
                 glDeleteProgram(program);
                 glDeleteBuffers(1, &buffer);
+                if (uniformBuffer != 0) glDeleteBuffers(1, &uniformBuffer);
                 gl.EndFrame();
             }
         };
@@ -241,6 +294,10 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
     MGL_SSBO_FORM_CASE(3, GlobalLayoutDefaultsThenAnInstanceNamedBlock)
     MGL_SSBO_FORM_CASE(4, BlockInstanceArrayOfOne)
     MGL_SSBO_FORM_CASE(5, BlockInstanceArrayOfOneWithSharedLayout)
+    // The form that makes the DEFAULT binding observable rather than accidental: forms 0/1/3/4/5
+    // are unqualified too, but nothing competes with them for glslang's flat slot 0, so they
+    // would keep passing even with the default wrong. See the comment on kFormVS[8].
+    MGL_SSBO_FORM_CASE(8, NoBindingQualifierBesideAUniformBlock)
     // ---- the two forms that do not work yet ----
     //
     // Both carry an UNSIZED array that is not the block's sole trailing member, and both fail

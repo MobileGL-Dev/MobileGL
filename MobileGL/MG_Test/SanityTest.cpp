@@ -1374,7 +1374,10 @@ TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
         {SpvImageFormatR11fG11fB10f, VK_FORMAT_B10G11R11_UFLOAT_PACK32},
         {SpvImageFormatR16f, VK_FORMAT_R16_SFLOAT},
         {SpvImageFormatRgba16, VK_FORMAT_R16G16B16A16_UNORM},
-        {SpvImageFormatRgb10A2, VK_FORMAT_A2R10G10B10_UNORM_PACK32},
+        // A2**B**10G10R10, matching MGToVk::ConvertTextureInternalFormatToVkFormat's RGB10A2:
+        // the view format and the image format have to name the same bit layout, and
+        // GL_UNSIGNED_INT_2_10_10_10_REV is A2B10G10R10. A2R10G10B10 transposes R and B.
+        {SpvImageFormatRgb10A2, VK_FORMAT_A2B10G10R10_UNORM_PACK32},
         {SpvImageFormatRg16, VK_FORMAT_R16G16_UNORM},
         {SpvImageFormatRg8, VK_FORMAT_R8G8_UNORM},
         {SpvImageFormatR16, VK_FORMAT_R16_UNORM},
@@ -1397,7 +1400,7 @@ TEST(DirectVulkanSanity, SpirvStorageImageFormatsMapToVulkanFormats) {
         {SpvImageFormatRgba16ui, VK_FORMAT_R16G16B16A16_UINT},
         {SpvImageFormatRgba8ui, VK_FORMAT_R8G8B8A8_UINT},
         {SpvImageFormatR32ui, VK_FORMAT_R32_UINT},
-        {SpvImageFormatRgb10a2ui, VK_FORMAT_A2R10G10B10_UINT_PACK32},
+        {SpvImageFormatRgb10a2ui, VK_FORMAT_A2B10G10R10_UINT_PACK32},
         {SpvImageFormatRg32ui, VK_FORMAT_R32G32_UINT},
         {SpvImageFormatRg16ui, VK_FORMAT_R16G16_UINT},
         {SpvImageFormatRg8ui, VK_FORMAT_R8G8_UINT},

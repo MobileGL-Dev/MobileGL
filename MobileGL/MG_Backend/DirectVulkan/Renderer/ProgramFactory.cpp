@@ -2094,7 +2094,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case SpvImageFormatR11fG11fB10f: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
         case SpvImageFormatR16f: return VK_FORMAT_R16_SFLOAT;
         case SpvImageFormatRgba16: return VK_FORMAT_R16G16B16A16_UNORM;
-        case SpvImageFormatRgb10A2: return VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        // A2**B**10G10R10, matching MGToVk::ConvertTextureInternalFormatToVkFormat's RGB10A2.
+        // This value becomes the storage image VIEW's format while the image itself was created
+        // from the texture's internal format, so the two must name the same bit layout or the
+        // shader reads the texel through a different component order than the host wrote it.
+        // GL_RGB10_A2 with GL_UNSIGNED_INT_2_10_10_10_REV puts R in bits 0-9, G in 10-19, B in
+        // 20-29 and A in 30-31, which is Vulkan's A2B10G10R10; A2R10G10B10 transposes R and B.
+        // KHR-GL43.shader_image_load_store.basic-allFormats-store read back [2,1,0,3] for an
+        // rgb10_a2ui image stored as [0,1,2,3] while these two converters disagreed.
+        case SpvImageFormatRgb10A2: return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
         case SpvImageFormatRg16: return VK_FORMAT_R16G16_UNORM;
         case SpvImageFormatRg8: return VK_FORMAT_R8G8_UNORM;
         case SpvImageFormatR16: return VK_FORMAT_R16_UNORM;
@@ -2117,7 +2125,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case SpvImageFormatRgba16ui: return VK_FORMAT_R16G16B16A16_UINT;
         case SpvImageFormatRgba8ui: return VK_FORMAT_R8G8B8A8_UINT;
         case SpvImageFormatR32ui: return VK_FORMAT_R32_UINT;
-        case SpvImageFormatRgb10a2ui: return VK_FORMAT_A2R10G10B10_UINT_PACK32;
+        case SpvImageFormatRgb10a2ui: return VK_FORMAT_A2B10G10R10_UINT_PACK32; // see Rgb10A2 above
         case SpvImageFormatRg32ui: return VK_FORMAT_R32G32_UINT;
         case SpvImageFormatRg16ui: return VK_FORMAT_R16G16_UINT;
         case SpvImageFormatRg8ui: return VK_FORMAT_R8G8_UINT;

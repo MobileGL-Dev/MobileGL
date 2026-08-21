@@ -22,6 +22,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/LegalizeFragmentOutputIndexPass.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/Lower1DArrayImagesPass.h>
+#include <MG_Util/ShaderTranspiler/SpirvPasses/Lower1DSampledImagesPass.h>
 #include <MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Util/ShaderTranspiler/glslang/UniformTraverser.h>
@@ -3041,6 +3042,47 @@ void main() {
         << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
 }
 
+// Marking a loop for unrolling means marking every loop enclosing it - SPIRV-Tools only unrolls
+// innermost loops - and the copies those levels produce MULTIPLY, so bounding each loop on its
+// own bounds nothing. This nest is the OIT shape wrapped in a tile walk: 64 x 64 x 2, every level
+// individually inside kMaxUnrolledIterations, and its product is not. Spending the budget as the
+// walk climbs stops at the innermost level; the switch lowering, whose cost is the output array's
+// length rather than the trip counts, legalizes whatever the unroll no longer reaches. The same
+// defect was measured first on LegalizeResourceArrayIndexPass, which the image half of that pass
+// made reachable; this walk is its twin and is fixed the same way.
+TEST_F(ProgramUtilTest, ALoopNestAroundAFragmentOutputIndexIsBoundedAsAWhole) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+out vec4 coeff[2];
+in vec4 vColor;
+void main() {
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            for (int attachmentIndex = 0; attachmentIndex < 2; ++attachmentIndex) {
+                coeff[attachmentIndex] = vColor * float(x + y + attachmentIndex);
+            }
+        }
+    }
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
+        << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
+        << DisassembleSpirv(raw);
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
+    ASSERT_FALSE(legalized.empty());
+    // Still legalized - that is not what is being traded away.
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized));
+    // ...and the module the driver has to compile is still a module, not the nest's product.
+    // Measured on this fixture: 318 words with the nest budget, 5112 without - so the bound is
+    // loose enough not to pin spirv-opt's exact output (3x the real figure) and tight enough
+    // that a nest-wide unroll cannot slip under it (5x below the unbounded one).
+    EXPECT_LT(legalized.size(), 1024u) << "legalized module is " << legalized.size() << " words";
+}
+
 // The fallback half: an index computed from a uniform cannot be folded by any amount of
 // unrolling, so the write becomes a switch over the array's range and the read becomes
 // constant-indexed loads combined with selects.
@@ -3651,6 +3693,290 @@ void main() { ssb.sum = uint(imageSize(i0).x) + imageLoad(i0, ivec2(0, 0)).r; }
         << "declining means the 1D-array type is still there for the driver to reject";
 }
 
+// --- 1D SAMPLED images (Lower1DSampledImagesPass) ----------------------------------------------
+//
+// The other half of the 1D story. SPIRV-Cross DOES widen a 1D sampler's coordinate for ES - the
+// test above pins that - but it prints the OFFSET and the two GRADIENT operands with the arity the
+// desktop shader spelled, against a sampler it has just declared 2D. The result has no ESSL
+// overload, the driver says "no matching overloaded function found", and the stage is lost.
+
+namespace {
+    // Same word walk as the storage-image counters, for Sampled == 1.
+    SizeT Count1DSampledImageTypes(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpTypeImage = 25, kDim1D = 0;
+        SizeT count = 0;
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpTypeImage && wordCount >= 8 && spirv[i + 3] == kDim1D &&
+                spirv[i + 7] == 1u) {
+                ++count;
+            }
+            i += wordCount;
+        }
+        return count;
+    }
+
+    // KHR-GL43.compute_shader.resource-texture's own sampler1DArray lookup, minus the other eight
+    // samplers: a textureLodOffset whose offset is the scalar GL gives a 1D array.
+    const char* k1DArraySamplerOffsetCompute = R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1DArray g_sampler4;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() { ssb.data = textureLodOffset(g_sampler4, vec2(0.5, 1.0), 0.0, 0); }
+)";
+} // namespace
+
+// The negative control, and the whole reason the pass exists: SPIRV-Cross emits the sampler as 2D
+// and widens the coordinate, then hands the scalar offset straight through. Pinning the upstream
+// behaviour here means that if a future SPIRV-Cross bump fixes it, this test fails and says so,
+// rather than the pass quietly becoming dead weight.
+TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarOffsetFor1DSamplers) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(k1DArraySamplerOffsetCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(Count1DSampledImageTypes(spirv), 1u)
+        << "glslang no longer emits a Dim1D/Sampled=1 image for sampler1DArray";
+
+    const String essl = DecompileToEssl(spirv);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("sampler2DArray"), String::npos)
+        << "SPIRV-Cross declares the 1D array sampler as 2D on ES; that half it does do:\n" << essl;
+    EXPECT_EQ(essl.find("ivec2"), String::npos)
+        << "SPIRV-Cross is expected to pass the SCALAR offset straight through, so nothing in this "
+           "fixture builds an ivec2 - its absence IS the defect, because ESSL has no "
+           "textureLodOffset(sampler2DArray, vec3, float, int). If this no longer happens, "
+           "Lower1DSampledImagesForEssl may no longer be needed:\n"
+        << essl;
+}
+
+// The fix: the type becomes a 2D array and the offset becomes two components, so the call
+// type-checks against the declaration SPIRV-Cross was already emitting.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesWidensTheOffsetOfA1DArrayLookup) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(k1DArraySamplerOffsetCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    // Through the shared chain first, exactly as the DirectGLES transpile path does - the same
+    // reason the storage-image tests above do it: the pass runs on sanitized bytes, and validating
+    // raw glslang output would latch pre-existing properties against this pass.
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_TRUE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
+        << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
+        << DisassembleSpirv(spirv);
+
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 0u)
+        << "no 1D sampled image type may survive the pass:\n"
+        << DisassembleSpirv(lowered);
+    // The point of moving the TYPE rather than only the operand: an ivec2 offset against a type
+    // still declared Dim1D is an invalid module, and the validator would say so.
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean:\n"
+        << DisassembleSpirv(lowered);
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("sampler2DArray"), String::npos)
+        << "the sampler must still be declared as the 2D array the texture is stored as:\n" << essl;
+    EXPECT_NE(essl.find("ivec2"), String::npos)
+        << "the offset must now be the two-component one ESSL's sampler2DArray overload takes:\n"
+        << essl;
+}
+
+// The gradients take the identical repair, and through a different SPIRV-Cross branch - the offset
+// is emitted at `if (args.offset)` and the gradients at `if (args.grad_x || args.grad_y)`, so one
+// fixture cannot cover both.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesWidensTheGradientsOfA1DLookup) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1D g_sampler0;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() { ssb.data = textureGrad(g_sampler0, 0.5, 0.25, 0.125); }
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_TRUE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
+        << DisassembleSpirv(spirv);
+
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 0u) << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean:\n"
+        << DisassembleSpirv(lowered);
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("textureGrad"), String::npos) << essl;
+    // Both derivatives have to be widened, not just the first: ESSL's overload takes two vec2s.
+    EXPECT_NE(essl.find("vec2(0.25, 0.0)"), String::npos)
+        << "dPdx must be widened to two components:\n" << essl;
+    EXPECT_NE(essl.find("vec2(0.125, 0.0)"), String::npos)
+        << "dPdy must be widened too:\n" << essl;
+}
+
+// Scope: a 1D sampler that is only SAMPLED or FETCHED is emitted correctly by the very same
+// SPIRV-Cross code, so the pass must not touch it. Replacing working emission with our own buys
+// nothing and risks everything - the same rule the storage-image sibling applies to a 1D image
+// with no atomic on it. resource-texture's own sampler1D is exactly this shape (it only calls
+// texelFetch), so this is not a hypothetical.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesLeavesPlainLookupsToSpirvCross) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1D g_sampler0;
+uniform sampler1DArray g_sampler4;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() {
+    ssb.data = texelFetch(g_sampler0, 2, 0) + texture(g_sampler4, vec2(0.5, 1.0));
+}
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(Count1DSampledImageTypes(spirv), 2u);
+    EXPECT_FALSE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
+        << "no offset and no gradient here, so the probe must say there is nothing to do";
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    EXPECT_EQ(lowered, spirv) << "a 1D sampler with no offset or gradient must pass through byte "
+                                 "for byte";
+}
+
+// The gate is per arrayed-ness, matching the two distinct OpTypeImage declarations glslang emits:
+// the sampler1DArray carries the offset and is rewritten, while the sampler1D in the same module
+// is left to SPIRV-Cross. This is resource-texture's own shape.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesRewritesOnlyTheArrayednessThatCarriesTheOffset) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1D g_sampler0;
+uniform sampler1DArray g_sampler4;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() {
+    ssb.data = texelFetch(g_sampler0, 2, 0) +
+               textureLodOffset(g_sampler4, vec2(0.5, 1.0), 0.0, 0);
+}
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DSampledImageTypes(spirv), 2u);
+
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 1u)
+        << "the arrayed sampler must be rewritten and the non-arrayed one left alone:\n"
+        << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean:\n"
+        << DisassembleSpirv(lowered);
+
+    // Both spellings coincide on ES, which is why a partial rewrite is safe here and is NOT safe
+    // for the storage-image sibling: SPIRV-Cross prints Dim1D as "2D" already, so the stage that
+    // was rewritten and the stage that was not declare the same ESSL type.
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_EQ(essl.find("sampler1D"), String::npos)
+        << "nothing may reach the driver still spelled 1D:\n" << essl;
+}
+
+// The shape that would emit INVALID SPIR-V without the deduplication, and the shape the
+// conformance case actually has: a 1D sampler and a real 2D sampler of the same sampled type in
+// one module. Rewriting the first one's Dim in place makes the two OpTypeImage declarations
+// structurally identical, and SPIR-V forbids duplicate non-aggregate types.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesDeduplicatesAgainstAnExisting2DSampler) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1D g_sampler0;
+uniform sampler2D g_sampler1;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() {
+    ssb.data = textureLodOffset(g_sampler0, 0.5, 0.0, 1) +
+               textureLod(g_sampler1, vec2(0.5), 0.0);
+}
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DSampledImageTypes(spirv), 1u);
+
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 0u) << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the rewritten 1D sampler collided with the module's own 2D sampler and left a "
+           "duplicate type declaration behind:\n"
+        << DisassembleSpirv(lowered);
+}
+
+// The declined shape, for the sibling's reason: textureSize(sampler1D) yields an int and
+// textureSize(sampler2D) an ivec2, so rewriting the type while leaving the query would hand the
+// shader a value of the wrong shape. The module is returned untouched rather than half-translated.
+TEST_F(ProgramUtilTest, Lower1DSampledImagesDeclinesAModuleThatQueriesTheTextureSize) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+uniform sampler1D g_sampler0;
+layout (std430, binding = 0) buffer SSB { vec4 data; } ssb;
+void main() {
+    ssb.data = textureLodOffset(g_sampler0, 0.5, 0.0, 1) + float(textureSize(g_sampler0, 0));
+}
+)",
+                                                  GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_TRUE(Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(spirv))
+        << "the fixture must still carry the offset that arms the pass, so that the decline is "
+           "what leaves the module alone rather than the gate:\n"
+        << DisassembleSpirv(spirv);
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DSampledImagesForEssl(spirv, lowered, true));
+    EXPECT_EQ(lowered, spirv)
+        << "a declined module must be handed back untouched, not partly rewritten";
+    EXPECT_EQ(Count1DSampledImageTypes(lowered), 1u)
+        << "declining means the 1D type is still there for the driver to reject";
+}
+
 // --- image format qualifier bake (BakeImageFormatsPass) ---------------------------------------
 //
 // Desktop GLSL 4.2 lets a writeonly image declaration omit its format layout qualifier; GLSL ES
@@ -3674,6 +4000,7 @@ namespace {
     constexpr Uint kGlRgba32ui = 0x8D70;
     constexpr Uint kGlR8ui = 0x8232;
     constexpr Uint kGlR32f = 0x822E;
+    constexpr Uint kGlRgb10A2ui = 0x906F;
 } // namespace
 
 // The KHR-GL4x.packed_depth_stencil.stencil_texturing compute shader, reduced: one format-less
@@ -3716,14 +4043,23 @@ void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 
 
 // SPIRV-Cross THROWS rather than printing the formats it calls desktop-only when it targets ESSL
 // (Compiler::is_desktop_only_format), and a throw loses the whole stage - so baking one of those
-// into the module would trade a missing qualifier for a missing shader. They are left format-less
-// here and completed on the emitted text instead (PrgramImpl::BakeImageFormatQualifiers). r8ui,
-// which the stencil half of the packed_depth_stencil case binds, is one of them.
-TEST_F(ProgramUtilTest, BakeImageFormatsLeavesTheFormatsSpirvCrossRefusesToPrint) {
+// into the module would trade a missing qualifier for a missing shader.
+//
+// That still holds for the formats NOTHING can rescue, which are left format-less here and
+// completed on the emitted text instead (PrgramImpl::BakeImageFormatQualifiers). It stopped
+// holding for the ones that widen EXACTLY: WidenImageFormatsForEssl runs immediately after this
+// pass on the ESSL chain and re-declares them in a core carrier SPIRV-Cross does print, so for
+// those the module is the right place and the text completion would put back the narrow token no
+// ES driver accepts. r8ui - which the stencil half of the packed_depth_stencil case binds - is
+// one of the rescued ones; rgb10_a2ui, whose 10/10/10/2 channel widths no core format has, is not.
+TEST_F(ProgramUtilTest, BakeImageFormatsLeavesOnlyTheFormatsNoCoreCarrierRescues) {
     using namespace MG_Util::ShaderTranspiler;
 
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR8ui))
-        << "if SPIRV-Cross ever learns to print r8ui for ES, the text completion can go";
+        << "if SPIRV-Cross ever learns to print r8ui for ES, this route can go";
+    ASSERT_NE(ShaderCompiler::WidenedCoreEsslImageFormat(kGlR8ui), 0u);
+    ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlRgb10A2ui));
+    ASSERT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb10A2ui), 0u);
     ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR32ui));
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(kGlR8ui), "r8ui");
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(0x8051 /*GL_RGB8*/), "");
@@ -3736,11 +4072,29 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
-    Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked));
-    EXPECT_EQ(baked, spirv) << "a format SPIRV-Cross cannot print must leave the module untouched";
-    // ...and the stage still transpiles, which is the whole point of declining.
-    EXPECT_FALSE(DecompileToEssl(baked).empty());
+    {   // Unprintable AND uncarriable: declined, module untouched, and the stage still transpiles.
+        Vector<Uint32> baked;
+        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlRgb10A2ui}}, baked));
+        EXPECT_EQ(baked, spirv) << "a format nothing can carry must leave the module untouched";
+        EXPECT_FALSE(DecompileToEssl(baked).empty());
+    }
+    {   // Unprintable but carriable: baked narrow here, then widened into the carrier, which is
+        // what finally gives the declaration a qualifier ES accepts.
+        Vector<Uint32> baked;
+        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked, true));
+        ASSERT_FALSE(baked.empty());
+        EXPECT_NE(baked, spirv) << "a format the widening carries must reach the module";
+        EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked));
+        ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(baked));
+
+        Vector<Uint32> widened;
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(baked, widened, false, true));
+        ASSERT_FALSE(widened.empty());
+        const String essl = DecompileToEssl(widened);
+        ASSERT_FALSE(essl.empty());
+        EXPECT_NE(essl.find("rgba8ui"), String::npos)
+            << "the baked r8ui must come out as the core carrier:\n" << essl;
+    }
 }
 
 // A DECLARED format is authoritative: GL requires the qualifier, the bind format and the
@@ -4224,4 +4578,103 @@ void main() {}
     EXPECT_EQ(bindings.at("octalUnit"), 10u) << "012 is octal ten, not twelve";
     ASSERT_EQ(bindings.count("suffixedUnit"), 1u);
     EXPECT_EQ(bindings.at("suffixedUnit"), 1u);
+}
+
+// GL 4.3 core 7.8 puts a storage block with no layout(binding = N) on binding ZERO. Nothing
+// downstream can still tell which blocks those are, because glslang's IO mapper auto-assigns a
+// binding out of one flat space and writes it into the qualifier - so the reflection reports the
+// invention. This scanner is the only surviving record, and it reports POSITIVELY: a block is
+// named only when it was recognised in full AND recognised as unqualified.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingNamesOnlyUnqualifiedBlocks) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // KHR-GL43.compute_shader.resource-ubo's own shape: an unqualified storage block alongside
+    // the uniform blocks whose presence is what pushes it off binding 0 today.
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std140) uniform InputBuffer { vec4 data[4]; } g_in_buffer[12];
+layout(std430) buffer OutputBuffer { vec4 data0[4]; } g_out_buffer;
+layout(std430, binding = 3) buffer BoundBlock { vec4 data1[4]; } g_bound;
+layout(binding = 5, std430) buffer BoundFirst { vec4 data2[4]; } g_bound_first;
+void main() { g_out_buffer.data0[0] = g_in_buffer[0].data[0]; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("OutputBuffer"), 1u)
+        << "the block the test binds at 0 with glBindBufferBase must be recognised";
+    EXPECT_EQ(unqualified.count("BoundBlock"), 0u)
+        << "a declared binding must never be defaulted away";
+    EXPECT_EQ(unqualified.count("BoundFirst"), 0u)
+        << "the binding may appear anywhere in the layout list, not only last";
+    // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, and
+    // its default is already handled where uniformBlockBinding is seeded. Naming it here would
+    // make the seeder default a resource it does not own.
+    EXPECT_EQ(unqualified.count("InputBuffer"), 0u) << "uniform blocks are out of scope";
+}
+
+// The scanner must not mistake a member qualifier, a buffer-typed sampler, or the
+// "layout(...) buffer;" default-qualifier form for a block declaration - and must record nothing
+// at all for grammar it does not fully recognise, so that anything surprising keeps today's
+// behaviour instead of being defaulted on a guess.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingIgnoresNonBlockBufferTokens) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+uniform samplerBuffer texelSampler;
+layout(std430) buffer;
+layout(std430) buffer Real { vec4 v[4]; } realInstance;
+void main() { realInstance.v[0] = texelFetch(texelSampler, 0); }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("Real"), 1u);
+    // samplerBuffer is one identifier token, so it can never match the `buffer` keyword; and the
+    // default-qualifier form declares no block, so there is no name to record.
+    EXPECT_EQ(unqualified.size(), 1u)
+        << "only the one real block declaration may be recorded";
+}
+
+// The dangerous direction, because a false positive here DEFAULTS AWAY a binding the shader
+// really declared. Memory qualifiers may sit between the layout list and the `buffer` keyword in
+// either order, and the binding has to survive them.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingKeepsBindingsAcrossMemoryQualifiers) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 1) coherent restrict buffer AfterLayout { uint a; } afterLayout;
+readonly layout(std430, binding = 2) buffer BeforeLayout { uint b; } beforeLayout;
+writeonly buffer NoBindingAtAll { uint c; } noBinding;
+void main() { noBinding.c = afterLayout.a + beforeLayout.b; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("AfterLayout"), 0u)
+        << "coherent/restrict must not break the qualifier run and lose the binding";
+    EXPECT_EQ(unqualified.count("BeforeLayout"), 0u)
+        << "a qualifier may precede the layout list too";
+    EXPECT_EQ(unqualified.count("NoBindingAtAll"), 1u)
+        << "a memory-qualified block with no binding is still an unqualified block";
+}
+
+// This scans preprocessor-visible text, so a block can be declared twice - once with a binding
+// and once without. Reporting it as unqualified would default away a binding the active
+// declaration carries, so any name seen WITH a binding is dropped outright.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingDropsNamesSeenBothWays) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 4) buffer Ambiguous { uint a; } bound;
+layout(std430) buffer Ambiguous { uint a; } unbound;
+layout(std430) buffer Clear { uint b; } clearInstance;
+void main() { clearInstance.b = 0u; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("Ambiguous"), 0u)
+        << "seen both ways is a doubt, and a doubt must not become a default";
+    EXPECT_EQ(unqualified.count("Clear"), 1u)
+        << "the unambiguous block alongside it is still recognised";
 }

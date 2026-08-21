@@ -162,6 +162,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         builder.Value(static_cast<Uint32>(inputs.shaderType));
         builder.Value(static_cast<Uint8>(inputs.supportsViewportArray));
         builder.Value(static_cast<Uint8>(inputs.supportsNoperspectiveInterpolation));
+        builder.Value(static_cast<Uint8>(inputs.supportsExtendedImageFormats));
         builder.Value(inputs.maxColorTextureSamples);
         builder.Value(inputs.maxIntegerSamples);
         builder.Value(inputs.maxDepthTextureSamples);
