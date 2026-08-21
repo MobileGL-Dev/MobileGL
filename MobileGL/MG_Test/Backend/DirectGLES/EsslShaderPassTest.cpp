@@ -233,6 +233,66 @@ void main()
     EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D storeOnly;")) << out;
 }
 
+// The ORDERING half of the split, which `coherent` alone does not buy. Coherent makes the store
+// through one variable VISIBLE to a load through the other; it says nothing about the order of
+// the two within a single invocation, and the ES compiler - seeing a write to one variable and a
+// read of another it has no reason to believe alias - is free to serve the read from before the
+// write. That is what advanced-memory-order measured on Adreno with the coherent pair already in
+// place. memoryBarrierImage() is the primitive that orders them.
+TEST(SplitReadWriteImageUniformsTest, EverySplitStoreIsFollowedByAnImageMemoryBarrier) {
+    const String source = R"(#version 320 es
+layout(binding = 2, rgba8) uniform highp image2D goku;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    imageStore(goku, ivec2(0), vec4(1.0));
+    highp vec4 first = imageLoad(goku, ivec2(0));
+    imageStore(goku, ivec2(0), vec4(2.0));
+    mg_FragColor = first + imageLoad(goku, ivec2(0));
+}
+)";
+    const String out = SplitReadWriteImageUniforms(source);
+
+    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("goku") + ", ivec2(0), vec4(1.0)); memoryBarrierImage();"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WriteAlias("goku") + ", ivec2(0), vec4(2.0)); memoryBarrierImage();"))
+        << out;
+    // One per store, not one per shader and not one per load.
+    EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 2u) << out;
+}
+
+// The barrier belongs to the SPLIT alone. A store-only image was repaired in place, nothing
+// aliases it, and paying for a barrier there would slow down every shader that merely writes an
+// image - which is most of them.
+TEST(SplitReadWriteImageUniformsTest, ARepairedButUnsplitStoreGetsNoBarrier) {
+    const String source = R"(#version 320 es
+layout(binding = 3, rgba8) uniform highp image2D storeOnly;
+void main()
+{
+    imageStore(storeOnly, ivec2(0), vec4(1.0));
+}
+)";
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D storeOnly;")) << out;
+    EXPECT_FALSE(Contains(out, "memoryBarrierImage")) << out;
+}
+
+// The store site is found by matching the call's own parentheses, not by looking for the next
+// ')', so a nested call in the value argument does not truncate the statement and the barrier
+// still lands after the whole thing.
+TEST(SplitReadWriteImageUniformsTest, TheBarrierLandsAfterAStoreWithNestedParentheses) {
+    const String source = R"(#version 320 es
+layout(binding = 6, rgba8) uniform highp image2D gohan[3];
+void main()
+{
+    imageStore(gohan[1], ivec2(0), max(imageLoad(gohan[2], ivec2(0)), vec4(0.5)));
+}
+)";
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "max(imageLoad(gohan[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();")) << out;
+    EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
+}
+
 // imageSize reads no texels and writes none, so it decides nothing; readonly is what keeps
 // such a declaration legal.
 TEST(SplitReadWriteImageUniformsTest, ImageSizeAloneDoesNotCountAsALoadOrAStore) {
