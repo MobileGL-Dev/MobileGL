@@ -4678,3 +4678,143 @@ void main() { clearInstance.b = 0u; }
     EXPECT_EQ(unqualified.count("Clear"), 1u)
         << "the unambiguous block alongside it is still recognised";
 }
+
+// KHR-GL43.shader_image_size.advanced-nonMS-* is nothing but its passing twin basic-nonMS-* plus a
+// GLSL subroutine, and glslang refuses the keyword outright when the target is SPIR-V ("subroutine
+// : not allowed when generating SPIR-V"), so every stage of those shaders failed to compile. The
+// lowering turns a subroutine uniform with exactly ONE compatible subroutine - the case where GL
+// 4.3 core 7.9 makes a direct call indistinguishable from a dispatch, because every legal value of
+// the uniform selects that one function - into a forwarding call.
+TEST_F(ProgramUtilTest, PreprocessLowersSingleImplementationSubroutineToAForwardingCall) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 430 core
+layout(binding = 0, rgba32i) writeonly uniform iimage2D g_result;
+subroutine void FuncType(int coord);
+subroutine uniform FuncType g_func;
+void main() {
+  int coord = gl_VertexID;
+  g_func(coord);
+}
+subroutine(FuncType) void Func0(int coord) {
+  imageStore(g_result, ivec2(coord, 0), ivec4(imageSize(g_result), 0, 0));
+}
+)";
+    const SizeT mainLine = std::count(source.begin(), source.begin() + source.find("void main"), '\n');
+
+    PreprocessShaderSource(ShaderStage::Vertex, source);
+
+    EXPECT_EQ(source.find("subroutine"), String::npos) << "the keyword glslang refuses must be gone";
+    EXPECT_NE(source.find("void g_func(int mgl_sr_arg0);"), String::npos)
+        << "the subroutine uniform becomes a prototype under its own name, so call sites stand";
+    EXPECT_NE(source.find("g_func(coord);"), String::npos) << "the call site is untouched";
+    EXPECT_NE(source.find("void Func0(int coord)"), String::npos)
+        << "the compatible subroutine keeps its body and only sheds the qualifier";
+    EXPECT_NE(source.find("Func0(mgl_sr_arg0);"), String::npos) << "the forwarding body";
+    // The forwarding body has to come after every definition it names: the CTS shaders define
+    // their subroutine BELOW the function that calls through the uniform.
+    EXPECT_LT(source.find("void Func0(int coord)"), source.find("Func0(mgl_sr_arg0);"));
+    // Blanking preserves newlines, and the prototype is single-line, so glslang's diagnostics still
+    // point at the line the application wrote.
+    EXPECT_EQ(std::count(source.begin(), source.begin() + source.find("void main"), '\n'), mainLine)
+        << "the rewrite must not move a single line";
+
+    ShaderAttrib attrib{.shaderType = GL_VERTEX_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// The forwarding function is rebuilt from the subroutine TYPE declaration, so it has to carry the
+// parameter qualifiers and array shapes across (an  parameter that arrives by value writes
+// nothing back) and has to return the forwarded value for a non-void subroutine.
+TEST_F(ProgramUtilTest, PreprocessSubroutineForwardingKeepsParameterQualifiersAndReturnsValues) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 430 core
+subroutine float Blend(const int k, out vec4 rgba, float weights[2]);
+subroutine uniform Blend g_blend;
+out vec4 fragColor;
+void main() {
+  vec4 rgba;
+  float w[2] = float[2](0.25, 0.75);
+  fragColor = rgba * g_blend(1, rgba, w);
+}
+subroutine(Blend) float Mix(const int k, out vec4 rgba, float weights[2]) {
+  rgba = vec4(weights[0], weights[1], float(k), 1.0);
+  return weights[0];
+}
+)";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_NE(source.find("float g_blend(const int mgl_sr_arg0, out vec4 mgl_sr_arg1, float mgl_sr_arg2 [ 2 ]);"),
+              String::npos)
+        << "qualifiers and the array declarator have to survive, under generated names";
+    EXPECT_NE(source.find("return Mix(mgl_sr_arg0, mgl_sr_arg1, mgl_sr_arg2);"), String::npos)
+        << "a non-void subroutine has to have its value forwarded back";
+
+    ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto res = ShaderCompiler::CompileShader(attrib);
+    if (!res) {
+        FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+    }
+}
+
+// Two compatible subroutines is genuine dynamic selection, which MobileGL does not implement:
+// glUniformSubroutinesuiv is still a stub and nothing reflects the subroutine interfaces. Pinning
+// such a shader to one of the alternatives would render silently wrong, so the whole rewrite is
+// abandoned and the source is left exactly as it arrived.
+TEST_F(ProgramUtilTest, PreprocessLeavesMultiImplementationSubroutinesAlone) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String source = R"(#version 430 core
+subroutine void FuncType(int coord);
+subroutine uniform FuncType g_func;
+out vec4 fragColor;
+void main() {
+  g_func(1);
+  fragColor = vec4(1.0);
+}
+subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
+subroutine(FuncType) void Func1(int coord) { fragColor = vec4(float(coord) * 2.0); }
+)";
+    const String before = source;
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source, before) << "an unimplementable dispatch must not be quietly pinned to one arm";
+}
+
+// An ARRAY of subroutine uniforms indexes the dispatch at the call site ("g_func[i](x)"), which is
+// the same dynamic selection - and a subroutine declared inside a #if arm cannot be reasoned about
+// at all, because the forwarding bodies this appends are unconditional.
+TEST_F(ProgramUtilTest, PreprocessLeavesArrayAndConditionalSubroutinesAlone) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String arrayed = R"(#version 430 core
+subroutine void FuncType(int coord);
+subroutine uniform FuncType g_func[2];
+out vec4 fragColor;
+void main() { g_func[0](1); fragColor = vec4(1.0); }
+subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
+)";
+    const String arrayedBefore = arrayed;
+    PreprocessShaderSource(ShaderStage::Fragment, arrayed);
+    EXPECT_EQ(arrayed, arrayedBefore) << "an arrayed subroutine uniform is a dispatch, not a call";
+
+    String conditional = R"(#version 430 core
+out vec4 fragColor;
+#ifdef USE_SUBROUTINE
+subroutine void FuncType(int coord);
+subroutine uniform FuncType g_func;
+#endif
+void main() { fragColor = vec4(1.0); }
+subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
+)";
+    const String conditionalBefore = conditional;
+    PreprocessShaderSource(ShaderStage::Fragment, conditional);
+    EXPECT_EQ(conditional, conditionalBefore)
+        << "an inactive #if arm must not have an unconditional forwarding body appended for it";
+}
