@@ -97,6 +97,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/LayeredAttachmentBarrierScenario.cpp
     Scenarios/LayeredTextureReadbackScenario.cpp
     Scenarios/AtomicCounterScenario.cpp
+    Scenarios/SsboArrayDynamicIndexScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
