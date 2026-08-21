@@ -31,6 +31,7 @@
 #include "Includes.h"
 #include "Init.h"
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/SpvcSession.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
 #include <spirv-tools/libspirv.hpp>
@@ -161,6 +162,35 @@ namespace {
             if (shuffle.firstVectorId == firstVectorId) return &shuffle;
         }
         return nullptr;
+    }
+
+    // The ESSL SPIRV-Cross emits for a module, or the error it refused with - which is the whole
+    // point for the formats in its is_desktop_only_format set: it THROWS rather than printing a
+    // token, and the throw takes the stage with it.
+    struct EsslAttempt {
+        Bool succeeded = false;
+        String text;
+        String error;
+    };
+
+    EsslAttempt EmitEssl(const Vector<Uint32>& spirv) {
+        using namespace MobileGL::MG_Util::ShaderTranspiler;
+        EsslAttempt attempt;
+        SpvcSession session(spirv, SessionUsageBit::Transpile);
+        spvc_compiler_options options;
+        if (session.CreateOptions(&options) != SPVC_SUCCESS) return attempt;
+        spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 320);
+        spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
+        spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
+        if (session.SetOptions(options) != SPVC_SUCCESS) return attempt;
+        auto essl = ShaderCompiler::DecompileShader(session);
+        if (!essl) {
+            attempt.error = essl.error().log;
+            return attempt;
+        }
+        attempt.succeeded = true;
+        attempt.text = *essl;
+        return attempt;
     }
 
     // rg32f: two float channels, and the entry the four CTS allFormats walkers abort on. Both an
@@ -355,6 +385,54 @@ TEST(WidenImageFormats, SingleChannelUnsignedImageBecomesRgba8uiWithBothAccesses
     const VectorShuffle* loadMask = FindShuffleOver(shuffles, readIds.front());
     ASSERT_NE(loadMask, nullptr);
     EXPECT_TRUE(HasComponents(*loadMask, {0u, 5u, 6u, 7u}));
+}
+
+// The point of the whole exercise, end to end: what reaches the ES driver.
+//
+// r8ui is in SPIRV-Cross's is_desktop_only_format set, so for an ESSL target it THROWS instead of
+// printing a token and no text is produced at all - which is what
+// KHR-GL43.shader_image_load_store.single-byte_data_alignment hit ("Attempting to use image format
+// not supported in ES profile"), leaving a program that linked and drew nothing. rg32f is the
+// other failure mode: SPIRV-Cross prints it happily and the DRIVER rejects it ("'rg32f' : not a
+// legal layout qualifier id"). After the widening both come out naming a core format, which is the
+// only thing on either side that makes the stage compilable.
+TEST(WidenImageFormats, WidenedModulesEmitEsslNamingTheCoreCarrier) {
+    {
+        const Vector<Uint32> spirv = CompileFragment(kR8uiLoadStore);
+        ASSERT_FALSE(spirv.empty());
+        const EsslAttempt before = EmitEssl(spirv);
+        EXPECT_FALSE(before.succeeded)
+            << "SPIRV-Cross printed r8ui for an ES target; the widening's premise has changed:\n"
+            << before.text;
+
+        Vector<Uint32> widened;
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, true));
+        const EsslAttempt after = EmitEssl(widened);
+        ASSERT_TRUE(after.succeeded) << after.error;
+        EXPECT_NE(after.text.find("rgba8ui"), String::npos) << after.text;
+        // "rgba8ui" does not contain "r8ui", so this is a clean negative.
+        EXPECT_EQ(after.text.find("r8ui"), String::npos) << after.text;
+        // GL reads a one-channel image as (r, 0, 0, 1) and drops everything past r on a store, so
+        // both accesses have to be spelled that way whatever the carrier holds.
+        EXPECT_NE(after.text.find("uvec4(0u, 0u, 0u, 1u)"), String::npos) << after.text;
+    }
+    {
+        const Vector<Uint32> spirv = CompileFragment(kRg32fLoadStore);
+        ASSERT_FALSE(spirv.empty());
+        // This one SPIRV-Cross does print - the token is simply not one GLSL ES has.
+        const EsslAttempt before = EmitEssl(spirv);
+        ASSERT_TRUE(before.succeeded) << before.error;
+        EXPECT_NE(before.text.find("rg32f"), String::npos) << before.text;
+
+        Vector<Uint32> widened;
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, true));
+        const EsslAttempt after = EmitEssl(widened);
+        ASSERT_TRUE(after.succeeded) << after.error;
+        EXPECT_NE(after.text.find("rgba32f"), String::npos) << after.text;
+        EXPECT_EQ(after.text.find("rg32f"), String::npos)
+            << "the token no ES driver accepts is still in the emitted source:\n"
+            << after.text;
+    }
 }
 
 TEST(WidenImageFormats, CoreFormatModuleIsHandedBackUntouched) {
