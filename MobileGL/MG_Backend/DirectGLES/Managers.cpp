@@ -386,6 +386,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // entry would otherwise false-skip the rebind).
             void ScrubBufferBindingShadowsForId(Uint id);
 
+            // Defined next to the same shadow, and the counterpart to the scrub above for a
+            // buffer whose STORE was re-specified rather than deleted: the binding survives -
+            // nothing unbound the id - but the extent the driver resolved for it at bind time
+            // does not. Marks those points unknown so the next sync issues a real
+            // glBindBufferBase/Range instead of skipping it.
+            void InvalidateIndexedBufferBindingShadowsForId(Uint id);
+
             // Resources whose owning BufferObject died; ids deleted at the next
             // sync point with a current ES context.
             Vector<SharedPtr<BackendBufferResource>> g_deferredBufferReleases;
@@ -558,6 +565,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
                 const SizeT size = bufferObject.GetSize();
+                // Read BEFORE the fields below are overwritten: whether this respecify changes
+                // the store's EXTENT is what decides if the indexed-binding shadow still
+                // describes the driver.
+                const Bool extentChanged = !resource.storageInitialized || resource.storageSize != size;
                 const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(bufferObject.GetUsage());
                 BindBufferId(TempBufferTarget, resource.id);
                 // An orphaning respecify (glBufferData with NULL, content never
@@ -573,6 +584,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource.pendingRespecify = false;
                 resource.pendingRanges.clear();
                 resource.syncedChangeSerial = bufferObject.GetChangeSerial();
+                // A GROWN store keeps its indexed bindings, and BindBufferBaseCached skips a
+                // rebind whenever the shadow already records this id at that index - so on a
+                // driver that resolves a whole-buffer indexed binding's extent at BIND time
+                // (Adreno does; Mali does not) the shader keeps seeing the old, smaller range:
+                // stores past it are dropped and loads return zero. Forget what the shadow
+                // claims for this id so the next SyncBufferBindingPoints issues the bind for
+                // real. Only when the extent actually moved: an orphaning respecify at the same
+                // size is Minecraft's per-frame hot path and its bindings are still exact.
+                if (extentChanged) {
+                    InvalidateIndexedBufferBindingShadowsForId(resource.id);
+                }
             }
 
             Bool StorageMatches(const GLESBufferResource& resource, const BufferObject& bufferObject) {
@@ -1170,6 +1192,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GLintptr offset = 0;
                 GLsizeiptr size = 0;
                 Bool isBase = true;
+                // False when the driver's binding at this point is no longer described by the
+                // fields above and the next bind must be issued whatever it asks for. Set by
+                // InvalidateIndexedBufferBindingShadowsForId after a store was re-specified at
+                // a new size: the id is still bound, so the entry must NOT be scrubbed to
+                // base(0) (a later bind of 0 would then be false-skipped) - only distrusted.
+                Bool known = true;
             };
             constexpr SizeT kMaxIndexedBufferBindings = 64;
             IndexedBufferBinding g_indexedUBOBindings[kMaxIndexedBufferBindings];
@@ -1201,20 +1229,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_boundPixelUnpackBufferId = 0;
                 }
             }
+
+            void InvalidateIndexedBufferBindingShadowsForId(Uint id) {
+                if (id == 0) return;
+                for (auto& binding : g_indexedUBOBindings) {
+                    if (binding.id == id) binding.known = false;
+                }
+                for (auto& binding : g_indexedSSBOBindings) {
+                    if (binding.id == id) binding.known = false;
+                }
+            }
         } // namespace
 
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id) {
             auto* s = IndexedBindingShadow(glTarget, index);
-            if (s && s->isBase && s->id == id) return;
+            if (s && s->known && s->isBase && s->id == id) return;
             g_GLESFuncs.glBindBufferBase(glTarget, index, id);
-            if (s) *s = {id, 0, 0, true};
+            if (s) *s = {id, 0, 0, true, true};
         }
 
         void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size) {
             auto* s = IndexedBindingShadow(glTarget, index);
-            if (s && !s->isBase && s->id == id && s->offset == offset && s->size == size) return;
+            if (s && s->known && !s->isBase && s->id == id && s->offset == offset && s->size == size) return;
             g_GLESFuncs.glBindBufferRange(glTarget, index, id, offset, size);
-            if (s) *s = {id, offset, size, false};
+            if (s) *s = {id, offset, size, false, true};
         }
 
         void InvalidateIndexedBufferBindingCache() {
