@@ -368,6 +368,8 @@ public:
     TIntermTyped* vkRelaxedRemapFunctionCall(const TSourceLoc&, TFunction*, TIntermNode*);
     // returns true if the variable was remapped to something else
     void recordUniformInitializer(const TString&, const TType&, const TConstUnionArray&);
+    void recordUniformLocation(const TString&, const TType&);
+    void atomicCounterOffsetCheck(const TSourceLoc&, const TString&, const TType&);
     bool vkRelaxedRemapUniformVariable(const TSourceLoc&, TString&, const TPublicType&, TArraySizes*, TIntermTyped*, TType&);
     void vkRelaxedRemapUniformMembers(const TSourceLoc&, const TPublicType&, const TType&, const TString&);
     void vkRelaxedRemapFunctionParameter(TFunction*, TParameter&, std::vector<int>* newParams = nullptr);
