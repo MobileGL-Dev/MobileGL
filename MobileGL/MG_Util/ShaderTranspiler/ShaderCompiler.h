@@ -71,10 +71,14 @@ namespace MobileGL {
                 // GL_OES_viewport_array AND integer multisample squeezed to 1) the separate
                 // probes made compile-heavy workloads measurably slower - ReservedNames-class
                 // CTS cases paid ~10%. Callers with more than one armed gate use this instead.
+                // The image-format widening deliberately does NOT ride this probe, even though it
+                // is a module question of exactly the same shape. It is armed on every driver, so
+                // a gate answered from the module would put a BuildModule on every stage of every
+                // program - and the frontend's uniform reflection can answer it for free
+                // (PrgramImpl::ImageFormatBakeInputs::declaresWidenableImageFormat).
                 struct SpirvGateFeatures {
                     Bool WritesViewportIndexOutput = false;
                     Bool DeclaresMultisampledImage = false;
-                    Bool DeclaresWidenableImageFormat = false;
                 };
                 static SpirvGateFeatures ProbeSpirvGateFeatures(const Vector<Uint32>& binary);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
@@ -241,15 +245,21 @@ namespace MobileGL {
                 // declared format natively. See WidenImageFormatsPass for the table, for the nine
                 // formats it deliberately does NOT widen, and for why the texture storage and the
                 // glBindImageTexture argument have to move with it.
+                // `onlyFormatsSpirvCrossRefusesToPrint` narrows it to the formats that have no
+                // ESSL route even WITH GL_NV_image_formats, because SPIRV-Cross throws for them
+                // rather than printing a token - which is the whole set a driver that advertises
+                // the extension still needs. See WidenImageFormatsPass.
                 static bool WidenImageFormatsForEssl(const Vector<Uint32>& inputBinary,
                                                      Vector<uint32_t>& outputBinary,
+                                                     bool onlyFormatsSpirvCrossRefusesToPrint = false,
                                                      bool enableSpirvValidation = false);
                 // Whether the module declares a storage image WidenImageFormatsForEssl would
-                // widen, so the ~every shader that declares none pays no optimizer run. Costs its
-                // own module parse: the transpile path asks the same question through
-                // ProbeSpirvGateFeatures instead, because this gate is armed on every real driver
-                // and would otherwise put a BuildModule on every stage of every program.
-                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary);
+                // widen, under the same mode the run would use. Costs its own module parse, so
+                // the transpile path does NOT gate on this - it answers the question from the
+                // frontend's uniform reflection instead, for the reason on SpirvGateFeatures.
+                // Here for tests and for callers that already hold nothing but the binary.
+                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
+                                                         bool onlyFormatsSpirvCrossRefusesToPrint = false);
                 // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
                 // when it needs no widening or cannot be widened exactly. The single source of
                 // truth for all three layers of the emulation: this one answers the shader, and

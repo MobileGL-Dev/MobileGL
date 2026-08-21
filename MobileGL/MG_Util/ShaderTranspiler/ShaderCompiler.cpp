@@ -728,8 +728,6 @@ namespace MobileGL {
                     LowerViewportIndexPass::DeclaresViewportIndexBuiltin(context.get());
                 features.DeclaresMultisampledImage =
                     ClampMultisampleFetchPass::DeclaresMultisampledImage(context.get());
-                features.DeclaresWidenableImageFormat =
-                    WidenImageFormatsPass::DeclaresWidenableImageFormat(context.get());
                 return features;
             }
 
@@ -776,10 +774,12 @@ namespace MobileGL {
 
             bool ShaderCompiler::WidenImageFormatsForEssl(const Vector<Uint32>& inputBinary,
                                                           Vector<uint32_t>& outputBinary,
+                                                          const bool onlyFormatsSpirvCrossRefusesToPrint,
                                                           const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(WidenImageFormatsPass::CreateWidenImageFormatsPass());
+                optimizer.RegisterPass(
+                    WidenImageFormatsPass::CreateWidenImageFormatsPass(onlyFormatsSpirvCrossRefusesToPrint));
                 // Two image types that differed only in a format the widening collapses -
                 // `layout(rg32f)` and `layout(rgba32f)` in one module - are one type afterwards,
                 // and duplicate non-aggregate type declarations are invalid SPIR-V. This joins
@@ -791,8 +791,10 @@ namespace MobileGL {
                                            true, enableSpirvValidation);
             }
 
-            bool ShaderCompiler::DeclaresWidenableImageFormat(const Vector<Uint32>& binary) {
-                return WidenImageFormatsPass::DeclaresWidenableImageFormat(binary);
+            bool ShaderCompiler::DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
+                                                              const bool onlyFormatsSpirvCrossRefusesToPrint) {
+                return WidenImageFormatsPass::DeclaresWidenableImageFormat(binary,
+                                                                           onlyFormatsSpirvCrossRefusesToPrint);
             }
 
             Uint ShaderCompiler::WidenedCoreEsslImageFormat(Uint glInternalFormat) {

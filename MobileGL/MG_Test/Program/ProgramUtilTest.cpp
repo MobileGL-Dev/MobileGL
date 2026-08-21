@@ -3762,7 +3762,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
         ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(baked));
 
         Vector<Uint32> widened;
-        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(baked, widened, true));
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(baked, widened, false, true));
         ASSERT_FALSE(widened.empty());
         const String essl = DecompileToEssl(widened);
         ASSERT_FALSE(essl.empty());

@@ -74,19 +74,39 @@ namespace MobileGL {
             // format from the same bind state, so the module must reach it unchanged.
             class WidenImageFormatsPass final : public spvtools::opt::Pass {
             public:
+                // `onlyFormatsSpirvCrossRefusesToPrint` narrows the pass to the formats that have
+                // no ESSL route even on a driver that DOES advertise GL_NV_image_formats.
+                // SPIRV-Cross's is_desktop_only_format set - r8ui, rg16f, r16i and fifteen others -
+                // makes it THROW for an ESSL target rather than print a token, and the throw takes
+                // the stage with it whatever the driver could have accepted. Mesa is exactly that
+                // case: it advertises the extension, so nothing else needs widening there, and
+                // `layout(r8ui) uimage2D` still lost its whole program until this ran for it.
+                //
+                // Off, the pass widens every format in the table, which is what a driver without
+                // the extension needs. The caller sets it from
+                // g_GLESCapabilities.SupportsExtendedImageFormats, and the SAME rule decides
+                // whether the ES texture storage and the glBindImageTexture argument widen
+                // (TextureImpl::GetImageBindableStorageWidening) - all three have to agree or the
+                // shader addresses a texel size the storage does not have.
+                explicit WidenImageFormatsPass(bool onlyFormatsSpirvCrossRefusesToPrint = false)
+                    : m_onlyFormatsSpirvCrossRefusesToPrint(onlyFormatsSpirvCrossRefusesToPrint) {}
+
                 const char* name() const override { return "mobilegl-widen-image-formats"; }
                 Status Process() override;
 
                 // Whether the module declares a storage image whose format this pass would widen,
                 // i.e. whether running it could change anything. Answered from a single parse so
                 // the caller can skip the optimizer run entirely - which is every shader but a
-                // handful.
-                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary);
+                // handful. `onlyFormatsSpirvCrossRefusesToPrint` must match what the run will use,
+                // or the gate answers a question the pass is not being asked.
+                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
+                                                         bool onlyFormatsSpirvCrossRefusesToPrint = false);
                 // The same question asked of a module the caller has ALREADY parsed, so a stage
                 // that has to answer several gate questions pays one BuildModule rather than one
                 // per gate - see ShaderCompiler::ProbeSpirvGateFeatures, and the ~10% it cost
                 // compile-heavy CTS cases when two gates each parsed for themselves.
-                static bool DeclaresWidenableImageFormat(spvtools::opt::IRContext* context);
+                static bool DeclaresWidenableImageFormat(spvtools::opt::IRContext* context,
+                                                         bool onlyFormatsSpirvCrossRefusesToPrint = false);
 
                 // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
                 // when the format needs no widening (it is core already) or cannot be widened
@@ -99,7 +119,11 @@ namespace MobileGL {
                 // forty image formats. The count the widened accesses are masked back to.
                 static Uint ImageFormatChannelCount(Uint glInternalFormat);
 
-                static spvtools::Optimizer::PassToken CreateWidenImageFormatsPass();
+                static spvtools::Optimizer::PassToken CreateWidenImageFormatsPass(
+                    bool onlyFormatsSpirvCrossRefusesToPrint = false);
+
+            private:
+                bool m_onlyFormatsSpirvCrossRefusesToPrint = false;
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

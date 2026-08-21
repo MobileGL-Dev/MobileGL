@@ -319,7 +319,8 @@ TEST(WidenImageFormats, TwoChannelFloatImageBecomesRgba32fWithBothAccessesMasked
     ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
 
     Vector<Uint32> widened;
-    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*enableSpirvValidation=*/true));
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
     ASSERT_FALSE(widened.empty());
     EXPECT_TRUE(Validates(widened));
     // ...and there is nothing left for a second run to do.
@@ -362,7 +363,8 @@ TEST(WidenImageFormats, SingleChannelUnsignedImageBecomesRgba8uiWithBothAccesses
     ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
 
     Vector<Uint32> widened;
-    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*enableSpirvValidation=*/true));
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
     ASSERT_FALSE(widened.empty());
     EXPECT_TRUE(Validates(widened));
 
@@ -406,7 +408,7 @@ TEST(WidenImageFormats, WidenedModulesEmitEsslNamingTheCoreCarrier) {
             << before.text;
 
         Vector<Uint32> widened;
-        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, true));
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, false, true));
         const EsslAttempt after = EmitEssl(widened);
         ASSERT_TRUE(after.succeeded) << after.error;
         EXPECT_NE(after.text.find("rgba8ui"), String::npos) << after.text;
@@ -425,13 +427,62 @@ TEST(WidenImageFormats, WidenedModulesEmitEsslNamingTheCoreCarrier) {
         EXPECT_NE(before.text.find("rg32f"), String::npos) << before.text;
 
         Vector<Uint32> widened;
-        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, true));
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, false, true));
         const EsslAttempt after = EmitEssl(widened);
         ASSERT_TRUE(after.succeeded) << after.error;
         EXPECT_NE(after.text.find("rgba32f"), String::npos) << after.text;
         EXPECT_EQ(after.text.find("rg32f"), String::npos)
             << "the token no ES driver accepts is still in the emitted source:\n"
             << after.text;
+    }
+}
+
+// The narrow mode, for a driver that HAS GL_NV_image_formats - Mesa, which every software lane
+// runs on. There the driver can spell rg32f, so widening it would spend two to four times the
+// texture memory to change nothing; but SPIRV-Cross STILL throws for r8ui rather than printing it,
+// and the throw loses the stage whatever the driver would have accepted. So the extension narrows
+// the emulation to its is_desktop_only_format set rather than switching it off.
+TEST(WidenImageFormats, TheExtensionNarrowsTheWideningToWhatSpirvCrossWillNotPrint) {
+    ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(0x8230 /*GL_RG32F*/));
+    ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(0x8232 /*GL_R8UI*/));
+
+    {   // rg32f: printable, so the narrow mode leaves it exactly as declared.
+        const Vector<Uint32> spirv = CompileFragment(kRg32fLoadStore);
+        ASSERT_FALSE(spirv.empty());
+        EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv, false));
+        EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv, true));
+
+        Vector<Uint32> widened;
+        ShaderCompiler::WidenImageFormatsForEssl(spirv, widened,
+                                                 /*onlyFormatsSpirvCrossRefusesToPrint=*/true, true);
+        if (!widened.empty()) {
+            const auto types = CollectStorageImageTypes(widened);
+            ASSERT_EQ(types.size(), 1u);
+            EXPECT_EQ(types.front().format, static_cast<Uint32>(spv::ImageFormat::Rg32f));
+            EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size());
+        }
+    }
+    {   // r8ui: unprintable, so the narrow mode still carries it - and must mask it exactly as
+        // the wide mode does, because the storage and the bind widen with it either way.
+        const Vector<Uint32> spirv = CompileFragment(kR8uiLoadStore);
+        ASSERT_FALSE(spirv.empty());
+        EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv, true));
+
+        Vector<Uint32> widened;
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(
+            spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/true, true));
+        ASSERT_FALSE(widened.empty());
+        EXPECT_TRUE(Validates(widened));
+        const auto types = CollectStorageImageTypes(widened);
+        ASSERT_EQ(types.size(), 1u);
+        EXPECT_EQ(types.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba8ui));
+
+        const auto shuffles = CollectVectorShuffles(widened);
+        const auto texelIds = CollectImageWriteTexelIds(widened);
+        ASSERT_EQ(texelIds.size(), 1u);
+        const VectorShuffle* storeMask = FindShuffleWithResult(shuffles, texelIds.front());
+        ASSERT_NE(storeMask, nullptr);
+        EXPECT_TRUE(HasComponents(*storeMask, {0u, 5u, 6u, 7u}));
     }
 }
 
@@ -442,7 +493,8 @@ TEST(WidenImageFormats, CoreFormatModuleIsHandedBackUntouched) {
     EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
 
     Vector<Uint32> widened;
-    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*enableSpirvValidation=*/true);
+    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true);
     if (!widened.empty()) {
         EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size())
             << "a core-format module must gain no masks";
@@ -466,7 +518,8 @@ TEST(WidenImageFormats, FormatWithoutAnExactCarrierIsLeftAlone) {
     EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
 
     Vector<Uint32> widened;
-    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*enableSpirvValidation=*/true);
+    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true);
     if (!widened.empty()) {
         const auto afterTypes = CollectStorageImageTypes(widened);
         ASSERT_EQ(afterTypes.size(), 1u);

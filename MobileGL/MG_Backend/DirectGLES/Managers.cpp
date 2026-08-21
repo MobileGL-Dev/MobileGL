@@ -5181,12 +5181,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // Whether the ESSL chain will re-declare an image of this format in a core carrier
-            // and mask its accesses (WidenImageFormatsForEssl). Armed only where there is no
-            // GL_NV_image_formats to spell the format natively - a driver that has the extension
-            // keeps the declaration and gets the `#extension` directive instead.
+            // and mask its accesses (WidenImageFormatsForEssl). The same rule
+            // TextureImpl::GetImageBindableStorageWidening applies to the storage and the bind -
+            // the three layers move together or the shader addresses a texel size the storage
+            // does not have.
+            //
+            // Without GL_NV_image_formats there is no legal spelling for any non-core format, so
+            // everything carriable widens. WITH the extension only the formats SPIRV-Cross
+            // refuses to print do: it throws for its is_desktop_only_format set instead of
+            // emitting a token, and the throw loses the stage however willing the driver was.
             Bool ImageFormatWillBeWidened(Uint glInternalFormat) {
-                return !g_GLESCapabilities.SupportsExtendedImageFormats && glInternalFormat != 0 &&
-                       MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(glInternalFormat) != 0;
+                if (glInternalFormat == 0) return false;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(glInternalFormat) == 0) {
+                    return false;
+                }
+                return !g_GLESCapabilities.SupportsExtendedImageFormats ||
+                       !MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(
+                           glInternalFormat);
             }
         } // namespace
 
@@ -5229,7 +5240,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // channels GL says they have (WidenImageFormatsForEssl, and the matching
                         // storage/bind widening in TextureImpl). Those need neither the extension
                         // nor the diagnostic: there IS a legal spelling for them now.
-                        if (!ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
+                        if (ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
+                            inputs.declaresWidenableImageFormat = true;
+                        } else {
                             inputs.needsExtendedImageFormats = true;
                             if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
                                 // From the OWNED TypeFacts, not from a live TType: the reflection
@@ -5277,6 +5290,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
                             continue;
                         }
+                        // The bake writes this format INTO the module, so the widening that runs
+                        // straight after has to be armed for it even though nothing DECLARED it.
+                        inputs.declaresWidenableImageFormat = true;
                     } else {
                         inputs.needsExtendedImageFormats = true;
                     }
@@ -5413,11 +5429,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Declares* probes each cost a BuildModule per stage, and on a driver where both
             // gates are armed (Mali: no GL_OES_viewport_array AND integer multisample
             // squeezed to 1) the doubled parse made compile-heavy workloads ~10% slower.
-            // Probing the pre-lowering module is sound for all three gates: demoting
-            // gl_ViewportIndex neither adds nor removes multisampled image types, and no pass
-            // between here and the widening changes which image FORMATS the module declares -
-            // Lower1DArrayImagesPass rebuilds an image type but copies its format operand across,
-            // and the one pass that can introduce a format (the bake) reports for itself below.
+            // Probing the pre-lowering module is sound for both gates: demoting
+            // gl_ViewportIndex neither adds nor removes multisampled image types.
             // Recomputed here rather than calling GL_Getter's GetAdvertisedMaxSamples():
             // this is backend code and must not reach into the GL frontend. 4 is that
             // translation unit's kFrontendMaxSamples, which is the source of truth -
@@ -5429,13 +5442,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
                 g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
                 g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
-            // The image-format widening is armed on EVERY real device (no driver tested advertises
-            // GL_NV_image_formats), so its probe has to ride the shared parse rather than add one:
-            // it is asked of every stage of every program, and a BuildModule per stage per gate is
-            // exactly what cost compile-heavy CTS cases ~10% before this struct existed.
-            const Bool imageFormatWideningArmed = !g_GLESCapabilities.SupportsExtendedImageFormats;
+            // The image-format widening is armed on EVERY driver, so its probe has to ride the
+            // shared parse rather than add one: it is asked of every stage of every program, and
+            // a BuildModule per stage per gate is exactly what cost compile-heavy CTS cases ~10%
+            // before this struct existed. What differs per driver is only HOW MUCH it widens -
+            // everything carriable where there is no GL_NV_image_formats to spell the narrow
+            // format, and only the formats SPIRV-Cross refuses to print where there is.
+            const Bool widenOnlyUnprintableImageFormats = g_GLESCapabilities.SupportsExtendedImageFormats;
             MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
-            if (viewportLoweringArmed || sampleClampArmed || imageFormatWideningArmed) {
+            if (viewportLoweringArmed || sampleClampArmed) {
                 spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
                     *effectiveSpirv);
             }
@@ -5615,7 +5630,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // whose images all declare formats, and the cheap probe keeps a program that has
             // an unbound format-less image from paying an optimizer round trip per stage.
             Vector<unsigned int> imageFormatSpirv;
-            Bool bakedAWidenableImageFormat = false;
             if (!imageFormatBake.glFormatByUniformName.empty() &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
@@ -5623,19 +5637,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     enableSpirvValidation) &&
                 !imageFormatSpirv.empty()) {
                 effectiveSpirv = &imageFormatSpirv;
-                // The bake can put a format into the module that was not there when the gate
-                // probe above parsed it, so the probe's verdict is stale for exactly this case.
-                // Answered from the bake's own map rather than by re-parsing: an entry the map
-                // does not carry cannot have been baked. Conservative in the harmless direction -
-                // the pass declines individual uniforms the map names, and a widening run that
-                // finds nothing to widen only costs a re-serialisation of a module that already
-                // went through the optimizer one line above.
-                for (const auto& entry : imageFormatBake.glFormatByUniformName) {
-                    if (MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(entry.second) != 0) {
-                        bakedAWidenableImageFormat = true;
-                        break;
-                    }
-                }
             }
 
             // GL has forty image formats and GLSL ES core has thirteen; the other twenty-seven
@@ -5650,23 +5651,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // have no exact carrier and keep the honest diagnostic
             // CollectImageFormatBakeInputs emits.
             //
+            // A driver that HAS GL_NV_image_formats still needs part of this. SPIRV-Cross throws
+            // for its is_desktop_only_format set when it targets ESSL rather than printing a
+            // token, and the throw loses the stage however willing the driver was - Mesa
+            // advertises the extension and `layout(r8ui) uimage2D` lost its whole program there
+            // until the widening ran for it too. So the driver bit decides HOW MUCH is widened,
+            // never WHETHER.
+            //
             // AFTER the bake above, deliberately: a format-less image whose unit holds a non-core
             // format is baked with that format and widened here, so both routes end in the same
             // place and there is no second widening rule for baked declarations.
             //
-            // KEY MATERIAL: g_GLESCapabilities.SupportsExtendedImageFormats, which ARMS this -
-            // see EsslTranslationKeyInputs::supportsExtendedImageFormats. The pass takes no other
-            // input: what it rewrites is a pure function of the module's own declared formats,
-            // and the module is already the largest thing in the L2 key.
+            // KEY MATERIAL: g_GLESCapabilities.SupportsExtendedImageFormats, which selects the
+            // mode - see EsslTranslationKeyInputs::supportsExtendedImageFormats. The pass takes
+            // no other input: what it rewrites is a pure function of the module's own declared
+            // formats and that mode, and the module is already the largest thing in the L2 key.
+            // The ARMING flag is deliberately NOT key material: it only decides whether the pass
+            // runs, and the module below is adopted only when the pass actually changed the bytes
+            // - so a program-wide flag that over-arms a stage costs an optimizer round trip and
+            // changes no output.
             //
             // DirectVulkan is deliberately not given this: it takes the declared format natively
             // and resolves the descriptor's view format from the same bind state.
             Vector<unsigned int> widenedImageFormatSpirv;
-            if (imageFormatWideningArmed &&
-                (spirvGates.DeclaresWidenableImageFormat || bakedAWidenableImageFormat) &&
+            if (imageFormatBake.declaresWidenableImageFormat &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::WidenImageFormatsForEssl(
-                    *effectiveSpirv, widenedImageFormatSpirv, enableSpirvValidation) &&
-                !widenedImageFormatSpirv.empty()) {
+                    *effectiveSpirv, widenedImageFormatSpirv, widenOnlyUnprintableImageFormats,
+                    enableSpirvValidation) &&
+                !widenedImageFormatSpirv.empty() && widenedImageFormatSpirv != *effectiveSpirv) {
                 effectiveSpirv = &widenedImageFormatSpirv;
             }
 

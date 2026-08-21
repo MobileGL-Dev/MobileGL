@@ -8,6 +8,10 @@
 
 #include "WidenImageFormatsPass.h"
 
+// For IsSpirvCrossEsslPrintableFormat: the two passes share one question about the emitter, and
+// the answer belongs where the rest of the image-format tables already are.
+#include "BakeImageFormatsPass.h"
+
 #include "spirv.hpp"
 #include "source/opt/build_module.h"
 #include "source/opt/constants.h"
@@ -211,12 +215,20 @@ namespace MobileGL {
                     }
                 }
 
-                Bool IsWidenableStorageImageType(const Instruction* type) {
+                Bool IsWidenableStorageImageType(const Instruction* type,
+                                                 bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
                     if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
                     const auto format =
                         static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
-                    return static_cast<Bool>(WideningOfSpirvImageFormat(format));
+                    if (!WideningOfSpirvImageFormat(format)) return false;
+                    if (onlyFormatsSpirvCrossRefusesToPrint &&
+                        BakeImageFormatsPass::IsSpirvCrossEsslPrintableFormat(static_cast<Uint32>(format))) {
+                        // The driver can spell this one and the emitter will print it; widening it
+                        // would spend two to four times the texture memory to change nothing.
+                        return false;
+                    }
+                    return true;
                 }
             } // namespace
 
@@ -231,23 +243,25 @@ namespace MobileGL {
                 return ChannelsOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
             }
 
-            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(IRContext* context) {
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(
+                IRContext* context, const bool onlyFormatsSpirvCrossRefusesToPrint) {
                 if (context == nullptr) {
                     return false;
                 }
                 for (const Instruction& type : context->module()->types_values()) {
-                    if (IsWidenableStorageImageType(&type)) {
+                    if (IsWidenableStorageImageType(&type, onlyFormatsSpirvCrossRefusesToPrint)) {
                         return true;
                     }
                 }
                 return false;
             }
 
-            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(const Vector<Uint32>& binary) {
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(
+                const Vector<Uint32>& binary, const bool onlyFormatsSpirvCrossRefusesToPrint) {
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
                     SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
-                return DeclaresWidenableImageFormat(context.get());
+                return DeclaresWidenableImageFormat(context.get(), onlyFormatsSpirvCrossRefusesToPrint);
             }
 
             spvtools::opt::Pass::Status WidenImageFormatsPass::Process() {
@@ -258,7 +272,7 @@ namespace MobileGL {
                 // byte-identical - which is every shader but a handful.
                 std::vector<Instruction*> imageTypes;
                 for (Instruction& type : irContext->types_values()) {
-                    if (IsWidenableStorageImageType(&type)) {
+                    if (IsWidenableStorageImageType(&type, m_onlyFormatsSpirvCrossRefusesToPrint)) {
                         imageTypes.push_back(&type);
                     }
                 }
@@ -539,8 +553,10 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken WidenImageFormatsPass::CreateWidenImageFormatsPass() {
-                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<WidenImageFormatsPass>());
+            spvtools::Optimizer::PassToken WidenImageFormatsPass::CreateWidenImageFormatsPass(
+                const bool onlyFormatsSpirvCrossRefusesToPrint) {
+                return spvtools::Optimizer::PassToken(
+                    spvtools::MakeUnique<WidenImageFormatsPass>(onlyFormatsSpirvCrossRefusesToPrint));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

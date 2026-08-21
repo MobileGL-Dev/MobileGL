@@ -1398,6 +1398,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Some format in play - declared or baked - is outside the GLSL ES core image
             // format set, so the emitted ESSL needs the GL_NV_image_formats directive.
             Bool needsExtendedImageFormats = false;
+            // Some DECLARED format in play is one WidenImageFormatsForEssl will re-declare in a
+            // core carrier. Answered from the uniform reflection rather than from a module parse
+            // on purpose: the widening is armed on every driver, so a per-stage BuildModule to
+            // find out would land on every stage of every program - which is the cost
+            // SpirvGateFeatures exists to avoid. Program-wide, so it can over-arm a stage that
+            // declares no image; the pass then finds nothing, reports no change, and the caller
+            // keeps the module it already had.
+            Bool declaresWidenableImageFormat = false;
         };
         ImageFormatBakeInputs CollectImageFormatBakeInputs(
             const MG_State::GLState::ProgramObject& stateProgramObject);

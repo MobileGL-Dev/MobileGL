@@ -236,16 +236,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat) {
-            // Same arming as WidenImageFormatsForEssl. A driver with GL_NV_image_formats spells
-            // the narrow format natively, and widening the storage behind a shader that still
-            // says `rg32f` would make the two disagree about the texel size.
-            if (g_GLESCapabilities.SupportsExtendedImageFormats) {
-                return {};
-            }
             const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             const auto carrier = static_cast<GLenum>(
                 MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
             if (carrier == 0) {
+                return {};
+            }
+            // EXACTLY the arming WidenImageFormatsForEssl uses, and it has to be: the shader, the
+            // storage and the bind must all widen or none of them may, or the shader addresses a
+            // texel size the storage does not have (which every driver tested accepts silently,
+            // reading and writing out of bounds).
+            //
+            // A driver WITH GL_NV_image_formats can spell the narrow format - but only for the
+            // formats SPIRV-Cross will actually print. It throws for its is_desktop_only_format
+            // set instead of emitting a token, and the throw loses the stage whatever the driver
+            // would have accepted: on Mesa, which advertises the extension, `layout(r8ui)
+            // uimage2D` still lost its whole program until the widening ran for it too.
+            if (g_GLESCapabilities.SupportsExtendedImageFormats &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
                 return {};
             }
             ImageBindableStorageWidening widening;
