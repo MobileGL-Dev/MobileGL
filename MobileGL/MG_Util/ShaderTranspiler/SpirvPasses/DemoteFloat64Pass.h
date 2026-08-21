@@ -50,6 +50,33 @@ namespace MobileGL {
             // for the same reason - writes exactly where the demoted shader reads. Blocks with no
             // 64-bit member anywhere are never touched.
             //
+            // THE MEASURED COST, so the next wave does not re-diagnose it. Four GL 4.3 conformance
+            // cases fail on BOTH backends and on both an Adreno 830 and a Mali G925 - i.e. on every
+            // device, because no device has shaderFloat64 and the demotion therefore always runs:
+            //
+            //   KHR-GL43.shader_storage_buffer_object.basic-stdLayout-case3
+            //   KHR-GL43.compute_shader.fp64-case1
+            //   KHR-GL43.compute_shader.fp64-case3
+            //   ...and the std430 half of the same stdLayout case.
+            //
+            // They fail in the two ways this comment predicts and in no other. stdLayout-case3
+            // copies a block byte for byte: the output matches the input for bytes [0, 76) and is
+            // zero from there on, which is exactly the block's size once every double became a
+            // float and the layout repacked tightly. fp64-case1 reports ceil(2.2) as 2: the
+            // uniform's double 2.0 is 0x4000000000000000, the demoted read takes its low 32 bits
+            // (0.0), ceil(0.0 + 0.2) = 1.0f = 0x3F800000 lands in the low half of the 8-byte
+            // output slot and the whole thing prints as 2.
+            //
+            // Fixing them means NOT demoting a double that lives in a buffer block, and carrying
+            // it as a uvec2 word pair instead - preserving the application's byte layout exactly,
+            // unpacking to fp32 for arithmetic and repacking on store. That is a large pass with
+            // the same dmat problem the paragraph above describes (a uvec2 representation cannot
+            // express a matrix stride either, so it would have to decline dmat types), and the
+            // default-uniform routing above reflects the demoted module, so a representation
+            // change there ripples into every glUniform*d. Four of 16085 cases; deliberately not
+            // attempted. compute_shader.fp64-case2 passes today and any attempt has to keep it
+            // green.
+            //
             // Declines (leaves the module byte-identical, so the caller's existing "this module
             // still declares Float64" failure path reports it) when the module contains an
             // operation whose validity depends on the operand really being 64 bits wide:
