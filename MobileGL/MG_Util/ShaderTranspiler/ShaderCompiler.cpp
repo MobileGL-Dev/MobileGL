@@ -34,6 +34,7 @@
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
+#include "SpirvPasses/WidenImageFormatsPass.h"
 #include "SpirvPasses/ClampMultisampleFetchPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
@@ -769,6 +770,35 @@ namespace MobileGL {
             bool ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat) {
                 return BakeImageFormatsPass::IsSpirvCrossEsslPrintableFormat(
                     BakeImageFormatsPass::SpirvImageFormatFromGLInternalFormat(glInternalFormat));
+            }
+
+            bool ShaderCompiler::WidenImageFormatsForEssl(const Vector<Uint32>& inputBinary,
+                                                          Vector<uint32_t>& outputBinary,
+                                                          const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(WidenImageFormatsPass::CreateWidenImageFormatsPass());
+                // Two image types that differed only in a format the widening collapses -
+                // `layout(rg32f)` and `layout(rgba32f)` in one module - are one type afterwards,
+                // and duplicate non-aggregate type declarations are invalid SPIR-V. This joins
+                // them, and cascades to the pointer and array types that named them; the pass
+                // itself deliberately does not carry a join of its own.
+                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
+
+                return RunOptimizerChecked("WidenImageFormatsForEssl", optimizer, inputBinary, outputBinary,
+                                           true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeclaresWidenableImageFormat(const Vector<Uint32>& binary) {
+                return WidenImageFormatsPass::DeclaresWidenableImageFormat(binary);
+            }
+
+            Uint ShaderCompiler::WidenedCoreEsslImageFormat(Uint glInternalFormat) {
+                return WidenImageFormatsPass::WidenedCoreEsslImageFormat(glInternalFormat);
+            }
+
+            Uint ShaderCompiler::ImageFormatChannelCount(Uint glInternalFormat) {
+                return WidenImageFormatsPass::ImageFormatChannelCount(glInternalFormat);
             }
 
             bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,

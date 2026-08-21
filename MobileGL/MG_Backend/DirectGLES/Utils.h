@@ -60,6 +60,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target);
         Bool BackendRenderbufferFormatAddsAlpha(TextureInternalFormat internalFormat);
         Bool ShouldUseCaveatRenderbufferFormat(TextureInternalFormat internalFormat);
+
+        // The CHANNEL WIDENING an image-bindable texture's ES storage takes, so that a format
+        // GLSL ES cannot spell as an image is carried by one it can.
+        //
+        // GL has forty image formats, GLSL ES core has thirteen, and no test device advertises
+        // GL_NV_image_formats - so a shader declaring one of the other twenty-six has no legal
+        // ESSL at all and glBindImageTexture rejects the narrow format outright for most of them
+        // (GL_INVALID_VALUE for nineteen of twenty-six on Adreno, twenty-five on both Malis).
+        // Seventeen have a core format of the SAME per-channel width and component type,
+        // differing only in channel count, and in one of those the emulation is EXACT: GL already
+        // defines an imageLoad from a narrower format as (r, 0, 0, 1) and an imageStore as
+        // dropping the components the format does not have, so the carrier's surplus channels
+        // hold values GL has already named. WidenImageFormatsPass pins them in the shader; this
+        // is the storage half, and DirectGLES::TextureImpl::SyncImageTextureBinding the bind
+        // half. All three ask WidenedCoreEsslImageFormat, so they cannot pick different carriers.
+        //
+        // Reports nothing (InternalFormat == GL_UNKNOWN_MGL) for a format that is core already,
+        // for the nine with no exact carrier (r11f_g11f_b10f, rgb10_a2, rgb10_a2ui, rgba16, rg16,
+        // r16, rgba16_snorm, rg16_snorm, r16_snorm - those keep the honest "no GLSL ES spelling"
+        // diagnostic rather than a silent approximation), and on a driver that HAS
+        // GL_NV_image_formats, where the shader keeps the declared format and no widening may
+        // happen behind it.
+        //
+        // The widened triple REPLACES what GenerateTextureFormatInfo chose, including any
+        // renderability substitution: an image that cannot be image-bound is useless whatever its
+        // attachment behaviour, so the image constraint wins. In practice that only bites
+        // RG8_SNORM/R8_SNORM on a driver without EXT_render_snorm, where the storage stays
+        // signed-normalized instead of becoming the half float that fallback would have picked -
+        // so an image-bound texture in one of those two formats is no longer attachable, and
+        // glGetTexImage on it falls through to the CPU shadow, which a shader-side imageStore
+        // does not update. Accepted deliberately: before the widening, an image binding in either
+        // format was refused outright by every driver tested and the stage that declared it never
+        // compiled at all, so nothing that works today is being given up.
+        //
+        // KNOWN GAP, for the same "all three layers move together" reason: a widened texture that
+        // is ALSO an FBO colour attachment gains one to three writable channels, and a draw into
+        // it can leave values in channels GL says are 0 and 1. Sampling and imageLoad are covered
+        // (the swizzle composition in SyncTextureParamsToBackend and the shader-side mask), but a
+        // glReadPixels/glGetTexImage that asks for more channels than the frontend format has
+        // would see them. Closing it needs the per-draw-buffer colour mask the three-channel
+        // widening already carries (FramebufferImpl::g_alphaWidenedDrawBufferMask) generalized
+        // from "alpha" to a channel count, which is its own change.
+        struct ImageBindableStorageWidening {
+            GLenum InternalFormat = GL_UNKNOWN_MGL;
+            GLenum Format = GL_UNKNOWN_MGL;
+            GLenum Type = GL_UNKNOWN_MGL;
+            // Channels the FRONTEND format has, i.e. how many of the carrier's four the client
+            // data fills. The rest are uploaded as 0, and the fourth as the format's implied 1.
+            Uint SourceChannels = 0;
+            // Whether that implied 1 is the integer one or a saturated normalized field - the
+            // transfer type cannot tell the two apart (GL_UNSIGNED_BYTE serves both RG8 and
+            // RG8UI), so the carrier decides.
+            Bool IntegerData = false;
+
+            explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
+        };
+        ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 
     namespace FramebufferImpl {} // namespace FramebufferImpl

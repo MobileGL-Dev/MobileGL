@@ -863,6 +863,13 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.supportsNoperspectiveInterpolation = true;
         variants.emplace_back("supportsNoperspectiveInterpolation", BuildEsslTranslationKey(v));
     }
+    {   // arms WidenImageFormatsForEssl - a driver WITH GL_NV_image_formats keeps the declared
+        // rg32f/r8ui/... image formats, one without has them re-declared in a core carrier and
+        // every access to them masked, so the two get materially different ESSL from one module.
+        EsslTranslationKeyInputs v = base;
+        v.supportsExtendedImageFormats = true;
+        variants.emplace_back("supportsExtendedImageFormats", BuildEsslTranslationKey(v));
+    }
     {   // arms AND parameterizes ClampMultisampleFetchesForEssl
         EsslTranslationKeyInputs v = base;
         v.maxColorTextureSamples = 1;

@@ -231,6 +231,31 @@ namespace MobileGL {
                 // must not ask BakeImageFormatsForEssl for those, and completes them in the
                 // emitted text instead.
                 static bool SpirvCrossCanPrintEsslImageFormat(Uint glInternalFormat);
+                // Re-declares every storage image whose DECLARED format GLSL ES cannot spell in
+                // the core format that carries it exactly, and masks each access back to the
+                // channels the original format has. The 26 formats outside the ES core set have no
+                // legal ESSL spelling on any tested driver (none exposes GL_NV_image_formats), and
+                // a format-less declaration is rejected too, so the stage is otherwise lost
+                // whatever this backend emits. DirectGLES transpile path only - Vulkan takes the
+                // declared format natively. See WidenImageFormatsPass for the table, for the nine
+                // formats it deliberately does NOT widen, and for why the texture storage and the
+                // glBindImageTexture argument have to move with it.
+                static bool WidenImageFormatsForEssl(const Vector<Uint32>& inputBinary,
+                                                     Vector<uint32_t>& outputBinary,
+                                                     bool enableSpirvValidation = false);
+                // Whether the module declares a storage image WidenImageFormatsForEssl would
+                // widen. One module parse, so the ~every shader that declares none pays no
+                // optimizer run.
+                static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary);
+                // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
+                // when it needs no widening or cannot be widened exactly. The single source of
+                // truth for all three layers of the emulation: this one answers the shader, and
+                // DirectGLES asks it again for the texture storage and the image bind, so the two
+                // sides cannot drift.
+                static Uint WidenedCoreEsslImageFormat(Uint glInternalFormat);
+                // Channels a GL image internal format really has (1-4), 0 when it is not one of
+                // the forty image formats.
+                static Uint ImageFormatChannelCount(Uint glInternalFormat);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);

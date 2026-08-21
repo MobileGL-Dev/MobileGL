@@ -8,6 +8,8 @@
 
 #include "BakeImageFormatsPass.h"
 
+#include "WidenImageFormatsPass.h"
+
 #include "spirv.hpp"
 #include "source/opt/build_module.h"
 #include "source/opt/def_use_manager.h"
@@ -418,7 +420,18 @@ namespace MobileGL {
                     // Those formats are completed in the emitted text instead (see
                     // PrgramImpl::BakeImageFormatQualifiers); the module is left format-less for
                     // them, which is exactly the state that pass looks for.
-                    if (!IsSpirvCrossEsslPrintableFormat(static_cast<Uint32>(format))) continue;
+                    //
+                    // UNLESS the format widens exactly: WidenImageFormatsPass runs immediately
+                    // after this one on the ESSL chain and rewrites it to a core four-channel
+                    // carrier SPIRV-Cross does print, masking the accesses back to the channels
+                    // the baked format has. So for those the module IS the right place, and
+                    // routing them to the text completion instead would spell the narrow format
+                    // the driver rejects. The two lists are asked in this order because
+                    // printability is the cheaper and more common answer.
+                    if (!IsSpirvCrossEsslPrintableFormat(static_cast<Uint32>(format)) &&
+                        WidenImageFormatsPass::WidenedCoreEsslImageFormat(formatIt->second) == 0) {
+                        continue;
+                    }
                     // spirv-val: "Expected Image Format to match Sampled Type". A bind format
                     // whose class disagrees with the declaration is an application error GL
                     // leaves undefined; baking it would turn that into an invalid module, so it

@@ -14,6 +14,7 @@ add_executable(
         ClampMultisampleFetchTest.cpp
         LegalizeStorageBlockArrayIndexTest.cpp
         FlattenAtomicCounterBlockTest.cpp
+        WidenImageFormatsTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

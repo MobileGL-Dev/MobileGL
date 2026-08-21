@@ -1463,8 +1463,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool layerable = SupportsLayeredImageBinding(imageBinding.Texture->GetTarget());
             const GLboolean layered = layerable ? imageBinding.Layered : GL_FALSE;
             const GLint layer = layerable ? imageBinding.Layer : 0;
+            // The bind half of the image-format widening. SyncTextureObjectToBackend has just
+            // allocated this texture's storage in the core carrier of its format (the call above
+            // is the one that marks it image-bindable), and glBindImageTexture's `format` has to
+            // name the storage the texture really has: a GL_RG32F bind is GL_INVALID_VALUE on
+            // Adreno for nineteen of the twenty-six non-core formats and on both Malis for
+            // twenty-five, and every driver that DOES accept a narrow texture through a wide
+            // image accepts it silently, reading and writing out of bounds. The frontend's own
+            // ImageTextureBinding keeps the application's format untouched, so
+            // GL_IMAGE_BINDING_FORMAT still answers what was passed in.
+            //
+            // Widened from the format the APPLICATION named rather than from the texture's own,
+            // because GL lets the two differ inside one format class and the shader was widened
+            // from the class the application named too (an r32ui view of an r32f image is a legal
+            // reinterpretation). The two carriers always have the same texel size - every format
+            // in a class widens to the four-channel form of that same class - so the storage
+            // still describes what the bind claims. Gated on the TEXTURE having been widened, so
+            // a bind format that names a class the storage does not have is left alone: GL
+            // already calls that undefined, and inventing a carrier for it would only make the
+            // out-of-class read wider.
+            GLenum bindFormat = imageBinding.Format;
+            if (TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
+                const auto boundFormatWidening = TextureImpl::GetImageBindableStorageWidening(
+                    MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+                if (boundFormatWidening) {
+                    bindFormat = boundFormatWidening.InternalFormat;
+                }
+            }
             g_GLESFuncs.glBindImageTexture(unit, backendTexture->GetBackendTextureId(), imageBinding.Level,
-                                           layered, layer, imageBinding.Access, imageBinding.Format);
+                                           layered, layer, imageBinding.Access, bindFormat);
         }
 
         // A buffer texture bound to a WRITABLE image unit is a buffer the shader is about to

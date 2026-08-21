@@ -2282,6 +2282,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
+            // The storage this re-mints may also be CHANNEL WIDENED (a GL_RG32F image is not
+            // bindable on this driver at all, so it becomes a GL_RGBA32F carrying two channels),
+            // and a widened texture's sampled view has to answer the channels the logical format
+            // does not have with 0 and 1 - which is a swizzle. The parameter sync is gated on the
+            // frontend's params version, which this transition does not move, so without the
+            // override an application that never touched GL_TEXTURE_SWIZZLE_* would keep the
+            // driver at its defaults and sample the carrier's surplus channels raw.
+            m_forceTextureParamsResync = true;
         }
 
         void BackendTextureObject::RecreateBackendTexture() {
@@ -2579,7 +2587,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                 Vector<Uint8>& widenedData, Bool integerData) {
             Uint8 oneBits[8] = {};
             SizeT componentSize = 0;
-            if (componentCount != 3 || data == nullptr || byteSize == 0 ||
+            // One and two source components as well as three: the image-format widening carries
+            // GL_R8UI in a GL_RGBA8UI and GL_RG32F in a GL_RGBA32F (see
+            // TextureImpl::GetImageBindableStorageWidening), and their surplus channels take the
+            // same values the three-channel case gives its single added one - zeroes, and the
+            // format's implied 1 in alpha.
+            if (componentCount == 0 || componentCount > 3 || data == nullptr || byteSize == 0 ||
                 !GetUploadComponentOneBits(uploadType, integerData, oneBits, &componentSize)) {
                 return data;
             }
@@ -2606,7 +2619,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Memcpy(dst, src, srcTexelBytes);
                     src += srcTexelBytes;
                 }
-                Memcpy(dst + srcTexelBytes, oneBits, componentSize);
+                // ALWAYS at component 3, never at `componentCount`: GL's implied 1 is the ALPHA
+                // channel, and a one- or two-component source leaves the channels between it and
+                // alpha at the zero `assign` already wrote. For three components the two
+                // expressions coincide, which is what this used to be written as.
+                Memcpy(dst + componentSize * 3, oneBits, componentSize);
             }
             return widenedData.data();
         }
@@ -2687,6 +2704,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              : byteSize;
             return PrepareChannelWidenedUpload(componentCount, texelSize, uploadData, uploadByteSize, uploadType,
                                                widenedData, IsIntegerWidenableFormat(format));
+        }
+
+        // The transfer half of the image-format widening: an image-bindable texture whose ES
+        // storage was widened to a core carrier is described to the driver as a four-component
+        // transfer, so its one- or two-component client data has to be repacked the same way the
+        // three-channel colour-renderable widening repacks its own.
+        //
+        // Composes with PrepareFallbackUpload rather than replacing it, and the composition is a
+        // no-op by construction: none of the seventeen widened formats is a three-channel one
+        // (GetWidenableClientComponentCount reports 0 for every one of them), and the SNORM
+        // shadow-to-float conversion only fires for a GL_FLOAT transfer type, which the widened
+        // triple never picks for the two SNORM8 formats. So the shadow reaches this untouched and
+        // one repack is all that runs.
+        static const void* PrepareImageWidenedUpload(const TextureImpl::ImageBindableStorageWidening& widening,
+                                                     const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                     Vector<Uint8>& widenedData) {
+            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels >= 4) {
+                return data;
+            }
+            return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
+                                               widenedData, widening.IntegerData);
+        }
+
+        // Overwrites the (internal format, format, type) triple GenerateTextureFormatInfo chose
+        // with the widened carrier's. Deliberately unconditional on anything but the widening
+        // itself: whatever renderability fallback the triple carried, an image the driver refuses
+        // to bind is useless, so the image constraint wins.
+        static void ApplyImageBindableStorageWidening(const TextureImpl::ImageBindableStorageWidening& widening,
+                                                      GLenum* inOutInternalFormat, GLenum* inOutFormat,
+                                                      GLenum* inOutType) {
+            if (!widening) {
+                return;
+            }
+            if (inOutInternalFormat) *inOutInternalFormat = widening.InternalFormat;
+            if (inOutFormat) *inOutFormat = widening.Format;
+            if (inOutType) *inOutType = widening.Type;
         }
 
         // RGB565/RGB5_A1 shadow data is stored as 8-bit unorm; uploading it as GL_UNSIGNED_BYTE
@@ -2884,6 +2937,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Bind(target);
                 }
 
+                // Only a texture that is actually image-bound pays for the widening: it doubles
+                // or quadruples the storage, and RequireImageBindableStorage is sticky, so a
+                // texture that is merely sampled keeps its narrow format for life. See
+                // TextureImpl::GetImageBindableStorageWidening for what widens and why.
+                const TextureImpl::ImageBindableStorageWidening imageWidening =
+                    m_imageBindableStorageRequired
+                        ? TextureImpl::GetImageBindableStorageWidening(textureMipmapObject->GetFormat())
+                        : TextureImpl::ImageBindableStorageWidening{};
+
                 const Bool canAppendMipmaps =
                     m_isInitialized &&
                     !m_imageBindableStorageRequired &&
@@ -2989,6 +3051,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
+                    ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
 
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     if (TextureImpl::IsMultisampleTextureTarget(targetInternal)) {
@@ -3104,6 +3167,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     uploadData =
                                         PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
                                                                 uploadData, levelByteSize, &glType, packedUploadData);
+                                    Vector<Uint8> imageWidenedUploadData;
+                                    uploadData = PrepareImageWidenedUpload(imageWidening, levelTexelSize, uploadData,
+                                                                           levelByteSize, imageWidenedUploadData);
 
                                     DebugImpl::ErrorLopper::Clear();
                                     BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
@@ -3243,6 +3309,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     GLenum glInternalFormat, glType, glFormat;
                     TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
+                    // The storage this level is being written into was widened when it was minted
+                    // (see above), so the transfer pair has to describe the carrier here too - ES
+                    // requires glTexSubImage's `format` to match the storage's base internal
+                    // format, so a GL_RG upload into a GL_RGBA32F image is GL_INVALID_OPERATION.
+                    ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
                     ScopedDefaultUnpackState unpackState;
                     for (auto& uploadTarget : uploadTargets) {
@@ -3281,6 +3352,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             Vector<Uint8> packedUploadData;
                             uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
                                                                  uploadData, byteSize, &glType, packedUploadData);
+                            // Leaves `uploadData` pointing at its own buffer when it fires, which
+                            // is exactly what takes the sub-rect fast path below out of play: that
+                            // path strides into the SHADOW, and the widened texels are four
+                            // components wide where the shadow's are one or two.
+                            Vector<Uint8> imageWidenedUploadData;
+                            uploadData = PrepareImageWidenedUpload(imageWidening, texelSize, uploadData, byteSize,
+                                                                   imageWidenedUploadData);
                             const IntVec3 uploadSize =
                                 GetBackendUploadSize(stateTextureObject->GetTarget(), texelSize);
                             // Sub-rect upload: when only a region of the level changed (a
@@ -3723,6 +3801,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (SizeT channel = 0; channel < 4; ++channel) {
                     if (swizzleParams[channel] == TextureSwizzleParam::Alpha) {
                         swizzleParams[channel] = TextureSwizzleParam::One;
+                    }
+                }
+            }
+            // The same composition for the image-format widening, which can add TWO or THREE
+            // channels rather than one (GL_R8UI carried in a GL_RGBA8UI). GL reads a channel the
+            // format does not have as 0, except alpha, which reads as 1 - so a sampler must see
+            // those constants and not whatever the widened storage holds. The upload and the
+            // shader's own store mask already keep them at exactly these values; this covers
+            // storage nothing has written yet (glTexStorage with no upload), whose surplus
+            // channels are undefined. Composed with the application's own swizzle for the same
+            // reason as the alpha case above: GL_TEXTURE_SWIZZLE names a SOURCE channel of the
+            // logical texel, so it is the source that is substituted, never the destination.
+            if (const auto imageWidening =
+                    m_imageBindableStorageRequired
+                        ? TextureImpl::GetImageBindableStorageWidening(stateTextureObject->GetFormat())
+                        : TextureImpl::ImageBindableStorageWidening{}) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    switch (swizzleParams[channel]) {
+                    case TextureSwizzleParam::Green:
+                        if (imageWidening.SourceChannels < 2) swizzleParams[channel] = TextureSwizzleParam::Zero;
+                        break;
+                    case TextureSwizzleParam::Blue:
+                        if (imageWidening.SourceChannels < 3) swizzleParams[channel] = TextureSwizzleParam::Zero;
+                        break;
+                    case TextureSwizzleParam::Alpha:
+                        if (imageWidening.SourceChannels < 4) swizzleParams[channel] = TextureSwizzleParam::One;
+                        break;
+                    default:
+                        break;
                     }
                 }
             }
@@ -5042,6 +5149,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return false;
                 }
             }
+
+            // The GL internal format a glslang layout format names, for the seventeen non-core
+            // formats WidenImageFormatsForEssl carries exactly plus nothing else: the only
+            // question asked of it is "does this DECLARED format widen", and answering 0 for
+            // everything else is the same "no" a non-widenable format gets. Kept as its own
+            // switch rather than routed through the frontend's enum converters because a
+            // TLayoutFormat is a glslang value and the reflection snapshot stores it raw.
+            Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
+                switch (format) {
+                case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
+                case glslang::ElfRg16f: return 0x822F;    // GL_RG16F
+                case glslang::ElfR16f: return 0x822D;     // GL_R16F
+                case glslang::ElfRg8: return 0x822B;      // GL_RG8
+                case glslang::ElfR8: return 0x8229;       // GL_R8
+                case glslang::ElfRg8Snorm: return 0x8F95; // GL_RG8_SNORM
+                case glslang::ElfR8Snorm: return 0x8F94;  // GL_R8_SNORM
+                case glslang::ElfRg32i: return 0x823B;    // GL_RG32I
+                case glslang::ElfRg16i: return 0x8239;    // GL_RG16I
+                case glslang::ElfR16i: return 0x8233;     // GL_R16I
+                case glslang::ElfRg8i: return 0x8237;     // GL_RG8I
+                case glslang::ElfR8i: return 0x8231;      // GL_R8I
+                case glslang::ElfRg32ui: return 0x823C;   // GL_RG32UI
+                case glslang::ElfRg16ui: return 0x823A;   // GL_RG16UI
+                case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
+                case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
+                case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                default:
+                    return 0;
+                }
+            }
+
+            // Whether the ESSL chain will re-declare an image of this format in a core carrier
+            // and mask its accesses (WidenImageFormatsForEssl). Armed only where there is no
+            // GL_NV_image_formats to spell the format natively - a driver that has the extension
+            // keeps the declaration and gets the `#extension` directive instead.
+            Bool ImageFormatWillBeWidened(Uint glInternalFormat) {
+                return !g_GLESCapabilities.SupportsExtendedImageFormats && glInternalFormat != 0 &&
+                       MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(glInternalFormat) != 0;
+            }
         } // namespace
 
         // What the format bake needs from the frontend, collected in one walk of the uniform
@@ -5074,17 +5220,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
                 const auto& type = stateProgramObject.GetUniformTypeFacts(loc);
                 if (type.hasFormat) {
-                    // Declared, and therefore left exactly as written - but a non-core spelling
-                    // still needs the extension directive to survive the ES compiler.
-                    if (!IsCoreEsslLayoutFormat(static_cast<glslang::TLayoutFormat>(type.layoutFormat))) {
-                        inputs.needsExtendedImageFormats = true;
-                        if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
-                            // From the OWNED TypeFacts, not from a live TType: the reflection
-                            // snapshot already carries the declared layout format, and there is
-                            // no glslang object to ask on a translation-cache L1 hit.
-                            recordUnspellableFormat(
-                                name, glslang::TQualifier::getLayoutFormatString(
-                                          static_cast<glslang::TLayoutFormat>(type.layoutFormat)));
+                    // Declared, and therefore never overridden by the BAKE - but a non-core
+                    // spelling still has to become legal ESSL somehow.
+                    const auto declaredFormat = static_cast<glslang::TLayoutFormat>(type.layoutFormat);
+                    if (!IsCoreEsslLayoutFormat(declaredFormat)) {
+                        // Seventeen of the twenty-six non-core formats are re-declared in the core
+                        // format that carries them exactly, with every access masked back to the
+                        // channels GL says they have (WidenImageFormatsForEssl, and the matching
+                        // storage/bind widening in TextureImpl). Those need neither the extension
+                        // nor the diagnostic: there IS a legal spelling for them now.
+                        if (!ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
+                            inputs.needsExtendedImageFormats = true;
+                            if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                                // From the OWNED TypeFacts, not from a live TType: the reflection
+                                // snapshot already carries the declared layout format, and there
+                                // is no glslang object to ask on a translation-cache L1 hit.
+                                recordUnspellableFormat(
+                                    name, glslang::TQualifier::getLayoutFormatString(declaredFormat));
+                            }
                         }
                     }
                     continue;
@@ -5102,20 +5255,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (boundFormat == 0) continue;
                 if (!MG_Util::ShaderTranspiler::ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(boundFormat)) {
-                    // Outside the GLSL ES core set, so the emitted ESSL only compiles with
-                    // GL_NV_image_formats. Without the extension there is no legal spelling at
-                    // all, and baking one would trade a "no format qualifier" compile error for
-                    // an "unsupported format" one - so the image is left format-less. Its unit
-                    // stays in the key, so a rebind to a core format still rebuilds and works.
                     if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
-                        MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which GLSL ES "
-                                "core cannot spell and this driver has no GL_NV_image_formats for.",
-                                name.c_str(), unit, boundFormat);
-                        recordUnspellableFormat(
-                            name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
-                        continue;
+                        // Outside the GLSL ES core set and with no GL_NV_image_formats to spell
+                        // it. If the format widens exactly it is still baked HERE, narrow, and
+                        // WidenImageFormatsForEssl re-declares it in its core carrier immediately
+                        // afterwards - both routes into that pass end in the same place.
+                        //
+                        // If it does not widen there is no legal ESSL for this stage at all.
+                        // Leaving the image format-LESS is NOT a softer failure: all three test
+                        // devices reject a format-less image declaration outright ("all images
+                        // have to define layout format"), readonly and writeonly alike, so it
+                        // trades one hard compile error for another. The unit stays in the
+                        // rebuild key either way, so a rebind to a spellable format still
+                        // rebuilds and works.
+                        if (!ImageFormatWillBeWidened(boundFormat)) {
+                            MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which "
+                                    "GLSL ES core cannot spell, this driver has no GL_NV_image_formats for, and "
+                                    "no core format carries exactly.",
+                                    name.c_str(), unit, boundFormat);
+                            recordUnspellableFormat(
+                                name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
+                            continue;
+                        }
+                    } else {
+                        inputs.needsExtendedImageFormats = true;
                     }
-                    inputs.needsExtendedImageFormats = true;
                 }
                 const String baseName = ImageUniformBaseName(name);
                 const auto existing = inputs.glFormatByUniformName.find(baseName);
@@ -5145,6 +5309,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<String> textCompleted;
             for (const auto& entry : inputs.glFormatByUniformName) {
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(entry.second)) {
+                    continue;
+                }
+                // A format the widening carries stays on the module route even though SPIRV-Cross
+                // would not print it: by the time SPIRV-Cross sees the declaration it names the
+                // core carrier, which it does print. Writing the narrow spelling into the text
+                // instead would put back exactly the token the driver rejects.
+                if (ImageFormatWillBeWidened(entry.second)) {
                     continue;
                 }
                 String spelling = MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(entry.second);
@@ -5197,8 +5368,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Reads (audited): the arguments; g_GLESCapabilities.{SupportsViewportArray,
         // MaxSamples, MaxColorTextureSamples, MaxIntegerSamples, MaxDepthTextureSamples,
-        // SupportsNoperspectiveInterpolation, GLESVersion} (the last via
-        // ResolveBackendEsslVersion); and m_backendProgramId, for a log line only.
+        // SupportsNoperspectiveInterpolation, SupportsExtendedImageFormats, GLESVersion}
+        // (the last via ResolveBackendEsslVersion); and m_backendProgramId, for a log line only.
         //
         // Deliberately NOT in here, and therefore NOT in the key: the text-level passes that
         // follow in SyncToBackend. They are cheap string work and they read a long tail of
@@ -5443,6 +5614,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     enableSpirvValidation) &&
                 !imageFormatSpirv.empty()) {
                 effectiveSpirv = &imageFormatSpirv;
+            }
+
+            // GL has forty image formats and GLSL ES core has thirteen; the other twenty-seven
+            // reach ES only through GL_NV_image_formats, which no tested driver advertises. A
+            // shader declaring one of them has NO legal ESSL spelling at all - SPIRV-Cross throws
+            // for some of them and the driver rejects the token for the rest ("'rg32f' : not a
+            // legal layout qualifier id"), and dropping the qualifier is refused too ("all images
+            // have to define layout format") - so the stage is lost and every draw with the
+            // program silently renders nothing. Seventeen of them widen EXACTLY into a core format
+            // of the same per-channel width, and this rewrites those declarations to the carrier
+            // and masks every access back to the channels GL says the format has. The other nine
+            // have no exact carrier and keep the honest diagnostic
+            // CollectImageFormatBakeInputs emits.
+            //
+            // AFTER the bake above, deliberately: a format-less image whose unit holds a non-core
+            // format is baked with that format and widened here, so both routes end in the same
+            // place and there is no second widening rule for baked declarations.
+            //
+            // KEY MATERIAL: g_GLESCapabilities.SupportsExtendedImageFormats, which ARMS this -
+            // see EsslTranslationKeyInputs::supportsExtendedImageFormats. The pass takes no other
+            // input: what it rewrites is a pure function of the module's own declared formats,
+            // and the module is already the largest thing in the L2 key.
+            //
+            // DirectVulkan is deliberately not given this: it takes the declared format natively
+            // and resolves the descriptor's view format from the same bind state.
+            Vector<unsigned int> widenedImageFormatSpirv;
+            if (!g_GLESCapabilities.SupportsExtendedImageFormats &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresWidenableImageFormat(*effectiveSpirv) &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::WidenImageFormatsForEssl(
+                    *effectiveSpirv, widenedImageFormatSpirv, enableSpirvValidation) &&
+                !widenedImageFormatSpirv.empty()) {
+                effectiveSpirv = &widenedImageFormatSpirv;
             }
 
             // GLSL ES demands a constant integral expression to index a fragment output
@@ -5781,6 +5984,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 esslKeyInputs.supportsViewportArray = g_GLESCapabilities.SupportsViewportArray;
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
+                esslKeyInputs.supportsExtendedImageFormats =
+                    g_GLESCapabilities.SupportsExtendedImageFormats;
                 esslKeyInputs.maxColorTextureSamples = g_GLESCapabilities.MaxColorTextureSamples;
                 esslKeyInputs.maxIntegerSamples = g_GLESCapabilities.MaxIntegerSamples;
                 esslKeyInputs.maxDepthTextureSamples = g_GLESCapabilities.MaxDepthTextureSamples;

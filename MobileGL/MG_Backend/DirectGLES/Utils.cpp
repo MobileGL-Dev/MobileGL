@@ -12,6 +12,7 @@
 #include "MG_Backend/BackendObjects.h"
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
+#include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
 
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
@@ -232,6 +233,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool BackendRenderbufferFormatAddsAlpha(TextureInternalFormat internalFormat) {
             return BackendFormatAddsAlpha(internalFormat, GetRenderbufferFormatCapabilityTargetIndex());
+        }
+
+        ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat) {
+            // Same arming as WidenImageFormatsForEssl. A driver with GL_NV_image_formats spells
+            // the narrow format natively, and widening the storage behind a shader that still
+            // says `rg32f` would make the two disagree about the texel size.
+            if (g_GLESCapabilities.SupportsExtendedImageFormats) {
+                return {};
+            }
+            const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            const auto carrier = static_cast<GLenum>(
+                MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
+            if (carrier == 0) {
+                return {};
+            }
+            ImageBindableStorageWidening widening;
+            widening.InternalFormat = carrier;
+            widening.SourceChannels =
+                MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
+            switch (carrier) {
+            case GL_RGBA32UI:
+            case GL_RGBA16UI:
+            case GL_RGBA8UI:
+            case GL_RGBA32I:
+            case GL_RGBA16I:
+            case GL_RGBA8I:
+                widening.IntegerData = true;
+                break;
+            default:
+                widening.IntegerData = false;
+                break;
+            }
+            // The carrier is a core ES format in every case, so it needs no fallback options of
+            // its own; this call is only here to spell the transfer pair that describes it.
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(carrier, Flags<PixelFormatNormalizeOptionBit>{},
+                                                                  nullptr, &widening.Format, &widening.Type);
+            return widening;
         }
     } // namespace TextureImpl
     namespace PrgramImpl {
