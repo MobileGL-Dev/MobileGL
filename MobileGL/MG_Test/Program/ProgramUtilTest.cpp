@@ -4818,3 +4818,65 @@ subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
     EXPECT_EQ(conditional, conditionalBefore)
         << "an inactive #if arm must not have an unconditional forwarding body appended for it";
 }
+
+// THE TEXT THIS SCANS IS NOT MACRO-EXPANDED. MobileGL's preprocessing rewrites the source, it
+// does not run the C preprocessor, so a `#define` and every use of it both survive into what
+// RunSourceOnlyPipeline hands here. `binding = SOME_MACRO` is therefore the ordinary spelling in
+// real shader packs - Flywheel's indirect engine writes every one of its storage blocks that way
+// - and reading "no integer literal" as "no binding" defaulted all of them onto binding 0 at
+// once, where they aliased and the whole engine drew nothing
+// (minecraft-1.21.1-neoforge-create-indirect-in-world, both backends).
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingKeepsAMacroSpelledBinding) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Flywheel's own shape, verbatim in structure: the binding is a macro, the block carries
+    // memory qualifiers, and the macro's definition is still sitting in the text above it.
+    const String source = R"(#version 460 core
+#define _FLW_MODEL_BUFFER_BINDING 3
+#define _FLW_DRAW_BUFFER_BINDING 4
+layout(local_size_x = 32) in;
+layout(std430, binding = _FLW_MODEL_BUFFER_BINDING) restrict readonly buffer ModelBuffer {
+    uint models[];
+};
+layout(std430, binding = _FLW_DRAW_BUFFER_BINDING) restrict buffer DrawBuffer {
+    uint draws[];
+};
+layout(std430) buffer ReallyUnqualified { uint u; } reallyUnqualified;
+void main() { draws[0] = models[0] + reallyUnqualified.u; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("ModelBuffer"), 0u)
+        << "a binding spelled as a macro is still a declared binding, never an absent one";
+    EXPECT_EQ(unqualified.count("DrawBuffer"), 0u)
+        << "every block of the engine would otherwise be defaulted onto 0 together";
+    EXPECT_EQ(unqualified.count("ReallyUnqualified"), 1u)
+        << "a block that truly declares no binding is still recognised in the same shader";
+}
+
+// The other two ways an unexpanded macro can hide a binding: as a whole layout entry, and as the
+// whole qualifier run. Both have to read as doubt for the same reason the macro-valued binding
+// does - what the scanner cannot expand, it must not claim is absent.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingDoubtsAMacroQualifier) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+#define FLW_BINDING binding = 2
+#define SSBO_QUALIFIER layout(std430, binding = 6) restrict
+layout(local_size_x = 1) in;
+layout(std430, FLW_BINDING) buffer EntryMacro { uint a; } entryMacro;
+SSBO_QUALIFIER buffer RunMacro { uint b; } runMacro;
+layout(std430, row_major) buffer PlainLayout { uint c; } plainLayout;
+void main() { plainLayout.c = entryMacro.a + runMacro.b; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("EntryMacro"), 0u)
+        << "an unreadable layout entry may itself be the binding";
+    EXPECT_EQ(unqualified.count("RunMacro"), 0u)
+        << "a macro standing in for the whole qualifier run may carry the binding";
+    // The counterweight: recognising doubt must not swallow the layout identifiers a buffer
+    // block legally carries, or nothing would ever be defaulted again.
+    EXPECT_EQ(unqualified.count("PlainLayout"), 1u)
+        << "std430/row_major are GLSL, not macros, and leave no doubt behind";
+}
