@@ -88,6 +88,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/IoBlockNameCollisionScenario.cpp
     Scenarios/TessellationDrawModeScenario.cpp
     Scenarios/GeometryDrawModeScenario.cpp
+    Scenarios/FormatlessImageBakeScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp
