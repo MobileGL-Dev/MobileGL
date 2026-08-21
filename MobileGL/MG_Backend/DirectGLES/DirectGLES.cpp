@@ -2393,7 +2393,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // different one makes what was built wrong. Asked of the twin because only it
                 // knows which units its own images address - and answered by an empty-vector
                 // test for every program that declares its formats, which is nearly all of them.
-                !twin->ImageUnitFormatsStillMatch()) {
+                !twin->ImageUnitFormatsStillMatch() ||
+                // A fifth of the same shape, for the programs ES will not link at all: one whose
+                // tessellation evaluation stage has no control stage gets a synthesized
+                // pass-through one, and GL_PATCH_VERTICES is compiled INTO it as
+                // `layout(vertices = N) out` - so a glPatchParameteri between two draws makes the
+                // built program wrong. -1 is "this program needed no such stage", which compares
+                // equal to itself and costs every other program one integer test.
+                (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
+                 twin->GetPassthroughTessControlPatchVertices() !=
+                     static_cast<Int>(MG_State::pGLContext->GetPatchVertices()))) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();

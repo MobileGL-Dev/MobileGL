@@ -280,6 +280,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // it reads need no entry in BuildEsslTranslationKey.
         String RemapImageArrayElementUnits(const String& glslCode, const Vector<ImageArrayUnitPlan>& plans,
                                            Int stageImageUniformBudget, Vector<String>* outDeclined = nullptr);
+        // The member list of a `gl_PerVertex { ... }` redeclaration in already-emitted ESSL -
+        // the text between the braces, verbatim - or nullopt when the shader does not redeclare
+        // the block in that direction. `input` selects the `in gl_PerVertex` form over the
+        // `out` one.
+        //
+        // Exists so BuildPassthroughTessControlEssl can MIRROR the stages it has to sit between
+        // rather than guess at them. Whether SPIRV-Cross redeclares the built-in block, and with
+        // which members, depends on what the application's shader touched; a synthesized stage
+        // that redeclares a different shape than its neighbours is an ES link error against a
+        // program that has no other problem.
+        std::optional<String> ExtractPerVertexBlockMembers(const String& essl, Bool input);
+        // The pass-through tessellation control stage GL 4.6 core 11.2.2 describes: "the input
+        // patch is passed through unmodified", the output patch has PATCH_VERTICES vertices, and
+        // the levels come from the PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
+        //
+        // Desktop GL makes the control stage OPTIONAL. OpenGL ES 3.2 does not: it has no
+        // PATCH_DEFAULT_*_LEVEL state at all (only glPatchParameteri, for PATCH_VERTICES) and
+        // rejects a program that has an evaluation stage without a control stage - with an EMPTY
+        // info log, verified on an Adreno 830 with no MobileGL in the process. MobileGL's own
+        // frontend link succeeds, so the program reports GL_LINK_STATUS = TRUE, program 0 is
+        // bound in its place, and every draw silently renders nothing.
+        //
+        // `inPerVertexMembers` / `outPerVertexMembers` are the member lists to redeclare gl_in
+        // and gl_out with - normally taken from the neighbouring stages' own emitted ESSL via
+        // ExtractPerVertexBlockMembers, and empty to leave the driver's built-in declaration
+        // alone, which is what matching a neighbour that did not redeclare requires.
+        //
+        // All four outer levels and both inner levels are written unconditionally: writing a
+        // level the evaluation stage's domain does not use is legal and ignored, and it saves
+        // this from having to know the domain. They are literal 1.0 because that is the GL
+        // default and glPatchParameterfv - their only setter - is a stub in this frontend
+        // (MG_Impl/GLImpl/Exporting/Definitions.cpp). Implementing that entry point means making
+        // the levels a parameter here AND part of what makes a built program stale, exactly as
+        // PATCH_VERTICES already is; the two must move together, so they are named together.
+        //
+        // The same stage, for the same reason, that DirectVulkan synthesizes in
+        // ProgramFactory::BuildPassthroughTessControlSource - Vulkan likewise requires both
+        // tessellation stages. Kept as two generators rather than one because the two targets
+        // disagree on everything but the algorithm: desktop GLSL 450 against ESSL, a fixed
+        // gl_PerVertex shape that Vulkan matches structurally against a mirrored one, and a
+        // VkShaderModule against a driver shader object.
+        String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices,
+                                               const String& inPerVertexMembers,
+                                               const String& outPerVertexMembers);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own (already stage-tagged) name.
         constexpr const char* IMAGE_WRITE_ALIAS_PREFIX = "mg_imageWrite_";

@@ -17,6 +17,8 @@
 
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ExtractPerVertexBlockMembers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_STAGE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_UNIT_MAP_PREFIX;
@@ -1014,4 +1016,85 @@ void main() { gl_ViewportIndex = 1; imageStore(uni_image, ivec2(0), uvec4(1u)); 
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_NV_image_formats : require\n")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
+}
+
+// --- pass-through tessellation control stage --------------------------------------------------
+//
+// Desktop GL makes the tessellation control stage optional and takes the levels from
+// PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL; ES 3.2 has neither, and rejects a
+// program that has an evaluation stage without a control stage - with an EMPTY info log. The
+// synthesized stage is what stands in, and it has to MIRROR its two neighbours' gl_PerVertex
+// rather than pick a shape, because a redeclaration that disagrees with the stage it feeds is an
+// ES link error against a program that has nothing else wrong with it.
+
+TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel) {
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "");
+    EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "layout(vertices = 4) out;")) << out;
+    EXPECT_TRUE(Contains(out,
+                         "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;"))
+        << out;
+    // All six, unconditionally: writing a level the evaluation stage's domain does not use is
+    // legal and ignored, and it saves the generator from having to know the domain.
+    for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
+                              "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
+        EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
+    }
+    // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
+    // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
+    EXPECT_FALSE(Contains(out, "gl_PerVertex")) << out;
+}
+
+// ES 3.1 reaches tessellation only through the extension; the caller has already established
+// that the driver runs the evaluation stage at all, so the only question is the spelling.
+TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
+    const String out = BuildPassthroughTessControlEssl(310, 3, "", "");
+    EXPECT_EQ(out.find("#version 310 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_shader : require")) << out;
+}
+
+TEST(PassthroughTessControlEsslTest, MirrorsTheNeighboursPerVertexBlocks) {
+    const String inMembers = " highp vec4 gl_Position; highp float gl_PointSize; ";
+    const String outMembers = " highp vec4 gl_Position; ";
+    const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers);
+    EXPECT_TRUE(Contains(out, "in gl_PerVertex {" + inMembers + "} gl_in[gl_MaxPatchVertices];")) << out;
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex {" + outMembers + "} gl_out[];")) << out;
+}
+
+TEST(ExtractPerVertexBlockMembersTest, ReadsEitherDirectionAndOnlyThatDirection) {
+    const String essl = R"(#version 320 es
+in gl_PerVertex { highp vec4 gl_Position; } gl_in[gl_MaxPatchVertices];
+out gl_PerVertex { highp vec4 gl_Position; highp float gl_PointSize; } gl_out[];
+void main() {}
+)";
+    const auto inMembers = ExtractPerVertexBlockMembers(essl, true);
+    ASSERT_TRUE(inMembers.has_value()) << essl;
+    EXPECT_TRUE(Contains(*inMembers, "gl_Position")) << *inMembers;
+    EXPECT_FALSE(Contains(*inMembers, "gl_PointSize"))
+        << "the `in` block must not pick up the `out` block's members: " << *inMembers;
+
+    const auto outMembers = ExtractPerVertexBlockMembers(essl, false);
+    ASSERT_TRUE(outMembers.has_value()) << essl;
+    EXPECT_TRUE(Contains(*outMembers, "gl_PointSize")) << *outMembers;
+}
+
+// A shader that does not redeclare the block must report nothing, so the generator leaves the
+// driver's built-in declaration alone rather than inventing one.
+TEST(ExtractPerVertexBlockMembersTest, ReportsNothingWhenTheBlockIsNotRedeclared) {
+    const String essl = R"(#version 320 es
+layout(quads) in;
+void main() { gl_Position = gl_in[0].gl_Position; }
+)";
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, false).has_value()) << essl;
+}
+
+// "min" ends in "in" and "layout" ends in "out": the direction keyword has to be a whole token
+// immediately before the block name, or an unrelated identifier would be read as a redeclaration.
+TEST(ExtractPerVertexBlockMembersTest, DoesNotMatchAnIdentifierEndingInTheKeyword) {
+    const String essl = R"(#version 320 es
+struct fin gl_PerVertex { highp vec4 gl_Position; };
+void main() {}
+)";
+    EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
 }

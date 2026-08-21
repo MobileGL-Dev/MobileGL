@@ -427,6 +427,19 @@ namespace MobileGL {
                 // module (see its header for the two operations that make it decline), which is
                 // what the backends report: no mobile driver can build such a module.
                 static Bool ModuleDeclaresFloat64(const Vector<Uint32>& spirv);
+
+                // True when the module declares an Input variable carrying a Location - i.e. a
+                // user-defined varying or a per-patch input, as opposed to a built-in.
+                //
+                // Asked of a TESSELLATION EVALUATION stage that has no control stage, to decide
+                // whether the pass-through control stage GL 4.6 core 11.2.2 describes can stand
+                // in for the missing one. That stage forwards gl_Position and nothing else, so a
+                // located input - which the vertex stage feeds today and which would stop
+                // arriving once a control stage sat in between - means the program has to be
+                // declined rather than fed an undefined varying. Same rule, same reasoning, as
+                // DirectVulkan's ReflectPassthroughTessControlNeed, which asks SPIRV-Reflect the
+                // identical question for the identical decision.
+                static Bool ModuleReadsLocatedInput(const Vector<Uint32>& spirv);
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

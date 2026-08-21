@@ -746,6 +746,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        std::optional<String> ExtractPerVertexBlockMembers(const String& essl, const Bool input) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Deliberately a scan for the DECLARATION rather than a regex over the whole text:
+            // "gl_PerVertex" also appears inside the block's own body in some emissions, and the
+            // direction keyword has to be the one immediately preceding the name for the match to
+            // mean what this needs it to mean.
+            const auto isIdentifierChar = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            };
+            const String keyword = input ? String("in") : String("out");
+            SizeT pos = 0;
+            while ((pos = essl.find("gl_PerVertex", pos)) != String::npos) {
+                // Walk back over whitespace to the direction keyword.
+                SizeT before = pos;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1]))) --before;
+                const Bool matches = before >= keyword.size() &&
+                                     essl.compare(before - keyword.size(), keyword.size(), keyword) == 0 &&
+                                     (before == keyword.size() ||
+                                      !isIdentifierChar(essl[before - keyword.size() - 1]));
+                if (!matches) {
+                    pos += 1;
+                    continue;
+                }
+                const SizeT open = essl.find('{', pos);
+                if (open == String::npos) return std::nullopt;
+                const SizeT close = essl.find('}', open);
+                if (close == String::npos) return std::nullopt;
+                return essl.substr(open + 1, close - open - 1);
+            }
+            return std::nullopt;
+        }
+
+        String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
+                                               const String& inPerVertexMembers,
+                                               const String& outPerVertexMembers) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // Tessellation is core in ES 3.2 and reachable in 3.1 only through
+            // GL_EXT_tessellation_shader. The caller has already established that the driver runs
+            // the evaluation stage at all, so the only question here is which spelling to use.
+            const Bool core = esslVersion >= 320;
+            String source = "#version " + std::to_string(core ? 320u : 310u) + " es\n";
+            if (!core) {
+                source += "#extension GL_EXT_tessellation_shader : require\n";
+            }
+            source += "precision highp float;\n";
+            source += "precision highp int;\n";
+            source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
+            // Mirrored, never invented. An empty member list means the neighbouring stage did not
+            // redeclare the block either, and the driver's own built-in declaration is then what
+            // both sides agree on - redeclaring here would be the thing that broke the match.
+            if (!inPerVertexMembers.empty()) {
+                source += "in gl_PerVertex {" + inPerVertexMembers + "} gl_in[gl_MaxPatchVertices];\n";
+            }
+            if (!outPerVertexMembers.empty()) {
+                source += "out gl_PerVertex {" + outPerVertexMembers + "} gl_out[];\n";
+            }
+            source += "void main() {\n";
+            // Only gl_Position is forwarded. That is the whole of what the pass-through owes the
+            // evaluation stage: a program whose evaluation stage reads anything else per-vertex
+            // was declined before this was ever called (ModuleReadsLocatedInput), and gl_PointSize
+            // from a tessellation stage is a separate capability on both targets.
+            source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
+            source += "    gl_TessLevelOuter[0] = 1.0;\n";
+            source += "    gl_TessLevelOuter[1] = 1.0;\n";
+            source += "    gl_TessLevelOuter[2] = 1.0;\n";
+            source += "    gl_TessLevelOuter[3] = 1.0;\n";
+            source += "    gl_TessLevelInner[0] = 1.0;\n";
+            source += "    gl_TessLevelInner[1] = 1.0;\n";
+            source += "}\n";
+            return source;
+        }
+
         namespace {
             Bool IsImagePassIdentifierChar(char c) {
                 return std::isalnum(static_cast<unsigned char>(c)) || c == '_';

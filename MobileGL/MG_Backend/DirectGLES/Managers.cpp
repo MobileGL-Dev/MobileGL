@@ -5864,6 +5864,123 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        // GL 4.6 core 11.2.2 lets a program have a tessellation EVALUATION shader and no CONTROL
+        // shader: the input patch is passed through unmodified and the levels come from the
+        // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state. OpenGL ES 3.2 has no such
+        // state and no such allowance - it rejects the program at link, and with an EMPTY info
+        // log, which was verified on an Adreno 830 with no MobileGL in the process (TES-only:
+        // link=0, log empty; the same shaders plus any TCS: link=1, with or without the SSBO and
+        // atomic counter the failing conformance case also declares). The frontend's own glslang
+        // link succeeds, so GL_LINK_STATUS reads TRUE, program 0 is bound in its place, and every
+        // draw silently renders nothing - a black framebuffer, an atomic counter still at 0 and
+        // an untouched SSBO, with no error anywhere.
+        //
+        // So the missing stage is synthesized and attached here, alongside the program's own.
+        // DirectVulkan already does exactly this for the same structural reason
+        // (ProgramFactory::BuildPassthroughTessControlSource), so this completes the pair rather
+        // than inventing an approach.
+        //
+        // Nothing that works today can be harmed by it: it fires ONLY for a program that has an
+        // evaluation stage and no control stage, and every such program fails to link on ES right
+        // now. The worst case is that the synthesized stage fails to compile or link, which leaves
+        // the program exactly as dead as it already was - but with a driver log that says why,
+        // where today there is an empty one.
+        void BackendProgramObjectImpl::AttachPassthroughTessControlStage(
+            const MG_State::GLState::ProgramObject& stateProgramObject, const Int tessEvalShaderIndex,
+            const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
+            const String& tessEvalStageEssl) {
+            // PATCH_VERTICES is dynamic state, and it decides the synthesized stage's output
+            // patch size - so a program built for one value is stale for another. Recorded here
+            // and compared on the draw path (SyncCurrentProgram), the same shape as the
+            // storage-block and image-format signatures next to it.
+            const Uint patchVertices = MG_State::pGLContext != nullptr
+                                           ? MG_State::pGLContext->GetPatchVertices()
+                                           : 3u;
+            m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
+
+            if (tessEvalShaderIndex < 0 ||
+                static_cast<SizeT>(tessEvalShaderIndex) >= shaderSpirvs.size()) {
+                MGLOG_E("Program %u has a tessellation evaluation stage with no control stage, but no "
+                        "SPIR-V for it; the pass-through control stage GL describes cannot be checked, so "
+                        "the program is left to fail its ES link.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            // The one shape the pass-through cannot stand in for. It forwards gl_Position and
+            // nothing else, so an evaluation stage that reads a user-defined varying or a
+            // per-patch input - both of which carry a Location, where every built-in it needs
+            // does not - would start reading undefined values the moment a control stage sat
+            // between it and the vertex stage. Declining keeps that from being silent; it is the
+            // identical rule DirectVulkan applies in ReflectPassthroughTessControlNeed.
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::ModuleReadsLocatedInput(
+                    shaderSpirvs[static_cast<SizeT>(tessEvalShaderIndex)])) {
+                MGLOG_E("Program %u has a tessellation evaluation stage with no control stage AND reads a "
+                        "user-defined input through it; a synthesized pass-through control stage cannot "
+                        "forward that, so the program is declined rather than fed an undefined varying.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            // Mirrored from the neighbours rather than fixed: whether SPIRV-Cross redeclares
+            // gl_PerVertex, and with which members, depends on what the application's shaders
+            // touched, and a synthesized stage that redeclares a DIFFERENT shape than the stage
+            // it feeds is an ES link error against a program with no other problem. gl_in copies
+            // the vertex stage's OUT block (that is what arrives) and gl_out the evaluation
+            // stage's IN block (that is what is expected). A neighbour that redeclared nothing
+            // yields an empty list, which leaves the driver's own built-in declaration in place -
+            // which is exactly what matching it requires.
+            const String inMembers =
+                ExtractPerVertexBlockMembers(vertexStageEssl, /*input=*/false).value_or(String());
+            const String outMembers =
+                ExtractPerVertexBlockMembers(tessEvalStageEssl, /*input=*/true).value_or(String());
+
+            const String source =
+                BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices, inMembers, outMembers);
+
+            const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
+            if (backendShaderId == 0) {
+                MGLOG_E("Failed to create the synthesized pass-through tessellation control shader for "
+                        "program %u.",
+                        stateProgramObject.GetExternalIndex());
+                m_backendProgramUsable = false;
+                return;
+            }
+
+            const char* sourceCStr = source.c_str();
+            MGLOG_D("Synthesized pass-through tessellation control stage for program %u (patch vertices "
+                    "%u):\n%s",
+                    stateProgramObject.GetExternalIndex(), patchVertices, sourceCStr);
+            g_GLESFuncs.glShaderSource(backendShaderId, 1, &sourceCStr, nullptr);
+            g_GLESFuncs.glCompileShader(backendShaderId);
+
+            // GL_FALSE, not GL_TRUE, for the reason the per-stage loop states: an unwritten
+            // out-param must read as "compile failed" and never as a silent success.
+            GLint compileStatus = GL_FALSE;
+            g_GLESFuncs.glGetShaderiv(backendShaderId, GL_COMPILE_STATUS, &compileStatus);
+            if (compileStatus == GL_FALSE) {
+                GLint logLength = 0;
+                g_GLESFuncs.glGetShaderiv(backendShaderId, GL_INFO_LOG_LENGTH, &logLength);
+                if (logLength < 0) logLength = 0;
+                Vector<GLchar> log(static_cast<SizeT>(logLength) + 1, '\0');
+                g_GLESFuncs.glGetShaderInfoLog(backendShaderId, logLength, nullptr, log.data());
+                log.back() = '\0';
+                MGLOG_E("The synthesized pass-through tessellation control stage failed to compile for "
+                        "program %u. Driver log: %s\nSource:\n%s",
+                        stateProgramObject.GetExternalIndex(), log.data(), sourceCStr);
+                m_backendProgramUsable = false;
+                g_GLESFuncs.glDeleteShader(backendShaderId);
+                return;
+            }
+
+            g_GLESFuncs.glAttachShader(m_backendProgramId, backendShaderId);
+            // Same ownership handover as every other stage: glDeleteShader only FLAGS, so this is
+            // what makes the program own it and what keeps a relink from leaking it.
+            g_GLESFuncs.glDeleteShader(backendShaderId);
+        }
+
         void BackendProgramObjectImpl::SyncToBackend(
             const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject) {
 #ifdef TRACY_ENABLE
@@ -5909,6 +6026,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // reading it afterwards - resolves the same slot for the same GL binding.
             m_atomicCounterGlBindings.clear();
             m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
+            // Re-established by AttachPassthroughTessControlStage below when this program needs
+            // one; cleared first so a program that stops needing one (a relink that now attaches
+            // a real control stage) does not keep comparing against a stale patch size.
+            m_passthroughTessControlPatchVertices = -1;
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).
@@ -6046,6 +6167,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 return candidate;
             };
+
+            // Desktop GL makes the tessellation CONTROL stage optional; OpenGL ES 3.2 rejects a
+            // program that has an evaluation stage without one, with an empty info log. When that
+            // is this program's shape, one is synthesized below - and it has to be spelled to
+            // MATCH the two stages it sits between, so their emitted ESSL is kept here as it is
+            // produced. Empty for every program that has a control stage of its own, which is
+            // all but a handful.
+            Bool hasTessEvalStage = false;
+            Bool hasTessControlStage = false;
+            Int tessEvalShaderIndex = -1;
+            String vertexStageEssl;
+            String tessEvalStageEssl;
+            for (int index = 0; index < attachedShaders.size(); ++index) {
+                const auto stage = attachedShaders[index]->GetShaderStage();
+                if (stage == ShaderStage::TessControl) hasTessControlStage = true;
+                if (stage == ShaderStage::TessEval) {
+                    hasTessEvalStage = true;
+                    tessEvalShaderIndex = index;
+                }
+            }
+            const Bool needsPassthroughTessControl = hasTessEvalStage && !hasTessControlStage;
 
             for (int index = 0; index < attachedShaders.size(); ++index) {
                 auto& shader = attachedShaders[index];
@@ -6374,7 +6516,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // MobileGL creates without an owning wrapper to destroy it.
                 g_GLESFuncs.glDeleteShader(backendShaderId);
 
+                // Kept AFTER every text-level pass, so what the synthesized control stage mirrors
+                // is the text the driver actually sees, not an intermediate form.
+                if (needsPassthroughTessControl) {
+                    if (glShaderType == GL_VERTEX_SHADER) {
+                        vertexStageEssl = source;
+                    } else if (glShaderType == GL_TESS_EVALUATION_SHADER) {
+                        tessEvalStageEssl = source;
+                    }
+                }
+
                 MGLOG_D("Processed shader source length: %zu", source.length());
+            }
+
+            if (needsPassthroughTessControl) {
+                AttachPassthroughTessControlStage(*stateProgramObject, tessEvalShaderIndex, shaderSpirvs,
+                                                  vertexStageEssl, tessEvalStageEssl);
             }
 
             // A counter buffer declared by several stages was recorded once per stage; the draw

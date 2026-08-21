@@ -1222,6 +1222,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // counter sync at one empty-vector test.
             const Vector<Int>& GetAtomicCounterBindings() const { return m_atomicCounterGlBindings; }
             Int GetAtomicCounterEsslBindingTop() const { return m_atomicCounterEsslBindingTop; }
+            // GL_PATCH_VERTICES the synthesized pass-through tessellation control stage was built
+            // for, or -1 when this program needed no such stage. Another of the same shape as the
+            // signatures above: the value is compiled INTO the synthesized stage as
+            // `layout(vertices = N) out`, so a program built for one patch size is stale for
+            // another and the draw path has to say so. -1 compares equal to itself for every
+            // program that has a control stage of its own, i.e. for all but a handful.
+            Int GetPassthroughTessControlPatchVertices() const {
+                return m_passthroughTessControlPatchVertices;
+            }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -1270,6 +1279,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         private:
             void CacheResourceLocations(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
 
+            // Builds, compiles and attaches the pass-through tessellation control stage GL 4.6
+            // core 11.2.2 describes, for a program that has an evaluation stage and none of its
+            // own - which ES 3.2 rejects outright. Called from SyncToBackend after every real
+            // stage has been attached and before the link; see the definition for why it cannot
+            // regress a program that works today.
+            void AttachPassthroughTessControlStage(
+                const MG_State::GLState::ProgramObject& stateProgramObject, Int tessEvalShaderIndex,
+                const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
+                const String& tessEvalStageEssl);
+
             // One stage's SPIR-V through the DirectGLES pass chain and SPIRV-Cross, producing
             // the raw emitted ESSL and the interface blocks this stage's XFB flattening
             // rewrote. This is the segment the L2 shader-translation memo keys on, so every
@@ -1307,6 +1326,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_shaderStorageBlockBindingSignature = 0;
             Vector<Int> m_atomicCounterGlBindings;
             Int m_atomicCounterEsslBindingTop = -1;
+            // -1 for every program that has a tessellation control stage of its own (or none at
+            // all); otherwise the GL_PATCH_VERTICES the synthesized pass-through stage was built
+            // with. See GetPassthroughTessControlPatchVertices.
+            Int m_passthroughTessControlPatchVertices = -1;
             Bool m_isInitialized = false;
             Bool m_backendProgramUsable = false;
 
