@@ -415,6 +415,68 @@ void main() { gl_Position = tint; }
     }
 }
 
+// AN OPAQUE uniform's explicit location must land in the same map as a plain one's, even
+// though it is the one kind the relaxed remap never touches and reflection could therefore
+// answer for. Found by running the retired scanner beside this capture over the whole corpus:
+// the scanner recorded these (it did not read types at all) and the first cut of the capture
+// did not, which would have demoted a declared location to an implementation-chosen one.
+//
+// The difference is not cosmetic. DoReflection marks everything in this map SOURCE-EXPLICIT,
+// which is what makes a collision a LINK ERROR under ARB_explicit_uniform_location; a location
+// arriving only through glslang's own layoutLocation() is treated as glslang's choice and
+// quietly moved out of the way instead.
+TEST_F(GlslangCaptureProbeTest, AnOpaqueUniformsExplicitLocationIsCapturedAlongsideAPlainOnes) {
+    const String source = R"(#version 460 core
+layout(location = 7) uniform sampler2D uTex;
+layout(location = 11) uniform mat4 uMvp;
+layout(location = 20) uniform sampler2D uTexArray[3];
+out vec4 fragColor;
+void main() { fragColor = texture(uTex, uMvp[0].xy) + texture(uTexArray[1], vec2(0)); }
+)";
+
+    ShaderAttrib shaderAttrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    ASSERT_TRUE(shaderResult) << shaderResult.error().log;
+    const UnorderedMap<String, Int> locations = CollectExplicitUniformLocations(*shaderResult.value());
+
+    ASSERT_EQ(locations.count("uTex"), 1u) << "the opaque half of the capture is missing";
+    EXPECT_EQ(locations.at("uTex"), 7);
+    ASSERT_EQ(locations.count("uMvp"), 1u) << "the snapshot half of the capture is missing";
+    EXPECT_EQ(locations.at("uMvp"), 11);
+    // Keyed by DECLARED name, which is what the reflection lookup reaches by stripping "[0]".
+    ASSERT_EQ(locations.count("uTexArray"), 1u);
+    EXPECT_EQ(locations.at("uTexArray"), 20);
+}
+
+// GLSLANG'S SYNTHESIZED ATOMIC-COUNTER BLOCKS ARE NOT UNQUALIFIED STORAGE BLOCKS, however much
+// they look like one at the collect callback: relaxed parsing folds every atomic_uint into a
+// "gl_AtomicCounterBlock_<GL binding>" buffer block and leaves it unbound, because MobileGL
+// asks for auto-mapped bindings. Seeding one to GL binding 0 would overwrite the counter
+// buffer's real binding - which is the trailing number in that very name.
+//
+// Also found by the side-by-side corpus run: the retired scanner could not see these blocks at
+// all (they do not exist in the source), so the capture inherited a whole class of entries its
+// consumer was never written for.
+TEST_F(GlslangCaptureProbeTest, TheSynthesizedAtomicCounterBlocksAreNotCapturedAsStorageBlocks) {
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(binding = 0) uniform atomic_uint counterA;
+layout(binding = 2) uniform atomic_uint counterB;
+layout(std430) buffer RealBlock { uint u; } realBlock;
+void main() { realBlock.u = atomicCounterIncrement(counterA) + atomicCounterIncrement(counterB); }
+)";
+
+    const LinkCapture capture = CaptureFromCompute(source);
+    ASSERT_TRUE(capture.linked) << capture.log;
+
+    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("RealBlock"), 1u)
+        << "the application's own unqualified block is still recognised";
+    for (const String& name : capture.storageBlocksWithoutBinding) {
+        EXPECT_FALSE(name.starts_with(MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX))
+            << "a synthesized atomic-counter block reached the storage-block capture: " << name;
+    }
+}
+
 // KHR-GL43.explicit_uniform_location: layout(binding = 0x2) on a sampler is its initial texture
 // unit. Same scenario the lexical extractor carried, now answered by the IO resolver - which
 // gets the C-style literal rules for free, and sees a binding no scanner could have read.
