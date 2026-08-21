@@ -1032,10 +1032,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         namespace {
             // The digits of an array extent or of an element subscript, or -1 for "not a plain
             // decimal literal".
+            //
+            // One trailing `u`/`U` is PART of the literal rather than grounds for rejection.
+            // SPIRV-Cross prints an index in the type SPIR-V gave it, and
+            // LegalizeResourceArrayIndexPass mints its per-element constants in the type of the
+            // index it replaced (ConstantLikeIndex reads that index's own type_id), so an image
+            // array reached through anything unsigned - `for (uint i = 0u; i < 4u; ++i)`, or any
+            // expression on gl_LocalInvocationIndex, which is uint by definition - arrives here
+            // spelled `g_image[0u]`. Reading that as "not a literal" declined the array and left
+            // it on one layout(binding = N), which hands its elements the consecutive units
+            // N, N+1, ... - exactly the silently-wrong-units defect the split exists to remove.
             Int ParseNonNegativeIntLiteral(const String& text) {
                 if (text.empty()) return -1;
+                SizeT digitCount = text.size();
+                if (text[digitCount - 1] == 'u' || text[digitCount - 1] == 'U') --digitCount;
+                if (digitCount == 0) return -1;
                 Int value = 0;
-                for (const char c : text) {
+                for (SizeT i = 0; i < digitCount; ++i) {
+                    const char c = text[i];
                     if (c < '0' || c > '9') return -1;
                     value = value * 10 + (c - '0');
                     if (value > 4096) return -1; // no image array is anywhere near this

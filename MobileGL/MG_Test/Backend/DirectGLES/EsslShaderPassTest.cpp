@@ -685,6 +685,50 @@ void main()
     ASSERT_EQ(outOfRangeDeclined.size(), 1u);
 }
 
+// A uint subscript IS a literal element index. SPIRV-Cross prints an index in the type SPIR-V
+// gave it and LegalizeResourceArrayIndexPass mints its per-element constants in the type of the
+// index it replaced, so an array walked by anything unsigned - a `uint` loop counter, or
+// anything derived from gl_LocalInvocationIndex, which is uint by definition - reaches this pass
+// spelled `g_image[0u]`. Refusing the `u` declined the array and left every element on the
+// consecutive units one binding hands out, silently.
+TEST(RemapImageArrayElementUnitsTest, AUintSubscriptIsStillALiteralElementIndex) {
+    const String source = R"(#version 320 es
+layout(local_size_x = 1) in;
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[3];
+void main()
+{
+    imageStore(g_image[0u], ivec2(0), vec4(1.0));
+    imageStore(g_image[2U], ivec2(0), vec4(2.0));
+}
+)";
+    Vector<String> declined;
+    const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4, 8})}, &declined);
+    EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
+
+    EXPECT_TRUE(Contains(out, "binding = 0) uniform writeonly highp image2D " + Elem("g_image", 0) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 4) uniform writeonly highp image2D " + Elem("g_image", 1) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "binding = 8) uniform writeonly highp image2D " + Elem("g_image", 2) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 0) + ", ivec2(0), vec4(1.0))")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", 2) + ", ivec2(0), vec4(2.0))")) << out;
+    EXPECT_FALSE(Contains(out, "g_image[")) << out;
+}
+
+// ...and the suffix is not a licence to accept anything else that ends in one: `iu` is not a
+// literal, and neither is a bare `u`.
+TEST(RemapImageArrayElementUnitsTest, ASuffixAloneDoesNotMakeAnExpressionALiteral) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void main()
+{
+    highp int iu = 1;
+    imageStore(g_image[iu], ivec2(0), vec4(1.0));
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4})}, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+}
+
 // A use the pass cannot see a subscript on has no element index to rewrite, so splitting the
 // array out from under it would leave it naming a declaration that no longer exists. Decline,
 // loudly, and change nothing.
