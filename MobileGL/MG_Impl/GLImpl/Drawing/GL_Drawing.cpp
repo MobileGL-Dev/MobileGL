@@ -199,11 +199,37 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+
+        // GL 4.6 core 10.1: the tessellation pipeline's only input primitive is GL_PATCHES, and
+        // GL_PATCHES has no meaning without it. Both directions are INVALID_OPERATION, and
+        // neither was implemented - which is two of the four sites
+        // KHR-GL43.transform_feedback.api_errors_test checks with one shared message string.
+        // The EVALUATION stage is what decides: a control stage cannot run without one, and a
+        // program carrying only an evaluation stage still tessellates, through GL's
+        // fixed-function pass-through control stage (11.2.2).
+        const Bool tessellationActive =
+            currentProgram && currentProgram->GetShaderIndexByStage(ShaderStage::TessEval) >= 0;
+        if (tessellationActive && mode != GL_PATCHES) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    "A program with a tessellation evaluation shader can only be drawn with GL_PATCHES."));
+            return false;
+        }
+        if (!tessellationActive && mode == GL_PATCHES) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                             "GL_PATCHES requires an active tessellation evaluation shader."));
+            return false;
+        }
+
         // A geometry stage only accepts the primitive types that decompose into its declared
         // input primitive (GL 4.6 core 11.3.1); anything else is INVALID_OPERATION. GL_PATCHES
         // is the tessellation pipeline's input and reaches the geometry stage already
         // converted, so it is not constrained here.
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         const GLenum gsInput = currentProgram ? currentProgram->GetGeometryInputType() : GL_NONE;
         if (gsInput != GL_NONE && mode != GL_PATCHES) {
             Bool compatible = false;
@@ -239,13 +265,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         // While transform feedback is active the draw's primitive type must match
         // the feedback primitive mode (GL 3.3 core 13.2.2). With a geometry shader
         // the constraint moves to the shader's output primitive type instead, so
-        // the draw mode itself is unconstrained here. A paused span is exempt: it
-        // captures nothing, so there is nothing for the mode to be incompatible with
-        // (GL 4.6 core 13.2.3).
+        // the draw mode itself is unconstrained here - and a TESSELLATION EVALUATION
+        // stage relocates it exactly the same way (GL 4.6 core 13.2.2 names both):
+        // what is captured is the tessellator's output primitive, and the draw mode
+        // can only ever be GL_PATCHES. A paused span is exempt: it captures nothing,
+        // so there is nothing for the mode to be incompatible with (GL 4.6 core 13.2.3).
+        const auto& feedbackProgram = MG_State::pGLContext->GetTransformFeedbackProgram();
+        const Bool feedbackModeIsProgramDriven =
+            feedbackProgram && (feedbackProgram->GetShaderIndexByStage(ShaderStage::Geometry) >= 0 ||
+                                feedbackProgram->GetShaderIndexByStage(ShaderStage::TessEval) >= 0);
         if (MG_State::pGLContext->IsTransformFeedbackActive() &&
-            !MG_State::pGLContext->IsTransformFeedbackPaused() &&
-            !(MG_State::pGLContext->GetTransformFeedbackProgram() &&
-              MG_State::pGLContext->GetTransformFeedbackProgram()->GetShaderIndexByStage(ShaderStage::Geometry) >= 0)) {
+            !MG_State::pGLContext->IsTransformFeedbackPaused() && !feedbackModeIsProgramDriven) {
             const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
             Bool compatible = false;
             switch (feedbackMode) {
