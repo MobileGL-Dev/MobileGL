@@ -8964,6 +8964,7 @@ void main() {
                 outMapping.baseSlice = baseSlice;
                 outMapping.availableSlices = std::max(1u, image.depth >> mipLevel);
                 return true;
+            case TextureTarget::Texture1DArray:
             case TextureTarget::Texture2DArray:
             case TextureTarget::Texture2DMultisampleArray:
             case TextureTarget::TextureCubeMap:
@@ -8971,15 +8972,18 @@ void main() {
                 // A cube map is an array of six faces here (see TryResolveTextureShapeInfo), and GL
                 // numbers its faces on the same z axis an array texture numbers its layers, so both
                 // arrive as a plain layer range.
+                //
+                // GL_TEXTURE_1D_ARRAY belongs here too, and needs no remap: this backend STORES it
+                // as a VK_IMAGE_TYPE_1D image whose layers live in arrayLayers (ToVulkanLevelExtent
+                // moves the count across), and GL 4.6 core 18.3.2 ADDRESSES it as a stack of slices
+                // on z with an image height of 1 - so the frontend's y/height are already the 0/1
+                // Vulkan requires and the layer lands in baseArrayLayer either way.
                 outMapping.slicesAreDepth = false;
                 outMapping.baseSlice = baseSlice;
                 outMapping.availableSlices = image.arrayLayers;
                 return true;
             default:
-                // GL_TEXTURE_1D_ARRAY carries its layers on the Y axis (srcY/srcHeight), which
-                // would have to be remapped against a Vulkan extent that also has to stay height 1
-                // for a VK_IMAGE_TYPE_1D image; GL_TEXTURE_BUFFER has no image at all. Declined
-                // rather than mis-addressed.
+                // GL_TEXTURE_BUFFER has no image at all. Declined rather than mis-addressed.
                 return false;
             }
         }

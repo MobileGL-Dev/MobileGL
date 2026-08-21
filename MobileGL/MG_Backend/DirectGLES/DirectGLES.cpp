@@ -5906,29 +5906,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!out.texture) return false;
         const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
         out.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
-        if (stateTarget == TextureTarget::Texture1DArray) {
-            out.x = x;
-            out.y = 0;
-            out.z = y;
-            return true;
-        }
+        // No axis remap for GL_TEXTURE_1D_ARRAY. The frontend STORES a 1D array with its layers
+        // on y (GetBackendUploadSize moves them across to the ES 2D array's z), but this entry
+        // point does not ADDRESS it that way: GL 4.6 core 18.3.2 treats every array texture as a
+        // stack of slices on z and gives a 1D array a height of 1 - exactly the shape the ES 2D
+        // array has - so GL's (x, 0, layer) and the ES image's (x, 0, layer) already agree.
+        // Remapping y into z here fetched the wrong slice for every call that spelled the layer
+        // the way GL defines it.
         out.x = x;
         out.y = y;
         out.z = z;
         return true;
-    }
-
-    // The region extent swaps the same two axes for a 1D array, and does so for whichever side
-    // of the copy is one - GL forbids a copy whose two endpoints disagree about how many layers
-    // move, so at most one of the two can be a 1D array only in the degenerate single-layer
-    // case, where the swap is the identity anyway.
-    static void ApplyGLESCopyImageExtent(GLenum appSrcTarget, GLenum appDstTarget, GLsizei& height, GLsizei& depth) {
-        const TextureTarget srcStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appSrcTarget);
-        const TextureTarget dstStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appDstTarget);
-        if (srcStateTarget != TextureTarget::Texture1DArray && dstStateTarget != TextureTarget::Texture1DArray) {
-            return;
-        }
-        std::swap(height, depth);
     }
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
@@ -6041,9 +6029,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        GLsizei copyHeight = srcHeight;
-        GLsizei copyDepth = srcDepth;
-        ApplyGLESCopyImageExtent(srcTarget, dstTarget, copyHeight, copyDepth);
+        // Verbatim: GL already spells a 1D array's extent the way the ES 2D array it maps onto
+        // wants it (height 1, layers on depth) - see MakeGLESCopyImageEndpoint.
+        const GLsizei copyHeight = srcHeight;
+        const GLsizei copyDepth = srcDepth;
 
         const TextureInternalFormat srcFormat = GetCopyImageEndpointFormat(srcEndpoint);
         const TextureInternalFormat dstFormat = GetCopyImageEndpointFormat(dstEndpoint);

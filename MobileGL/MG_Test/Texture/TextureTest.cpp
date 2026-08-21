@@ -4982,10 +4982,14 @@ TEST_F(TextureTest, CopyImageSubDataCountsCubeMapFacesOnTheZAxis) {
     ExpectSingleGlError(GL_INVALID_VALUE);
 }
 
-// The other axis convention: GL puts a 1D ARRAY's layers on y for this entry point (srcY is the
-// first layer, srcHeight the layer count), which is also where this frontend keeps them - so the
-// level extent answers directly and z stays a single slice.
-TEST_F(TextureTest, CopyImageSubDataBoundsA1DArraysLayersOnTheYAxis) {
+// The other axis convention, and it is NOT the one this frontend stores. GL 4.6 core 18.3.2
+// treats every array texture as a stack of slices on Z and gives a 1D array an image HEIGHT OF
+// ONE (which is exactly what the CTS asserts: it forces height = 1 for GL_TEXTURE_1D_ARRAY and
+// lists the target as multilayer). MobileGL keeps a 1D array's layers on y internally - that is
+// what glTexImage2D(GL_TEXTURE_1D_ARRAY, w, layers) writes - so this entry point has to convert,
+// and measuring srcY against the LAYER count is what let an out-of-range srcY come back
+// GL_NO_ERROR (KHR-GL43.copy_image.exceeding_boundaries, the src_test_case y variants).
+TEST_F(TextureTest, CopyImageSubDataBoundsA1DArraysLayersOnTheZAxis) {
     const ScopedTextureBackendFunctionsOverride backendGuard;
     MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
     g_copyImageSubDataCall = {};
@@ -5006,14 +5010,33 @@ TEST_F(TextureTest, CopyImageSubDataBoundsA1DArraysLayersOnTheYAxis) {
         GTEST_SKIP() << "this context could not give the 1D arrays storage";
     }
 
-    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 3, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
-                                      0, 0, 3, 0, 4, 5, 1);
+    // 16 wide, 8 layers. Five layers from layer 3 is legal, and it is spelled on z with a
+    // height of 1 - the layer count rides on srcDepth.
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 0, 3, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 0, 3, 4, 1, 5);
     EXPECT_TRUE(g_copyImageSubDataCall.Called);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
+    // One layer past the last one is out of bounds on z.
     g_copyImageSubDataCall = {};
-    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 4, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
-                                      0, 0, 0, 0, 4, 5, 1);
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 0, 4, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 0, 0, 4, 1, 5);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // The image is one texel HIGH whatever its layer count is, so any srcY past 0 is out of
+    // bounds - this is the KHR-GL43.copy_image case that used to be measured against the 8
+    // layers and pass.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 6, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 6, 0, 4, 1, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // ... and a height of 1 at y = 0 is the only legal y extent.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 0, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 0, 0, 4, 2, 1);
     EXPECT_FALSE(g_copyImageSubDataCall.Called);
     ExpectSingleGlError(GL_INVALID_VALUE);
 }

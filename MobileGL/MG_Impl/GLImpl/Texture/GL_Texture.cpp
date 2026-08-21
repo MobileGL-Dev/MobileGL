@@ -3750,19 +3750,34 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GetCopyImageLevelSize(endpoint.Texture, uploadTarget, level);
         }
 
-        // How far the region's z axis may reach. It does not mean the same thing on every target
-        // GL 4.6 core 18.3.2 accepts: on a CUBE MAP it selects among the six faces, which this
-        // frontend keeps as six separate one-slice upload targets - so the level's own extent
-        // says 1 and the real bound is 6. A cube-map ARRAY is one upload target whose depth
-        // already counts layer-faces, and a 1D array carries its layers on y (which is where GL
-        // puts them for this entry point too), so both are answered by the level extent.
-        Int GetCopyImageEndpointLayerCount(const MG_Backend::CopyImageEndpoint& endpoint,
-                                           const IntVec3& levelSize) {
-            if (!endpoint.IsRenderbuffer() && endpoint.Texture &&
-                endpoint.Texture->GetTarget() == TextureTarget::TextureCubeMap) {
-                return 6;
+        // The per-axis extent of one endpoint's image AS THIS ENTRY POINT ADDRESSES IT, which is
+        // not always the level extent this frontend stores.
+        //
+        // GL 4.6 core 18.3.2 treats EVERY array texture as a stack of slices addressed by z, and
+        // gives a 1D array an image height of 1. This frontend stores a 1D array the way
+        // glTexImage2D(GL_TEXTURE_1D_ARRAY, w, layers) writes it instead - layers on y - so the
+        // two views have to be told apart here. Measuring y against the LAYER count is what let
+        // srcY = 14 on a 16-wide, 16-layer 1D array come back GL_NO_ERROR
+        // (KHR-GL43.copy_image.non_existent_mipmap / the src_test_case y variants); the CTS is
+        // unambiguous about the convention, forcing height = 1 for 1D and 1D_ARRAY and listing
+        // 1D_ARRAY as multilayer.
+        //
+        // A CUBE MAP is the other target whose z bound is not the level extent: this frontend
+        // keeps its six faces as six separate one-slice upload targets, so the level says 1 and
+        // the real bound is 6. A cube-map ARRAY is one upload target whose depth already counts
+        // layer-faces, and every remaining target is answered by the level extent verbatim.
+        IntVec3 GetCopyImageEndpointRegionBounds(const MG_Backend::CopyImageEndpoint& endpoint,
+                                                 const IntVec3& levelSize) {
+            const TextureTarget target = (!endpoint.IsRenderbuffer() && endpoint.Texture)
+                                             ? endpoint.Texture->GetTarget()
+                                             : TextureTarget::Unknown;
+            if (target == TextureTarget::TextureCubeMap) {
+                return {levelSize.x(), levelSize.y(), 6};
             }
-            return std::max(levelSize.z(), 1);
+            if (target == TextureTarget::Texture1DArray) {
+                return {levelSize.x(), 1, std::max(levelSize.y(), 1)};
+            }
+            return {levelSize.x(), levelSize.y(), std::max(levelSize.z(), 1)};
         }
 
         // GL 4.6 core 18.3.2 requires INVALID_VALUE when the region exceeds either image's
@@ -3780,9 +3795,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             // reject a copy GL allows. Every caller has already established that the level
             // exists and that the image is complete, so this is a belt-and-braces guard.
             if (levelSize.x() <= 0 || levelSize.y() <= 0) return true;
-            const Int layers = GetCopyImageEndpointLayerCount(endpoint, levelSize);
-            if (x >= 0 && y >= 0 && z >= 0 && static_cast<Int64>(x) + width <= levelSize.x() &&
-                static_cast<Int64>(y) + height <= levelSize.y() && static_cast<Int64>(z) + depth <= layers) {
+            const IntVec3 bounds = GetCopyImageEndpointRegionBounds(endpoint, levelSize);
+            if (x >= 0 && y >= 0 && z >= 0 && static_cast<Int64>(x) + width <= bounds.x() &&
+                static_cast<Int64>(y) + height <= bounds.y() && static_cast<Int64>(z) + depth <= bounds.z()) {
                 return true;
             }
             MG_State::pGLContext->RecordError(
@@ -3791,7 +3806,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
                     std::format("The {} region [{}, {}, {}] + [{} x {} x {}] does not fit inside the {} x {} x {} "
                                 "image.",
-                                endpointName, x, y, z, width, height, depth, levelSize.x(), levelSize.y(), layers)));
+                                endpointName, x, y, z, width, height, depth, bounds.x(), bounds.y(), bounds.z())));
             return false;
         }
     } // namespace
