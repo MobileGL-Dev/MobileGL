@@ -558,8 +558,9 @@ namespace MobileGL::MG_Util::SelfTest {
             } else {
                 builder.Warn("GL_EXT_render_snorm",
                              "not supported; signed-normalized formats are texture-only, so every SNORM "
-                             "render target is stored as a float (GL_RGBA8_SNORM/GL_RGB8_SNORM -> "
-                             "GL_RGBA16F) and its fragment outputs are clamped to [-1,1] in software");
+                             "render target is stored as a float (8-bit -> *16F, 16-bit -> *32F, which "
+                             "is the narrowest float that still holds a 16-bit SNORM channel exactly) "
+                             "and its fragment outputs are clamped to [-1,1] in software");
             }
             // FAIL, not WARN: ES 3.x core makes every float format texture-only, and every Iris
             // shaderpack renders into at least GL_R11F_G11F_B10F (Complementary's colortex0, BSL's

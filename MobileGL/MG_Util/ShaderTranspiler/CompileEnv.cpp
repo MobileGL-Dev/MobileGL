@@ -62,6 +62,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // gl_MaxComputeTextureImageUnits built-in constant, so a compute module that reads
         // that constant generates DIFFERENT SPIR-V under two backends that disagree on it.
         HashValue(state, env.params.MaxComputeTextureImageUnits);
+        // Added when wave4 (4fc3531d) made this one env-derived, and the same class again:
+        // glslang REJECTS gl_ClipDistance[i] for i >= maxClipDistances at parse (ParseHelper)
+        // and expands gl_MaxClipDistances from the same number, so it decides both whether a
+        // shader compiles at all and what a module that reads the constant generates.
+        HashValue(state, env.params.MaxClipDistances);
         // The compute work-group limits, likewise added by wave3 (cb155c5b). They used to be
         // hardcoded maxima in BuildTBuiltInResource, and the L1 key comment said in so many
         // words that the day they became backend-derived they would have to move in here -

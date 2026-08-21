@@ -1246,6 +1246,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const std::set<String>& xfbCaptureBlockNames,
                                       const ImageFormatBakeInputs& imageFormatBake,
                                       const UnorderedMap<String, Int>& storageBlockBindingOverrides,
+                                      const std::map<String, String>& inputBlockRenames,
+                                      const std::map<String, String>& outputBlockRenames,
                                       Int atomicCounterEsslBindingTop, Bool enableSpirvValidation,
                                       String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,

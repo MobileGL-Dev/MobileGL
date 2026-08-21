@@ -10,6 +10,7 @@
 #include <Includes.h>
 
 #include <list>
+#include <map>
 #include <mutex>
 #include <set>
 
@@ -130,6 +131,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
 
         // std::set is already ordered, but it gets the same length prefix.
         void NameSet(const std::set<String>& names);
+        // std::map is ordered too, so it needs no sort - but both halves are TEXT, so each
+        // gets its own length prefix and the pair cannot run into the next one.
+        void StringMap(const std::map<String, String>& map);
         // ORDER-SENSITIVE, unlike NameMap: a transform-feedback capture list is a sequence,
         // and gl_NextBuffer / gl_SkipComponentsN make its order load-bearing.
         void TextList(const Vector<String>& values);
@@ -553,6 +557,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //   * the storage-block binding overrides handed to SPIRV-Cross;
     //   * the atomic-counter binding top, which SetAtomicCounterBlockBindings turns into the
     //     layout(binding=) qualifier every synthesized counter block is printed with;
+    //   * this stage's two interface-block rename maps, which UniquifyIoBlockNamesForEssl
+    //     turns into the block type names the emitted ESSL spells;
     //   * the ESSL version SPIRV-Cross targets (ResolveBackendEsslVersion, i.e. the
     //     driver's GLES version) - the remaining two SPIRV-Cross options are
     //     compile-time constants (GLSL_ES true, VULKAN_SEMANTICS false);
@@ -593,6 +599,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         const std::set<String>* xfbCaptureBlockNames = nullptr;
         const UnorderedMap<String, Uint>* glFormatByUniformName = nullptr;
         const UnorderedMap<String, Int>* storageBlockBindingOverrides = nullptr;
+        // THIS STAGE's share of the program-wide interface-block rename plan - the two
+        // arguments UniquifyIoBlockNamesForEssl is called with, which decide which block type
+        // names the emitted ESSL spells. Empty for every program without a tessellation or
+        // geometry stage that declares one block name in both directions, i.e. for all but a
+        // handful. The maps rather than what they were derived from: they ARE the pass's
+        // arguments, so they are exactly as fine as its behaviour and no finer.
+        const std::map<String, String>* inputBlockRenames = nullptr;
+        const std::map<String, String>* outputBlockRenames = nullptr;
 
         // The top of the reserved storage-block window atomic-counter blocks are moved into
         // (`top - N` for GL binding N). Derived from the driver's

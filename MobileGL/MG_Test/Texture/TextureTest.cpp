@@ -3197,11 +3197,19 @@ TEST_F(TextureTest, NormalizeLegacySizedFormatsMapToCanonicalShadowLayouts) {
         GLenum type;
     };
     const Case cases[] = {
-        // Legacy <=8-bit-per-channel formats store as UNorm8 component arrays.
-        {GL_R3_G3_B2, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGB4, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGB5, GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGBA2, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
+        // Legacy <=8-bit-per-channel DESKTOP-ONLY formats store as UNorm8 component arrays, in the
+        // 8-bit-per-channel ES format that layout already is. Storing them in the narrower
+        // GL_RGB565/GL_RGBA4 they nominally fit in made the driver requantize the shadow bytes on
+        // every upload, which is not lossless: 5-bit 2 -> UNorm8 16 -> 16/255*31 = 1.945, which a
+        // truncating driver reads back as 1 (KHR-GL43.copy_image rgb4->rgb4, 12/12 failing on Mali).
+        {GL_R3_G3_B2, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB4, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGB5, GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
+        {GL_RGBA2, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},
+        // The two that are ES formats in their own right keep their native storage: an application
+        // that asks for GL_RGBA4 or GL_RGB5_A1 is asking for the smaller image, and the same
+        // normalization also picks the storage for glRenderbufferStorage, where those two are
+        // ordinary ES render targets rather than a desktop-compatibility shim.
         {GL_RGBA4, GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
         {GL_RGB5_A1, GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE},
         // 10/12-bit channels store as UNorm16 component arrays.
@@ -3860,6 +3868,131 @@ TEST_F(TextureTest, ColorAttachableTargetsRequestTheThreeChannelWidening) {
                 PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
     EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, texture2DIndex) &
                  PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+
+    // ...and neither can an 8-bit one. That half of the answer used to be missing entirely, which
+    // is why an R8_SNORM / RG8_SNORM colour attachment got no substitute at all on a driver
+    // without EXT_render_snorm.
+    EXPECT_TRUE(GetRenderTargetNormalizeOptions(noSnormCapabilities, texture2DIndex) &
+                PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(capabilities, texture2DIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(noSnormCapabilities, bufferIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+
+    // 8-bit signed-normalized storage is core ES, so only EXT_render_snorm gates the 8-bit bit;
+    // the 16-bit one also needs EXT_texture_norm16 for the encoding to exist at all.
+    MG_External::GLESCapabilities noNorm16Capabilities{};
+    noNorm16Capabilities.SupportsRenderSnorm = true;
+    noNorm16Capabilities.SupportsNorm16Texture = false;
+    EXPECT_TRUE(GetRenderTargetNormalizeOptions(noNorm16Capabilities, texture2DIndex) &
+                PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+    EXPECT_FALSE(GetRenderTargetNormalizeOptions(noNorm16Capabilities, texture2DIndex) &
+                 PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget);
+}
+
+// ---- Signed-normalized colour-renderable substitution (KHR-GL4x.texture_swizzle on Mali) -------
+//
+// A driver without GL_EXT_render_snorm treats every signed-normalized format as texture-only, so a
+// colour attachment in one of them leaves the ES framebuffer incomplete: the draw lands nowhere and
+// the readback falls through to the CPU shadow, which for a glTexImage2D(..., nullptr) output
+// texture is all zeroes. The render-target bits used to reach GL_RGB16_SNORM alone, so five of the
+// eight SNORM formats - and in particular the single-channel GL_R8_SNORM / GL_R16_SNORM that
+// KHR-GL4x.texture_swizzle renders into for EVERY SNORM source format - had no fallback at all.
+
+TEST_F(TextureTest, SnormRenderTargetOptionsApplyToEverySignedNormalizedFormat) {
+    using MG_Util::TextureFormatProcessor::GetApplicablePixelFormatNormalizeOptions;
+    const Flags<PixelFormatNormalizeOptionBit> requested =
+        PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget | PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+
+    for (const GLenum internalFormat : {GL_R8_SNORM, GL_RG8_SNORM, GL_RGB8_SNORM, GL_RGBA8_SNORM}) {
+        const auto applicable = GetApplicablePixelFormatNormalizeOptions(internalFormat, requested);
+        EXPECT_TRUE(applicable & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+        // The two bits are per precision class, so the 16-bit one never reaches an 8-bit format -
+        // that is what keeps the fallback reason from naming both.
+        EXPECT_FALSE(applicable & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+    for (const GLenum internalFormat : {GL_R16_SNORM, GL_RG16_SNORM, GL_RGB16_SNORM, GL_RGBA16_SNORM}) {
+        const auto applicable = GetApplicablePixelFormatNormalizeOptions(internalFormat, requested);
+        EXPECT_TRUE(applicable & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+        EXPECT_FALSE(applicable & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+    // GL_RGB16_SNORM used to be granted the 16-bit bit only when the three-channel widening was
+    // requested alongside it, which made the answer depend on the order the caller assembled its
+    // option set in. The capability probe and the runtime storage choice assemble different sets.
+    EXPECT_TRUE(GetApplicablePixelFormatNormalizeOptions(GL_RGB16_SNORM,
+                                                         PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) &
+                PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget);
+
+    // Nothing else responds to either bit; an unsigned-normalized or float format keeps its storage.
+    for (const GLenum internalFormat : {GL_R8, GL_R16, GL_RGBA8, GL_RGBA16, GL_RGB16F, GL_RGBA32F, GL_RGB9_E5}) {
+        EXPECT_FALSE(GetApplicablePixelFormatNormalizeOptions(internalFormat, requested))
+            << "internalformat 0x" << std::hex << internalFormat;
+    }
+}
+
+TEST_F(TextureTest, SnormRenderTargetSubstitutesKeepEveryChannelValueExactly) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct Case {
+        GLenum requested;
+        Flags<PixelFormatNormalizeOptionBit> options;
+        GLenum internalFormat;
+        GLenum format;
+        GLenum type;
+    };
+    const Flags<PixelFormatNormalizeOptionBit> snorm8RT = PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
+    const Flags<PixelFormatNormalizeOptionBit> snorm16RT = PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+
+    const Case cases[] = {
+        // 8-bit: a half float represents every v/127 exactly (the worst case, -123/127, quantizes
+        // 0.03 of a SNORM step away), so it is the same storage GL_RGBA8_SNORM already always got.
+        {GL_R8_SNORM, snorm8RT, GL_R16F, GL_RED, GL_FLOAT},
+        {GL_RG8_SNORM, snorm8RT, GL_RG16F, GL_RG, GL_FLOAT},
+        {GL_RGBA8_SNORM, snorm8RT, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        // 16-bit: NOT a half float. Its spacing just below 1.0 is some 16 SNORM steps, so it hands
+        // -23451/32767 back as -23457 against a conformance window of one step; a 32-bit float
+        // round-trips all 65535 channel values.
+        {GL_R16_SNORM, snorm16RT, GL_R32F, GL_RED, GL_FLOAT},
+        {GL_RG16_SNORM, snorm16RT, GL_RG32F, GL_RG, GL_FLOAT},
+        {GL_RGBA16_SNORM, snorm16RT, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // The render-target bit outranks the narrower fallbacks, whichever way the caller's option
+        // set was assembled: the capability probe folds the driver options in, the runtime storage
+        // choice can see the render-target bit alone, and the two have to pick the same storage.
+        {GL_R16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoNorm16, GL_R32F, GL_RED, GL_FLOAT},
+        {GL_RG16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoSnorm16, GL_RG32F, GL_RG, GL_FLOAT},
+        {GL_RGBA16_SNORM,
+         snorm16RT | PixelFormatNormalizeOptionBit::NoNorm16 | PixelFormatNormalizeOptionBit::NoSnorm16,
+         GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // The three-channel formats go on through the widening, which outranks everything.
+        {GL_RGB8_SNORM, snorm8RT | PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget, GL_RGBA16F, GL_RGBA,
+         GL_FLOAT},
+        {GL_RGB16_SNORM, snorm16RT | PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget, GL_RGBA32F, GL_RGBA,
+         GL_FLOAT},
+        // Control: with EXT_render_snorm neither bit is ever set, so the driver that renders to the
+        // signed-normalized encoding keeps storing it byte for byte. This is the shape Adreno and
+        // llvmpipe take, which is why the substitution is invisible on every gate the project runs.
+        {GL_R8_SNORM, PixelFormatNormalizeOptionBit::None, GL_R8_SNORM, GL_RED, GL_BYTE},
+        {GL_RG8_SNORM, PixelFormatNormalizeOptionBit::None, GL_RG8_SNORM, GL_RG, GL_BYTE},
+        {GL_R16_SNORM, PixelFormatNormalizeOptionBit::None, GL_R16_SNORM, GL_RED, GL_SHORT},
+        {GL_RG16_SNORM, PixelFormatNormalizeOptionBit::None, GL_RG16_SNORM, GL_RG, GL_SHORT},
+        {GL_RGBA16_SNORM, PixelFormatNormalizeOptionBit::None, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
+        // ...and the bit for the other precision class does nothing on its own.
+        {GL_R8_SNORM, snorm16RT, GL_R8_SNORM, GL_RED, GL_BYTE},
+        {GL_R16_SNORM, snorm8RT, GL_R16_SNORM, GL_RED, GL_SHORT},
+    };
+
+    for (const auto& testCase : cases) {
+        GLenum internalFormat = 0;
+        GLenum format = 0;
+        GLenum type = 0;
+        NormalizePixelFormat(testCase.requested, testCase.options, &internalFormat, &format, &type);
+        EXPECT_EQ(internalFormat, testCase.internalFormat) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(format, testCase.format) << "requested 0x" << std::hex << testCase.requested;
+        EXPECT_EQ(type, testCase.type) << "requested 0x" << std::hex << testCase.requested;
+    }
 }
 
 TEST_F(TextureTest, ThreeChannelRenderTargetOptionAppliesToEveryDeniedThreeChannelFormat) {
@@ -3910,9 +4043,10 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
         {GL_RGB16F, widen, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
         {GL_RGB32F, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // 16-bit SNORM keeps its encoding where EXT_render_snorm can render to it; a half float's
-        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly.
+        // 11-bit mantissa cannot represent a 16-bit SNORM channel exactly, so the driver that
+        // cannot render to the encoding gets the 32-bit float rather than the half.
         {GL_RGB16_SNORM, widen, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
-        {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA16F, GL_RGBA, GL_FLOAT},
+        {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16.
         {GL_RGB16, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         {GL_RGB10, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
@@ -4680,6 +4814,208 @@ TEST_F(TextureTest, CopyImageSubDataChecksARenderbufferLevelAndStorage) {
                                       0, 0, 4, 4, 1);
     EXPECT_FALSE(g_copyImageSubDataCall.Called);
     ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+// GL 4.6 core 18.3.2 requires INVALID_VALUE when the region exceeds either image's boundaries, and
+// this validator had no bounds check whatsoever: the one call shaped like one,
+// ValidateCopyImageBlockAlignment, returns true on its first line for every UNCOMPRESSED format.
+// Texture endpoints only looked covered because the ES driver raised its own error - which
+// DirectGLES logs and swallows, so the application saw GL_NO_ERROR and a destination that never
+// changed (KHR-GL43.copy_image.exceeding_boundaries).
+TEST_F(TextureTest, CopyImageSubDataRejectsARegionThatLeavesTheImage) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MakeCopyImagePair(GL_RGBA8, GL_RGBA8, srcTexture, dstTexture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The region that exactly reaches the far edge is the boundary this must NOT reject - a
+    // validator that answered INVALID_VALUE to every non-origin region would satisfy the negatives
+    // below and break every legal partial copy.
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 4, 4, 0, dstTexture, GL_TEXTURE_2D, 0, 4, 4, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // One texel past it on x, on y, and on the destination side.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 5, 4, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 4, 5, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 5, 5, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A negative origin is out of bounds on the other side of the same rule.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D, 0, -1, 0, 0, dstTexture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The endpoint the missing bounds check actually cost: a renderbuffer never reaches the ES
+// driver's texture-shaped checks either, so a 4x4 region at y = 14 of a 16x16 renderbuffer - the
+// exact sub-case KHR-GL43.copy_image.exceeding_boundaries starts with, GL_RENDERBUFFER being first
+// in its target list - was accepted outright.
+TEST_F(TextureTest, CopyImageSubDataBoundsARenderbufferRegion) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 16, 16);
+    GLuint renderbuffer = 0;
+    MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
+    MG_Impl::GLImpl::NamedRenderbufferStorage(renderbuffer, GL_RGBA8, 16, 16);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 12, 0, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 14, 0, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // ...and as the destination, where the same renderbuffer has the same one image.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(texture, GL_TEXTURE_2D, 0, 0, 0, 0, renderbuffer, GL_RENDERBUFFER, 0, 14, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A renderbuffer has exactly one slice, so any z at all is out of range.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(renderbuffer, GL_RENDERBUFFER, 0, 0, 0, 1, texture, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                      4, 4, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The z axis was structurally unbounded - srcZ/dstZ did not even reach the validator - so a layer
+// range running off the end of an array reached the backend as an out-of-range image subresource.
+TEST_F(TextureTest, CopyImageSubDataBoundsTheLayerRangeOfAnArray) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage3D(srcTexture, 1, GL_RGBA8, 8, 8, 12);
+    MG_Impl::GLImpl::TextureStorage3D(dstTexture, 1, GL_RGBA8, 8, 8, 12);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Layers 5..11 of a 12-layer array: the last one the range may reach.
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 5, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 5, 4, 4, 7);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 6, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 0, 4, 4, 7);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, dstTexture, GL_TEXTURE_2D_ARRAY,
+                                      0, 0, 0, 6, 4, 4, 7);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The convention the bounds check has to get right, and the one that would silently reject legal
+// copies if it did not: on a CUBE MAP the z axis selects among the six faces, which this frontend
+// keeps as six separate one-slice upload targets - so the level's own extent reports depth 1 and a
+// bound taken from it would refuse every whole-cube copy.
+TEST_F(TextureTest, CopyImageSubDataCountsCubeMapFacesOnTheZAxis) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2D(srcTexture, 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstTexture, 1, GL_RGBA8, 8, 8);
+    DrainPendingGlErrors();
+
+    const auto srcObject = MG_State::pGLContext->GetTextureObject(srcTexture);
+    const auto dstObject = MG_State::pGLContext->GetTextureObject(dstTexture);
+    ASSERT_NE(srcObject, nullptr);
+    ASSERT_NE(dstObject, nullptr);
+    if (!srcObject->IsComplete() || !dstObject->IsComplete()) {
+        GTEST_SKIP() << "this context could not give the cube maps storage";
+    }
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_CUBE_MAP, 0, 0, 0, 0, dstTexture, GL_TEXTURE_CUBE_MAP,
+                                      0, 0, 0, 0, 8, 8, 6);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A seventh face does not exist.
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_CUBE_MAP, 0, 0, 0, 1, dstTexture, GL_TEXTURE_CUBE_MAP,
+                                      0, 0, 0, 0, 8, 8, 6);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// The other axis convention: GL puts a 1D ARRAY's layers on y for this entry point (srcY is the
+// first layer, srcHeight the layer count), which is also where this frontend keeps them - so the
+// level extent answers directly and z stays a single slice.
+TEST_F(TextureTest, CopyImageSubDataBoundsA1DArraysLayersOnTheYAxis) {
+    const ScopedTextureBackendFunctionsOverride backendGuard;
+    MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData = RecordCopyImageSubData;
+    g_copyImageSubDataCall = {};
+
+    GLuint srcTexture = 0;
+    GLuint dstTexture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D_ARRAY, 1, &srcTexture);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D_ARRAY, 1, &dstTexture);
+    MG_Impl::GLImpl::TextureStorage2D(srcTexture, 1, GL_RGBA8, 16, 8);
+    MG_Impl::GLImpl::TextureStorage2D(dstTexture, 1, GL_RGBA8, 16, 8);
+    DrainPendingGlErrors();
+
+    const auto srcObject = MG_State::pGLContext->GetTextureObject(srcTexture);
+    const auto dstObject = MG_State::pGLContext->GetTextureObject(dstTexture);
+    ASSERT_NE(srcObject, nullptr);
+    ASSERT_NE(dstObject, nullptr);
+    if (!srcObject->IsComplete() || !dstObject->IsComplete()) {
+        GTEST_SKIP() << "this context could not give the 1D arrays storage";
+    }
+
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 3, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 3, 0, 4, 5, 1);
+    EXPECT_TRUE(g_copyImageSubDataCall.Called);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    g_copyImageSubDataCall = {};
+    MG_Impl::GLImpl::CopyImageSubData(srcTexture, GL_TEXTURE_1D_ARRAY, 0, 0, 4, 0, dstTexture, GL_TEXTURE_1D_ARRAY,
+                                      0, 0, 0, 0, 4, 5, 1);
+    EXPECT_FALSE(g_copyImageSubDataCall.Called);
+    ExpectSingleGlError(GL_INVALID_VALUE);
 }
 
 // A 16-byte RGTC2 block and a 16-byte RGBA32UI texel are in the same size class, so GL 4.6 core

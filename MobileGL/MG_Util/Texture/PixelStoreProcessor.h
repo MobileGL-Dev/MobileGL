@@ -47,12 +47,18 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
     // True when a packed internal format has REDUNDANT encodings, so decoding a texel and
     // re-encoding it keeps the VALUE but not the BITS. Only RGB9_E5 does: its shared exponent can
     // be lowered with the mantissas shifted up to match, and the spec's encoder always emits the
-    // canonical form. RGB10_A2, RGB10_A2UI and R11F_G11F_B10F round-trip through float32
-    // bit-exactly, so a GPU readback can answer for them.
+    // canonical form, so no readback that goes through a decode cycle can return the stored words.
     //
-    // This is what decides whether the CPU shadow has to stay authoritative for a format: a
-    // readback of an RGB9_E5 level through a colour attachment cannot return the stored words, no
-    // matter how well behaved the driver is.
+    // Read this as "a FINITE value re-encodes to different bits", and nothing wider. This comment
+    // used to assert that RGB10_A2, RGB10_A2UI and R11F_G11F_B10F "round-trip through float32
+    // bit-exactly, so a GPU readback can answer for them", and that is false for
+    // R11F_G11F_B10F: a field whose 5-bit exponent is all ones is an Inf or a NaN, and a NaN's
+    // payload does not survive the trip (EncodeFloatToUnsignedSmallFloat re-encodes every NaN as
+    // the canonical payload 1). glCopyImageSubData from an RGB9_E5 source produces exactly such a
+    // word in the blue field on every texel, because the source's shared-exponent field is all
+    // ones. The bit-exact answer for all four formats is the raw-word route,
+    // DirectGLES::ReadPackedLevelWordsViaScratch; this predicate only picks which of the older
+    // fallbacks to prefer when that route is unavailable.
     Bool HasRedundantPackedEncoding(TextureInternalFormat internalFormat);
 
     // Decodes the canonical shadow-mip storage of `internalFormat` into wide RGBA texels for CPU

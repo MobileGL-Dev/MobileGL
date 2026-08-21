@@ -84,9 +84,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //   * the DynamicBackendParameters fields BuildTBuiltInResource copies into
         //     TBuiltInResource - MaxImageUnits, MaxDrawBuffers, MaxVertexImageUniforms,
         //     MaxGeometryImageUniforms, MaxFragmentImageUniforms, MaxComputeImageUniforms,
-        //     MaxCombinedImageUniforms, MaxComputeTextureImageUnits. glslang enforces those at
-        //     parse, so they decide whether a shader compiles at all and can change the link
-        //     result.
+        //     MaxCombinedImageUniforms, MaxComputeTextureImageUnits, MaxClipDistances. glslang
+        //     enforces those at parse, so they decide whether a shader compiles at all and can
+        //     change the link result. MaxClipDistances moved in at the wave4 merge (4fc3531d),
+        //     the third time in three waves that a hardcoded TBuiltInResource field became
+        //     env-derived - assume the next wave does it again and re-audit.
         //   * maxComputeWorkGroupSize and maxComputeWorkGroupCount, all three components each.
         //     These moved IN at the dev merge that brought wave3's cb155c5b, which made
         //     BuildTBuiltInResource read them from the env instead of hardcoding a permissive

@@ -59,6 +59,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/AsyncCompileScenario.cpp
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/ThreeChannelAttachmentScenario.cpp
+    Scenarios/SnormAttachmentScenario.cpp
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp
@@ -83,6 +84,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ImageSizeAfterRespecScenario.cpp
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
+    Scenarios/IoBlockNameCollisionScenario.cpp
     Scenarios/FragmentOutputArrayIndexScenario.cpp
     Scenarios/BufferTextureScenario.cpp
     Scenarios/VertexAttribBindingScenario.cpp
@@ -91,6 +93,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
+    Scenarios/PackedWordReadbackScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
     Scenarios/LayeredTextureReadbackScenario.cpp
     Scenarios/AtomicCounterScenario.cpp

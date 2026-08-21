@@ -213,7 +213,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (options & PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget) {
                 reasons.push_back("no colour-renderable three-channel format on OpenGL ES");
             }
-            if (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) {
+            // A format is either 8- or 16-bit signed normalized, so at most one of the two ever
+            // survives GetApplicablePixelFormatNormalizeOptions and the reason is not duplicated.
+            if ((options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget) ||
+                (options & PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget)) {
                 reasons.push_back("EXT_render_snorm not supported");
             }
 
@@ -1336,6 +1339,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;
         m_dynamicParameters.MaxViewports = m_GLESCapabilities.MaxViewports;
+        // Whatever the driver said about which vertex supplies gl_Layer, and GL_UNDEFINED_VERTEX
+        // for gl_ViewportIndex on every driver without GL_OES_viewport_array - which is both test
+        // devices. That is not a shortfall being hidden: without the extension only viewport 0 is
+        // ever rasterized, so no vertex "selects" a viewport index and naming a convention would
+        // describe behaviour this backend does not implement.
+        m_dynamicParameters.LayerProvokingVertex = m_GLESCapabilities.LayerProvokingVertex;
+        m_dynamicParameters.ViewportIndexProvokingVertex = m_GLESCapabilities.ViewportIndexProvokingVertex;
         m_dynamicParameters.MaxViewportWidth = m_GLESCapabilities.MaxViewportWidth;
         m_dynamicParameters.MaxViewportHeight = m_GLESCapabilities.MaxViewportHeight;
         m_dynamicParameters.ViewportBoundsRangeMin = m_GLESCapabilities.ViewportBoundsRangeMin;

@@ -643,6 +643,55 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
     EXPECT_EQ(params.MaxComputeImageUniforms, 5);
 }
 
+// maxClipDistances is a LIMIT every Vulkan device reports; declaring ClipDistance in a module
+// needs the shaderClipDistance FEATURE, which is separate and which VulkanRenderer enables only
+// where the physical device has it. Forwarding the limit without the feature advertises eight
+// clip planes no shader may use - the same shape as the image-uniform limits above, and the same
+// shape as the GL_EXT_clip_cull_distance lie on DirectGLES. Not a blanket zero: a device WITH the
+// feature keeps its real number.
+TEST(DirectVulkanSanity, GatesClipDistancesOnTheShaderClipDistanceFeature) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    MG_External::VulkanCapabilities caps;
+    caps.MaxClipDistances = 8;
+
+    caps.SupportsShaderClipDistance = false;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 0);
+
+    caps.SupportsShaderClipDistance = true;
+    backend.ApplyVulkanCapabilitiesForTesting(caps);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxClipDistances, 8);
+}
+
+// GL_LAYER_PROVOKING_VERTEX / GL_VIEWPORT_INDEX_PROVOKING_VERTEX were a hard-coded
+// GL_LAST_VERTEX_CONVENTION for both backends, derived from nothing, and wrong on both test
+// devices in opposite directions. DirectGLES now forwards what its loader resolved; DirectVulkan
+// reports GL_UNDEFINED_VERTEX, which GL 4.6 table 23.65 permits and which is what the backend
+// honestly implements - the provoking mode is chosen per pipeline out of VK_EXT_provoking_vertex,
+// provokingVertexModePerPipeline and the topology.
+TEST(ProvokingVertexConventions, EachBackendReportsWhatItActuallyPins) {
+    using namespace MobileGL;
+
+    MG_Backend::DirectGLES::BackendObject_DirectGLES glesBackend;
+    MG_External::GLESCapabilities glesCaps;
+    glesCaps.LayerProvokingVertex = GL_FIRST_VERTEX_CONVENTION;
+    glesCaps.ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
+    glesBackend.ApplyGLESCapabilitiesForTesting(glesCaps);
+    EXPECT_EQ(glesBackend.GetDynamicParameters().LayerProvokingVertex,
+              static_cast<GLenum>(GL_FIRST_VERTEX_CONVENTION));
+    EXPECT_EQ(glesBackend.GetDynamicParameters().ViewportIndexProvokingVertex,
+              static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+
+    MG_Backend::DirectVulkan::BackendObject_DirectVulkan vkBackend;
+    MG_External::VulkanCapabilities vkCaps;
+    vkBackend.ApplyVulkanCapabilitiesForTesting(vkCaps);
+    EXPECT_EQ(vkBackend.GetDynamicParameters().LayerProvokingVertex, static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+    EXPECT_EQ(vkBackend.GetDynamicParameters().ViewportIndexProvokingVertex,
+              static_cast<GLenum>(GL_UNDEFINED_VERTEX));
+}
+
 TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
     using namespace MobileGL;
 

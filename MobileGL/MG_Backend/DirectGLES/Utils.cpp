@@ -171,6 +171,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!capabilities.SupportsRenderSnorm || !capabilities.SupportsNorm16Texture) {
                 options |= PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
             }
+            // 8-bit signed-normalized storage is core ES, so only the rendering half is in
+            // question here; the 16-bit bit above additionally needs EXT_texture_norm16 for the
+            // encoding to exist at all.
+            if (!capabilities.SupportsRenderSnorm) {
+                options |= PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
+            }
             return options;
         }
 

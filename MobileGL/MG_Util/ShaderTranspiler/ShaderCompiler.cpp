@@ -23,6 +23,7 @@
 #include "SpirvPasses/LowerViewportIndexPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
 #include "SpirvPasses/FlattenXfbInterfaceBlocksPass.h"
+#include "SpirvPasses/UniquifyIoBlockNamesPass.h"
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
@@ -82,7 +83,6 @@ namespace MobileGL {
                 Resources.maxFragmentInputVectors = 15;
                 Resources.minProgramTexelOffset = -8;
                 Resources.maxProgramTexelOffset = 7;
-                Resources.maxClipDistances = 8;
                 Resources.maxComputeUniformComponents = MAX_COMPUTE_UNIFORM_COMPONENTS;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
@@ -181,6 +181,14 @@ namespace MobileGL {
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
                 Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
                 Resources.maxComputeTextureImageUnits = dynamicParameters.MaxComputeTextureImageUnits;
+                // Load-bearing, not cosmetic. glslang rejects gl_ClipDistance[i] for
+                // i >= maxClipDistances (ParseHelper.cpp) and expands gl_MaxClipDistances from the
+                // same number, so tracking the backend limit is what turns "the program links,
+                // the backend's shader compile fails somewhere the frontend never surfaces, and
+                // the draw renders nothing" into an honest glCompileShader error with a log. It is
+                // also what makes glGetIntegerv(GL_MAX_CLIP_DISTANCES) and gl_MaxClipDistances
+                // agree, which KHR-GLxx.clip_distance.coverage compares directly.
+                Resources.maxClipDistances = dynamicParameters.MaxClipDistances;
 
                 // The compute work-group limits are the env's, not the backend parameters': they
                 // are the only ones that come from a REAL indexed driver query, which
@@ -780,6 +788,42 @@ namespace MobileGL {
                 const String& captureName, const std::set<String>& flattenedBlockNames, String& outName) {
                 return FlattenXfbInterfaceBlocksPass::RewriteCaptureName(captureName, flattenedBlockNames,
                                                                          outName);
+            }
+
+            void ShaderCompiler::ProbeIoBlockNamesForEssl(const Vector<Uint32>& binary,
+                                                          std::set<String>& collidingBlockNames,
+                                                          std::set<String>& declaredNames) {
+                if (binary.empty()) {
+                    // Same reasoning as ModuleDeclaresBufferTextureSampler: a stage that produced
+                    // no SPIR-V has no block names to report, and parsing it would push a
+                    // spurious diagnostic through the message consumer.
+                    return;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbeIoBlockNamesForEssl"), binary.data(),
+                    binary.size());
+                if (!context) {
+                    // Unparseable here means unusable downstream too; let the ordinary transpile
+                    // path produce the error rather than inventing a rename plan from it.
+                    return;
+                }
+                UniquifyIoBlockNamesPass::ProbeIoBlockNames(context.get(), collidingBlockNames, declaredNames);
+            }
+
+            bool ShaderCompiler::UniquifyIoBlockNamesForEssl(const Vector<Uint32>& inputBinary,
+                                                             const std::map<String, String>& inputBlockRenames,
+                                                             const std::map<String, String>& outputBlockRenames,
+                                                             std::set<String>& renamedBlockNames,
+                                                             Vector<uint32_t>& outputBinary,
+                                                             const bool enableSpirvValidation) {
+                using namespace spvtools;
+                if (inputBlockRenames.empty() && outputBlockRenames.empty()) return false;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(UniquifyIoBlockNamesPass::CreateUniquifyIoBlockNamesPass(
+                    inputBlockRenames, outputBlockRenames, &renamedBlockNames));
+
+                return RunOptimizerChecked("UniquifyIoBlockNamesForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,

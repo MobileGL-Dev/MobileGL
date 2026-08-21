@@ -1572,9 +1572,6 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_LINE_WIDTH:
             *params = static_cast<GLint>(MG_State::pGLContext->GetLineWidth());
             return;
-        case GL_LAYER_PROVOKING_VERTEX:
-            *params = GL_LAST_VERTEX_CONVENTION;
-            return;
         case GL_LOGIC_OP_MODE:
             *params = static_cast<GLint>(MG_Util::ConvertLogicOperationToGLEnum(MG_State::pGLContext->GetLogicOp()));
             return;
@@ -1664,7 +1661,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Multisample) ? GL_TRUE : GL_FALSE;
             return;
         case GL_MIN_MAP_BUFFER_ALIGNMENT:
-            *params = 64; // TODO
+            // The same constant the map paths align to (MG_State/GLState/BufferState/
+            // PipeResource.h), never a literal: this number is a PROMISE about the pointers
+            // glMapBuffer and glMapBufferRange return, and the two used to be unrelated - the
+            // query said 64 while the pointers came out of a std::vector aligned to 16.
+            *params = static_cast<GLint>(MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT);
             return;
         case GL_MAX_LABEL_LENGTH:
             *params = 256; // TODO
@@ -2113,9 +2114,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             params[3] = vp.w();
             return;
         }
-        case GL_VIEWPORT_INDEX_PROVOKING_VERTEX:
-            *params = GL_LAST_VERTEX_CONVENTION;
-            return;
         case GL_MAX_ELEMENT_INDEX:
             *params = 1024 * 1024; // TODO
             return;
@@ -2202,6 +2200,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_CLIP_DISTANCES:
             *params = dynamicParameters.MaxClipDistances;
+            break;
+        // Both were a hard-coded GL_LAST_VERTEX_CONVENTION, derived from nothing. GL 4.6 table
+        // 23.65 permits GL_UNDEFINED_VERTEX for either, and that is what the backends report
+        // wherever they do not actually pin a convention - claiming one is a statement about
+        // which vertex of a primitive supplies gl_Layer / gl_ViewportIndex, and DirectGLES
+        // rasterizes only viewport 0 on a driver without GL_OES_viewport_array while
+        // DirectVulkan picks its provoking mode per pipeline. KHR-GLxx.viewport_array.query
+        // accepts all four values, and .provoking_vertex - which failed on both devices, in
+        // OPPOSITE directions - stops verifying as soon as either answer is undefined.
+        case GL_LAYER_PROVOKING_VERTEX:
+            *params = static_cast<GLint>(dynamicParameters.LayerProvokingVertex);
+            break;
+        case GL_VIEWPORT_INDEX_PROVOKING_VERTEX:
+            *params = static_cast<GLint>(dynamicParameters.ViewportIndexProvokingVertex);
             break;
         case GL_MAX_COLOR_TEXTURE_SAMPLES:
             *params = std::max(dynamicParameters.MaxColorTextureSamples, GetAdvertisedMaxSamples());

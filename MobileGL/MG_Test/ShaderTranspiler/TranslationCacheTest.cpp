@@ -627,6 +627,9 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
         // real drivers produce (z = 64 on ES against 1024 elsewhere).
         {"params.MaxComputeTextureImageUnits",
          [](CompileEnv& e) { e.params.MaxComputeTextureImageUnits += 1; }},
+        // wave4's 4fc3531d: glslang rejects gl_ClipDistance[i] past this at parse AND expands
+        // gl_MaxClipDistances from it, so it is both a compile gate and a baked constant.
+        {"params.MaxClipDistances", [](CompileEnv& e) { e.params.MaxClipDistances += 1; }},
         {"maxComputeWorkGroupSize[0]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[0] += 1; }},
         {"maxComputeWorkGroupSize[1]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[1] += 1; }},
         {"maxComputeWorkGroupSize[2]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[2] += 1; }},
@@ -830,6 +833,8 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
     const std::set<String> xfbBlocks{"StageData"};
     const UnorderedMap<String, Uint> imageFormats{{"gImage", 0x8236u /*GL_R32UI*/}};
     const UnorderedMap<String, Int> storageBindings{{"Data", 3}};
+    const std::map<String, String> ioBlockRenames{{"TCSOutputBlock", "TCSOutputBlock_mgio1"}};
+    const std::map<String, String> otherIoBlockRenames{{"TCSOutputBlock", "TCSOutputBlock_mgio2"}};
 
     const EsslTranslationKeyInputs base = BaselineEsslInputs(spirv);
     const TranslationCacheKey baseKey = BuildEsslTranslationKey(base);
@@ -897,6 +902,31 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         EsslTranslationKeyInputs v = base;
         v.esslVersion = 300;
         variants.emplace_back("esslVersion", BuildEsslTranslationKey(v));
+    }
+    {   // SpvcSession::SetAtomicCounterBlockBindings - printed into the layout(binding=)
+        // qualifier of every synthesized counter block, so it changes the emitted text.
+        EsslTranslationKeyInputs v = base;
+        v.atomicCounterEsslBindingTop = 6;
+        variants.emplace_back("atomicCounterEsslBindingTop", BuildEsslTranslationKey(v));
+    }
+    {   // the two arguments to UniquifyIoBlockNamesForEssl. Separate cases, because a stage
+        // that CONSUMES a block renames it after the previous stage while one that PRODUCES
+        // it renames after itself - so the same block name legitimately maps to different
+        // spellings in the two maps, and a key that folded them together would let a
+        // consumer's plan be served to a producer.
+        EsslTranslationKeyInputs v = base;
+        v.inputBlockRenames = &ioBlockRenames;
+        variants.emplace_back("inputBlockRenames", BuildEsslTranslationKey(v));
+    }
+    {
+        EsslTranslationKeyInputs v = base;
+        v.outputBlockRenames = &ioBlockRenames;
+        variants.emplace_back("outputBlockRenames", BuildEsslTranslationKey(v));
+    }
+    {   // ...and a DIFFERENT target spelling for the same block name must not share either.
+        EsslTranslationKeyInputs v = base;
+        v.outputBlockRenames = &otherIoBlockRenames;
+        variants.emplace_back("outputBlockRenames(other target)", BuildEsslTranslationKey(v));
     }
     {
         EsslTranslationKeyInputs v = base;

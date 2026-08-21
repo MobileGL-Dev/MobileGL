@@ -372,8 +372,32 @@ namespace MobileGL {
             Int MaxComputeImageUniforms = 8;
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;
+            // GL_MAX_CLIP_DISTANCES. Zero is a legal answer here, not a placeholder, and a
+            // backend that cannot host a clip distance MUST report it: advertising eight the
+            // backend will refuse does not make gl_ClipDistance work, it only moves the failure
+            // from an honest "unsupported" at query time to a backend shader-compile error the
+            // frontend never surfaces, after which every draw with that program silently renders
+            // nothing. DirectGLES fills it from GL_EXT_clip_cull_distance, DirectVulkan from the
+            // shaderClipDistance device feature. The DEFAULT stays at the GL 4.3 core minimum
+            // because it describes the no-backend case (standalone shader compiles, unit tests),
+            // where there is no device to be honest about and BuildTBuiltInResource still has to
+            // hand glslang a workable gl_MaxClipDistances.
             Int MaxClipDistances = 8;
             Int MaxViewports = 16;
+            // GL_LAYER_PROVOKING_VERTEX / GL_VIEWPORT_INDEX_PROVOKING_VERTEX: which vertex of a
+            // primitive supplies gl_Layer and gl_ViewportIndex. GL 4.6 table 23.65 makes
+            // GL_UNDEFINED_VERTEX a legal answer for both, and it is the honest default - naming
+            // a convention is a statement about behaviour, so a backend that does not pin one
+            // must not claim it does. DirectGLES fills the layer one from the ES 3.2 query and
+            // the viewport one from GL_OES_viewport_array, and leaves UNDEFINED where the
+            // capability is absent: without the viewport array extension only viewport 0 is ever
+            // rasterized, so no convention selects anything. DirectVulkan keeps UNDEFINED for
+            // both - which vertex provokes is decided per pipeline by
+            // VulkanRenderer::SelectProvokingVertexMode out of VK_EXT_provoking_vertex,
+            // provokingVertexModePerPipeline and the topology, so no single convention is true
+            // of the backend.
+            GLenum LayerProvokingVertex = GL_UNDEFINED_VERTEX;
+            GLenum ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
             Int MaxViewportWidth = 16384;
             Int MaxViewportHeight = 16384;
             Float ViewportBoundsRangeMin = 0.0f;

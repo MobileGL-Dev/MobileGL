@@ -25,7 +25,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //
         // 2: L2 gained atomicCounterEsslBindingTop (wave3's atomic-counter block rebinding
         // prints it into the emitted ESSL), and L1c was added.
-        constexpr Uint32 kKeyLayoutVersion = 2u;
+        // 3: L2 gained the two interface-block rename maps (wave4's UniquifyIoBlockNames).
+        constexpr Uint32 kKeyLayoutVersion = 3u;
 
         // The repo's existing cache epoch (MG_Config::CacheVersion, the seed
         // ProgramFactory::ComputeHash uses). Strictly redundant for an in-memory
@@ -90,6 +91,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     void TranslationKeyBuilder::TextList(const Vector<String>& values) {
         Value(static_cast<Uint64>(values.size()));
         for (const String& value : values) Text(value);
+    }
+
+    void TranslationKeyBuilder::StringMap(const std::map<String, String>& map) {
+        Value(static_cast<Uint64>(map.size()));
+        for (const auto& [name, value] : map) {
+            Text(name);
+            Text(value);
+        }
     }
 
     void TranslationKeyBuilder::NameSet(const std::set<String>& names) {
@@ -167,6 +176,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         static const UnorderedMap<String, Int> kEmptyBindings;
         builder.NameMap(inputs.storageBlockBindingOverrides ? *inputs.storageBlockBindingOverrides
                                                             : kEmptyBindings);
+        static const std::map<String, String> kEmptyRenames;
+        builder.StringMap(inputs.inputBlockRenames ? *inputs.inputBlockRenames : kEmptyRenames);
+        builder.StringMap(inputs.outputBlockRenames ? *inputs.outputBlockRenames : kEmptyRenames);
         static const Vector<Uint32> kEmptyWords;
         builder.Words(inputs.spirv ? *inputs.spirv : kEmptyWords);
         return MakeTranslationCacheKey(builder);

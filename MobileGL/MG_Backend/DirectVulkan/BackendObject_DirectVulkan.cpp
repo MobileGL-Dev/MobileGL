@@ -905,8 +905,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int maxSupportedDrawBuffers = static_cast<Int>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
         m_dynamicParameters.MaxDrawBuffers = std::min(m_vulkanCaps.MaxDrawBuffers, maxSupportedDrawBuffers);
         m_dynamicParameters.MaxColorAttachments = std::min(m_vulkanCaps.MaxColorAttachments, maxSupportedDrawBuffers);
-        m_dynamicParameters.MaxClipDistances = m_vulkanCaps.MaxClipDistances;
+        // Same shape as the image-uniform limits three lines above: maxClipDistances is reported
+        // by every device, but declaring ClipDistance in a module needs the shaderClipDistance
+        // FEATURE, which VulkanRenderer enables exactly where the physical device has it. Without
+        // it the limit describes a capacity no shader may use, so report none.
+        m_dynamicParameters.MaxClipDistances =
+            m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0;
         m_dynamicParameters.MaxViewports = m_vulkanCaps.MaxViewports;
+        // Assigned explicitly rather than left to the struct's defaults, like every other
+        // parameter here, so a second fill cannot inherit a stale value. GL_UNDEFINED_VERTEX is
+        // the truthful answer for DirectVulkan and a legal one (GL 4.6 table 23.65): which vertex
+        // provokes is chosen per pipeline by VulkanRenderer::SelectProvokingVertexMode out of
+        // VK_EXT_provoking_vertex, provokingVertexModePerPipeline and the topology, so there is no
+        // one convention to name. Vulkan's own default is FIRST, which is the opposite of the
+        // GL_LAST_VERTEX_CONVENTION this used to claim unconditionally.
+        m_dynamicParameters.LayerProvokingVertex = GL_UNDEFINED_VERTEX;
+        m_dynamicParameters.ViewportIndexProvokingVertex = GL_UNDEFINED_VERTEX;
         m_dynamicParameters.MaxViewportWidth = m_vulkanCaps.MaxViewportWidth;
         m_dynamicParameters.MaxViewportHeight = m_vulkanCaps.MaxViewportHeight;
         m_dynamicParameters.ViewportBoundsRangeMin = m_vulkanCaps.ViewportBoundsRangeMin;
