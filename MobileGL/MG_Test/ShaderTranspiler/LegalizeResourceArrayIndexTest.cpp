@@ -286,6 +286,23 @@ void main() {
 }
 )";
 
+    // The same fold, buried in the loop nest a real image-writing shader has: a tile walk with
+    // the array walk innermost. Every level's trip count is inside the per-loop budget on its
+    // own, so nothing but a NEST budget stops the three from multiplying.
+    constexpr const char* kNestedLoopIndexedImageArray = R"(#version 450 core
+layout(local_size_x = 1) in;
+layout(rgba32f, binding = 0) uniform writeonly image2D g_image[4];
+void main() {
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            for (int i = 0; i < 4; ++i) {
+                imageStore(g_image[i], ivec2(x, y), vec4(1.0));
+            }
+        }
+    }
+}
+)";
+
     // A uniform-sourced image index: nothing can fold it, so the switch/select lowering is what
     // has to carry it. Both directions in one shader, as the block-array fixture does.
     constexpr const char* kUniformIndexedImageArray = R"(#version 450 core
@@ -424,6 +441,29 @@ TEST(LegalizeResourceArrayIndexPass, FoldsALoopIndexedImageArray) {
     for (int element = 0; element < 4; ++element) {
         EXPECT_NE(after.text.find("g_image[" + std::to_string(element) + "]"), String::npos) << after.text;
     }
+}
+
+// Marking a loop for unrolling means marking every loop enclosing it - SPIRV-Tools only unrolls
+// innermost loops, so an outer one is unrollable only once its children are gone - and the copies
+// those levels produce MULTIPLY. Bounding each loop on its own therefore bounds nothing: with the
+// per-loop cap alone this nest (64 x 64 x 4, every level inside it) folded to 16384 OpImageWrite,
+// a 3.68 MB module and 3.6 s of spirv-opt on desktop x86, from twelve lines of GLSL - before
+// SPIRV-Cross or the device compiler saw any of it. Spending the budget as the walk climbs stops
+// at the innermost level here, and the switch lowering - whose cost is the ARRAY LENGTH, not the
+// trip counts - is what legalizes anything the unroll no longer reaches.
+TEST(LegalizeResourceArrayIndexPass, BoundsTheWholeLoopNestAndNotEachLoopSeparately) {
+    const Vector<Uint32> input = CompileCompute(kNestedLoopIndexedImageArray);
+    ASSERT_FALSE(input.empty());
+    EXPECT_TRUE(HasDynamicImageArrayIndex(input));
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::LegalizeResourceArrayIndexingForEssl(input, output, true));
+    ASSERT_FALSE(output.empty());
+    // Still legalized - that is not what is being traded away.
+    EXPECT_FALSE(HasDynamicImageArrayIndex(output));
+    EXPECT_TRUE(Validates(output));
+    // ...and paid for at the budget, not at its cube. 64 is kMaxUnrolledIterations.
+    EXPECT_LE(CountOpcode(output, spv::Op::OpImageWrite), 64u);
 }
 
 TEST(LegalizeResourceArrayIndexPass, LowersAUniformIndexedImageWriteToASwitchAndAReadToSelects) {
