@@ -235,9 +235,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // stops being safe to edit by hand.
         String BakeImageFormatQualifiers(String glslCode, const UnorderedMap<String, String>& esslFormatByUniformName);
         String RemoveLayoutBinding(const String& glslCode);
-        // Prefix of the const element->unit-offset table RemapImageArrayElementUnits declares
-        // next to a widened image array; the suffix is the array's own name.
-        constexpr const char* IMAGE_UNIT_MAP_PREFIX = "mg_imageUnitMap_";
+        // Prefix of the per-element scalar declarations RemapImageArrayElementUnits splits an
+        // image array into; the suffix is the array's own name and the element's index.
+        constexpr const char* IMAGE_ARRAY_ELEMENT_PREFIX = "mg_imageElem_";
         // One image ARRAY whose elements the application pointed at units that are not
         // consecutive-from-element-zero.
         struct ImageArrayUnitPlan {
@@ -253,33 +253,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // 1,3,5,7, so its two programs actually addressed 0,1,2,3 and 1,2,3,4 - one layer got the
         // wrong value and three were never written, with no GL error and no link log. The same
         // defect for SAMPLER arrays was fixed API-side (SubscriptUniformNameForElement); an image
-        // array has no API side to fix.
+        // array has no API side to fix, because ES makes glUniform1i on an image uniform an
+        // INVALID_OPERATION.
         //
-        // Repaired by WIDENING the array to cover every unit from the lowest it needs to the
-        // highest, rebasing its binding on the lowest, and routing every subscript through a
-        // `const highp int` table of per-element offsets. The elements in between are declared
-        // and never accessed. A const array indexed by a constant expression IS one, so literal
-        // subscripts stay literal; and a table lookup on a dynamically uniform index is itself
-        // dynamically uniform, which is what GLSL ES 3.20 asks of an image array index - so this
-        // works whether SPIRV-Cross unrolled the application's loop over the array or not. That
-        // is the reason for the table rather than one scalar declaration per element: scalars
-        // cannot be selected by a non-constant index at all.
+        // Repaired by SPLITTING the array into one SCALAR image uniform per element, each with
+        // its own layout(binding = N), and rewriting `name[k]` to the scalar declared for
+        // element k. One declaration carries one binding, so one declaration per unit is the
+        // only spelling that reaches an arbitrary set of them.
+        //
+        // That rewrite needs every k in the emitted text to be a LITERAL, and it is:
+        // LegalizeResourceArrayIndexingForEssl has already folded or lowered every dynamic
+        // image-array subscript in the module, because ESSL forbids one outright ("image arrays
+        // indexed with non-constant expressions are forbidden in GLSL ES", Mesa 26.1.4 at
+        // ES 3.2, on a raw GLES probe with no MobileGL in the loop). The earlier shape here -
+        // widening the array to cover the whole span of units and routing each subscript through
+        // a `const highp int` offset table - was written before that pass covered images, and
+        // the table lookup was itself one of the non-constant expressions the same probe refuses.
+        // The split also costs exactly the image uniforms the application declared, where the
+        // widening cost the whole SPAN (seven for the four elements of
+        // KHR-GL42.shader_image_load_store.advanced-sso-simple), so there is no budget for it to
+        // fail to fit in.
         //
         // Declines - leaving the array exactly as it was, and naming it in `outDeclined` for the
-        // caller to report - when the span will not fit in `stageImageUniformBudget`
-        // (GL_MAX_<stage>_IMAGE_UNIFORMS; <= 0 means "cannot say", and then it is not enforced),
-        // when the emitted extent disagrees with the reflection, or when the array is reached by
-        // anything other than a subscript. Silence was the whole defect here, so a decline must
-        // be audible.
+        // caller to report - when the emitted extent disagrees with the reflection, when the
+        // array is reached by anything other than a subscript, or when a subscript is not a
+        // literal element index. Silence was the whole defect here, so a decline must be audible.
         //
         // Must run AFTER RebindImageUniformsToFrontendUnits and BakeImageFormatQualifiers (both
         // key on the GL uniform name and on a binding already being stamped) and BEFORE
-        // SplitReadWriteImageUniforms (so both halves of a split inherit the widened extent and
-        // the rebased binding) and RemoveLayoutBinding (which is what preserves image bindings).
-        // Like them, it is downstream of the L2 shader-translation memo, so the per-program units
-        // it reads need no entry in BuildEsslTranslationKey.
+        // SplitReadWriteImageUniforms (so each element that is both read and written is split
+        // with its own binding already on it) and RemoveLayoutBinding (which is what preserves
+        // image bindings). Like them, it is downstream of the L2 shader-translation memo, so the
+        // per-program units it reads need no entry in BuildEsslTranslationKey.
         String RemapImageArrayElementUnits(const String& glslCode, const Vector<ImageArrayUnitPlan>& plans,
-                                           Int stageImageUniformBudget, Vector<String>* outDeclined = nullptr);
+                                           Vector<String>* outDeclined = nullptr);
         // The member list of a `gl_PerVertex { ... }` redeclaration in already-emitted ESSL -
         // the text between the braces, verbatim - or nullopt when the shader does not redeclare
         // the block in that direction. `input` selects the `in gl_PerVertex` form over the

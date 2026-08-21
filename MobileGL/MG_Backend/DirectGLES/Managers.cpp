@@ -5675,7 +5675,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // from the image's own Dim), so the pass moves the type to 2D and widens coordinate,
             // offset and gradients together.
             //
-            // NO KEY MATERIAL, by the same test LegalizeStorageBlockArrayIndexingForEssl passes:
+            // NO KEY MATERIAL, by the same test LegalizeResourceArrayIndexingForEssl passes:
             // it takes the module and nothing else, no capability bit arms it, and it self-gates
             // on the module's own content (BinaryHasOffsetOrGrad1DSampledImage). The module is
             // already the largest thing in the L2 key, so it is covered completely.
@@ -5765,24 +5765,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &outputIndexSpirv;
             }
 
-            // Same rule, different resource, every stage: GL 4.3 lets an array of storage
-            // blocks be indexed with any dynamically-uniform expression, GLSL ES keeps the
-            // ES 3.1 constant-expression rule, and the Qualcomm compiler enforces it
+            // Same rule, two more resources, every stage: desktop GL lets an array of
+            // storage blocks and an array of image uniforms be indexed with any
+            // dynamically-uniform expression, GLSL ES keeps the ES 3.1
+            // constant-expression rule for both, and the drivers enforce it - Qualcomm
             // ("indexing into an SSBO array using a non-constant expression is not
-            // permitted") - losing the stage, the program, and every dispatch that used
-            // it, while the frontend keeps reporting the link glslang performed. Fold or
-            // lower the index here, on the ESSL path only: the same module is legal for
-            // DirectVulkan, which binds the array as one descriptor array.
+            // permitted"), Mesa ("image arrays indexed with non-constant expressions are
+            // forbidden in GLSL ES") - losing the stage, the program, and every draw or
+            // dispatch that used it, while the frontend keeps reporting the link glslang
+            // performed. Fold or lower the index here, on the ESSL path only: the same
+            // module is legal for DirectVulkan, which binds the array as one descriptor
+            // array.
+            //
+            // The image half is also what makes RemapImageArrayElementUnits below possible
+            // at all: that pass rewrites `g_image[k]` into a per-element declaration, and it
+            // can only do that once every k the emitted ESSL spells is a literal.
             //
             // NO KEY MATERIAL, and that is a conclusion rather than an omission: this takes the
             // module and nothing else - no capability bit arms it, no per-program plan steers
             // it - and it self-gates on the module's own content
-            // (BinaryHasDynamicStorageBlockArrayIndexing). The module is already the largest
+            // (BinaryHasDynamicResourceArrayIndexing). The module is already the largest
             // thing in the L2 key, so it is fully covered. Contrast LowerViewportIndexForEssl,
             // whose signature is equally module-only but which SupportsViewportArray ARMS -
             // that bit is in the key precisely because of it.
             Vector<unsigned int> blockArrayIndexSpirv;
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeStorageBlockArrayIndexingForEssl(
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeResourceArrayIndexingForEssl(
                     *effectiveSpirv, blockArrayIndexSpirv, enableSpirvValidation) &&
                 !blockArrayIndexSpirv.empty()) {
                 effectiveSpirv = &blockArrayIndexSpirv;
@@ -6400,16 +6407,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                    imageFormatBake.esslFormatQualifierByUniformName);
                 // An image ARRAY whose elements do not sit on consecutive units cannot be spelled
                 // by the single layout(binding=N) the rebind above stamped: ESSL gives element k
-                // the unit N+k and there is no glUniform1i to correct it with. Widen the array to
-                // cover the span and route its subscripts through a constant offset table. AFTER
-                // the rebind and the format bake, both of which look the array up by its GL
-                // uniform name and need the binding already there; BEFORE the read+write split,
-                // so both halves inherit the widened extent and the rebased binding.
+                // the unit N+k and there is no glUniform1i to correct it with. Split the array
+                // into one scalar declaration per element, each with its own binding. AFTER the
+                // rebind and the format bake, both of which look the array up by its GL uniform
+                // name and need the binding already there; BEFORE the read+write split, so an
+                // element that is both read and written is split with its own binding on it.
                 if (!nonConsecutiveImageArrays.empty()) {
                     Vector<String> declinedImageArrays;
-                    source = RemapImageArrayElementUnits(
-                        source, nonConsecutiveImageArrays,
-                        AdvertisedStageImageUniformLimit(shader->GetShaderStage()), &declinedImageArrays);
+                    source = RemapImageArrayElementUnits(source, nonConsecutiveImageArrays,
+                                                         &declinedImageArrays);
                     for (const auto& declined : declinedImageArrays) {
                         // MGLOG_E, unlatched, like the transpile- and compile-failure diagnostics
                         // around it: this is the "linked, drew, produced wrong numbers, said

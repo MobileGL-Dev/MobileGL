@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LegalizeStorageBlockArrayIndexPass.cpp
+// MobileGL - MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LegalizeResourceArrayIndexPass.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-#include "LegalizeStorageBlockArrayIndexPass.h"
+#include "LegalizeResourceArrayIndexPass.h"
 
 #include "spirv.hpp"
 #include "source/opt/basic_block.h"
@@ -39,10 +39,10 @@ namespace MobileGL {
                 using spvtools::opt::IRContext;
                 using spvtools::opt::Operand;
 
-                // GL_MAX_*_SHADER_STORAGE_BLOCKS is 16 on the devices MobileGL targets, and
-                // each lowered element costs one basic block per write, so a module claiming
-                // more than this is refused rather than exploded. The largest array in the
-                // conformance suite is 8.
+                // GL_MAX_*_SHADER_STORAGE_BLOCKS and GL_MAX_*_IMAGE_UNIFORMS are both 16 or
+                // fewer on the devices MobileGL targets, and each lowered element costs one
+                // basic block per write, so a module claiming more than this is refused rather
+                // than exploded. The largest array in the conformance suite is 8.
                 constexpr uint32_t kMaxLoweredArrayLength = 32;
                 // One CFG-changing rewrite per round (analyses are dropped after each), so
                 // the round budget bounds the work on a pathological module.
@@ -50,14 +50,22 @@ namespace MobileGL {
                 // Full unrolling copies the body once per iteration, and nothing in the stock
                 // unroller bounds that. Past this count the loop is left alone and the switch
                 // lowering, whose cost is the array length rather than the trip count, takes
-                // it instead. A loop over an array of storage blocks iterates at most
-                // GL_MAX_*_SHADER_STORAGE_BLOCKS times in any shader that is not already
-                // broken.
+                // it instead. A loop over an array of storage blocks or of images iterates at
+                // most GL_MAX_*_SHADER_STORAGE_BLOCKS / GL_MAX_*_IMAGE_UNIFORMS times in any
+                // shader that is not already broken.
                 constexpr size_t kMaxUnrolledIterations = 64;
+
+                struct ResourceArray {
+                    uint32_t length = 0;
+                    // Which lowering the chain's uses need; see the header. Detection and
+                    // loop-marking are identical for both.
+                    bool isImage = false;
+                };
 
                 struct DynamicIndexUse {
                     Instruction* accessChain = nullptr;
                     uint32_t arrayLength = 0;
+                    bool isImageArray = false;
                 };
 
                 bool HasDecoration(IRContext* context, uint32_t id, spv::Decoration kind) {
@@ -73,16 +81,24 @@ namespace MobileGL {
                     return false;
                 }
 
-                // Every variable that is an ARRAY OF STORAGE BLOCKS, mapped to that array's
-                // length. Two spellings are accepted because both reach here depending on the
-                // SPIR-V version glslang targets: StorageBuffer + Block (1.3, what MobileGL
-                // asks for) and Uniform + BufferBlock (the pre-1.3 encoding). A UNIFORM block
-                // array - Uniform + Block - is deliberately NOT collected; see the header.
+                // Every variable that is an ARRAY OF STORAGE BLOCKS or an ARRAY OF IMAGE
+                // UNIFORMS, mapped to that array's length and kind.
+                //
+                // Storage blocks: two spellings are accepted because both reach here depending
+                // on the SPIR-V version glslang targets: StorageBuffer + Block (1.3, what
+                // MobileGL asks for) and Uniform + BufferBlock (the pre-1.3 encoding). A UNIFORM
+                // block array - Uniform + Block - is deliberately NOT collected; see the header.
+                //
+                // Images: UniformConstant + OpTypeArray of OpTypeImage. Sampled == 2 is what
+                // separates a storage image - what GLSL calls `image2D` and what the ES rule is
+                // about - from the OpTypeImage that sits INSIDE an OpTypeSampledImage, which
+                // never appears as an array element type on its own here and whose array ESSL
+                // 3.20 4.1.7 explicitly permits a dynamically-uniform index.
                 //
                 // A length that is not a plain OpConstant (a spec constant) maps to 0: still
                 // detected as illegal ESSL, never lowered.
-                std::unordered_map<uint32_t, uint32_t> CollectStorageBlockArrays(IRContext* context) {
-                    std::unordered_map<uint32_t, uint32_t> blockArrays;
+                std::unordered_map<uint32_t, ResourceArray> CollectResourceArrays(IRContext* context) {
+                    std::unordered_map<uint32_t, ResourceArray> resourceArrays;
                     auto* defUseMgr = context->get_def_use_mgr();
                     auto* constantMgr = context->get_constant_mgr();
 
@@ -93,7 +109,8 @@ namespace MobileGL {
                         const auto storageClass =
                             static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
                         if (storageClass != spv::StorageClass::StorageBuffer &&
-                            storageClass != spv::StorageClass::Uniform) {
+                            storageClass != spv::StorageClass::Uniform &&
+                            storageClass != spv::StorageClass::UniformConstant) {
                             continue;
                         }
 
@@ -106,17 +123,33 @@ namespace MobileGL {
                             continue;
                         }
                         Instruction* elementType = defUseMgr->GetDef(pointeeType->GetSingleWordInOperand(0));
-                        if (elementType == nullptr || elementType->opcode() != spv::Op::OpTypeStruct) {
+                        if (elementType == nullptr) {
                             continue;
                         }
 
-                        const bool isStorageBlock =
-                            storageClass == spv::StorageClass::StorageBuffer
-                                ? HasDecoration(context, elementType->result_id(), spv::Decoration::Block)
-                                : HasDecoration(context, elementType->result_id(),
-                                                spv::Decoration::BufferBlock);
-                        if (!isStorageBlock) {
-                            continue;
+                        bool isImage = false;
+                        if (storageClass == spv::StorageClass::UniformConstant) {
+                            // OpTypeImage <result> <sampled type> <dim> <depth> <arrayed> <ms>
+                            //             <sampled> <format>
+                            if (elementType->opcode() != spv::Op::OpTypeImage ||
+                                elementType->NumInOperands() < 6 ||
+                                elementType->GetSingleWordInOperand(5) != 2u) {
+                                continue;
+                            }
+                            isImage = true;
+                        } else {
+                            if (elementType->opcode() != spv::Op::OpTypeStruct) {
+                                continue;
+                            }
+                            const bool isStorageBlock =
+                                storageClass == spv::StorageClass::StorageBuffer
+                                    ? HasDecoration(context, elementType->result_id(),
+                                                    spv::Decoration::Block)
+                                    : HasDecoration(context, elementType->result_id(),
+                                                    spv::Decoration::BufferBlock);
+                            if (!isStorageBlock) {
+                                continue;
+                            }
                         }
 
                         uint32_t arrayLength = 0;
@@ -125,9 +158,9 @@ namespace MobileGL {
                         if (lengthConstant != nullptr && lengthConstant->AsIntConstant() != nullptr) {
                             arrayLength = lengthConstant->AsIntConstant()->GetU32BitValue();
                         }
-                        blockArrays.emplace(inst.result_id(), arrayLength);
+                        resourceArrays.emplace(inst.result_id(), ResourceArray{arrayLength, isImage});
                     }
-                    return blockArrays;
+                    return resourceArrays;
                 }
 
                 // "Constant integral expression" in the ESSL sense: an OpConstant (or the
@@ -140,17 +173,17 @@ namespace MobileGL {
                                               def->opcode() == spv::Op::OpConstantNull);
                 }
 
-                // Access chains that index an array of storage blocks with a non-constant.
-                // Only the FIRST index is considered: it is the one that selects the block,
-                // and it is the only one ESSL constrains here. Indices inside the block - the
-                // member selector and any array subscript below it - are legal however they
-                // are computed, and chains rooted at another access chain are already inside
-                // one element.
+                // Access chains that index an array of storage blocks or of images with a
+                // non-constant. Only the FIRST index is considered: it is the one that selects
+                // the element, and it is the only one ESSL constrains here. Indices inside the
+                // block - the member selector and any array subscript below it - are legal
+                // however they are computed, and chains rooted at another access chain are
+                // already inside one element.
                 std::vector<DynamicIndexUse> CollectDynamicIndexUses(IRContext* context) {
                     std::vector<DynamicIndexUse> uses;
-                    const std::unordered_map<uint32_t, uint32_t> blockArrays =
-                        CollectStorageBlockArrays(context);
-                    if (blockArrays.empty()) {
+                    const std::unordered_map<uint32_t, ResourceArray> resourceArrays =
+                        CollectResourceArrays(context);
+                    if (resourceArrays.empty()) {
                         return uses;
                     }
 
@@ -164,14 +197,15 @@ namespace MobileGL {
                                 if (inst.NumInOperands() < 2) {
                                     continue;
                                 }
-                                const auto arrayIt = blockArrays.find(inst.GetSingleWordInOperand(0));
-                                if (arrayIt == blockArrays.end()) {
+                                const auto arrayIt = resourceArrays.find(inst.GetSingleWordInOperand(0));
+                                if (arrayIt == resourceArrays.end()) {
                                     continue;
                                 }
                                 if (IsConstantIndex(context, inst.GetSingleWordInOperand(1))) {
                                     continue;
                                 }
-                                uses.push_back({&inst, arrayIt->second});
+                                uses.push_back(
+                                    {&inst, arrayIt->second.length, arrayIt->second.isImage});
                             }
                         }
                     }
@@ -274,7 +308,7 @@ namespace MobileGL {
                 }
             } // namespace
 
-            bool LegalizeStorageBlockArrayIndexPass::BinaryHasDynamicStorageBlockArrayIndexing(
+            bool LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(
                 const std::vector<uint32_t>& binary) {
                 if (binary.empty()) {
                     return false;
@@ -289,11 +323,11 @@ namespace MobileGL {
                 return !CollectDynamicIndexUses(context.get()).empty();
             }
 
-            spvtools::opt::Pass::Status LegalizeStorageBlockArrayIndexPass::Process() {
+            spvtools::opt::Pass::Status LegalizeResourceArrayIndexPass::Process() {
                 return m_mode == Mode::MarkLoopsForUnroll ? MarkLoopsForUnroll() : LowerToConstantSwitch();
             }
 
-            spvtools::opt::Pass::Status LegalizeStorageBlockArrayIndexPass::MarkLoopsForUnroll() {
+            spvtools::opt::Pass::Status LegalizeResourceArrayIndexPass::MarkLoopsForUnroll() {
                 auto* irContext = context();
                 const std::vector<DynamicIndexUse> uses = CollectDynamicIndexUses(irContext);
                 if (uses.empty()) {
@@ -337,11 +371,11 @@ namespace MobileGL {
                 if (!modified) {
                     return Status::SuccessWithoutChange;
                 }
-                MGLOG_D("[spirv] storage-block array index: marked enclosing loops for full unrolling");
+                MGLOG_D("[spirv] resource array index: marked enclosing loops for full unrolling");
                 return Status::SuccessWithChange;
             }
 
-            spvtools::opt::Pass::Status LegalizeStorageBlockArrayIndexPass::LowerToConstantSwitch() {
+            spvtools::opt::Pass::Status LegalizeResourceArrayIndexPass::LowerToConstantSwitch() {
                 auto* irContext = context();
 
                 bool modified = false;
@@ -357,7 +391,8 @@ namespace MobileGL {
                         if (declined.count(use.accessChain->result_id()) != 0) {
                             continue;
                         }
-                        const LoweringOutcome outcome = LowerOneChain(use.accessChain, use.arrayLength);
+                        const LoweringOutcome outcome =
+                            LowerOneChain(use.accessChain, use.arrayLength, use.isImageArray);
                         if (outcome == LoweringOutcome::Declined) {
                             declined.insert(use.accessChain->result_id());
                             continue;
@@ -383,16 +418,20 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            LegalizeStorageBlockArrayIndexPass::LoweringOutcome
-            LegalizeStorageBlockArrayIndexPass::LowerOneChain(Instruction* accessChain, uint32_t arrayLength) {
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerOneChain(Instruction* accessChain, uint32_t arrayLength,
+                                                          bool isImageArray) {
                 auto* irContext = context();
                 if (arrayLength == 0 || arrayLength > kMaxLoweredArrayLength) {
-                    MGLOG_D("[spirv] storage-block array index: array length %u is not lowerable",
+                    MGLOG_D("[spirv] resource array index: array length %u is not lowerable",
                             arrayLength);
                     return LoweringOutcome::Declined;
                 }
                 if (!IsLowerableIndexType(irContext, accessChain->GetSingleWordInOperand(1))) {
                     return LoweringOutcome::Declined;
+                }
+                if (isImageArray) {
+                    return LowerImageChain(accessChain, arrayLength);
                 }
 
                 std::vector<Instruction*> stores;
@@ -458,8 +497,8 @@ namespace MobileGL {
             // every path. An index outside [0, length) reaches the default target, which is
             // the merge block: nothing is stored, which is what indexing a block array out of
             // range already meant.
-            LegalizeStorageBlockArrayIndexPass::LoweringOutcome
-            LegalizeStorageBlockArrayIndexPass::LowerStore(Instruction* accessChain, uint32_t arrayLength,
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerStore(Instruction* accessChain, uint32_t arrayLength,
                                                            Instruction* store) {
                 auto* irContext = context();
                 BasicBlock* block = irContext->get_instr_block(store);
@@ -543,8 +582,8 @@ namespace MobileGL {
             // pick with OpSelect. Reading the elements the shader did not ask for is safe -
             // every one of them is a storage block this stage already declares, and an ES
             // driver bounds-checks a storage buffer read that lands outside what is bound.
-            LegalizeStorageBlockArrayIndexPass::LoweringOutcome
-            LegalizeStorageBlockArrayIndexPass::LowerLoad(Instruction* accessChain, uint32_t arrayLength,
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerLoad(Instruction* accessChain, uint32_t arrayLength,
                                                           Instruction* load) {
                 auto* irContext = context();
                 uint32_t conditionTypeId = 0;
@@ -594,16 +633,283 @@ namespace MobileGL {
                 return LoweringOutcome::Changed;
             }
 
-            spvtools::Optimizer::PassToken
-            LegalizeStorageBlockArrayIndexPass::CreateMarkLoopsForUnrollPass() {
-                return spvtools::Optimizer::PassToken(
-                    MakeUnique<LegalizeStorageBlockArrayIndexPass>(Mode::MarkLoopsForUnroll));
+            // An image array's chain is never stored or loaded THROUGH the way a storage
+            // block's is: it is OpLoad-ed once into an opaque image object, and the image ops
+            // consume that object. So this resolves the chain one CONSUMER at a time - the
+            // round loop in LowerToConstantSwitch recollects after each - and refuses anything
+            // that is not a plain read or write of the loaded image.
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerImageChain(Instruction* accessChain, uint32_t arrayLength) {
+                auto* irContext = context();
+
+                std::vector<Instruction*> loads;
+                bool unsupportedUse = false;
+                irContext->get_def_use_mgr()->ForEachUser(accessChain, [&](Instruction* user) {
+                    switch (user->opcode()) {
+                    case spv::Op::OpName:
+                    case spv::Op::OpDecorate:
+                    case spv::Op::OpDecorateId:
+                        return;
+                    case spv::Op::OpLoad:
+                        // Memory operands would be dropped by the per-element rebuild, so a
+                        // load carrying any is refused instead.
+                        if (user->NumInOperands() == 1) {
+                            loads.push_back(user);
+                        } else {
+                            unsupportedUse = true;
+                        }
+                        return;
+                    default:
+                        // OpImageTexelPointer above all: that is how an imageAtomic* reaches
+                        // the array, and running one per element would perform every OTHER
+                        // element's atomic as well - a read can be thrown away, a
+                        // read-modify-write cannot.
+                        unsupportedUse = true;
+                        return;
+                    }
+                });
+
+                if (unsupportedUse) {
+                    MGLOG_D("[spirv] image array index: chain %%%u has a use this pass cannot rewrite",
+                            accessChain->result_id());
+                    return LoweringOutcome::Declined;
+                }
+
+                if (loads.empty()) {
+                    // No uses left: the chain itself is what detection is still seeing.
+                    irContext->KillInst(accessChain);
+                    irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
+                    return LoweringOutcome::Changed;
+                }
+
+                Instruction* load = loads.front();
+                Instruction* consumer = nullptr;
+                bool unsupportedConsumer = false;
+                irContext->get_def_use_mgr()->ForEachUser(load, [&](Instruction* user) {
+                    switch (user->opcode()) {
+                    case spv::Op::OpName:
+                    case spv::Op::OpDecorate:
+                    case spv::Op::OpDecorateId:
+                        return;
+                    case spv::Op::OpImageWrite:
+                    case spv::Op::OpImageRead:
+                        if (consumer == nullptr) consumer = user;
+                        return;
+                    default:
+                        // A sampled-image construction, a query, a copy, an argument to a
+                        // function: shapes whose per-element rebuild this pass cannot spell
+                        // exactly.
+                        unsupportedConsumer = true;
+                        return;
+                    }
+                });
+
+                if (unsupportedConsumer) {
+                    MGLOG_D("[spirv] image array index: the image loaded from chain %%%u is consumed by "
+                            "an operation this pass cannot rewrite",
+                            accessChain->result_id());
+                    return LoweringOutcome::Declined;
+                }
+                if (consumer == nullptr) {
+                    irContext->KillInst(load);
+                    irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
+                    return LoweringOutcome::Changed;
+                }
+
+                return consumer->opcode() == spv::Op::OpImageWrite
+                           ? LowerImageWrite(accessChain, arrayLength, load, consumer)
+                           : LowerImageRead(accessChain, arrayLength, load, consumer);
+            }
+
+            // Drops |load| and |accessChain| once the rewrite above has taken their last user,
+            // in that order - the load is what uses the chain. Anything still using either is
+            // another consumer a later round will come back for.
+            void LegalizeResourceArrayIndexPass::KillImageChainIfDead(Instruction* accessChain,
+                                                                      Instruction* load) {
+                auto* irContext = context();
+                if (irContext->get_def_use_mgr()->NumUsers(load) == 0) {
+                    irContext->KillInst(load);
+                }
+                if (irContext->get_def_use_mgr()->NumUsers(accessChain) == 0) {
+                    irContext->KillInst(accessChain);
+                }
+            }
+
+            // switch (idx) { case 0: imageStore(arr[0], ...); break; case 1: ... }
+            //
+            // The same block split as LowerStore, for the same reason: whatever followed the
+            // write still runs exactly once on every path, and an index outside [0, length)
+            // reaches the default target - the merge block - so nothing is written, which is
+            // what indexing an image array out of range already meant.
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerImageWrite(Instruction* accessChain, uint32_t arrayLength,
+                                                            Instruction* load, Instruction* imageWrite) {
+                auto* irContext = context();
+                BasicBlock* block = irContext->get_instr_block(imageWrite);
+                if (block == nullptr) {
+                    return LoweringOutcome::Declined;
+                }
+                // Splitting a loop header keeps the label - and so the back edge's target - on
+                // the first half while the OpLoopMerge moves to the second, which is not a loop
+                // any more. Refuse instead of producing that.
+                if (block->GetLoopMergeInst() != nullptr) {
+                    MGLOG_D("[spirv] image array index: write sits in a loop header, declining");
+                    return LoweringOutcome::Declined;
+                }
+                Function* function = block->GetParent();
+                if (function == nullptr) {
+                    return LoweringOutcome::Declined;
+                }
+
+                const uint32_t indexId = accessChain->GetSingleWordInOperand(1);
+                const uint32_t imageTypeId = load->type_id();
+                // Coordinate, texel and any image operands, verbatim: only the image itself is
+                // per-element.
+                std::vector<Operand> tailOperands;
+                for (uint32_t i = 1; i < imageWrite->NumInOperands(); ++i) {
+                    tailOperands.push_back(imageWrite->GetInOperand(i));
+                }
+
+                const uint32_t mergeLabelId = irContext->TakeNextId();
+                block->SplitBasicBlock(irContext, mergeLabelId, BasicBlock::iterator(imageWrite));
+                // |imageWrite| now heads the merge block; the per-element writes replace it.
+                irContext->KillInst(imageWrite);
+
+                std::vector<std::pair<Operand::OperandData, uint32_t>> targets;
+                targets.reserve(arrayLength);
+                BasicBlock* insertAfter = block;
+                for (uint32_t element = 0; element < arrayLength; ++element) {
+                    const uint32_t caseLabelId = irContext->TakeNextId();
+                    auto caseBlock = MakeUnique<BasicBlock>(MakeUnique<Instruction>(
+                        irContext, spv::Op::OpLabel, 0, caseLabelId, std::initializer_list<Operand>{}));
+                    caseBlock->SetParent(function);
+                    BasicBlock* casePtr = function->InsertBasicBlockAfter(std::move(caseBlock), insertAfter);
+                    // Hand-built label; see LowerStore for why it has to be registered here.
+                    irContext->AnalyzeDefUse(casePtr->GetLabelInst());
+                    irContext->set_instr_block(casePtr->GetLabelInst(), casePtr);
+
+                    InstructionBuilder caseBuilder(
+                        irContext, casePtr,
+                        IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                    const uint32_t constantId = ConstantLikeIndex(irContext, indexId, element);
+                    Instruction* elementChain =
+                        CloneChainWithConstantIndex(caseBuilder, irContext, accessChain, constantId);
+                    Instruction* elementImage =
+                        caseBuilder.AddLoad(imageTypeId, elementChain->result_id());
+
+                    std::vector<Operand> writeOperands;
+                    writeOperands.push_back({SPV_OPERAND_TYPE_ID, {elementImage->result_id()}});
+                    for (const Operand& tailOperand : tailOperands) {
+                        writeOperands.push_back(tailOperand);
+                    }
+                    caseBuilder.AddInstruction(
+                        MakeUnique<Instruction>(irContext, spv::Op::OpImageWrite, 0, 0, writeOperands));
+                    caseBuilder.AddBranch(mergeLabelId);
+
+                    targets.push_back({Operand::OperandData{element}, caseLabelId});
+                    insertAfter = casePtr;
+                }
+
+                InstructionBuilder switchBuilder(
+                    irContext, block, IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                switchBuilder.AddSwitch(indexId, mergeLabelId, targets, mergeLabelId);
+
+                KillImageChainIfDead(accessChain, load);
+                irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
+                MGLOG_D("[spirv] image array index: lowered a dynamic imageStore to a %u-way switch",
+                        arrayLength);
+                return LoweringOutcome::Changed;
+            }
+
+            // A read needs no control flow: read every element through a constant index and pick
+            // with OpSelect. The selection happens on the RESULT, not on the image object - an
+            // opaque type may not be selected at all (pre-1.4 OpSelect takes pointers, scalars
+            // and vectors only, and ESSL has no ternary on an image), so what is duplicated is
+            // the OpImageRead.
+            //
+            // Reading the elements the shader did not ask for is safe: every one of them is an
+            // image this stage already declares, and GL 4.6 7.11.2 makes a load through an
+            // image unit whose binding is missing or incompatible return undefined DATA - never
+            // an error, and never a fault - which the select then discards. Contrast an
+            // imageAtomic*, which LowerImageChain refuses for exactly the opposite reason.
+            LegalizeResourceArrayIndexPass::LoweringOutcome
+            LegalizeResourceArrayIndexPass::LowerImageRead(Instruction* accessChain, uint32_t arrayLength,
+                                                           Instruction* load, Instruction* imageRead) {
+                auto* irContext = context();
+                uint32_t conditionTypeId = 0;
+                uint32_t dimension = 0;
+                if (!TryGetSelectConditionType(irContext, imageRead->type_id(), &conditionTypeId,
+                                               &dimension)) {
+                    MGLOG_D("[spirv] image array index: read type is not selectable, declining");
+                    return LoweringOutcome::Declined;
+                }
+                const uint32_t boolTypeId = irContext->get_type_mgr()->GetBoolTypeId();
+                const uint32_t indexId = accessChain->GetSingleWordInOperand(1);
+                const uint32_t imageTypeId = load->type_id();
+                std::vector<Operand> tailOperands;
+                for (uint32_t i = 1; i < imageRead->NumInOperands(); ++i) {
+                    tailOperands.push_back(imageRead->GetInOperand(i));
+                }
+
+                InstructionBuilder builder(
+                    irContext, imageRead,
+                    IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+
+                uint32_t selectedId = 0;
+                for (uint32_t element = 0; element < arrayLength; ++element) {
+                    const uint32_t constantId = ConstantLikeIndex(irContext, indexId, element);
+                    Instruction* elementChain =
+                        CloneChainWithConstantIndex(builder, irContext, accessChain, constantId);
+                    Instruction* elementImage = builder.AddLoad(imageTypeId, elementChain->result_id());
+
+                    std::vector<Operand> readOperands;
+                    readOperands.push_back({SPV_OPERAND_TYPE_ID, {elementImage->result_id()}});
+                    for (const Operand& tailOperand : tailOperands) {
+                        readOperands.push_back(tailOperand);
+                    }
+                    Instruction* elementRead = builder.AddInstruction(
+                        MakeUnique<Instruction>(irContext, spv::Op::OpImageRead, imageRead->type_id(),
+                                                irContext->TakeNextId(), readOperands));
+                    if (element == 0) {
+                        // Element 0 is the else-arm of the whole ladder, so an out-of-range
+                        // index reads it - an undefined element for an undefined index.
+                        selectedId = elementRead->result_id();
+                        continue;
+                    }
+
+                    Instruction* isElement =
+                        builder.AddBinaryOp(boolTypeId, spv::Op::OpIEqual, indexId, constantId);
+                    uint32_t conditionId = isElement->result_id();
+                    if (dimension > 1) {
+                        std::vector<uint32_t> components(dimension, conditionId);
+                        conditionId = builder.AddCompositeConstruct(conditionTypeId, components)->result_id();
+                    }
+                    selectedId = builder
+                                     .AddSelect(imageRead->type_id(), conditionId,
+                                                elementRead->result_id(), selectedId)
+                                     ->result_id();
+                }
+
+                irContext->ReplaceAllUsesWith(imageRead->result_id(), selectedId);
+                irContext->KillInst(imageRead);
+                KillImageChainIfDead(accessChain, load);
+                irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
+                MGLOG_D("[spirv] image array index: lowered a dynamic imageLoad to %u constant-indexed "
+                        "reads",
+                        arrayLength);
+                return LoweringOutcome::Changed;
             }
 
             spvtools::Optimizer::PassToken
-            LegalizeStorageBlockArrayIndexPass::CreateLowerToConstantSwitchPass() {
+            LegalizeResourceArrayIndexPass::CreateMarkLoopsForUnrollPass() {
                 return spvtools::Optimizer::PassToken(
-                    MakeUnique<LegalizeStorageBlockArrayIndexPass>(Mode::LowerToConstantSwitch));
+                    MakeUnique<LegalizeResourceArrayIndexPass>(Mode::MarkLoopsForUnroll));
+            }
+
+            spvtools::Optimizer::PassToken
+            LegalizeResourceArrayIndexPass::CreateLowerToConstantSwitchPass() {
+                return spvtools::Optimizer::PassToken(
+                    MakeUnique<LegalizeResourceArrayIndexPass>(Mode::LowerToConstantSwitch));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

@@ -566,7 +566,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //
     // Unconditional passes take no input but the module and so need no key material:
     // StripUboMemberRelaxedPrecision, LowerRectImages, Lower1DArrayImages,
-    // Lower1DSampledImages, LegalizeStorageBlockArrayIndexing and
+    // Lower1DSampledImages, LegalizeResourceArrayIndexing and
     // FlattenAtomicCounterBlockOffsets. Each self-gates on the module's own content and is
     // armed by nothing, so the SPIR-V already in this key covers them completely.
     //

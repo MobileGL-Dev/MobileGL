@@ -129,21 +129,20 @@ void main()
             // assignment that is not consecutive (the conformance case uses 0, 2, 4, 6) has no
             // spelling in a single declaration.
             //
-            // RemapImageArrayElementUnits repairs it by WIDENING the array to cover every unit
-            // from the lowest it needs to the highest and routing each subscript through a const
-            // offset table. What that costs is image-uniform budget: units 0..6 need SEVEN
-            // fragment image uniforms where the application declared four. So the gate is the
-            // budget, not the backend - a driver that cannot afford the widening declines it
-            // (and says so at ERROR level) rather than addressing the wrong units silently.
-            // DirectVulkan has no such constraint and needs no widening at all.
+            // RemapImageArrayElementUnits repairs it by SPLITTING the array into one scalar
+            // image uniform per element, each carrying its own binding, which costs exactly the
+            // four image uniforms the application declared. (It used to WIDEN the array to cover
+            // the whole span instead, which cost seven for those four elements and had to be
+            // declined on a stage that could not afford them - hence the budget gate that used
+            // to be here.) DirectVulkan needs no rewrite at all.
             bool PerElementImageUnitsAreHonoured() const {
                 if (Gl().BackendName() == "DirectVulkan") return true;
                 GLint maxFragmentImageUniforms = 0;
                 glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
                 while (glGetError() != GL_NO_ERROR) {
                 }
-                // The widest span either of the two fragment programs below needs: 0..6 and 1..7.
-                return maxFragmentImageUniforms >= 7;
+                // One per element of the four-element array either fragment program declares.
+                return maxFragmentImageUniforms >= 4;
             }
 
             // The scenarios below need image load/store at all; a driver without it should skip
@@ -174,8 +173,7 @@ void main()
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
         if (!PerElementImageUnitsAreHonoured()) {
-            GTEST_SKIP() << "fewer than 7 fragment image uniforms: the widening that covers a "
-                             "non-consecutive image array does not fit";
+            GTEST_SKIP() << "fewer than 4 fragment image uniforms: the array under test does not fit";
         }
         HeadlessGL& gl = Gl();
 
