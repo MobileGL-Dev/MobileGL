@@ -520,5 +520,215 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             DestroyIntTarget(target);
         }
 
+        // --- 4. an explicitly EMPTY scissor box clips, it does not mean "never written" --------
+        //
+        // Deliberately NOT a ViewportArrayScenario case, because it must run on DirectGLES - the
+        // backend that got it wrong - and that fixture skips there. It needs none of the routing:
+        // one viewport, one scissor rectangle, no geometry stage.
+        //
+        // glScissor(0, 0, 0, 0) is legal GL meaning "the scissor test rejects every fragment",
+        // but it is byte-identical to the all-zero rectangle a context starts with, whose meaning
+        // is the OPPOSITE ("the whole window", which the frontend cannot spell before a surface
+        // exists). DirectGLES resolved the collision from the EXTENT, so it substituted the whole
+        // surface for a deliberately empty box and inverted the request into "clip nothing" -
+        // and did so on every draw, at any origin, no matter how many times the application had
+        // already called glScissor. KHR-GL43.viewport_array.scissor_zero_dimension is the
+        // conformance shape of exactly this, and it is what the written-flag now separates.
+
+        const char* const kFullScreenVertexSource = R"(#version 330 core
+void main() {
+    // One clip-space-covering triangle straight from gl_VertexID: no buffers, no attributes,
+    // and nothing that could clip the draw except the scissor rectangle under test.
+    const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    gl_Position = vec4(corners[gl_VertexID], 0.0, 1.0);
+}
+)";
+
+        const char* const kConstantIntFragmentSource = R"(#version 330 core
+layout(location = 0) out int fragColor;
+void main() { fragColor = 7; }
+)";
+        constexpr GLint kPainted = 7;
+
+        class EmptyScissorScenario : public ScenarioTest {
+        protected:
+            void SetUp() override {
+                ScenarioTest::SetUp();
+                if (!Ready()) return;
+
+                m_program = BuildQuadProgram();
+                ASSERT_NE(m_program, 0u) << "full-screen program failed to build: " << m_buildLog;
+                glGenVertexArrays(1, &m_vao);
+                glBindVertexArray(m_vao);
+
+                glGenTextures(1, &m_texture);
+                glBindTexture(GL_TEXTURE_2D, m_texture);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, kSurfaceSide, kSurfaceSide, 0, GL_RED_INTEGER, GL_INT,
+                             nullptr);
+                glGenFramebuffers(1, &m_fbo);
+                glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GL_FRAMEBUFFER_COMPLETE)
+                    << "R32I is required to be colour-renderable; an incomplete target would make every "
+                       "assertion below vacuous";
+
+                glViewport(0, 0, kSurfaceSide, kSurfaceSide);
+                glDisable(GL_DEPTH_TEST);
+                ResetScissorState();
+                ASSERT_EQ(glGetError(), GL_NO_ERROR) << "setup left a GL error behind";
+            }
+
+            void TearDown() override {
+                if (!Ready() || IsSkipped()) return;
+                // The context is shared with every other scenario in the process, and a leftover
+                // 0x0 scissor box with the test enabled would silently blank whatever runs next.
+                ResetScissorState();
+                glScissor(0, 0, kSurfaceSide, kSurfaceSide);
+                if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
+                if (m_program != 0) glDeleteProgram(m_program);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
+                if (m_texture != 0) glDeleteTextures(1, &m_texture);
+                while (glGetError() != GL_NO_ERROR) {
+                }
+            }
+
+            static void ResetScissorState() {
+                for (int i = 0; i < kViewportCount; ++i) {
+                    glDisablei(GL_SCISSOR_TEST, static_cast<GLuint>(i));
+                }
+                glDisable(GL_SCISSOR_TEST);
+            }
+
+            // Uploaded, not cleared, for the reason FillIntTarget gives - and here for a second
+            // one that is decisive: glClear is ITSELF scissored, so a clear issued under the very
+            // state this case is testing would be clipped away and prove nothing.
+            void FillTarget() const {
+                const std::vector<GLint> unwritten(static_cast<size_t>(kSurfaceSide) * kSurfaceSide, kUnwritten);
+                glBindTexture(GL_TEXTURE_2D, m_texture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kSurfaceSide, kSurfaceSide, GL_RED_INTEGER, GL_INT,
+                                unwritten.data());
+            }
+
+            static std::vector<GLint> ReadTarget() {
+                std::vector<GLint> pixels(static_cast<size_t>(kSurfaceSide) * kSurfaceSide, 0);
+                glReadPixels(0, 0, kSurfaceSide, kSurfaceSide, GL_RED_INTEGER, GL_INT, pixels.data());
+                return pixels;
+            }
+
+            GLuint BuildQuadProgram() {
+                const GLuint vs = CompileOne(GL_VERTEX_SHADER, kFullScreenVertexSource);
+                if (vs == 0) return 0;
+                const GLuint fs = CompileOne(GL_FRAGMENT_SHADER, kConstantIntFragmentSource);
+                if (fs == 0) {
+                    glDeleteShader(vs);
+                    return 0;
+                }
+                const GLuint program = glCreateProgram();
+                glAttachShader(program, vs);
+                glAttachShader(program, fs);
+                glLinkProgram(program);
+                GLint linked = 0;
+                glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                glDeleteShader(vs);
+                glDeleteShader(fs);
+                if (linked) return program;
+                GLint length = 0;
+                glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
+                std::vector<char> log(static_cast<size_t>(length > 1 ? length : 1), '\0');
+                glGetProgramInfoLog(program, static_cast<GLsizei>(log.size()), nullptr, log.data());
+                m_buildLog = log.data();
+                glDeleteProgram(program);
+                return 0;
+            }
+
+            GLuint CompileOne(GLenum stage, const char* source) {
+                const GLuint shader = glCreateShader(stage);
+                glShaderSource(shader, 1, &source, nullptr);
+                glCompileShader(shader);
+                GLint compiled = 0;
+                glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+                if (compiled) return shader;
+                GLint length = 0;
+                glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+                std::vector<char> log(static_cast<size_t>(length > 1 ? length : 1), '\0');
+                glGetShaderInfoLog(shader, static_cast<GLsizei>(log.size()), nullptr, log.data());
+                m_buildLog = log.data();
+                glDeleteShader(shader);
+                return 0;
+            }
+
+            std::string m_buildLog;
+            GLuint m_program = 0;
+            GLuint m_vao = 0;
+            GLuint m_fbo = 0;
+            GLuint m_texture = 0;
+        };
+
+        TEST_F(EmptyScissorScenario, AnExplicitlyEmptyScissorBoxClipsEveryFragment) {
+            // Positive control FIRST. Without it a regression that simply lost the draw entirely
+            // would sail through the half below, which only asserts that nothing was painted.
+            FillTarget();
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(0, 0, kSurfaceSide, kSurfaceSide);
+            glUseProgram(m_program);
+            glBindVertexArray(m_vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR);
+            {
+                const std::vector<GLint> pixels = ReadTarget();
+                ASSERT_EQ(pixels.front(), kPainted) << "control: a full-surface scissor box must not clip";
+                ASSERT_EQ(pixels.back(), kPainted) << "control: a full-surface scissor box must not clip";
+            }
+
+            // The case itself, and note it runs AFTER an explicit glScissor - the old
+            // extent-based sentinel misfired here too, which is what made this a live rendering
+            // bug and not just a first-frame startup quirk.
+            FillTarget();
+            glScissor(0, 0, 0, 0);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR);
+            {
+                const std::vector<GLint> pixels = ReadTarget();
+                for (size_t i = 0; i < pixels.size(); ++i) {
+                    ASSERT_EQ(pixels[i], kUnwritten)
+                        << "texel " << i << " was painted through a 0x0 scissor box: the empty rectangle was "
+                           "substituted with the whole surface, inverting 'clip everything' into 'clip nothing'";
+                }
+            }
+        }
+
+        TEST_F(EmptyScissorScenario, IndexedZeroDimensionScissorBoxesClipEveryFragment) {
+            // The conformance shape: setup4x4Scissor(..., set_zeros=true) writes all 16 boxes
+            // through glScissorArrayv with zero extents at a 4x4 grid of origins and enables the
+            // test on every index. Index 0's box is (0, 0, 0, 0) - byte-identical to the
+            // never-written default - which is precisely the collision the written flag breaks.
+            // Backends that collapse every index to 0 (DirectGLES today) still pass: index 0's
+            // box is empty, so the draw is clipped away, which is what the case requires.
+            FillTarget();
+            std::vector<GLint> boxes(static_cast<size_t>(kViewportCount) * 4, 0);
+            for (int i = 0; i < kViewportCount; ++i) {
+                boxes[static_cast<size_t>(i) * 4 + 0] = (i % kGridSide) * kCellSize;
+                boxes[static_cast<size_t>(i) * 4 + 1] = (i / kGridSide) * kCellSize;
+                // width and height stay 0 - that IS the case.
+            }
+            glScissorArrayv(0, kViewportCount, boxes.data());
+            for (int i = 0; i < kViewportCount; ++i) {
+                glEnablei(GL_SCISSOR_TEST, static_cast<GLuint>(i));
+            }
+            glUseProgram(m_program);
+            glBindVertexArray(m_vao);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ASSERT_EQ(glGetError(), GL_NO_ERROR);
+
+            const std::vector<GLint> pixels = ReadTarget();
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                ASSERT_EQ(pixels[i], kUnwritten) << "texel " << i << " was painted through a zero-extent indexed "
+                                                                     "scissor box";
+            }
+        }
+
     } // namespace
 } // namespace MGITest
