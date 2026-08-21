@@ -3042,6 +3042,47 @@ void main() {
         << "the generated ESSL still indexes a fragment output with a non-constant:\n" << essl;
 }
 
+// Marking a loop for unrolling means marking every loop enclosing it - SPIRV-Tools only unrolls
+// innermost loops - and the copies those levels produce MULTIPLY, so bounding each loop on its
+// own bounds nothing. This nest is the OIT shape wrapped in a tile walk: 64 x 64 x 2, every level
+// individually inside kMaxUnrolledIterations, and its product is not. Spending the budget as the
+// walk climbs stops at the innermost level; the switch lowering, whose cost is the output array's
+// length rather than the trip counts, legalizes whatever the unroll no longer reaches. The same
+// defect was measured first on LegalizeResourceArrayIndexPass, which the image half of that pass
+// made reachable; this walk is its twin and is fixed the same way.
+TEST_F(ProgramUtilTest, ALoopNestAroundAFragmentOutputIndexIsBoundedAsAWhole) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = CompileFragmentToRawSpirv(R"(#version 330 core
+out vec4 coeff[2];
+in vec4 vColor;
+void main() {
+    for (int y = 0; y < 64; ++y) {
+        for (int x = 0; x < 64; ++x) {
+            for (int attachmentIndex = 0; attachmentIndex < 2; ++attachmentIndex) {
+                coeff[attachmentIndex] = vColor * float(x + y + attachmentIndex);
+            }
+        }
+    }
+}
+)");
+    ASSERT_FALSE(raw.empty());
+    ASSERT_TRUE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(raw))
+        << "the fixture must reproduce the defect before the fix is asked to remove it:\n"
+        << DisassembleSpirv(raw);
+
+    Vector<Uint32> legalized;
+    ASSERT_TRUE(ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(raw, legalized, true));
+    ASSERT_FALSE(legalized.empty());
+    // Still legalized - that is not what is being traded away.
+    EXPECT_FALSE(LegalizeFragmentOutputIndexPass::BinaryHasDynamicOutputIndexing(legalized));
+    // ...and the module the driver has to compile is still a module, not the nest's product.
+    // Measured on this fixture: 318 words with the nest budget, 5112 without - so the bound is
+    // loose enough not to pin spirv-opt's exact output (3x the real figure) and tight enough
+    // that a nest-wide unroll cannot slip under it (5x below the unbounded one).
+    EXPECT_LT(legalized.size(), 1024u) << "legalized module is " << legalized.size() << " words";
+}
+
 // The fallback half: an index computed from a uniform cannot be folded by any amount of
 // unrolling, so the write becomes a switch over the array's range and the read becomes
 // constant-indexed loads combined with selects.
