@@ -230,8 +230,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         // input primitive (GL 4.6 core 11.3.1); anything else is INVALID_OPERATION. GL_PATCHES
         // is the tessellation pipeline's input and reaches the geometry stage already
         // converted, so it is not constrained here.
-        const GLenum gsInput = currentProgram ? currentProgram->GetGeometryInputType() : GL_NONE;
-        if (gsInput != GL_NONE && mode != GL_PATCHES) {
+        //
+        // "Is there a geometry stage at all" has to be asked of the STAGE, never of the input
+        // primitive: GL_NONE and GL_POINTS are both 0, so a `layout(points) in` geometry shader
+        // is indistinguishable from no geometry shader by its reflected input type alone. The
+        // sentinel test this replaces therefore skipped the whole rule for exactly the geometry
+        // shaders whose input is the most restrictive one - every mode but GL_POINTS was
+        // accepted (KHR-GL43.transform_feedback.api_errors_test draws a points-in geometry
+        // program with GL_LINES and requires INVALID_OPERATION).
+        const Bool geometryActive =
+            currentProgram && currentProgram->GetShaderIndexByStage(ShaderStage::Geometry) >= 0;
+        const GLenum gsInput = geometryActive ? currentProgram->GetGeometryInputType() : GL_NONE;
+        if (geometryActive && mode != GL_PATCHES) {
             Bool compatible = false;
             switch (gsInput) {
             case GL_POINTS:

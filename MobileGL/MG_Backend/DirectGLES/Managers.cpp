@@ -5268,31 +5268,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 if (boundFormat == 0) continue;
                 if (!MG_Util::ShaderTranspiler::ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(boundFormat)) {
-                    if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
-                        // Outside the GLSL ES core set and with no GL_NV_image_formats to spell
-                        // it. If the format widens exactly it is still baked HERE, narrow, and
-                        // WidenImageFormatsForEssl re-declares it in its core carrier immediately
-                        // afterwards - both routes into that pass end in the same place.
-                        //
-                        // If it does not widen there is no legal ESSL for this stage at all.
-                        // Leaving the image format-LESS is NOT a softer failure: all three test
-                        // devices reject a format-less image declaration outright ("all images
-                        // have to define layout format"), readonly and writeonly alike, so it
-                        // trades one hard compile error for another. The unit stays in the
-                        // rebuild key either way, so a rebind to a spellable format still
-                        // rebuilds and works.
-                        if (!ImageFormatWillBeWidened(boundFormat)) {
-                            MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which "
-                                    "GLSL ES core cannot spell, this driver has no GL_NV_image_formats for, and "
-                                    "no core format carries exactly.",
-                                    name.c_str(), unit, boundFormat);
-                            recordUnspellableFormat(
-                                name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
-                            continue;
-                        }
+                    // The same three-way split the DECLARED branch above makes, and it has to be
+                    // the same one: a format-less image is baked with the bound format, so from
+                    // WidenImageFormatsForEssl's point of view the two routes hand it identical
+                    // modules and must arm it identically.
+                    if (ImageFormatWillBeWidened(boundFormat)) {
                         // The bake writes this format INTO the module, so the widening that runs
-                        // straight after has to be armed for it even though nothing DECLARED it.
+                        // straight after has to be armed for it even though nothing DECLARED it -
+                        // and armed WHETHER OR NOT the driver has GL_NV_image_formats. SPIRV-Cross
+                        // throws for its is_desktop_only_format set the moment it targets ESSL,
+                        // however willing the driver was, so the extension decides HOW MUCH gets
+                        // widened (widenOnlyUnprintableImageFormats) and never WHETHER. Arming
+                        // this only on the no-extension path left the shader half of the widening
+                        // switched off while TextureImpl's storage/bind half - which keys on
+                        // SpirvCrossCanPrintEsslImageFormat, not on the driver bit - still ran:
+                        // the stage threw, the program linked without it, and every dispatch
+                        // silently did nothing. That is the whole of
+                        // KHR-GL43.stencil_texturing.functional's compute half, whose uni_image is
+                        // a format-less uimage2D bound to an R8UI texture.
                         inputs.declaresWidenableImageFormat = true;
+                    } else if (!g_GLESCapabilities.SupportsExtendedImageFormats) {
+                        // Outside the GLSL ES core set, with no GL_NV_image_formats to spell it
+                        // and no core format that carries it exactly: there is no legal ESSL for
+                        // this stage at all. Leaving the image format-LESS is NOT a softer
+                        // failure: all three test devices reject a format-less image declaration
+                        // outright ("all images have to define layout format"), readonly and
+                        // writeonly alike, so it trades one hard compile error for another. The
+                        // unit stays in the rebuild key either way, so a rebind to a spellable
+                        // format still rebuilds and works.
+                        MGLOG_D("Image uniform '%s' has no declared format and its unit %d holds 0x%x, which "
+                                "GLSL ES core cannot spell, this driver has no GL_NV_image_formats for, and "
+                                "no core format carries exactly.",
+                                name.c_str(), unit, boundFormat);
+                        recordUnspellableFormat(
+                            name, MG_Util::ShaderTranspiler::ShaderCompiler::EsslImageFormatSpelling(boundFormat));
+                        continue;
                     } else {
                         inputs.needsExtendedImageFormats = true;
                     }
