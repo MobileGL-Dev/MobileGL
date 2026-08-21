@@ -146,9 +146,10 @@ namespace MobileGL {
                 LoweringOutcome LowerImageWrite(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                                 spvtools::opt::Instruction* load,
                                                 spvtools::opt::Instruction* imageWrite);
-                LoweringOutcome LowerImageRead(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
-                                               spvtools::opt::Instruction* load,
-                                               spvtools::opt::Instruction* imageRead);
+                LoweringOutcome LowerImageReadOrQuery(spvtools::opt::Instruction* accessChain,
+                                                      uint32_t arrayLength,
+                                                      spvtools::opt::Instruction* load,
+                                                      spvtools::opt::Instruction* consumer);
 
                 Mode m_mode;
             };

@@ -342,6 +342,21 @@ void main() {
     // An imageAtomic* reaches the array through OpImageTexelPointer, and running one per element
     // would perform every other element's atomic as well. The pass has to decline rather than
     // lower this.
+    // imageSize() on a dynamically indexed image array. The query carries the image in the same
+    // leading operand position as an imageLoad and answers with an int vector, so the select
+    // ladder spells it exactly - and unlike a read it touches no memory at all, so evaluating it
+    // for every element cannot even return undefined data.
+    constexpr const char* kUniformIndexedImageSizeQuery = R"(#version 450 core
+layout(local_size_x = 1) in;
+layout(rgba32f, binding = 0) uniform image2D g_image[4];
+layout(rgba32f, binding = 4) uniform image2DArray g_layered[2];
+layout(std430, binding = 8) buffer Out { ivec2 size; int layers; } g_out;
+uniform int g_index;
+void main() {
+    g_out.size = imageSize(g_image[g_index]);
+    g_out.layers = imageSize(g_layered[g_index]).z;
+}
+)";
     constexpr const char* kUniformIndexedImageAtomic = R"(#version 450 core
 layout(local_size_x = 1) in;
 layout(r32ui, binding = 0) uniform uimage2D g_image[4];
@@ -512,6 +527,36 @@ TEST(LegalizeResourceArrayIndexPass, LeavesADynamicallyIndexedSamplerArrayByteId
     Vector<Uint32> output;
     ASSERT_TRUE(ShaderCompiler::LegalizeResourceArrayIndexingForEssl(input, output, true));
     EXPECT_EQ(output, input);
+}
+
+// imageSize() on a dynamically indexed image array used to lose the whole stage: the consumer
+// whitelist accepted only OpImageRead/OpImageWrite, so the chain was declined and the illegal
+// subscript reached the ES compiler intact. It is the same select ladder as a read - the query
+// takes the image in in-operand 0 and produces an int vector - and it reads no memory, so the
+// elements the shader did not ask for cost nothing but the instruction.
+TEST(LegalizeResourceArrayIndexPass, LowersAUniformIndexedImageSizeQueryToSelects) {
+    const Vector<Uint32> input = CompileCompute(kUniformIndexedImageSizeQuery);
+    ASSERT_FALSE(input.empty());
+    EXPECT_TRUE(HasDynamicImageArrayIndex(input));
+    EXPECT_EQ(CountOpcode(input, spv::Op::OpImageQuerySize), 2u);
+    EXPECT_EQ(CountOpcode(input, spv::Op::OpSelect), 0u);
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::LegalizeResourceArrayIndexingForEssl(input, output, true));
+    ASSERT_FALSE(output.empty());
+    EXPECT_FALSE(HasDynamicImageArrayIndex(output));
+    // Four elements for g_image and two for g_layered, one query apiece, and one select per
+    // element past the first of each ladder.
+    EXPECT_EQ(CountOpcode(output, spv::Op::OpImageQuerySize), 6u);
+    EXPECT_EQ(CountOpcode(output, spv::Op::OpSelect), 4u);
+    EXPECT_EQ(CountOpcode(output, spv::Op::OpSwitch), 0u) << "a query produces a value, so no control flow";
+    EXPECT_TRUE(Validates(output));
+
+    const EsslAttempt after = EmitEssl(output);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    for (int element = 0; element < 4; ++element) {
+        EXPECT_NE(after.text.find("g_image[" + std::to_string(element) + "]"), String::npos) << after.text;
+    }
 }
 
 // An imageAtomic* is the shape the lowering must refuse: its per-element rebuild would run every
