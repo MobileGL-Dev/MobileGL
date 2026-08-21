@@ -194,6 +194,13 @@ namespace {
             return result;
         }
 
+        if (const std::optional<String> counterOffsetError =
+                FindAtomicCounterOffsetViolation(result.preprocessedSource)) {
+            result.outcome = ShaderPreprocessOutcome::AtomicCounterOffsetRejected;
+            result.infoLog = *counterOffsetError;
+            return result;
+        }
+
         // The parse this feeds runs in the link-compatible configuration (Vulkan-client
         // env with relaxed rules): the TShader it produces is what glLinkProgram links and
         // what the backends' SPIR-V is generated from - there is no second, GL-client

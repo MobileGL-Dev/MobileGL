@@ -4064,6 +4064,49 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
     EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
 }
 
+// KHR-GL43.shader_atomic_counters.negative-offset-1: an atomic counter whose layout(offset = N)
+// puts its last byte past GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE is a COMPILE-time error, and the CTS
+// never links the shader at all. MobileGL only had the rule at link, because the Vulkan-relaxed
+// parse never reaches glslang's fixOffset().
+TEST_F(ProgramUtilTest, AtomicCounterOffsetCeilingIsCheckedAtCompile) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto violation = [](const String& body) {
+        return FindAtomicCounterOffsetViolation("#version 430 core\n" + body + "void main() {}\n");
+    };
+    const String maxSize = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE);
+    const String lastLegal = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 4);
+
+    // The boundary itself: the last counter that still fits, and the first that does not.
+    EXPECT_FALSE(violation("layout(binding = 0, offset = " + lastLegal + ") uniform atomic_uint c;\n").has_value());
+    EXPECT_TRUE(violation("layout(binding = 0, offset = " + maxSize + ") uniform atomic_uint c;\n").has_value());
+
+    // An array occupies one word per element, so what has to fit is the LAST one.
+    EXPECT_FALSE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 16) +
+                           ") uniform atomic_uint c[4];\n")
+                     .has_value());
+    EXPECT_TRUE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 8) +
+                          ") uniform atomic_uint c[4];\n")
+                    .has_value());
+
+    // An offset that is not a multiple of 4 (GL 4.6 core 7.7), and one that is.
+    EXPECT_TRUE(violation("layout(offset = 2) uniform atomic_uint c;\n").has_value());
+    EXPECT_FALSE(violation("layout(offset = 8) uniform atomic_uint c;\n").has_value());
+
+    // Things the scanner must NOT judge: a counter with no explicit offset, an `offset` that is
+    // an ordinary identifier rather than a layout qualifier, an array sized by an expression,
+    // and an offset qualifier that belongs to a different declaration.
+    EXPECT_FALSE(violation("uniform atomic_uint c;\nconst int offset = 99999;\n").has_value());
+    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(offset = " + maxSize +
+                           ") uniform atomic_uint c[kCount];\n")
+                     .has_value());
+    EXPECT_FALSE(violation("layout(offset = " + maxSize + ") uniform Block { int x; };\n"
+                           "uniform atomic_uint c;\n")
+                     .has_value());
+    // A source with no counter at all never pays for the scan and never reports one.
+    EXPECT_FALSE(FindAtomicCounterOffsetViolation("#version 430 core\nvoid main() {}\n").has_value());
+}
+
 // KHR-GL43.explicit_uniform_location.uniform-loc-nondecimal: GLSL integer literals are C-style, so
 // layout(location = 0xA) is 10 and layout(location = 010) is OCTAL 8. The extractor used to accept
 // a base-10 digit run and nothing else: the hex spelling failed the test entirely and the

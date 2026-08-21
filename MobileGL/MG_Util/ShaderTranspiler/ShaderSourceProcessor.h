@@ -75,6 +75,18 @@ namespace MobileGL {
             // `maxBindings` is what glGetIntegerv answers for that pname; a non-positive value
             // means "nothing to check against" and every declaration passes.
             std::optional<String> FindShaderStorageBindingViolation(const String& source, Int maxBindings);
+
+            // GL 4.6 core 7.7 / ARB_shader_atomic_counters makes it a COMPILE-time error to
+            // declare an atomic counter at an offset that is not a multiple of 4, or whose last
+            // byte passes GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE. glslang enforces both in fixOffset(),
+            // which the Vulkan-relaxed parse never reaches (vkRelaxedRemapUniformVariable folds
+            // the atomic_uint into a synthesized storage block and returns from declareVariable()
+            // first), so MobileGL only caught them at LINK - and
+            // KHR-GL43.shader_atomic_counters.negative-offset-1 never links at all. The
+            // cross-stage rule (two counters sharing a binding must not overlap) stays at link:
+            // a single-stage source cannot see it. Returns the compile-error text for the first
+            // violation, or nullopt for a clean source.
+            std::optional<String> FindAtomicCounterOffsetViolation(const String& source);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL
