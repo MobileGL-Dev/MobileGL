@@ -930,6 +930,405 @@ namespace {
         }
     }
 
+    // Index one past the token that closes the group tokens[open] opens, or the token count when
+    // the group is never closed. Nesting of the SAME bracket pair is counted, everything else is
+    // skipped, so a '(' inside a '[' run cannot confuse a bracket walk and vice versa.
+    SizeT FindGroupEnd(const Vector<CodeToken>& tokens, SizeT open, char opener, char closer) {
+        int depth = 0;
+        for (SizeT i = open; i < tokens.size(); ++i) {
+            if (tokens[i].text.size() != 1) continue;
+            if (tokens[i].text[0] == opener) {
+                ++depth;
+            } else if (tokens[i].text[0] == closer && --depth == 0) {
+                return i + 1;
+            }
+        }
+        return tokens.size();
+    }
+
+    // Token text joined by single spaces. Token text is comment-free by construction (the
+    // tokenizer reads a masked source), so this is how a rewritten declaration is rebuilt without
+    // dragging a comment - or a newline - into a line the rewrite promises to keep single-line.
+    String JoinTokenText(const Vector<CodeToken>& tokens, SizeT begin, SizeT end) {
+        String text;
+        for (SizeT i = begin; i < end; ++i) {
+            if (!text.empty()) text += ' ';
+            text += tokens[i].text;
+        }
+        return text;
+    }
+
+    // Erase a span for the compiler while keeping every later offset - and every LINE NUMBER -
+    // exactly where it was, so edits collected against one token scan all stay valid and glslang's
+    // diagnostics still point at the line the application wrote.
+    void BlankSpan(MobileGL::String& source, SizeT begin, SizeT end) {
+        for (SizeT i = begin; i < end && i < source.size(); ++i) {
+            if (source[i] != '\n' && source[i] != '\r') {
+                source[i] = ' ';
+            }
+        }
+    }
+
+    bool IsParameterQualifierKeyword(const String& text) {
+        static constexpr std::string_view kQualifiers[] = {
+            "const",    "in",       "out",      "inout",     "highp",     "mediump", "lowp",
+            "precise",  "coherent", "volatile", "restrict",  "readonly",  "writeonly",
+        };
+        return std::find(std::begin(kQualifiers), std::end(kQualifiers), std::string_view(text)) !=
+            std::end(kQualifiers);
+    }
+
+    // The #if/#ifdef/#ifndef nesting in effect at each offset, as (offset, depth) marks. Every
+    // mark takes effect at the END of the directive line that changed the depth.
+    Vector<std::pair<SizeT, int>> BuildConditionalDepthMarks(const MobileGL::String& source,
+                                                            const Vector<std::pair<SizeT, SizeT>>& ranges) {
+        Vector<std::pair<SizeT, int>> marks;
+        marks.emplace_back(static_cast<SizeT>(0), 0);
+        int depth = 0;
+        for (const std::pair<SizeT, SizeT>& range : ranges) {
+            SizeT pos = range.first;
+            SkipDirectiveWhitespace(source, pos, range.second);
+            if (pos >= range.second || source[pos] != '#') continue;
+            ++pos;
+            SkipDirectiveWhitespace(source, pos, range.second);
+            const String name = ReadDirectiveIdentifier(source, pos, range.second);
+            if (name == "if" || name == "ifdef" || name == "ifndef") {
+                ++depth;
+            } else if (name == "endif") {
+                if (depth > 0) --depth;
+            } else {
+                continue;
+            }
+            marks.emplace_back(range.second, depth);
+        }
+        return marks;
+    }
+
+    int ConditionalDepthAt(const Vector<std::pair<SizeT, int>>& marks, SizeT offset) {
+        const auto next = std::upper_bound(marks.begin(), marks.end(), offset,
+                                           [](SizeT value, const std::pair<SizeT, int>& mark) {
+                                               return value < mark.first;
+                                           });
+        return next == marks.begin() ? 0 : std::prev(next)->second;
+    }
+
+    struct SubroutineParameters {
+        Vector<String> declarations; // "in highp float mgl_sr_arg0", ready for a parameter list
+        Vector<String> arguments;    // "mgl_sr_arg0", ready for a forwarding call
+    };
+
+    // One parameter of a subroutine TYPE declaration, whose name (if it even has one) this rewrite
+    // replaces with a generated one. The shape read is
+    //     <qualifier>* <typeName> <arrayOfType>? <name>? <arrayOfName>?
+    // which is the whole of the GLSL parameter grammar; anything that does not fit is refused so
+    // the caller can abandon the rewrite rather than emit a guess.
+    bool AppendSubroutineParameter(const Vector<CodeToken>& tokens, SizeT begin, SizeT end, SizeT index,
+                                   SubroutineParameters& parameters) {
+        if (begin >= end) return false;
+
+        SizeT cursor = begin;
+        while (cursor < end && IsParameterQualifierKeyword(tokens[cursor].text)) {
+            ++cursor;
+        }
+        if (cursor >= end || !IsIdentifierToken(tokens[cursor])) return false;
+        ++cursor;
+        while (cursor < end && tokens[cursor].text == "[") { // "float[4] a"
+            const SizeT close = FindGroupEnd(tokens, cursor, '[', ']');
+            if (close > end) return false;
+            cursor = close;
+        }
+        const String typeText = JoinTokenText(tokens, begin, cursor);
+
+        String arraySuffix;
+        if (cursor < end) { // the declared parameter name, which the generated one replaces
+            if (!IsIdentifierToken(tokens[cursor])) return false;
+            const SizeT afterName = cursor + 1;
+            cursor = afterName;
+            while (cursor < end && tokens[cursor].text == "[") { // "float a[4]"
+                const SizeT close = FindGroupEnd(tokens, cursor, '[', ']');
+                if (close > end) return false;
+                cursor = close;
+            }
+            if (cursor != end) return false;
+            arraySuffix = JoinTokenText(tokens, afterName, end);
+        }
+
+        const String name = "mgl_sr_arg" + std::to_string(index);
+        parameters.declarations.push_back(typeText + " " + name + (arraySuffix.empty() ? "" : " " + arraySuffix));
+        parameters.arguments.push_back(name);
+        return true;
+    }
+
+    // The parameter list between (but not including) the parentheses of a subroutine type
+    // declaration. "()" and "(void)" are both the empty list.
+    bool ParseSubroutineParameters(const Vector<CodeToken>& tokens, SizeT begin, SizeT end,
+                                   SubroutineParameters& parameters) {
+        if (begin >= end) return true;
+        if (end == begin + 1 && tokens[begin].text == "void") return true;
+
+        SizeT parameterBegin = begin;
+        SizeT index = 0;
+        for (SizeT i = begin; i <= end; ++i) {
+            if (i < end) {
+                if (tokens[i].text == "[") { // a comma inside a subscript is not a separator
+                    const SizeT close = FindGroupEnd(tokens, i, '[', ']');
+                    if (close > end) return false;
+                    i = close - 1;
+                    continue;
+                }
+                if (tokens[i].text != ",") continue;
+            }
+            if (!AppendSubroutineParameter(tokens, parameterBegin, i, index, parameters)) return false;
+            ++index;
+            parameterBegin = i + 1;
+        }
+        return true;
+    }
+
+    // GLSL subroutines (ARB_shader_subroutine, core since 4.00).
+    //
+    // glslang refuses the keyword outright once the target is SPIR-V - "'subroutine' : not allowed
+    // when generating SPIR-V", "feature not yet implemented" - so a shader that declares one never
+    // produces a module at all and the whole program is lost at COMPILE time. That is the entire
+    // failure of KHR-GL43.shader_image_size.advanced-nonMS-*: its subroutine-free twin
+    // basic-nonMS-* drives the identical image battery through the identical imageSize() calls on
+    // the identical targets and passes on every stage.
+    //
+    // The rewrite is confined to the case where it is provably a no-op on semantics: a subroutine
+    // uniform whose type has EXACTLY ONE compatible subroutine. GL 4.3 core 7.9 leaves the value of
+    // a subroutine uniform implementation-dependent until glUniformSubroutinesuiv sets it, so with
+    // a single compatible subroutine every legal value of that uniform selects the same function
+    // and a direct call is indistinguishable from a dispatch under any GL state. A type with two or
+    // more compatible subroutines genuinely needs the dynamic selection MobileGL does not implement
+    // (glUniformSubroutinesuiv is still a stub, and nothing reflects the subroutine interfaces), so
+    // it is left to fail at compile time exactly as it does today rather than silently pinned to
+    // one of the alternatives.
+    //
+    //     subroutine void FuncType(int coord);          ->  (blanked)
+    //     subroutine uniform FuncType g_func;           ->  void g_func(int mgl_sr_arg0);
+    //     subroutine(FuncType) void Func0(int c) { }    ->  void Func0(int c) { }
+    //                                                       ...plus, appended at end of source,
+    //                                                       void g_func(int mgl_sr_arg0) {
+    //                                                           Func0(mgl_sr_arg0);
+    //                                                       }
+    //
+    // Naming the forwarding function after the subroutine UNIFORM is what leaves every CALL site
+    // untouched - "g_func(coord)" already reads as a call - and that name is free precisely because
+    // the declaration that held it is gone. The forwarding body has to be appended rather than
+    // written in place because the compatible subroutine is routinely defined AFTER the function
+    // that calls through the uniform (the CTS shaders define theirs below main()); at end of source
+    // every definition it names is already in scope, and a prototype at the old declaration site
+    // keeps the call sites legal.
+    //
+    // All-or-nothing, in the discipline of the scanners below it: an array subroutine uniform, a
+    // subroutine token inside a #if arm or a macro body, an unbalanced file, a type that is never
+    // declared - anything outside the grammar abandons the whole pass with the source untouched,
+    // which is exactly today's behaviour.
+    void LowerShaderSubroutines(MobileGL::String& source) {
+        if (source.find("subroutine") == MobileGL::String::npos) return;
+
+        const Vector<CodeToken> tokens = TokenizeCode(source);
+        const SizeT count = tokens.size();
+        if (count < 4 || !HasBalancedBraces(tokens)) return;
+
+        const Vector<std::pair<SizeT, SizeT>> directiveRanges = FindDirectiveLineRanges(source);
+        const Vector<std::pair<SizeT, int>> conditionalDepth =
+            BuildConditionalDepthMarks(source, directiveRanges);
+
+        struct SubroutineType {
+            String returnText; // empty until the type declaration itself is seen
+            SubroutineParameters parameters;
+            Vector<String> implementations; // compatible subroutines, in declaration order
+        };
+        struct UniformSite {
+            SizeT begin = 0; // first byte of the declaration, layout(...) qualifier included
+            SizeT end = 0;   // one past its ';'
+            String typeName;
+            Vector<String> variables;
+        };
+        struct BlankEdit {
+            SizeT begin;
+            SizeT end;
+        };
+
+        MobileGL::UnorderedMap<String, SubroutineType> types;
+        Vector<UniformSite> uniformSites;
+        Vector<BlankEdit> blanks;
+
+        SizeT braceDepth = 0;
+        for (SizeT i = 0; i < count; ++i) {
+            const CodeToken& token = tokens[i];
+            if (token.text.size() == 1) {
+                if (token.text[0] == '{') {
+                    ++braceDepth;
+                    continue;
+                }
+                if (token.text[0] == '}') {
+                    if (braceDepth > 0) --braceDepth;
+                    continue;
+                }
+            }
+            if (token.text != "subroutine") continue;
+
+            // Nothing here may reason about a subroutine that is not unconditionally at file
+            // scope: the forwarding bodies this appends are unconditional, so a declaration that
+            // only exists in one #if arm (or inside a macro body) would have them naming a
+            // function that is not there.
+            if (braceDepth != 0 || IsInDirectiveLine(directiveRanges, token.begin) ||
+                ConditionalDepthAt(conditionalDepth, token.begin) != 0) {
+                return;
+            }
+            if (i + 1 >= count) return;
+
+            // (a) `[layout(...)] subroutine uniform <TypeName> <var>[, <var>]... ;`
+            if (tokens[i + 1].text == "uniform") {
+                UniformSite site;
+                site.begin = token.begin;
+                if (i >= 2 && tokens[i - 1].text == ")") {
+                    SizeT open = i - 1;
+                    int depth = 1;
+                    while (depth > 0) {
+                        if (open == 0) return;
+                        --open;
+                        if (tokens[open].text == ")") {
+                            ++depth;
+                        } else if (tokens[open].text == "(") {
+                            --depth;
+                        }
+                    }
+                    if (open == 0 || tokens[open - 1].text != "layout") return;
+                    site.begin = tokens[open - 1].begin;
+                }
+
+                SizeT cursor = i + 2;
+                if (cursor >= count || !IsIdentifierToken(tokens[cursor])) return;
+                site.typeName = tokens[cursor].text;
+                ++cursor;
+                while (true) {
+                    if (cursor >= count || !IsIdentifierToken(tokens[cursor])) return;
+                    site.variables.push_back(tokens[cursor].text);
+                    ++cursor;
+                    if (cursor >= count) return;
+                    if (tokens[cursor].text == ",") {
+                        ++cursor;
+                        continue;
+                    }
+                    // An ARRAY of subroutine uniforms indexes the dispatch itself
+                    // ("g_func[i](x)"), which is the dynamic selection this rewrite refuses.
+                    if (tokens[cursor].text != ";") return;
+                    break;
+                }
+                site.end = tokens[cursor].end;
+                uniformSites.push_back(std::move(site));
+                i = cursor;
+                continue;
+            }
+
+            // (b) `subroutine(<TypeName>, ...) <ret> <name>(<params>) { ... }` - a definition,
+            // which only has to shed the qualifier to become an ordinary function.
+            if (tokens[i + 1].text == "(") {
+                const SizeT listEnd = FindGroupEnd(tokens, i + 1, '(', ')');
+                if (listEnd >= count) return;
+                Vector<String> listed;
+                for (SizeT t = i + 2; t + 1 < listEnd; ++t) {
+                    if (tokens[t].text == ",") continue;
+                    if (!IsIdentifierToken(tokens[t])) return;
+                    listed.push_back(tokens[t].text);
+                }
+                if (listed.empty()) return;
+
+                SizeT paren = listEnd;
+                while (paren < count && tokens[paren].text != "(") {
+                    const String& text = tokens[paren].text;
+                    if (text == "{" || text == "}" || text == ";" || text == ",") return;
+                    ++paren;
+                }
+                if (paren >= count || paren == listEnd || !IsIdentifierToken(tokens[paren - 1])) return;
+
+                for (const String& typeName : listed) {
+                    types[typeName].implementations.push_back(tokens[paren - 1].text);
+                }
+                blanks.push_back({token.begin, tokens[listEnd - 1].end});
+                i = listEnd - 1;
+                continue;
+            }
+
+            // (c) `subroutine <ret> <TypeName>(<params>);` - the type declaration.
+            SizeT paren = i + 1;
+            while (paren < count && tokens[paren].text != "(") {
+                const String& text = tokens[paren].text;
+                if (text == "{" || text == "}" || text == ";" || text == ",") return;
+                ++paren;
+            }
+            if (paren >= count || paren == i + 1 || !IsIdentifierToken(tokens[paren - 1])) return;
+            const SizeT listEnd = FindGroupEnd(tokens, paren, '(', ')');
+            if (listEnd >= count || tokens[listEnd].text != ";") return;
+
+            SubroutineType& type = types[tokens[paren - 1].text];
+            if (!type.returnText.empty()) return; // declared twice; out of scope
+            type.returnText = JoinTokenText(tokens, i + 1, paren - 1);
+            if (type.returnText.empty()) return;
+            if (!ParseSubroutineParameters(tokens, paren + 1, listEnd - 1, type.parameters)) return;
+            blanks.push_back({token.begin, tokens[listEnd].end});
+            i = listEnd;
+        }
+
+        if (blanks.empty() && uniformSites.empty()) return;
+
+        for (const UniformSite& site : uniformSites) {
+            const auto known = types.find(site.typeName);
+            if (known == types.end() || known->second.returnText.empty()) return;
+            if (known->second.implementations.size() != 1) return;
+        }
+
+        String appended;
+        Vector<std::pair<SizeT, String>> prototypes; // (offset, text), applied back to front
+        for (const UniformSite& site : uniformSites) {
+            const SubroutineType& type = types.at(site.typeName);
+            String parameterList;
+            for (const String& declaration : type.parameters.declarations) {
+                if (!parameterList.empty()) parameterList += ", ";
+                parameterList += declaration;
+            }
+            String arguments;
+            for (const String& argument : type.parameters.arguments) {
+                if (!arguments.empty()) arguments += ", ";
+                arguments += argument;
+            }
+
+            String text;
+            for (const String& variable : site.variables) {
+                const String signature = type.returnText + " " + variable + "(" + parameterList + ")";
+                text += signature + "; ";
+                appended += signature + " {\n    " + (type.returnText == "void" ? "" : "return ") +
+                    type.implementations.front() + "(" + arguments + ");\n}\n";
+            }
+            prototypes.emplace_back(site.begin, std::move(text));
+        }
+
+        // Blanking first keeps every collected offset valid (it preserves length AND newlines), so
+        // only the prototype insertions - which are single-line, and so cost no line numbers - have
+        // to run back to front.
+        for (const BlankEdit& blank : blanks) {
+            BlankSpan(source, blank.begin, blank.end);
+        }
+        for (const UniformSite& site : uniformSites) {
+            BlankSpan(source, site.begin, site.end);
+        }
+        std::sort(prototypes.begin(), prototypes.end(),
+                  [](const std::pair<SizeT, String>& a, const std::pair<SizeT, String>& b) {
+                      return a.first < b.first;
+                  });
+        for (auto it = prototypes.rbegin(); it != prototypes.rend(); ++it) {
+            source.insert(it->first, it->second);
+        }
+
+        if (!appended.empty()) {
+            if (!source.empty() && source.back() != '\n') source += '\n';
+            source += appended;
+        }
+    }
+
     // Rewrite the `packed` / `shared` block-packing qualifiers inside layout(...) declarations to
     // `std140`. Desktop GL leaves the memory layout of such blocks to the implementation and the
     // app must query member offsets; MobileGL's SPIR-V pipeline always lays uniform blocks out as
@@ -1079,6 +1478,10 @@ namespace MobileGL {
                 // once both qualifiers are normalized keeps the two passes' notions of a block
                 // declaration identical.
                 SizeNonFinalUnsizedBufferBlockMembers(source);
+
+                // Before the builtin-shadowing rename, so the forwarding functions this synthesizes
+                // are just as visible to it as the ones the application wrote.
+                LowerShaderSubroutines(source);
 
                 RenameBuiltinShadowingFunctions(source);
 

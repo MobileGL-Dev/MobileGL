@@ -737,12 +737,18 @@ namespace MobileGL {
                         return;
                     case spv::Op::OpImageWrite:
                     case spv::Op::OpImageRead:
+                    // imageSize()/imageSamples() carry the image in the same leading operand
+                    // position as an OpImageRead and produce an int or int vector, so the same
+                    // select ladder rebuilds them exactly - and a size query touches no memory
+                    // at all, which makes evaluating it for every element strictly safer than
+                    // the read the ladder was written for.
+                    case spv::Op::OpImageQuerySize:
+                    case spv::Op::OpImageQuerySizeLod:
                         if (consumer == nullptr) consumer = user;
                         return;
                     default:
-                        // A sampled-image construction, a query, a copy, an argument to a
-                        // function: shapes whose per-element rebuild this pass cannot spell
-                        // exactly.
+                        // A sampled-image construction, a copy, an argument to a function:
+                        // shapes whose per-element rebuild this pass cannot spell exactly.
                         unsupportedConsumer = true;
                         return;
                     }
@@ -762,7 +768,7 @@ namespace MobileGL {
 
                 return consumer->opcode() == spv::Op::OpImageWrite
                            ? LowerImageWrite(accessChain, arrayLength, load, consumer)
-                           : LowerImageRead(accessChain, arrayLength, load, consumer);
+                           : LowerImageReadOrQuery(accessChain, arrayLength, load, consumer);
             }
 
             // Drops |load| and |accessChain| once the rewrite above has taken their last user,
@@ -865,38 +871,42 @@ namespace MobileGL {
                 return LoweringOutcome::Changed;
             }
 
-            // A read needs no control flow: read every element through a constant index and pick
+            // A value-producing consumer - an OpImageRead, or an imageSize()/imageSamples() query -
+            // needs no control flow: run it against every element through a constant index and pick
             // with OpSelect. The selection happens on the RESULT, not on the image object - an
             // opaque type may not be selected at all (pre-1.4 OpSelect takes pointers, scalars
             // and vectors only, and ESSL has no ternary on an image), so what is duplicated is
-            // the OpImageRead.
+            // the consuming instruction itself. Every such consumer carries the image in in-operand
+            // 0 and nothing else that is per-element, so one rebuild spells all of them.
             //
-            // Reading the elements the shader did not ask for is safe: every one of them is an
+            // Running the elements the shader did not ask for is safe: every one of them is an
             // image this stage already declares, and GL 4.6 7.11.2 makes a load through an
             // image unit whose binding is missing or incompatible return undefined DATA - never
-            // an error, and never a fault - which the select then discards. Contrast an
-            // imageAtomic*, which LowerImageChain refuses for exactly the opposite reason.
+            // an error, and never a fault - which the select then discards. A size query does not
+            // even touch memory. Contrast an imageAtomic*, which LowerImageChain refuses for
+            // exactly the opposite reason.
             LegalizeResourceArrayIndexPass::LoweringOutcome
-            LegalizeResourceArrayIndexPass::LowerImageRead(Instruction* accessChain, uint32_t arrayLength,
-                                                           Instruction* load, Instruction* imageRead) {
+            LegalizeResourceArrayIndexPass::LowerImageReadOrQuery(Instruction* accessChain,
+                                                                  uint32_t arrayLength, Instruction* load,
+                                                                  Instruction* consumer) {
                 auto* irContext = context();
                 uint32_t conditionTypeId = 0;
                 uint32_t dimension = 0;
-                if (!TryGetSelectConditionType(irContext, imageRead->type_id(), &conditionTypeId,
+                if (!TryGetSelectConditionType(irContext, consumer->type_id(), &conditionTypeId,
                                                &dimension)) {
-                    MGLOG_D("[spirv] image array index: read type is not selectable, declining");
+                    MGLOG_D("[spirv] image array index: result type is not selectable, declining");
                     return LoweringOutcome::Declined;
                 }
                 const uint32_t boolTypeId = irContext->get_type_mgr()->GetBoolTypeId();
                 const uint32_t indexId = accessChain->GetSingleWordInOperand(1);
                 const uint32_t imageTypeId = load->type_id();
                 std::vector<Operand> tailOperands;
-                for (uint32_t i = 1; i < imageRead->NumInOperands(); ++i) {
-                    tailOperands.push_back(imageRead->GetInOperand(i));
+                for (uint32_t i = 1; i < consumer->NumInOperands(); ++i) {
+                    tailOperands.push_back(consumer->GetInOperand(i));
                 }
 
                 InstructionBuilder builder(
-                    irContext, imageRead,
+                    irContext, consumer,
                     IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
 
                 uint32_t selectedId = 0;
@@ -906,18 +916,18 @@ namespace MobileGL {
                         CloneChainWithConstantIndex(builder, irContext, accessChain, constantId);
                     Instruction* elementImage = builder.AddLoad(imageTypeId, elementChain->result_id());
 
-                    std::vector<Operand> readOperands;
-                    readOperands.push_back({SPV_OPERAND_TYPE_ID, {elementImage->result_id()}});
+                    std::vector<Operand> elementOperands;
+                    elementOperands.push_back({SPV_OPERAND_TYPE_ID, {elementImage->result_id()}});
                     for (const Operand& tailOperand : tailOperands) {
-                        readOperands.push_back(tailOperand);
+                        elementOperands.push_back(tailOperand);
                     }
-                    Instruction* elementRead = builder.AddInstruction(
-                        MakeUnique<Instruction>(irContext, spv::Op::OpImageRead, imageRead->type_id(),
-                                                irContext->TakeNextId(), readOperands));
+                    Instruction* elementResult = builder.AddInstruction(
+                        MakeUnique<Instruction>(irContext, consumer->opcode(), consumer->type_id(),
+                                                irContext->TakeNextId(), elementOperands));
                     if (element == 0) {
                         // Element 0 is the else-arm of the whole ladder, so an out-of-range
                         // index reads it - an undefined element for an undefined index.
-                        selectedId = elementRead->result_id();
+                        selectedId = elementResult->result_id();
                         continue;
                     }
 
@@ -929,17 +939,17 @@ namespace MobileGL {
                         conditionId = builder.AddCompositeConstruct(conditionTypeId, components)->result_id();
                     }
                     selectedId = builder
-                                     .AddSelect(imageRead->type_id(), conditionId,
-                                                elementRead->result_id(), selectedId)
+                                     .AddSelect(consumer->type_id(), conditionId,
+                                                elementResult->result_id(), selectedId)
                                      ->result_id();
                 }
 
-                irContext->ReplaceAllUsesWith(imageRead->result_id(), selectedId);
-                irContext->KillInst(imageRead);
+                irContext->ReplaceAllUsesWith(consumer->result_id(), selectedId);
+                irContext->KillInst(consumer);
                 KillImageChainIfDead(accessChain, load);
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
-                MGLOG_D("[spirv] image array index: lowered a dynamic imageLoad to %u constant-indexed "
-                        "reads",
+                MGLOG_D("[spirv] image array index: lowered a dynamic image read/query to %u "
+                        "constant-indexed operations",
                         arrayLength);
                 return LoweringOutcome::Changed;
             }
