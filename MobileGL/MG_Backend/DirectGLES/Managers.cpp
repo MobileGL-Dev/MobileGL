@@ -6663,6 +6663,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else {
                 MGLOG_D("Program linked successfully. ID: %u", m_backendProgramId);
             }
+            // The driver program was relinked IN PLACE, so its GL name no longer identifies
+            // the executable behind it - and that name is exactly what Use()'s
+            // g_lastUsedBackendProgramId early-out treats as identifying it. Without this,
+            // a rebuild of the program that is already bound issues no glUseProgram at all
+            // and the driver keeps running whatever the last one installed.
+            //
+            // GL 4.6 core 7.3 does promise that a successful re-link of a program in use
+            // installs the new executable - but only "for all shader stages where the program
+            // is active", and a stage the previous link did not produce is not active for
+            // anything. So a relink that ADDS a stage is precisely the case the promise does
+            // not cover. Verified with no MobileGL in the process (bare EGL + GLES 3.2, Mesa
+            // 26.1.4 llvmpipe): vertex+fragment linked, used and drawn renders; a geometry
+            // shader attached and relinked reports LINK_STATUS true with an empty info log,
+            // and the next draw renders NOTHING and raises no error - while the same draw
+            // after a fresh glUseProgram of the same name renders again.
+            //
+            // A flag rather than zeroing the guard: 0 is also the id Use() binds for a build
+            // that did NOT come out usable, and a zeroed guard would make it skip that
+            // glUseProgram(0) and leave the failed program's previous executable running -
+            // the silent wrong-shader draw Use() exists to prevent.
+            m_rebindAfterRelink = true;
             m_baseInstanceUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
                                                                              BASE_INSTANCE_UNIFORM_NAME);
             m_drawIdUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, DRAW_ID_UNIFORM_NAME);
@@ -6812,7 +6833,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        void BackendProgramObjectImpl::Use() const {
+        void BackendProgramObjectImpl::Use() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -6822,9 +6843,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // test case's alpha that way once a sampler2DRect stage failed to
             // transpile). Bind nothing instead: the draw is then a visible no-op.
             const Uint programToBind = m_backendProgramUsable ? m_backendProgramId : 0;
-            if (g_lastUsedBackendProgramId == programToBind) {
+            // ...unless SyncToBackend relinked this program since the last bind, in which case
+            // the id matching proves nothing about the executable behind it.
+            if (g_lastUsedBackendProgramId == programToBind && !m_rebindAfterRelink) {
                 return;
             }
+            m_rebindAfterRelink = false;
             if (!m_backendProgramUsable) {
                 // Every draw made with this program renders nothing and raises no GL error, so
                 // without this line the only symptom is a framebuffer that kept its clear
