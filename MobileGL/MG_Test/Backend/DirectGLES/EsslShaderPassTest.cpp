@@ -20,11 +20,12 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ExtractPerVertexBlockMembers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_STAGE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_ARRAY_ELEMENT_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_READONLY_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_SPLIT_READ_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageStageAliasPrefix;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
@@ -44,14 +45,14 @@ namespace {
         return count;
     }
 
-    // Every fixture below is a fragment shader unless it says otherwise. The pass tags the name
-    // of every declaration it rewrites with the stage it ran on, so the expectations have to
-    // spell the same tag.
-    constexpr GLenum kStage = GL_FRAGMENT_SHADER;
-    String StageAlias(const String& name) { return ImageStageAliasPrefix(kStage) + name; }
-    // The writeonly half is minted from the ALREADY stage-tagged name, so it carries both.
+    // The pass tags the name of every declaration it rewrites with the REPAIR it applied, so the
+    // expectations have to spell the tag that matches how the fixture uses the image.
+    String RoAlias(const String& name) { return String(IMAGE_READONLY_ALIAS_PREFIX) + name; }
+    String WoAlias(const String& name) { return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name; }
+    String RwAlias(const String& name) { return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name; }
+    // The writeonly half is minted from the ALREADY access-tagged name, so it carries both.
     String WriteAlias(const String& name) { return String(IMAGE_WRITE_ALIAS_PREFIX) + name; }
-    String SplitWriteAlias(const String& name) { return WriteAlias(StageAlias(name)); }
+    String SplitWriteAlias(const String& name) { return WriteAlias(RwAlias(name)); }
     // The scalar RemapImageArrayElementUnits declares for one element of a split image array.
     String Elem(const String& name, Int element) {
         return String(IMAGE_ARRAY_ELEMENT_PREFIX) + name + "_" + std::to_string(element);
@@ -74,13 +75,13 @@ void main()
     mg_FragColor = loaded;
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
 
     // Both halves: same binding, same format, same type - which is what makes two image
     // variables on one image unit legal - and both `coherent`, which is what makes the store
     // through one of them visible to the load through the other.
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " +
-                                  StageAlias("goku") + ";"))
+                                  RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
@@ -88,7 +89,7 @@ void main()
 
     // The load goes to the readonly half, the store to the writeonly one, and neither is called
     // what the application called it any more.
-    EXPECT_TRUE(Contains(out, "imageLoad(" + StageAlias("goku") + ","));
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ","));
     EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ","));
     EXPECT_FALSE(Contains(out, "imageStore(goku,"));
     EXPECT_FALSE(Contains(out, "imageLoad(goku,"));
@@ -105,7 +106,7 @@ void main()
     imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
 }
 )";
-    const String out = RemoveLayoutBinding(SplitReadWriteImageUniforms(source, kStage));
+    const String out = RemoveLayoutBinding(SplitReadWriteImageUniforms(source));
     EXPECT_EQ(CountOf(out, "binding = 5"), 2u);
 }
 
@@ -120,11 +121,11 @@ void main()
     mg_FragColor = imageLoad(trunks, ivec3(0));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " +
-                                  StageAlias("trunks") + ";"))
+                                  RoAlias("trunks") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "imageLoad(" + StageAlias("trunks") + ","));
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("trunks") + ","));
     EXPECT_FALSE(Contains(out, "writeonly"));
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
     EXPECT_EQ(CountOf(out, "image2DArray"), 1u);
@@ -138,11 +139,11 @@ void main()
     imageStore(gohan, ivec2(0), vec4(1.0));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(
-        Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + StageAlias("gohan") + ";"))
+        Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "imageStore(" + StageAlias("gohan") + ","));
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("gohan") + ","));
     EXPECT_FALSE(Contains(out, "readonly"));
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
 }
@@ -155,7 +156,7 @@ TEST(SplitReadWriteImageUniformsTest, ExemptFormatsAreLeftCompletelyAlone) {
         const String source = "#version 320 es\nlayout(binding = 4, " + String(format) + ") uniform highp " + type +
                               " vegeta;\nvoid main()\n{\n    imageStore(vegeta, ivec2(0), imageLoad(vegeta, "
                               "ivec2(0)));\n}\n";
-        EXPECT_EQ(SplitReadWriteImageUniforms(source, kStage), source) << "format " << format;
+        EXPECT_EQ(SplitReadWriteImageUniforms(source), source) << "format " << format;
     }
 }
 
@@ -172,7 +173,7 @@ void main()
     // Untouched means UNRENAMED too: a declaration that already carries its qualifier in the
     // source carries the SAME one in every stage, so there is no cross-stage mismatch to break up
     // and renaming it would only churn the text.
-    EXPECT_EQ(SplitReadWriteImageUniforms(source, kStage), source);
+    EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
 // The binding of an image array is the array's base; splitting must keep the array on both
@@ -185,15 +186,15 @@ void main()
     imageStore(gohan[1], ivec2(0), imageLoad(gohan[2], ivec2(0)));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " +
-                                  StageAlias("gohan") + "[3];"))
+                                  RwAlias("gohan") + "[3];"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("gohan") + "[3];"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("gohan") + "[1],"));
-    EXPECT_TRUE(Contains(out, "imageLoad(" + StageAlias("gohan") + "[2],"));
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("gohan") + "[2],"));
 }
 
 // The rewrite is by identifier, not by substring: "goku" must not reach into "goku_hd", and
@@ -209,20 +210,20 @@ void main()
     imageStore(goku_hd, ivec2(0), loaded);
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
 
     // goku is read+write -> split (and coherent with it); goku_hd is write-only -> qualified in
     // place, not split, and left non-coherent because nothing aliases it. Both are renamed.
     EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " +
-                                  StageAlias("goku") + ";"))
+                                  RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " +
-                                  StageAlias("goku_hd") + ";"))
+                                  WoAlias("goku_hd") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "imageStore(" + StageAlias("goku_hd") + ","));
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("goku_hd") + ","));
     EXPECT_FALSE(Contains(out, SplitWriteAlias("goku") + "_hd"));
     EXPECT_FALSE(Contains(out, SplitWriteAlias("goku_hd")));
 }
@@ -237,8 +238,8 @@ void main()
     imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
-    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + StageAlias("goku") + ";"))
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(
         Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
@@ -266,14 +267,14 @@ void main()
     imageStore(storeOnly, ivec2(0), vec4(2.0));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
-    EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + StageAlias("goku") + ";")) << out;
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
     EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
         << out;
     // Exactly the two halves of the pair, and nothing else: the store-only image is repaired in
     // place, has no alias to stay visible to, and must not pay for uncached access.
     EXPECT_EQ(CountOf(out, "coherent"), 2u);
-    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + StageAlias("storeOnly") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + WoAlias("storeOnly") + ";")) << out;
 }
 
 // The ORDERING half of the split, which `coherent` alone does not buy. Coherent makes the store
@@ -294,7 +295,7 @@ void main()
     mg_FragColor = first + imageLoad(goku, ivec2(0));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
 
     EXPECT_TRUE(
         Contains(out, "imageStore(" + SplitWriteAlias("goku") + ", ivec2(0), vec4(1.0)); memoryBarrierImage();"))
@@ -317,8 +318,8 @@ void main()
     imageStore(storeOnly, ivec2(0), vec4(1.0));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
-    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + StageAlias("storeOnly") + ";")) << out;
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "uniform writeonly highp image2D " + WoAlias("storeOnly") + ";")) << out;
     EXPECT_FALSE(Contains(out, "memoryBarrierImage")) << out;
 }
 
@@ -333,8 +334,8 @@ void main()
     imageStore(gohan[1], ivec2(0), max(imageLoad(gohan[2], ivec2(0)), vec4(0.5)));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
-    EXPECT_TRUE(Contains(out, "max(imageLoad(" + StageAlias("gohan") +
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "max(imageLoad(" + RwAlias("gohan") +
                                   "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
         << out;
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
@@ -359,7 +360,7 @@ void main()
 }
 )";
     Uint splitCount = 99u;
-    SplitReadWriteImageUniforms(twoSplits, kStage, &splitCount);
+    SplitReadWriteImageUniforms(twoSplits, &splitCount);
     EXPECT_EQ(splitCount, 2u) << "only the read+write pair counts; the store-only repair adds no uniform";
 
     // Every early return has to write the count too, or a caller reads whatever was there before.
@@ -371,7 +372,7 @@ void main()
 }
 )";
     splitCount = 99u;
-    SplitReadWriteImageUniforms(noImages, kStage, &splitCount);
+    SplitReadWriteImageUniforms(noImages, &splitCount);
     EXPECT_EQ(splitCount, 0u);
 }
 
@@ -386,20 +387,20 @@ void main()
     mg_FragColor = vec4(float(imageSize(sizeOnly).x));
 }
 )";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " +
-                                  StageAlias("sizeOnly") + ";"))
+                                  RoAlias("sizeOnly") + ";"))
         << out;
     // The rename has to reach imageSize too, or the declaration and its only use stop agreeing.
-    EXPECT_TRUE(Contains(out, "imageSize(" + StageAlias("sizeOnly") + ")")) << out;
+    EXPECT_TRUE(Contains(out, "imageSize(" + RoAlias("sizeOnly") + ")")) << out;
     EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX));
 }
 
 // Neither minted name may land on an identifier the shader already uses - and there are two of
-// them now, the stage-tagged name of the repaired declaration and the writeonly half built on
+// them now, the access-tagged name of the repaired declaration and the writeonly half built on
 // top of it. Both collisions are exercised at once.
 TEST(SplitReadWriteImageUniformsTest, AliasNamesAvoidExistingIdentifiers) {
-    const String stageCollision = StageAlias("taken");
+    const String stageCollision = RwAlias("taken");
     const String writeCollision = SplitWriteAlias("taken");
     const String source = "#version 320 es\n"
                           "layout(binding = 6, rgba8) uniform highp image2D taken;\n"
@@ -408,7 +409,7 @@ TEST(SplitReadWriteImageUniformsTest, AliasNamesAvoidExistingIdentifiers) {
                           ";\nvoid main()\n{\n"
                           "    imageStore(taken, ivec2(0), imageLoad(taken, ivec2(0)) + " +
                           stageCollision + " + " + writeCollision + ");\n}\n";
-    const String out = SplitReadWriteImageUniforms(source, kStage);
+    const String out = SplitReadWriteImageUniforms(source);
 
     EXPECT_FALSE(Contains(out, "image2D " + stageCollision + ";")) << out;
     EXPECT_FALSE(Contains(out, "image2D " + writeCollision + ";")) << out;
@@ -435,7 +436,7 @@ void main()
     // Declining means declining EVERYTHING: no qualifier, and no rename either. A rename that
     // moved the declaration but not the use inside helper() would be a compile error rather than
     // the wrong-but-compiling shader this pass refuses to guess at.
-    EXPECT_EQ(SplitReadWriteImageUniforms(source, kStage), source);
+    EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
 TEST(SplitReadWriteImageUniformsTest, ShaderWithoutImagesIsReturnedUnchanged) {
@@ -447,7 +448,7 @@ void main()
     mg_FragColor = texture(goku, vec2(0.5));
 }
 )";
-    EXPECT_EQ(SplitReadWriteImageUniforms(source, kStage), source);
+    EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
 // The defect the rename exists for. The pass sees ONE stage at a time and picks the memory
@@ -455,9 +456,9 @@ void main()
 // shader that only loads the same image came out `writeonly g_image` and `readonly g_image` -
 // two declarations of one uniform name that GLSL requires to be identical. Adreno merges them
 // and silently discards the vertex-stage stores (advanced-memory-dependentInvocation reads back
-// the untouched zeros, with LINK_STATUS = 1 and an empty driver log). Stage-tagged names leave
-// nothing to merge.
-TEST(SplitReadWriteImageUniformsTest, TheSameImageGetsADifferentNameInEachStage) {
+// the untouched zeros, with LINK_STATUS = 1 and an empty driver log). Tagging by the repair
+// leaves nothing to merge.
+TEST(SplitReadWriteImageUniformsTest, StagesThatUseAnImageDifferentlyGetDifferentNames) {
     const String vertexSource = R"(#version 320 es
 layout(binding = 0, rgba32f) uniform coherent highp image2D g_image;
 void main()
@@ -474,11 +475,11 @@ void main()
     mg_FragColor = imageLoad(g_image, ivec2(0));
 }
 )";
-    const String vsOut = SplitReadWriteImageUniforms(vertexSource, GL_VERTEX_SHADER);
-    const String fsOut = SplitReadWriteImageUniforms(fragmentSource, GL_FRAGMENT_SHADER);
+    const String vsOut = SplitReadWriteImageUniforms(vertexSource);
+    const String fsOut = SplitReadWriteImageUniforms(fragmentSource);
 
-    const String vsName = ImageStageAliasPrefix(GL_VERTEX_SHADER) + "g_image";
-    const String fsName = ImageStageAliasPrefix(GL_FRAGMENT_SHADER) + "g_image";
+    const String vsName = WoAlias("g_image");
+    const String fsName = RoAlias("g_image");
     EXPECT_NE(vsName, fsName);
     EXPECT_TRUE(Contains(vsOut, "uniform writeonly coherent highp image2D " + vsName + ";")) << vsOut;
     EXPECT_TRUE(Contains(fsOut, "uniform readonly coherent highp image2D " + fsName + ";")) << fsOut;
@@ -493,21 +494,62 @@ void main()
     EXPECT_TRUE(Contains(fsOut, "binding = 0"));
 }
 
-// Every stage gets a tag of its own, including the ones a fragment/vertex pair never exercises.
-TEST(SplitReadWriteImageUniformsTest, EveryStageTagIsDistinct) {
-    const GLenum stages[] = {GL_VERTEX_SHADER,      GL_FRAGMENT_SHADER,        GL_COMPUTE_SHADER,
-                             GL_GEOMETRY_SHADER,    GL_TESS_CONTROL_SHADER,    GL_TESS_EVALUATION_SHADER};
-    Vector<String> prefixes;
-    for (const GLenum stage : stages) {
-        const String prefix = ImageStageAliasPrefix(stage);
-        EXPECT_EQ(prefix.rfind(IMAGE_STAGE_ALIAS_PREFIX, 0), 0u) << prefix;
+// The other side of that coin, and the one a per-STAGE tag got wrong. Two stages that use the
+// image the same way emit byte-identical declarations, so they must arrive at ONE shared name:
+// Adreno allocates an image LOCATION per distinct uniform, and giving each stage its own name
+// multiplied a program's image-uniform count by the number of stages that mention it - which is
+// how the five stages of KHR-GL43.shading_language_420pack.binding_images_texture_type_* went
+// from 6 image uniforms to 30 and drew "Error: Image Image location or component exceeds max
+// allowed." out of the Adreno 830 linker, with LINK_STATUS = TRUE already published by the
+// frontend and every draw silently doing nothing.
+TEST(SplitReadWriteImageUniformsTest, StagesThatUseAnImageAlikeShareOneName) {
+    const String vertexSource = R"(#version 320 es
+layout(binding = 1, rgba8) uniform highp image2D goku;
+void main()
+{
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+    gl_Position = vec4(0.0);
+}
+)";
+    const String fragmentSource = R"(#version 320 es
+layout(binding = 1, rgba8) uniform highp image2D goku;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+    mg_FragColor = vec4(0.0);
+}
+)";
+    const String vsOut = SplitReadWriteImageUniforms(vertexSource);
+    const String fsOut = SplitReadWriteImageUniforms(fragmentSource);
+
+    // One name, arrived at independently by two different stages, so the linker merges them
+    // back into the single image uniform the application declared.
+    for (const String& out : {vsOut, fsOut}) {
+        EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
+        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
+            << out;
+        EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ",")) << out;
+        EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ",")) << out;
+    }
+}
+
+// One tag per repair, all three distinct, and each a legal identifier stem.
+TEST(SplitReadWriteImageUniformsTest, EveryAccessTagIsDistinct) {
+    const String prefixes[] = {String(IMAGE_READONLY_ALIAS_PREFIX), String(IMAGE_WRITEONLY_ALIAS_PREFIX),
+                               String(IMAGE_SPLIT_READ_ALIAS_PREFIX), String(IMAGE_WRITE_ALIAS_PREFIX)};
+    Vector<String> seenPrefixes;
+    for (const String& prefix : prefixes) {
         // A GLSL identifier may not contain "__" (GLSL ES 3.20 3.7), and the prefix is glued
         // straight onto a name that may itself start with '_'.
         EXPECT_EQ(prefix.find("__"), String::npos) << prefix;
-        for (const String& seen : prefixes) {
+        for (const String& seen : seenPrefixes) {
             EXPECT_NE(seen, prefix) << prefix;
+            // Nor may one be a prefix of another: the write half is minted on top of an
+            // already-tagged name, so a shared stem would let two repairs collide.
+            EXPECT_NE(prefix.rfind(seen, 0), 0u) << prefix << " vs " << seen;
         }
-        prefixes.push_back(prefix);
+        seenPrefixes.push_back(prefix);
     }
 }
 
@@ -690,17 +732,17 @@ void main()
 }
 )";
     String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 6})});
-    out = SplitReadWriteImageUniforms(out, kStage);
+    out = SplitReadWriteImageUniforms(out);
     out = RemoveLayoutBinding(out);
 
     // Element 0 is only ever loaded and element 1 only ever stored, so neither is split into a
     // pair - but each keeps the unit the application gave it, which the array could not express.
     EXPECT_TRUE(Contains(out, "binding = 4")) << out;
     EXPECT_TRUE(Contains(out, "binding = 6")) << out;
-    EXPECT_TRUE(Contains(out, "readonly highp image2D " + StageAlias(Elem("g_image", 0)) + ";")) << out;
-    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + StageAlias(Elem("g_image", 1)) + ";")) << out;
-    EXPECT_TRUE(Contains(out, "imageStore(" + StageAlias(Elem("g_image", 1)) + ", ivec2(0), imageLoad(" +
-                                  StageAlias(Elem("g_image", 0)) + ", ivec2(0)))"))
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RoAlias(Elem("g_image", 0)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WoAlias(Elem("g_image", 1)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias(Elem("g_image", 1)) + ", ivec2(0), imageLoad(" +
+                                  RoAlias(Elem("g_image", 0)) + ", ivec2(0)))"))
         << out;
     // Nothing is left addressing the array.
     EXPECT_FALSE(Contains(out, "g_image[")) << out;
@@ -718,15 +760,52 @@ void main()
 }
 )";
     String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 9})});
-    out = SplitReadWriteImageUniforms(out, kStage);
+    out = SplitReadWriteImageUniforms(out);
     out = RemoveLayoutBinding(out);
 
     // Element 1 sits on unit 9, and both halves of its split pair say so.
     EXPECT_EQ(CountOf(out, "binding = 9"), 2u) << out;
-    EXPECT_TRUE(Contains(out, "readonly highp image2D " + StageAlias(Elem("g_image", 1)) + ";")) << out;
-    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(StageAlias(Elem("g_image", 1))) + ";"))
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias(Elem("g_image", 1)) + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";"))
         << out;
     EXPECT_EQ(CountOf(out, "binding = 4"), 1u) << out;
+}
+
+// The gap that let a per-STAGE image rename reach production: every fixture above declares an
+// image ARRAY, and the regression it caused was in the SCALAR images sitting next to one. A
+// scalar with an explicit binding has to come out of the whole chain still on ITS OWN unit,
+// still spelled once, and named the same thing every stage would name it - it is the array that
+// needs repairing, not its neighbour.
+TEST(RemapImageArrayElementUnitsTest, AScalarImageWithItsOwnBindingIsUntouchedByTheArrayRepair) {
+    const String source = R"(#version 320 es
+layout(rgba8, binding = 7) uniform highp image2D goku;
+layout(rgba32f, binding = 4) uniform highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), imageLoad(g_image[0], ivec2(0)));
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+}
+)";
+    Vector<String> declined;
+    String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 9})}, &declined);
+    EXPECT_TRUE(declined.empty());
+    // The array pass may only ever touch the arrays it was handed a plan for.
+    EXPECT_TRUE(Contains(out, "layout(rgba8, binding = 7) uniform highp image2D goku;")) << out;
+
+    out = SplitReadWriteImageUniforms(out);
+    out = RemoveLayoutBinding(out);
+
+    // Unit 7 exactly twice - the two halves of the scalar's own split pair - and nothing has
+    // moved it onto one of the array's units.
+    EXPECT_EQ(CountOf(out, "binding = 7"), 2u) << out;
+    EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
+    // ...and no per-stage tag anywhere: the name a scalar gets is a function of how this text
+    // uses it, so every stage that uses it the same way keeps ONE shared uniform (Adreno spends
+    // an image location per distinct one).
+    EXPECT_FALSE(Contains(out, "mg_imageVs_")) << out;
+    EXPECT_FALSE(Contains(out, "mg_imageFs_")) << out;
+    EXPECT_FALSE(Contains(out, "mg_imageCs_")) << out;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -971,7 +1050,7 @@ layout(binding = 3) uniform writeonly highp uimage2D uni_image;
 void main() { imageStore(uni_image, ivec2(0), uvec4(1u)); }
 )";
     String out = BakeImageFormatQualifiers(source, {{"uni_image", "r8ui"}});
-    out = SplitReadWriteImageUniforms(out, kStage);
+    out = SplitReadWriteImageUniforms(out);
     out = RemoveLayoutBinding(out);
     EXPECT_TRUE(Contains(out, "r8ui")) << out;
     EXPECT_TRUE(Contains(out, "binding = 3")) << out;

@@ -332,15 +332,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                const String& inPerVertexMembers,
                                                const String& outPerVertexMembers);
         // Prefix of the writeonly half a read+write image uniform is split into (see
-        // SplitReadWriteImageUniforms); the suffix is the image's own (already stage-tagged) name.
+        // SplitReadWriteImageUniforms); the suffix is the image's own (already access-tagged) name.
         constexpr const char* IMAGE_WRITE_ALIAS_PREFIX = "mg_imageWrite_";
-        // Stem of the per-stage name every image declaration SplitReadWriteImageUniforms rewrites
-        // is renamed under; ImageStageAliasPrefix appends the stage tag and the separator.
-        constexpr const char* IMAGE_STAGE_ALIAS_PREFIX = "mg_image";
-        // "mg_imageVs_", "mg_imageFs_", "mg_imageCs_", ... - the prefix SplitReadWriteImageUniforms
-        // renames a rewritten image declaration under, so that no two stages can end up declaring
-        // the same image uniform name with different memory qualifiers. Exposed for the tests.
-        String ImageStageAliasPrefix(GLenum shaderType);
+        // The three names SplitReadWriteImageUniforms renames a rewritten image declaration
+        // under, one per REPAIR it can apply. Which one a stage picks is decided by that stage's
+        // own accesses, so two stages that use an image the same way arrive at the SAME name and
+        // two that use it differently arrive at different ones - which is exactly the property
+        // the rename exists for, at no cost to the stages that agree. Exposed for the tests.
+        constexpr const char* IMAGE_READONLY_ALIAS_PREFIX = "mg_imageRo_";
+        constexpr const char* IMAGE_WRITEONLY_ALIAS_PREFIX = "mg_imageWo_";
+        constexpr const char* IMAGE_SPLIT_READ_ALIAS_PREFIX = "mg_imageRw_";
         // ESSL refuses an image variable that carries a format qualifier other than r32f /
         // r32i / r32ui unless it also carries `readonly` or `writeonly` (GLSL ES 3.10 4.9 /
         // 3.20 4.10; glslang enforces it verbatim in ParseHelper.cpp's layoutObjectCheck).
@@ -352,31 +353,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // bare declaration, so the frontend raises no error and the illegal ESSL only shows
         // up as a device compile failure - and then as a silently no-op draw.
         //
-        // Restores a legal declaration, and RENAMES it per stage while doing so:
-        //  * loaded only            -> add `readonly`
-        //  * stored only            -> add `writeonly`
+        // Restores a legal declaration, and RENAMES it after the repair it applied while doing so:
+        //  * loaded only            -> add `readonly`, rename under IMAGE_READONLY_ALIAS_PREFIX
+        //  * stored only            -> add `writeonly`, rename under IMAGE_WRITEONLY_ALIAS_PREFIX
         //  * both                   -> emit TWO declarations on the same binding and of the
-        //                              same type, `coherent readonly <name>` and `coherent
-        //                              writeonly <IMAGE_WRITE_ALIAS_PREFIX><name>`, point
+        //                              same type, `coherent readonly
+        //                              <IMAGE_SPLIT_READ_ALIAS_PREFIX><name>` and `coherent
+        //                              writeonly <IMAGE_WRITE_ALIAS_PREFIX><that name>`, point
         //                              every imageStore at the second one, and follow each of
         //                              those stores with `memoryBarrierImage();`. Several image
         //                              variables may share an image unit as long as they have
         //                              the same type and format, which is exactly what the pair
         //                              is.
         //
-        // The rename (ImageStageAliasPrefix) is the other half of the repair and applies to all
-        // three cases. The qualifier chosen above is a decision about ONE STAGE's accesses, and
-        // GLSL requires a uniform declared in two stages to be declared identically - so a shader
-        // that stores an image from the vertex stage and loads it from the fragment stage came out
-        // of here `writeonly` in one and `readonly` in the other. Adreno merges the two same-named
-        // declarations and silently drops the vertex-stage STORES: no GL error, no link log,
-        // LINK_STATUS = 1, and the image still reads back its initial contents
+        // The rename is the other half of the repair and applies to all three cases. The qualifier
+        // chosen above is a decision about ONE STAGE's accesses, and GLSL requires a uniform
+        // declared in two stages to be declared identically - so a shader that stores an image from
+        // the vertex stage and loads it from the fragment stage came out of here `writeonly` in one
+        // and `readonly` in the other. Adreno merges the two same-named declarations and silently
+        // drops the vertex-stage STORES: no GL error, no link log, LINK_STATUS = 1, and the image
+        // still reads back its initial contents
         // (KHR-GL4x.shader_image_load_store.advanced-memory-dependentInvocation; a raw-ES probe
         // isolated the trigger to the same-name/mismatched-qualifier pair, and only when both
-        // carry `coherent`). A per-stage name leaves no cross-stage variable to merge. Every
-        // rewritten declaration is renamed, including the readonly half of a split pair; the
-        // declarations this pass leaves untouched keep their names, and those are exactly the ones
-        // that already agree across stages.
+        // carry `coherent`). Renaming leaves no cross-stage variable to merge.
+        //
+        // The name is keyed on the REPAIR, not on the stage, and that distinction is the whole
+        // point: two stages that use an image the same way emit byte-identical declarations, so
+        // letting them keep one shared name costs nothing and merging them is correct, while two
+        // stages that use it differently land on different prefixes and cannot be merged at all.
+        // A per-STAGE tag also satisfied the first requirement but violated the second: it made
+        // the SAME image a distinct uniform in every stage that named it, and Adreno allocates
+        // image LOCATIONS per distinct uniform. KHR-GL43.shading_language_420pack.
+        // binding_images_texture_type_* declares three read+write images in each of its five
+        // stages; merged that is 6 image uniforms, per-stage-tagged it is 30, and the Adreno 830
+        // linker answered "Error: Image Image location or component exceeds max allowed. Error:
+        // Linking failed." - which, the frontend having already published LINK_STATUS = TRUE from
+        // glslang's link, surfaced only as every draw silently doing nothing and the images
+        // reading back zero. Mali and Mesa link the same text, so nothing but a device gate
+        // catches this.
+        //
+        // The declarations this pass leaves untouched keep their names, and those are exactly the
+        // ones that already agree across stages.
         //
         // The `coherent` on both halves of the pair is load-bearing, not decoration: GLSL only
         // guarantees a write through one image variable is visible to a read through a DIFFERENT
@@ -401,16 +418,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Runs on the transpiled ESSL, so it must see the bindings the frontend units were
         // already rewritten to and must run before those bindings are stripped - see the call
-        // site in Managers.cpp. It is downstream of the L2 shader-translation memo (which stores
-        // what SPIRV-Cross emitted, before any of these text passes), so `shaderType` steering the
-        // names it mints needs no entry in BuildEsslTranslationKey.
+        // site in Managers.cpp. Its output is a function of the emitted text alone - it needs no
+        // stage and no per-program state - so it adds nothing to BuildEsslTranslationKey either.
         //
         // `outSplitCount`, when given, receives the number of declarations that were actually
         // doubled - i.e. exactly how many image uniforms this stage gained over what the
         // application declared. Zero for every shader but a handful, and the only number the
         // budget note above can be reported with.
-        String SplitReadWriteImageUniforms(const String& glslCode, GLenum shaderType,
-                                           Uint* outSplitCount = nullptr);
+        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount = nullptr);
         // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
         // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.
         constexpr const char* LOD_BIAS_UNIFORM_PREFIX = "mg_lodBias_";

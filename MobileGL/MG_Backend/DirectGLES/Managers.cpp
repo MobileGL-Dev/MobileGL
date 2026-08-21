@@ -6437,11 +6437,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //    declaration and preserves its binding - an image unit cannot be set from
                 //    the API in ES, so the qualifier is the only binding mechanism there is,
                 //    and both halves of the pair have to still be carrying theirs when it runs.
-                //  * and it needs the STAGE, because the qualifier it adds is a per-stage decision
-                //    and the rename that keeps two stages from declaring one image uniform
-                //    differently is keyed on it.
+                // Takes no stage: the qualifier it adds is a decision about THIS text's accesses
+                // and the rename that keeps two stages from declaring one image uniform
+                // differently is keyed on that same decision, so two stages that agree still
+                // share one uniform (see the location-budget note on the pass).
                 Uint splitImageUniformCount = 0;
-                source = SplitReadWriteImageUniforms(source, glShaderType, &splitImageUniformCount);
+                source = SplitReadWriteImageUniforms(source, &splitImageUniformCount);
                 if (splitImageUniformCount != 0) {
                     splitImageUniformStages.push_back({shader->GetShaderStage(), splitImageUniformCount});
                 }
