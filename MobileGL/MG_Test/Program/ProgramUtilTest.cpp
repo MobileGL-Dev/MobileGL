@@ -3674,6 +3674,7 @@ namespace {
     constexpr Uint kGlRgba32ui = 0x8D70;
     constexpr Uint kGlR8ui = 0x8232;
     constexpr Uint kGlR32f = 0x822E;
+    constexpr Uint kGlRgb10A2ui = 0x906F;
 } // namespace
 
 // The KHR-GL4x.packed_depth_stencil.stencil_texturing compute shader, reduced: one format-less
@@ -3716,14 +3717,23 @@ void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 
 
 // SPIRV-Cross THROWS rather than printing the formats it calls desktop-only when it targets ESSL
 // (Compiler::is_desktop_only_format), and a throw loses the whole stage - so baking one of those
-// into the module would trade a missing qualifier for a missing shader. They are left format-less
-// here and completed on the emitted text instead (PrgramImpl::BakeImageFormatQualifiers). r8ui,
-// which the stencil half of the packed_depth_stencil case binds, is one of them.
-TEST_F(ProgramUtilTest, BakeImageFormatsLeavesTheFormatsSpirvCrossRefusesToPrint) {
+// into the module would trade a missing qualifier for a missing shader.
+//
+// That still holds for the formats NOTHING can rescue, which are left format-less here and
+// completed on the emitted text instead (PrgramImpl::BakeImageFormatQualifiers). It stopped
+// holding for the ones that widen EXACTLY: WidenImageFormatsForEssl runs immediately after this
+// pass on the ESSL chain and re-declares them in a core carrier SPIRV-Cross does print, so for
+// those the module is the right place and the text completion would put back the narrow token no
+// ES driver accepts. r8ui - which the stencil half of the packed_depth_stencil case binds - is
+// one of the rescued ones; rgb10_a2ui, whose 10/10/10/2 channel widths no core format has, is not.
+TEST_F(ProgramUtilTest, BakeImageFormatsLeavesOnlyTheFormatsNoCoreCarrierRescues) {
     using namespace MG_Util::ShaderTranspiler;
 
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR8ui))
-        << "if SPIRV-Cross ever learns to print r8ui for ES, the text completion can go";
+        << "if SPIRV-Cross ever learns to print r8ui for ES, this route can go";
+    ASSERT_NE(ShaderCompiler::WidenedCoreEsslImageFormat(kGlR8ui), 0u);
+    ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlRgb10A2ui));
+    ASSERT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb10A2ui), 0u);
     ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR32ui));
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(kGlR8ui), "r8ui");
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(0x8051 /*GL_RGB8*/), "");
@@ -3736,11 +3746,29 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
                                                    GL_COMPUTE_SHADER);
     ASSERT_FALSE(spirv.empty());
 
-    Vector<Uint32> baked;
-    ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked));
-    EXPECT_EQ(baked, spirv) << "a format SPIRV-Cross cannot print must leave the module untouched";
-    // ...and the stage still transpiles, which is the whole point of declining.
-    EXPECT_FALSE(DecompileToEssl(baked).empty());
+    {   // Unprintable AND uncarriable: declined, module untouched, and the stage still transpiles.
+        Vector<Uint32> baked;
+        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlRgb10A2ui}}, baked));
+        EXPECT_EQ(baked, spirv) << "a format nothing can carry must leave the module untouched";
+        EXPECT_FALSE(DecompileToEssl(baked).empty());
+    }
+    {   // Unprintable but carriable: baked narrow here, then widened into the carrier, which is
+        // what finally gives the declaration a qualifier ES accepts.
+        Vector<Uint32> baked;
+        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlR8ui}}, baked, true));
+        ASSERT_FALSE(baked.empty());
+        EXPECT_NE(baked, spirv) << "a format the widening carries must reach the module";
+        EXPECT_FALSE(ShaderCompiler::DeclaresFormatlessStorageImage(baked));
+        ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(baked));
+
+        Vector<Uint32> widened;
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(baked, widened, true));
+        ASSERT_FALSE(widened.empty());
+        const String essl = DecompileToEssl(widened);
+        ASSERT_FALSE(essl.empty());
+        EXPECT_NE(essl.find("rgba8ui"), String::npos)
+            << "the baked r8ui must come out as the core carrier:\n" << essl;
+    }
 }
 
 // A DECLARED format is authoritative: GL requires the qualifier, the bind format and the
