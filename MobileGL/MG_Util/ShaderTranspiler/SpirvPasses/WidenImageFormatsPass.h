@@ -82,6 +82,11 @@ namespace MobileGL {
                 // the caller can skip the optimizer run entirely - which is every shader but a
                 // handful.
                 static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary);
+                // The same question asked of a module the caller has ALREADY parsed, so a stage
+                // that has to answer several gate questions pays one BuildModule rather than one
+                // per gate - see ShaderCompiler::ProbeSpirvGateFeatures, and the ~10% it cost
+                // compile-heavy CTS cases when two gates each parsed for themselves.
+                static bool DeclaresWidenableImageFormat(spvtools::opt::IRContext* context);
 
                 // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
                 // when the format needs no widening (it is core already) or cannot be widened

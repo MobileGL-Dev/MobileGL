@@ -74,6 +74,7 @@ namespace MobileGL {
                 struct SpirvGateFeatures {
                     Bool WritesViewportIndexOutput = false;
                     Bool DeclaresMultisampledImage = false;
+                    Bool DeclaresWidenableImageFormat = false;
                 };
                 static SpirvGateFeatures ProbeSpirvGateFeatures(const Vector<Uint32>& binary);
                 // Replaces an ARRAY vertex input with one input per element at consecutive
@@ -244,8 +245,10 @@ namespace MobileGL {
                                                      Vector<uint32_t>& outputBinary,
                                                      bool enableSpirvValidation = false);
                 // Whether the module declares a storage image WidenImageFormatsForEssl would
-                // widen. One module parse, so the ~every shader that declares none pays no
-                // optimizer run.
+                // widen, so the ~every shader that declares none pays no optimizer run. Costs its
+                // own module parse: the transpile path asks the same question through
+                // ProbeSpirvGateFeatures instead, because this gate is armed on every real driver
+                // and would otherwise put a BuildModule on every stage of every program.
                 static bool DeclaresWidenableImageFormat(const Vector<Uint32>& binary);
                 // The core-ESSL GL internal format that carries `glInternalFormat` exactly, or 0
                 // when it needs no widening or cannot be widened exactly. The single source of

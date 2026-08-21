@@ -231,11 +231,8 @@ namespace MobileGL {
                 return ChannelsOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
             }
 
-            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(const Vector<Uint32>& binary) {
-                std::unique_ptr<IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
-                    binary.data(), binary.size());
-                if (!context) {
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(IRContext* context) {
+                if (context == nullptr) {
                     return false;
                 }
                 for (const Instruction& type : context->module()->types_values()) {
@@ -244,6 +241,13 @@ namespace MobileGL {
                     }
                 }
                 return false;
+            }
+
+            bool WidenImageFormatsPass::DeclaresWidenableImageFormat(const Vector<Uint32>& binary) {
+                std::unique_ptr<IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    binary.data(), binary.size());
+                return DeclaresWidenableImageFormat(context.get());
             }
 
             spvtools::opt::Pass::Status WidenImageFormatsPass::Process() {
@@ -519,8 +523,11 @@ namespace MobileGL {
                 for (Instruction* type : imageTypes) {
                     const auto widenedIt = widenedByTypeId.find(type->result_id());
                     if (widenedIt == widenedByTypeId.end()) continue;
+                    // No def-use re-analysis: the Image Format operand is a LITERAL, so no use of
+                    // any id moves, and the masks above already left the manager describing a
+                    // module that has since grown instructions it was never told about. Every
+                    // analysis is dropped below instead.
                     type->SetInOperand(kImageFormatOperand, {static_cast<uint32_t>(widenedIt->second.Carrier)});
-                    defUseMgr->AnalyzeInstUse(type);
                 }
 
                 // StorageImageExtendedFormats is deliberately left declared even though every

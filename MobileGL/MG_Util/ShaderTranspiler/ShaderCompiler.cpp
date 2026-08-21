@@ -728,6 +728,8 @@ namespace MobileGL {
                     LowerViewportIndexPass::DeclaresViewportIndexBuiltin(context.get());
                 features.DeclaresMultisampledImage =
                     ClampMultisampleFetchPass::DeclaresMultisampledImage(context.get());
+                features.DeclaresWidenableImageFormat =
+                    WidenImageFormatsPass::DeclaresWidenableImageFormat(context.get());
                 return features;
             }
 
