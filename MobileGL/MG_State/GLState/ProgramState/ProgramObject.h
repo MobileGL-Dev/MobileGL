@@ -155,6 +155,46 @@ namespace MobileGL::MG_State::GLState {
         // The last link's full input set; empty when this program has never linked (or its
         // last link had no shaders attached). GL-thread-owned, rebuilt in Link()'s prologue.
         const Vector<LinkedShaderRef>& GetLinkedShaderSnapshot() const { return m_linkedShaderSnapshot; }
+        // "Does this program's EXECUTABLE have this stage" - the only form of the question a
+        // draw may ask. GetShaderIndexByStage answers it of the live attach list, which by the
+        // rule above is a different set: glAttachShader adds to that list immediately while
+        // leaving the executable (and LINK_STATUS) alone, and glDetachShader defers the removal
+        // to the next Link(), so between an attach and the relink the two disagree in both
+        // directions. A draw-time stage test that reads the live list therefore starts rejecting
+        // draws GL requires to execute, against an executable that does not carry the stage at
+        // all - and stays wrong until the application happens to relink.
+        Bool HasLinkedShaderStage(ShaderStage stage) const {
+            return std::any_of(m_linkedShaderSnapshot.begin(), m_linkedShaderSnapshot.end(),
+                               [stage](const LinkedShaderRef& ref) {
+                                   return ref.shader && ref.shader->GetShaderStage() == stage;
+                               });
+        }
+        // The stage of each module of GetGeneratedSpirv(), at the SAME index and with the same
+        // size: phase B emits exactly one module per entry of the snapshot above, in that order
+        // (Link() fills ProgramLinkTask::in.shaders from the snapshot loop, phase A copies the
+        // stages straight across into SpirvHandoff::shaderTypes, and GetSpirvBinaryFromProgram
+        // walks that list). This - never GetAttachedShaders() - is what a consumer of the
+        // generated SPIR-V must size its loop by and index alongside.
+        //
+        // The two lists are NOT interchangeable and cannot be made so: the attach list is live
+        // and the SPIR-V is a link artifact, so a glAttachShader after a link grows one and not
+        // the other, with no link in between at which they could be reconciled. A loop that runs
+        // over the attach list and indexes the SPIR-V therefore reads off the end of it - which
+        // is a plain out-of-bounds Vector read, not a wrong answer.
+        //
+        // Deliberately a Vector<ShaderStage> and not the shader objects: every consumer wants
+        // only the stage, and a distinct type is what makes handing it the attach list by
+        // mistake a compile error rather than a segfault. Built on demand because these callers
+        // are program-BUILD paths (a backend rebuild, a pipeline cache miss), each of which then
+        // spends milliseconds compiling the very modules this indexes.
+        Vector<ShaderStage> GetLinkedShaderStages() const {
+            Vector<ShaderStage> stages;
+            stages.reserve(m_linkedShaderSnapshot.size());
+            for (const LinkedShaderRef& ref : m_linkedShaderSnapshot) {
+                stages.push_back(ref.shader ? ref.shader->GetShaderStage() : ShaderStage::Unknown);
+            }
+            return stages;
+        }
         // Pipeline-composite attach: AttachShader plus a pin that makes THIS program's
         // Link() consume ref's (source, node) instead of the shader's current ones, so a
         // post-link recompile of the stage program's shader cannot leak into the composite.

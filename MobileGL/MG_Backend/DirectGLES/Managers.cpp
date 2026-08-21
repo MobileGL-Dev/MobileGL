@@ -6090,17 +6090,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // Attach current shaders
-            auto& attachedShaders = stateProgramObject->GetAttachedShaders();
-            MGLOG_D("Attaching %zu shaders to program %u", attachedShaders.size(), m_backendProgramId);
-            for (auto& shader : attachedShaders) {
-                const auto& src = shader->GetShaderSource();
+            // Attach current shaders.
+            //
+            // The EXECUTABLE's stage list, not GetAttachedShaders(): this loop indexes
+            // shaderSpirvs by the same running index, and the generated SPIR-V is a link
+            // artifact while the attach list is live. GL 4.6 core 7.3 makes glAttachShader take
+            // effect only at the next link, so a program that is attached to after it linked has
+            // MORE entries in the attach list than there are modules - and pairing the two read
+            // straight off the end of shaderSpirvs (a std::vector copy from garbage, which is
+            // how this crashed). GetLinkedShaderStages() is the list the modules were generated
+            // from, one entry per module, in module order.
+            const Vector<ShaderStage> linkedStages = stateProgramObject->GetLinkedShaderStages();
+            auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
+            // Both come from the same Link(), so they agree by construction. If they ever did
+            // not there would be no index this function could safely use for EITHER array, so
+            // this refuses the build instead of picking one and hoping.
+            if (linkedStages.size() != shaderSpirvs.size()) {
+                MGLOG_E_ONCE("Program %u: %zu linked stage(s) but %zu generated SPIR-V module(s); refusing to "
+                             "build a backend program from mismatched link artifacts.",
+                             stateProgramObject->GetExternalIndex(), linkedStages.size(), shaderSpirvs.size());
+                m_backendProgramUsable = false;
+                return;
+            }
+            MGLOG_D("Attaching %zu shaders to program %u", linkedStages.size(), m_backendProgramId);
+            for (const auto& ref : stateProgramObject->GetLinkedShaderSnapshot()) {
+                if (!ref.shader) continue;
                 const auto& stage =
-                    MG_Util::ConvertGLEnumToString(MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage()));
+                    MG_Util::ConvertGLEnumToString(MG_Util::ConvertShaderStageToGLEnum(ref.shader->GetShaderStage()));
+                // The source THIS link consumed, which a later glShaderSource does not disturb.
+                const String& src = ref.source ? *ref.source : ref.shader->GetShaderSource();
                 MGLOG_D("Original src @ %s: \n", stage.c_str());
                 MGLOG_D("%s:", src.empty() ? "" : src.c_str());
             }
-            auto& shaderSpirvs = stateProgramObject->GetGeneratedSpirv();
             const Bool enableSpirvValidation = stateProgramObject->GetSpirvValidationEnabled();
 
             // Blocks a transform-feedback capture request names a member of ("StageData" of
@@ -6151,15 +6172,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stage is rewritten.
             std::set<String> collidingIoBlockNames;
             std::set<String> declaredIoBlockNames;
-            Vector<Int> stagePipelineIndices(attachedShaders.size(), -1);
+            Vector<Int> stagePipelineIndices(linkedStages.size(), -1);
             Bool anyStageCanDeclareBlocksInBothDirections = false;
-            for (SizeT index = 0; index < attachedShaders.size(); ++index) {
-                const ShaderStage stage = attachedShaders[index]->GetShaderStage();
+            for (SizeT index = 0; index < linkedStages.size(); ++index) {
+                const ShaderStage stage = linkedStages[index];
                 stagePipelineIndices[index] = InterStagePipelineIndex(stage);
                 if (CanDeclareBlocksInBothDirections(stage)) anyStageCanDeclareBlocksInBothDirections = true;
             }
             if (anyStageCanDeclareBlocksInBothDirections) {
-                for (SizeT index = 0; index < attachedShaders.size() && index < shaderSpirvs.size(); ++index) {
+                for (SizeT index = 0; index < shaderSpirvs.size(); ++index) {
                     MG_Util::ShaderTranspiler::ShaderCompiler::ProbeIoBlockNamesForEssl(
                         shaderSpirvs[index], collidingIoBlockNames, declaredIoBlockNames);
                 }
@@ -6196,19 +6217,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int tessEvalShaderIndex = -1;
             String vertexStageEssl;
             String tessEvalStageEssl;
-            for (int index = 0; index < attachedShaders.size(); ++index) {
-                const auto stage = attachedShaders[index]->GetShaderStage();
+            //
+            // Asked of the executable for the same reason the loop below indexes it: a
+            // tessellation evaluation shader merely ATTACHED to a linked vertex+fragment program
+            // is not part of what this program runs, and synthesizing a control stage for it
+            // would build a tessellating driver program for an executable that does not
+            // tessellate (and would take tessEvalShaderIndex past the end of shaderSpirvs).
+            for (SizeT index = 0; index < linkedStages.size(); ++index) {
+                const ShaderStage stage = linkedStages[index];
                 if (stage == ShaderStage::TessControl) hasTessControlStage = true;
                 if (stage == ShaderStage::TessEval) {
                     hasTessEvalStage = true;
-                    tessEvalShaderIndex = index;
+                    tessEvalShaderIndex = static_cast<Int>(index);
                 }
             }
             const Bool needsPassthroughTessControl = hasTessEvalStage && !hasTessControlStage;
 
-            for (int index = 0; index < attachedShaders.size(); ++index) {
-                auto& shader = attachedShaders[index];
-                GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(shader->GetShaderStage());
+            for (SizeT index = 0; index < linkedStages.size(); ++index) {
+                GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(linkedStages[index]);
                 GLuint backendShaderId = g_GLESFuncs.glCreateShader(glShaderType);
 
                 if (backendShaderId == 0) {
@@ -6454,7 +6480,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint splitImageUniformCount = 0;
                 source = SplitReadWriteImageUniforms(source, &splitImageUniformCount);
                 if (splitImageUniformCount != 0) {
-                    splitImageUniformStages.push_back({shader->GetShaderStage(), splitImageUniformCount});
+                    splitImageUniformStages.push_back({linkedStages[index], splitImageUniformCount});
                 }
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);

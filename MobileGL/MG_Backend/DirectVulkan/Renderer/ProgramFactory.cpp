@@ -83,7 +83,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool isMember = false;
         };
 
-        ShaderStage PickClipFixupStage(const Vector<SharedPtr<ShaderObject>>& shaders);
+        ShaderStage PickClipFixupStage(const Vector<ShaderStage>& stages);
 
         Bool IsVec4Float32(spvtools::opt::IRContext* context, Uint32 typeId, Uint32* outFloatTypeId) {
             auto* vecInst = context->get_def_use_mgr()->GetDef(typeId);
@@ -614,15 +614,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         void ReflectStageInterface(ShaderStage targetStage,
                                    Bool reflectInputs,
-                                   const Vector<SharedPtr<ShaderObject>>& shaders,
+                                   const Vector<ShaderStage>& stages,
                                    const Vector<Vector<Uint>>& spirv,
                                    StageInterfaceSummary& outSummary,
                                    Uint programExternalIndex,
                                    const char* stageLabel) {
             outSummary.slotSignatures.fill(0);
 
-            for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
-                if (!shaders[moduleIndex] || shaders[moduleIndex]->GetShaderStage() != targetStage) {
+            for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
+                if (stages[moduleIndex] != targetStage) {
                     continue;
                 }
 
@@ -690,11 +690,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        void ValidateRasterizationStageInterface(const Vector<SharedPtr<ShaderObject>>& shaders,
+        void ValidateRasterizationStageInterface(const Vector<ShaderStage>& stages,
                                                  const Vector<Vector<Uint>>& spirv,
                                                  ProgramFactory::VkProgramObject& entry,
                                                  Uint programExternalIndex) {
-            const ShaderStage producerStage = PickClipFixupStage(shaders);
+            const ShaderStage producerStage = PickClipFixupStage(stages);
             entry.rasterizationProducerStage = producerStage;
             entry.producerOutputComponentCount = 0;
             entry.fragmentInputComponentCount = 0;
@@ -703,8 +703,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             Bool hasFragmentStage = false;
-            for (const auto& shader : shaders) {
-                if (shader && shader->GetShaderStage() == ShaderStage::Fragment) {
+            for (const ShaderStage stage : stages) {
+                if (stage == ShaderStage::Fragment) {
                     hasFragmentStage = true;
                     break;
                 }
@@ -715,9 +715,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             StageInterfaceSummary producerOutputs{};
             StageInterfaceSummary fragmentInputs{};
-            ReflectStageInterface(producerStage, false, shaders, spirv, producerOutputs, programExternalIndex,
+            ReflectStageInterface(producerStage, false, stages, spirv, producerOutputs, programExternalIndex,
                                   "producer");
-            ReflectStageInterface(ShaderStage::Fragment, true, shaders, spirv, fragmentInputs, programExternalIndex,
+            ReflectStageInterface(ShaderStage::Fragment, true, stages, spirv, fragmentInputs, programExternalIndex,
                                   "fragment");
             entry.producerOutputComponentCount = CountOccupiedStageInterfaceSlots(producerOutputs);
             entry.fragmentInputComponentCount = CountOccupiedStageInterfaceSlots(fragmentInputs);
@@ -1719,14 +1719,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return success;
         }
 
-        ShaderStage PickClipFixupStage(const Vector<SharedPtr<ShaderObject>>& shaders) {
+        ShaderStage PickClipFixupStage(const Vector<ShaderStage>& stages) {
             Bool hasGeometry = false;
             Bool hasTessEval = false;
             Bool hasVertex = false;
 
-            for (const auto& shader : shaders) {
-                if (!shader) continue;
-                const auto stage = shader->GetShaderStage();
+            for (const ShaderStage stage : stages) {
                 hasGeometry |= (stage == ShaderStage::Geometry);
                 hasTessEval |= (stage == ShaderStage::TessEval);
                 hasVertex |= (stage == ShaderStage::Vertex);
@@ -2316,15 +2314,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void ProgramFactory::ReflectVertexInputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+    void ProgramFactory::ReflectVertexInputs(const Vector<ShaderStage>& stages,
                                              const Vector<Vector<Uint>>& spirv,
                                              VkProgramObject& entry) const {
         entry.activeVertexInputLocationMask = 0;
         entry.vertexInputTypes.fill(0);
         entry.readsBaseVertexBuiltin = false;
 
-        for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
-            if (!shaders[moduleIndex] || shaders[moduleIndex]->GetShaderStage() != ShaderStage::Vertex) {
+        for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
+            if (stages[moduleIndex] != ShaderStage::Vertex) {
                 continue;
             }
 
@@ -2401,14 +2399,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // evaluation stages. Rather than guess which one is last, every non-fragment, non-compute
     // module is asked - one writer anywhere means this program's draws need a multi-viewport
     // pipeline, and a false positive costs only a wider viewportCount.
-    void ProgramFactory::ReflectViewportIndexUsage(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+    void ProgramFactory::ReflectViewportIndexUsage(const Vector<ShaderStage>& stages,
                                                    const Vector<Vector<Uint>>& spirv,
                                                    VkProgramObject& entry) const {
         entry.writesViewportIndexBuiltin = false;
 
-        for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
-            if (!shaders[moduleIndex]) continue;
-            const ShaderStage stage = shaders[moduleIndex]->GetShaderStage();
+        for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
+            const ShaderStage stage = stages[moduleIndex];
             if (stage == ShaderStage::Fragment || stage == ShaderStage::Compute) continue;
 
             const auto& module = spirv[moduleIndex];
@@ -2436,15 +2433,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    void ProgramFactory::ReflectFragmentOutputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+    void ProgramFactory::ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
                                                 const Vector<Vector<Uint>>& spirv,
                                                 VkProgramObject& entry) const {
         entry.activeFragmentOutputLocationMask = 0;
         entry.fragmentOutputTypes.fill(0);
         entry.fragmentReplacesDepth = false;
 
-        for (SizeT moduleIndex = 0; moduleIndex < shaders.size() && moduleIndex < spirv.size(); ++moduleIndex) {
-            if (!shaders[moduleIndex] || shaders[moduleIndex]->GetShaderStage() != ShaderStage::Fragment) {
+        for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
+            if (stages[moduleIndex] != ShaderStage::Fragment) {
                 continue;
             }
 
@@ -3150,7 +3147,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& entry = m_cache[hash];
         entry.hash = hash;
         entry.lastUsedFrame = m_frameCounter;
-        auto& shaders = program.GetAttachedShaders();
+        // The EXECUTABLE's stage list, not GetAttachedShaders(): `spirv` is a link artifact with
+        // one module per linked stage, while the attach list is live and grows on
+        // glAttachShader, which GL 4.6 core 7.3 says does not reach the executable until the
+        // next link. Sizing this loop by the attach list therefore ran it past the end of both
+        // `spirv` and `moduleSpirvs` for any program attached to after it linked.
+        const Vector<ShaderStage> stages = program.GetLinkedShaderStages();
         auto& spirv = program.GetGeneratedSpirv();
         Vector<Vector<Uint>> moduleSpirvs(spirv.size());
         const Bool enableSpirvValidation = program.GetSpirvValidationEnabled();
@@ -3158,14 +3160,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
         }
 
-        const ShaderStage fixupStage = PickClipFixupStage(shaders);
+        const ShaderStage fixupStage = PickClipFixupStage(stages);
 
-        for (SizeT i = 0; i < shaders.size(); ++i) {
+        // Both lists come from the same Link(), so they agree by construction; the min() is what
+        // makes that an assumption this loop does not have to bet the process on.
+        const SizeT moduleCount = std::min(stages.size(), spirv.size());
+        for (SizeT i = 0; i < moduleCount; ++i) {
             auto& spv = spirv[i];
             if (spv.empty()) continue;
 
             // Apply position fixup if needed
-            if (fixupStage != ShaderStage::Unknown && shaders[i] && shaders[i]->GetShaderStage() == fixupStage) {
+            if (fixupStage != ShaderStage::Unknown && stages[i] == fixupStage) {
                 const Vector<Uint>* fixupInput = &spv;
                 Vector<Uint> xfbSpirv;
                 if ((flags & ProgramFactory::CompileOptionBit::XfbCapture) &&
@@ -3181,16 +3186,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 moduleSpirvs[i] = spv;
             }
 
-            if ((flags & ProgramFactory::CompileOptionBit::ExplicitLod0Sampling) && shaders[i] &&
-                shaders[i]->GetShaderStage() == ShaderStage::Fragment) {
+            if ((flags & ProgramFactory::CompileOptionBit::ExplicitLod0Sampling) && stages[i] == ShaderStage::Fragment) {
                 Vector<Uint> explicitLodSpirv;
                 if (TransformSpirvForExplicitLod0Sampling(moduleSpirvs[i], explicitLodSpirv)) {
                     moduleSpirvs[i] = Move(explicitLodSpirv);
                 }
             }
 
-            if ((flags & ProgramFactory::CompileOptionBit::FragCoordYFlip) && shaders[i] &&
-                shaders[i]->GetShaderStage() == ShaderStage::Fragment) {
+            if ((flags & ProgramFactory::CompileOptionBit::FragCoordYFlip) && stages[i] == ShaderStage::Fragment) {
                 Vector<Uint> fragCoordSpirv;
                 if (TransformSpirvForFragCoordYFlip(moduleSpirvs[i], fragCoordSpirv, m_defaultFramebufferHeight)) {
                     moduleSpirvs[i] = Move(fragCoordSpirv);
@@ -3201,7 +3204,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // operations execute natively; module repairs keep the GL contract intact
             // around them. The opt-in emulation path replaces them only on devices with no
             // subgroup support at all (MOBILEGL_MAGMA_EMULATE_SUBGROUP).
-            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Compute) {
+            if (stages[i] == ShaderStage::Compute) {
                 // Program 203 broadcasts the first reduction through
                 // prefixSumCache[0], then lets the second reduction overwrite that
                 // scratch without first rendezvousing all readers. Patch that exact
@@ -3304,8 +3307,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // The unsupported-device counterpart of this rebase (warning when a shader reads
             // the builtin but shaderDrawParameters is missing) rides along with
             // ReflectVertexInputs, which already reflects this stage.
-            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex &&
-                m_shaderDrawParametersEnabled) {
+            if (stages[i] == ShaderStage::Vertex && m_shaderDrawParametersEnabled) {
                 Vector<Uint> rebasedSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::RebaseInstanceIndexForVulkan(moduleSpirvs[i],
                                                                                             rebasedSpirv, enableSpirvValidation)) {
@@ -3322,8 +3324,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
             // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
             // and for the baseVertex word of an indexed indirect command.
-            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex &&
-                (flags & CompileOptionBit::ZeroBaseVertex)) {
+            if (stages[i] == ShaderStage::Vertex && (flags & CompileOptionBit::ZeroBaseVertex)) {
                 Vector<Uint> zeroedSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(moduleSpirvs[i],
                                                                                        zeroedSpirv, enableSpirvValidation)) {
@@ -3346,7 +3347,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
             // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
             // double input - garbage with no diagnostic anywhere.
-            if (shaders[i] && shaders[i]->GetShaderStage() == ShaderStage::Vertex) {
+            if (stages[i] == ShaderStage::Vertex) {
                 Vector<Uint> packedSpirv;
                 const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
                     moduleSpirvs[i], packedSpirv, enableSpirvValidation);
@@ -3385,17 +3386,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool remapOk = RemapDescriptorBindingsForVulkan(moduleSpirvs, m_maxBindings, moduleSpirvs);
         MOBILEGL_ASSERT(remapOk, "ProgramFactory::GetOrCreateProgram: descriptor binding remap failed");
 
-        for (SizeT i = 0; i < shaders.size(); ++i) {
+        for (SizeT i = 0; i < moduleCount; ++i) {
             auto& moduleSpv = moduleSpirvs[i];
             if (moduleSpv.empty()) continue;
 
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-            ValidateTransformedSpirv(moduleSpv, shaders[i]->GetShaderStage(), program.GetExternalIndex());
+            ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex());
 #else
             // Final module the driver receives; also checked in the INFO-level CI/test
             // lanes, where the DEBUG gate above is compiled out.
             if (enableSpirvValidation) {
-                ValidateTransformedSpirv(moduleSpv, shaders[i]->GetShaderStage(), program.GetExternalIndex());
+                ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex());
             }
 #endif
 
@@ -3407,7 +3408,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_VERIFY(vkCreateShaderModule(m_device, &smci, nullptr, &module), "vkCreateShaderModule");
 
             VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-            ShaderStage shaderStage = shaders[i]->GetShaderStage();
+            ShaderStage shaderStage = stages[i];
             stage.stage = ToVkStage(shaderStage);
             stage.module = module;
             stage.pName = "main";
@@ -3442,12 +3443,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // Reflect and create layout as part of the program object
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-        ValidateRasterizationStageInterface(shaders, moduleSpirvs, entry, program.GetExternalIndex());
+        ValidateRasterizationStageInterface(stages, moduleSpirvs, entry, program.GetExternalIndex());
 #endif
-        ReflectVertexInputs(shaders, moduleSpirvs, entry);
-        ReflectViewportIndexUsage(shaders, moduleSpirvs, entry);
-        ReflectFragmentOutputs(shaders, moduleSpirvs, entry);
-        ReflectPassthroughTessControlNeed(shaders, moduleSpirvs, entry);
+        ReflectVertexInputs(stages, moduleSpirvs, entry);
+        ReflectViewportIndexUsage(stages, moduleSpirvs, entry);
+        ReflectFragmentOutputs(stages, moduleSpirvs, entry);
+        ReflectPassthroughTessControlNeed(stages, moduleSpirvs, entry);
         ReflectLayout(program, moduleSpirvs, entry);
         // A failed remap means the modules kept glslang's per-stage auto-mapped binding numbers -
         // no cross-stage unification, no set->0 normalisation - so the bindings this layout
@@ -3659,7 +3660,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void ProgramFactory::ReflectPassthroughTessControlNeed(
-        const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        const Vector<ShaderStage>& stages,
         const Vector<Vector<Uint>>& spirv,
         VkProgramObject& entry) const {
         entry.needsPassthroughTessControl = false;
@@ -3668,9 +3669,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool hasTessEval = false;
         Bool hasTessControl = false;
         SizeT tessEvalModuleIndex = 0;
-        for (SizeT i = 0; i < shaders.size(); ++i) {
-            if (!shaders[i]) continue;
-            const auto stage = shaders[i]->GetShaderStage();
+        for (SizeT i = 0; i < stages.size(); ++i) {
+            const ShaderStage stage = stages[i];
             if (stage == ShaderStage::TessControl) hasTessControl = true;
             if (stage == ShaderStage::TessEval) {
                 hasTessEval = true;

@@ -700,7 +700,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_COMPUTE_WORK_GROUP_SIZE: { // GL >= 4.3
-            if (!programObject->GetLinkStatus() || programObject->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
+            // "a linked program object with a compute shader" is one whose EXECUTABLE has the
+            // stage: the local size below is a link artifact, so an attached-but-not-yet-linked
+            // compute shader would answer this query with the previous link's (absent) value
+            // instead of the INVALID_OPERATION GL 4.6 core 7.13 asks for.
+            if (!programObject->GetLinkStatus() || !programObject->HasLinkedShaderStage(ShaderStage::Compute)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,

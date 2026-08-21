@@ -4765,10 +4765,11 @@ void main() {
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
     static Bool ProgramCapturesXfbFromGeometryStage(const MG_State::GLState::ProgramObject& program) {
         if (program.GetTransformFeedbackVaryingCount() == 0) return false;
-        for (const auto& shader : program.GetAttachedShaders()) {
-            if (shader && shader->GetShaderStage() == ShaderStage::Geometry) return true;
-        }
-        return false;
+        // Both halves are link-time properties, so both are asked of the LAST LINK. Reading the
+        // live attach list would let a glAttachShader that has not been linked in yet - which GL
+        // 4.6 core 7.3 says changes nothing about what the program runs - flip a property this
+        // pipeline is cached under, for an executable with no geometry stage in it.
+        return program.HasLinkedShaderStage(ShaderStage::Geometry);
     }
 
     VkPipeline VulkanRenderer::GetOrCreatePipeline(

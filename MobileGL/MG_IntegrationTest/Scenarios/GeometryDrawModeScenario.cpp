@@ -294,5 +294,120 @@ void main()
             }
         }
 
+        // The other half of "ask the stage": WHICH stage list is asked. gsInputPrimitive is a
+        // LINK artifact, so pairing it with the live attach list re-points the GL_NONE/GL_POINTS
+        // aliasing instead of removing it - inside the window between glAttachShader and the
+        // next link, the live list says "geometry present" while the artifact still reads
+        // GL_NONE, which is 0, which is GL_POINTS, so every mode but GL_POINTS is rejected.
+        //
+        // GL 4.6 core 7.3 makes that window legal and ordinary: an attach affects the program's
+        // executable only at the next link, and leaves LINK_STATUS alone. The attached shader
+        // need not even compile. Worse, it does not heal - glDetachShader defers the removal to
+        // the next Link() too, so the program would keep failing every non-POINTS draw until the
+        // application happened to relink for some unrelated reason.
+        TEST_F(GeometryDrawModeScenario, AttachingAGeometryStageAfterTheLinkDoesNotConstrainTheDrawMode) {
+            if (!Ready()) GTEST_SKIP();
+
+            // Deliberately NOT BuildProgram: the executable under test has no geometry stage.
+            const GLuint program = glCreateProgram();
+            m_programs.push_back(program);
+            for (const auto& [stage, source] :
+                 std::vector<std::pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertexSource},
+                                                             {GL_FRAGMENT_SHADER, kFragmentSource}}) {
+                const GLuint shader = glCreateShader(stage);
+                glShaderSource(shader, 1, &source, nullptr);
+                glCompileShader(shader);
+                glAttachShader(program, shader);
+                glDeleteShader(shader);
+            }
+            glLinkProgram(program);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE) << "the vertex+fragment program did not link";
+
+            glUseProgram(program);
+            DrainErrors();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "a program with no geometry stage must draw triangles";
+            DrainErrors();
+
+            const GLuint geometry = glCreateShader(GL_GEOMETRY_SHADER);
+            glShaderSource(geometry, 1, &kPointsInGeometrySource, nullptr);
+            glCompileShader(geometry);
+            glAttachShader(program, geometry);
+            glDeleteShader(geometry);
+            DrainErrors();
+
+            // Same executable as three lines ago - no relink has happened.
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "the attach does not reach the executable until the next link, so the geometry "
+                   "shader's points input must not constrain this draw";
+            DrainErrors();
+
+            // And once it IS linked in, the rule applies - the fix must not have simply disabled it.
+            glLinkProgram(program);
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE) << "the relink with the geometry stage failed";
+            glUseProgram(program);
+            DrainErrors();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION))
+                << "now that the points-in geometry shader is in the executable, triangles must be rejected";
+            DrainErrors();
+        }
+
+        // The tessellation guard above the geometry one had the identical defect, and it does not
+        // even need the GL_NONE aliasing to misfire: it drives BOTH directions unconditionally, so
+        // reading the live attach list rejects every non-GL_PATCHES draw the moment an evaluation
+        // shader is attached, whether or not it was ever linked in.
+        TEST_F(GeometryDrawModeScenario, AttachingATessEvalStageAfterTheLinkDoesNotForceGlPatches) {
+            if (!Ready()) GTEST_SKIP();
+
+            GLint maxPatchVertices = 0;
+            glGetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
+            DrainErrors();
+            if (maxPatchVertices < 3) GTEST_SKIP() << "no tessellation stage on this backend";
+
+            const GLuint program = glCreateProgram();
+            m_programs.push_back(program);
+            for (const auto& [stage, source] :
+                 std::vector<std::pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertexSource},
+                                                             {GL_FRAGMENT_SHADER, kFragmentSource}}) {
+                const GLuint shader = glCreateShader(stage);
+                glShaderSource(shader, 1, &source, nullptr);
+                glCompileShader(shader);
+                glAttachShader(program, shader);
+                glDeleteShader(shader);
+            }
+            glLinkProgram(program);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE) << "the vertex+fragment program did not link";
+
+            glUseProgram(program);
+            DrainErrors();
+
+            static const char* const kTessEvalSource = R"(#version 420 core
+layout(triangles, equal_spacing, ccw) in;
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+}
+)";
+            const GLuint tessEval = glCreateShader(GL_TESS_EVALUATION_SHADER);
+            glShaderSource(tessEval, 1, &kTessEvalSource, nullptr);
+            glCompileShader(tessEval);
+            glAttachShader(program, tessEval);
+            glDeleteShader(tessEval);
+            DrainErrors();
+
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
+                << "the executable still has no tessellation stage, so GL_PATCHES must not be required";
+            DrainErrors();
+        }
+
     } // namespace
 } // namespace MGITest

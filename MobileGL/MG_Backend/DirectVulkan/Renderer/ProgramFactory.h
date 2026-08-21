@@ -499,13 +499,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         static TextureTarget UniformTypeToTextureTarget(GLenum glType);
-        void ReflectVertexInputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        // `stages` is ALWAYS ProgramObject::GetLinkedShaderStages() - one entry per module of
+        // `spirv`, at the same index. Taking the stages rather than the shader objects is what
+        // keeps the program's live attach list, which is a longer and differently-indexed list
+        // the moment a glAttachShader lands after the link, from being passed here by mistake.
+        void ReflectVertexInputs(const Vector<ShaderStage>& stages,
                      const Vector<Vector<Uint>>& spirv,
                      VkProgramObject& entry) const;
-        void ReflectViewportIndexUsage(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        void ReflectViewportIndexUsage(const Vector<ShaderStage>& stages,
                                        const Vector<Vector<Uint>>& spirv,
                                        VkProgramObject& entry) const;
-        void ReflectFragmentOutputs(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        void ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
                         const Vector<Vector<Uint>>& spirv,
                         VkProgramObject& entry) const;
         void ReflectLayout(const MG_State::GLState::ProgramObject& program, const Vector<Vector<Uint>>& spirv,
@@ -513,7 +517,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Fills needsPassthroughTessControl / passthroughTessControlEmulatable off the linked
         // modules. Const and reflection-only: it decides nothing about the pipeline, it only
         // records what the evaluation stage's input interface is made of.
-        void ReflectPassthroughTessControlNeed(const Vector<SharedPtr<MG_State::GLState::ShaderObject>>& shaders,
+        void ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages,
                                                const Vector<Vector<Uint>>& spirv,
                                                VkProgramObject& entry) const;
 

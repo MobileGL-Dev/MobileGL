@@ -45,7 +45,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDispatch();
         if (!ValidateProgramForExecution(currentProgram, functionName)) return false;
 
-        if (currentProgram->GetShaderIndexByStage(ShaderStage::Compute) < 0) {
+        // Of the EXECUTABLE, not the live attach list: attaching a compute shader to an
+        // already-linked graphics program does not give that program a compute stage to
+        // dispatch (GL 4.6 core 7.3), and letting the dispatch through on the strength of the
+        // attach hands the backend a program whose SPIR-V has no compute module in it.
+        if (!currentProgram->HasLinkedShaderStage(ShaderStage::Compute)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
@@ -111,7 +115,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // A geometry stage writes what it emits, not what the draw assembled, and the
             // amplification factor lives in the shader. Record that this span contained such
             // a draw so the transform feedback queries keep their backend result for it.
-            if (program->GetShaderIndexByStage(ShaderStage::Geometry) >= 0) {
+            if (program->HasLinkedShaderStage(ShaderStage::Geometry)) {
                 MG_State::pGLContext->AddTransformFeedbackGeometryCaptureDraw();
             }
             // Capacity in captured vertices = the tightest bound buffer.
@@ -208,8 +212,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // The EVALUATION stage is what decides: a control stage cannot run without one, and a
         // program carrying only an evaluation stage still tessellates, through GL's
         // fixed-function pass-through control stage (11.2.2).
-        const Bool tessellationActive =
-            currentProgram && currentProgram->GetShaderIndexByStage(ShaderStage::TessEval) >= 0;
+        // Asked of the LAST LINK, not the live attach list (GL 4.6 core 7.3): attaching a
+        // tessellation evaluation shader to an already-linked program does not put it in the
+        // executable, so reading the live list here would reject every non-GL_PATCHES draw
+        // against a program that does not tessellate - and keep rejecting them, since a detach
+        // is likewise deferred to the next link.
+        const Bool tessellationActive = currentProgram && currentProgram->HasLinkedShaderStage(ShaderStage::TessEval);
         if (tessellationActive && mode != GL_PATCHES) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -238,8 +246,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         // shaders whose input is the most restrictive one - every mode but GL_POINTS was
         // accepted (KHR-GL43.transform_feedback.api_errors_test draws a points-in geometry
         // program with GL_LINES and requires INVALID_OPERATION).
-        const Bool geometryActive =
-            currentProgram && currentProgram->GetShaderIndexByStage(ShaderStage::Geometry) >= 0;
+        //
+        // And it has to be asked of the LAST LINK: gsInputPrimitive is a link artifact, so
+        // pairing it with the live attach list would re-point the very same 0-aliasing rather
+        // than remove it. In the window after glAttachShader(GS) on a linked program the live
+        // list says "geometry present" while the artifact still reads GL_NONE == GL_POINTS, and
+        // the switch below would silently reject every mode but GL_POINTS.
+        const Bool geometryActive = currentProgram && currentProgram->HasLinkedShaderStage(ShaderStage::Geometry);
         const GLenum gsInput = geometryActive ? currentProgram->GetGeometryInputType() : GL_NONE;
         if (geometryActive && mode != GL_PATCHES) {
             Bool compatible = false;
@@ -281,9 +294,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // can only ever be GL_PATCHES. A paused span is exempt: it captures nothing,
         // so there is nothing for the mode to be incompatible with (GL 4.6 core 13.2.3).
         const auto& feedbackProgram = MG_State::pGLContext->GetTransformFeedbackProgram();
+        // Both stage tests are asked of the last link, for the same reason as the two guards
+        // above: what relocates the constraint is a stage the program actually RUNS, and an
+        // attach that has not been linked in yet gives it none.
         const Bool feedbackModeIsProgramDriven =
-            feedbackProgram && (feedbackProgram->GetShaderIndexByStage(ShaderStage::Geometry) >= 0 ||
-                                feedbackProgram->GetShaderIndexByStage(ShaderStage::TessEval) >= 0);
+            feedbackProgram && (feedbackProgram->HasLinkedShaderStage(ShaderStage::Geometry) ||
+                                feedbackProgram->HasLinkedShaderStage(ShaderStage::TessEval));
         if (MG_State::pGLContext->IsTransformFeedbackActive() &&
             !MG_State::pGLContext->IsTransformFeedbackPaused() && !feedbackModeIsProgramDriven) {
             const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
