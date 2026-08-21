@@ -235,6 +235,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // stops being safe to edit by hand.
         String BakeImageFormatQualifiers(String glslCode, const UnorderedMap<String, String>& esslFormatByUniformName);
         String RemoveLayoutBinding(const String& glslCode);
+        // Prefix of the const element->unit-offset table RemapImageArrayElementUnits declares
+        // next to a widened image array; the suffix is the array's own name.
+        constexpr const char* IMAGE_UNIT_MAP_PREFIX = "mg_imageUnitMap_";
+        // One image ARRAY whose elements the application pointed at units that are not
+        // consecutive-from-element-zero.
+        struct ImageArrayUnitPlan {
+            String name;       // the array's name, exactly as the emitted ESSL declares it
+            Vector<Int> units; // the frontend image unit element k has to reach
+        };
+        // Desktop GL lets an application give each element of an image array an ARBITRARY unit
+        // (glUniform1i per element). ES has no such call at all - "ES image units come
+        // exclusively from the layout(binding=N) qualifier" - and one declaration carries one
+        // binding, so ESSL nails an array's elements to the CONSECUTIVE units N, N+1, N+2, ...
+        // MobileGL used to stamp element [0]'s unit as the binding and let the rest fall where
+        // they fell: KHR-GL4x.shader_image_load_store.advanced-sso-simple assigns 0,2,4,6 and
+        // 1,3,5,7, so its two programs actually addressed 0,1,2,3 and 1,2,3,4 - one layer got the
+        // wrong value and three were never written, with no GL error and no link log. The same
+        // defect for SAMPLER arrays was fixed API-side (SubscriptUniformNameForElement); an image
+        // array has no API side to fix.
+        //
+        // Repaired by WIDENING the array to cover every unit from the lowest it needs to the
+        // highest, rebasing its binding on the lowest, and routing every subscript through a
+        // `const highp int` table of per-element offsets. The elements in between are declared
+        // and never accessed. A const array indexed by a constant expression IS one, so literal
+        // subscripts stay literal; and a table lookup on a dynamically uniform index is itself
+        // dynamically uniform, which is what GLSL ES 3.20 asks of an image array index - so this
+        // works whether SPIRV-Cross unrolled the application's loop over the array or not. That
+        // is the reason for the table rather than one scalar declaration per element: scalars
+        // cannot be selected by a non-constant index at all.
+        //
+        // Declines - leaving the array exactly as it was, and naming it in `outDeclined` for the
+        // caller to report - when the span will not fit in `stageImageUniformBudget`
+        // (GL_MAX_<stage>_IMAGE_UNIFORMS; <= 0 means "cannot say", and then it is not enforced),
+        // when the emitted extent disagrees with the reflection, or when the array is reached by
+        // anything other than a subscript. Silence was the whole defect here, so a decline must
+        // be audible.
+        //
+        // Must run AFTER RebindImageUniformsToFrontendUnits and BakeImageFormatQualifiers (both
+        // key on the GL uniform name and on a binding already being stamped) and BEFORE
+        // SplitReadWriteImageUniforms (so both halves of a split inherit the widened extent and
+        // the rebased binding) and RemoveLayoutBinding (which is what preserves image bindings).
+        // Like them, it is downstream of the L2 shader-translation memo, so the per-program units
+        // it reads need no entry in BuildEsslTranslationKey.
+        String RemapImageArrayElementUnits(const String& glslCode, const Vector<ImageArrayUnitPlan>& plans,
+                                           Int stageImageUniformBudget, Vector<String>* outDeclined = nullptr);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own (already stage-tagged) name.
         constexpr const char* IMAGE_WRITE_ALIAS_PREFIX = "mg_imageWrite_";

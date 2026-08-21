@@ -19,8 +19,11 @@ using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_STAGE_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_UNIT_MAP_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageStageAliasPrefix;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
@@ -47,6 +50,7 @@ namespace {
     // The writeonly half is minted from the ALREADY stage-tagged name, so it carries both.
     String WriteAlias(const String& name) { return String(IMAGE_WRITE_ALIAS_PREFIX) + name; }
     String SplitWriteAlias(const String& name) { return WriteAlias(StageAlias(name)); }
+    String UnitMap(const String& name) { return String(IMAGE_UNIT_MAP_PREFIX) + name; }
 } // namespace
 
 // The bug the pass exists for. SPIRV-Cross speculatively marks every storage image
@@ -500,6 +504,170 @@ TEST(SplitReadWriteImageUniformsTest, EveryStageTagIsDistinct) {
         }
         prefixes.push_back(prefix);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// RemapImageArrayElementUnits
+//
+// ES takes an image unit only from layout(binding=N), and one declaration carries one of them,
+// so an image array's elements land on N, N+1, N+2, ... Desktop GL lets an application point
+// each element wherever it likes with glUniform1i, which ES makes an INVALID_OPERATION on an
+// image uniform - there is no API side to fix, so the emitted text has to carry it.
+
+namespace {
+    // The advanced-sso-simple shape: a four-element image array on units 0, 2, 4, 6, written
+    // through a loop counter (which is how SPIRV-Cross emits the conformance case's
+    // `for (int i = 0; i < g_image.length(); ++i)` when it does not unroll it).
+    const char* const kSsoImageArrayFS = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[4];
+void main()
+{
+    for (int i = 0; i < 4; i++)
+    {
+        imageStore(g_image[i], ivec2(gl_FragCoord.xy), vec4(1.0));
+    }
+}
+)";
+
+    ImageArrayUnitPlan Plan(const String& name, const Vector<Int>& units) {
+        ImageArrayUnitPlan plan;
+        plan.name = name;
+        plan.units = units;
+        return plan;
+    }
+} // namespace
+
+// The defect, end to end. Elements 0..3 need units 0, 2, 4, 6, so the array is widened to cover
+// units 0..6 and every subscript is routed through the offset table. Before this, the single
+// stamped binding sent the four elements to units 0, 1, 2, 3.
+TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsWidenTheArrayAndRouteEverySubscript) {
+    Vector<String> declined;
+    const String out =
+        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, 8, &declined);
+
+    EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
+    // Seven elements from binding 0, i.e. units 0..6 - the span the four assigned units need.
+    EXPECT_TRUE(Contains(out, "layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[7];")) << out;
+    EXPECT_TRUE(Contains(out, "const highp int " + UnitMap("g_image") + "[4] = int[4](0, 2, 4, 6);")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(g_image[" + UnitMap("g_image") + "[i]], ivec2(gl_FragCoord.xy)")) << out;
+    // The original four-element extent is gone; nothing may still address units 0,1,2,3.
+    EXPECT_FALSE(Contains(out, "image2D g_image[4];")) << out;
+}
+
+// The other program of the same conformance case: units 1, 3, 5, 7, so the binding rebases onto
+// the LOWEST unit rather than staying on element [0]'s.
+TEST(RemapImageArrayElementUnitsTest, TheBindingRebasesOntoTheLowestUnitInTheSpan) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 3) uniform writeonly highp image2D g_image[4];
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(2.0));
+    imageStore(g_image[3], ivec2(0), vec4(2.0));
+}
+)";
+    const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {3, 1, 7, 5})}, 8);
+    EXPECT_TRUE(Contains(out, "layout(rgba32f, binding = 1) uniform writeonly highp image2D g_image[7];")) << out;
+    // Offsets from the new base, in the application's element order - the order is what carries
+    // the assignment, so it must NOT be sorted.
+    EXPECT_TRUE(Contains(out, "const highp int " + UnitMap("g_image") + "[4] = int[4](2, 0, 6, 4);")) << out;
+    // A literal subscript stays a constant expression: a const array indexed by one is one.
+    EXPECT_TRUE(Contains(out, "imageStore(g_image[" + UnitMap("g_image") + "[0]], ivec2(0)")) << out;
+    EXPECT_TRUE(Contains(out, "imageStore(g_image[" + UnitMap("g_image") + "[3]], ivec2(0)")) << out;
+}
+
+// Consecutive-from-element-zero is exactly what ESSL does unaided, so the emitted text of an
+// ordinary image shader must come out byte-identical. The caller filters these; the pass must
+// not depend on that.
+TEST(RemapImageArrayElementUnitsTest, ConsecutiveUnitsAreLeftCompletelyAlone) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 2) uniform writeonly highp image2D g_image[3];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), vec4(1.0));
+}
+)";
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {2, 3, 4})}, 8), source);
+    // ...and so is a plan for an array this stage does not declare at all: the reflection is
+    // program-wide, the pass runs per stage.
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("other_image", {0, 4})}, 8), source);
+}
+
+// Widening costs image-uniform budget, and a stage that cannot afford it must be told so rather
+// than silently addressing the wrong units - the exact silence this whole pass exists to end.
+TEST(RemapImageArrayElementUnitsTest, ASpanThatExceedsTheStageBudgetIsDeclinedAndNamed) {
+    Vector<String> declined;
+    const String out =
+        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, 4, &declined);
+    EXPECT_EQ(out, String(kSsoImageArrayFS)) << out;
+    ASSERT_EQ(declined.size(), 1u);
+    EXPECT_TRUE(Contains(declined[0], "g_image")) << declined[0];
+
+    // A budget of "cannot say" (the ES side reports no limit for this stage) must not be read as
+    // a budget of zero - that would decline every array on a driver that simply does not answer.
+    Vector<String> unknownBudget;
+    const String repaired =
+        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, -1, &unknownBudget);
+    EXPECT_TRUE(unknownBudget.empty());
+    EXPECT_TRUE(Contains(repaired, "image2D g_image[7];")) << repaired;
+}
+
+// A use the pass cannot see a subscript on has no element index to rewrite, so widening the
+// array underneath it would change which unit it reaches. Decline, loudly, and change nothing.
+TEST(RemapImageArrayElementUnitsTest, AUseWithoutASubscriptIsDeclined) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void helper();
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(1.0));
+    helper(g_image);
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 5})}, 8, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+    EXPECT_TRUE(Contains(declined[0], "g_image")) << declined[0];
+}
+
+// The reflection and the emitted text have to be talking about the same array. If they are not,
+// the pass has misidentified something and must not rewrite on a guess.
+TEST(RemapImageArrayElementUnitsTest, AnExtentThatDisagreesWithTheReflectionIsDeclined) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 0) uniform writeonly highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[0], ivec2(0), vec4(1.0));
+}
+)";
+    Vector<String> declined;
+    EXPECT_EQ(RemapImageArrayElementUnits(source, {Plan("g_image", {0, 4, 8})}, 16, &declined), source);
+    ASSERT_EQ(declined.size(), 1u);
+}
+
+// The two passes that run after it have to see the widened declaration and keep its binding: an
+// ES image unit cannot be assigned through the API, so the qualifier is the only mechanism there
+// is, and a read+write array is split into two declarations that must BOTH be the widened one.
+TEST(RemapImageArrayElementUnitsTest, TheWidenedArraySurvivesTheLaterImagePasses) {
+    const String source = R"(#version 320 es
+layout(rgba32f, binding = 4) uniform highp image2D g_image[2];
+void main()
+{
+    imageStore(g_image[1], ivec2(0), imageLoad(g_image[0], ivec2(0)));
+}
+)";
+    String out = RemapImageArrayElementUnits(source, {Plan("g_image", {4, 6})}, 8);
+    out = SplitReadWriteImageUniforms(out, kStage);
+    out = RemoveLayoutBinding(out);
+
+    // Both halves, both widened to the three units 4..6, and both still bound.
+    EXPECT_EQ(CountOf(out, "binding = 4"), 2u) << out;
+    EXPECT_TRUE(Contains(out, "image2D " + StageAlias("g_image") + "[3];")) << out;
+    EXPECT_TRUE(Contains(out, "image2D " + SplitWriteAlias("g_image") + "[3];")) << out;
+    // The offset table is untouched by the rename - it is not an image uniform - and both halves
+    // still route their subscripts through it.
+    EXPECT_TRUE(Contains(out, "const highp int " + UnitMap("g_image") + "[2] = int[2](0, 2);")) << out;
+    EXPECT_TRUE(Contains(out, SplitWriteAlias("g_image") + "[" + UnitMap("g_image") + "[1]]")) << out;
+    EXPECT_TRUE(Contains(out, StageAlias("g_image") + "[" + UnitMap("g_image") + "[0]]")) << out;
 }
 
 // ---------------------------------------------------------------------------------------

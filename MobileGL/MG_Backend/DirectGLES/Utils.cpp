@@ -968,6 +968,222 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        namespace {
+            // The digits of an array extent, or -1 for "not a plain literal size".
+            Int ParseArrayExtent(const String& text) {
+                if (text.empty()) return -1;
+                Int value = 0;
+                for (const char c : text) {
+                    if (c < '0' || c > '9') return -1;
+                    value = value * 10 + (c - '0');
+                    if (value > 4096) return -1; // no image array is anywhere near this
+                }
+                return value;
+            }
+        } // namespace
+
+        String RemapImageArrayElementUnits(const String& glslCode, const Vector<ImageArrayUnitPlan>& plans,
+                                           const Int stageImageUniformBudget, Vector<String>* outDeclined) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (outDeclined != nullptr) outDeclined->clear();
+            if (plans.empty() || glslCode.find("image") == String::npos) return glslCode;
+
+            // Same declaration shape as the split pass reads, with the array extent captured.
+            static const std::regex imageDeclRegex(
+                R"(layout\s*\(([^)]*)\)\s*uniform\s+)"
+                R"(((?:(?:readonly|writeonly|coherent|volatile|restrict|highp|mediump|lowp)\s+)*))"
+                R"(([iu]?image[A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[\s*([0-9]*)\s*\])?\s*;)");
+            static const std::regex bindingValueRegex(R"(binding\s*=\s*\d+)");
+
+            struct StageImageDecl {
+                String name;
+                String layout;
+                String qualifiers;
+                String type;
+                Int elementCount = 1;
+                SizeT declStart = 0;
+                SizeT declLength = 0;
+            };
+            // Every image declaration in the stage, because the budget test below is about the
+            // stage's total and not about this one array.
+            Vector<StageImageDecl> decls;
+            Int stageImageUniforms = 0;
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), imageDeclRegex), last; it != last; ++it) {
+                const std::smatch& match = *it;
+                StageImageDecl decl;
+                decl.layout = match[1].str();
+                decl.qualifiers = NormalizeDeclarationSpacing(match[2].str());
+                decl.type = match[3].str();
+                decl.name = match[4].str();
+                decl.elementCount = match[5].matched ? ParseArrayExtent(match[5].str()) : 1;
+                decl.declStart = static_cast<SizeT>(match.position(0));
+                decl.declLength = match[0].str().size();
+                stageImageUniforms += decl.elementCount > 0 ? decl.elementCount : 1;
+                decls.push_back(Move(decl));
+            }
+
+            Vector<ImageSourceEdit> edits;
+            Vector<String> takenNames;
+            for (const ImageArrayUnitPlan& plan : plans) {
+                const auto decline = [&](const char* why) {
+                    if (outDeclined != nullptr) outDeclined->push_back(plan.name + ": " + why);
+                };
+                if (plan.units.size() < 2) continue;
+
+                const StageImageDecl* decl = nullptr;
+                for (const auto& candidate : decls) {
+                    if (candidate.name == plan.name) {
+                        decl = &candidate;
+                        break;
+                    }
+                }
+                if (decl == nullptr) {
+                    // Absent from this stage entirely is the normal outcome - the reflection is
+                    // program-wide and this pass runs per stage. Named but not RECOGNIZED is not:
+                    // it means the declaration is spelled in some shape the regex above does not
+                    // read, and staying quiet about that is how the wrong units got shipped.
+                    if (ContainsIdentifier(glslCode, plan.name)) {
+                        decline("the stage names it but declares it in a shape this pass cannot read");
+                    }
+                    continue;
+                }
+                if (decl->elementCount < 0 || static_cast<SizeT>(decl->elementCount) != plan.units.size()) {
+                    decline("the emitted array extent disagrees with the reflected element count");
+                    continue;
+                }
+
+                Int minUnit = plan.units[0];
+                Int maxUnit = plan.units[0];
+                Bool consecutive = true;
+                for (SizeT element = 0; element < plan.units.size(); ++element) {
+                    const Int unit = plan.units[element];
+                    if (unit < 0) {
+                        minUnit = -1;
+                        break;
+                    }
+                    if (unit != plan.units[0] + static_cast<Int>(element)) consecutive = false;
+                    minUnit = std::min(minUnit, unit);
+                    maxUnit = std::max(maxUnit, unit);
+                }
+                if (minUnit < 0) {
+                    decline("an element has no image unit");
+                    continue;
+                }
+                // Already exactly what ESSL would do on its own. The caller filters these out;
+                // repeating the test here keeps the pass correct on its own terms.
+                if (consecutive) continue;
+
+                const Int spanSize = maxUnit - minUnit + 1;
+                // The array has to COVER every unit from the lowest to the highest, because ESSL
+                // hands an array's elements consecutive units and nothing else can move them.
+                // The elements in between are declared and never accessed; what they cost is
+                // image-uniform budget, so that is what is checked.
+                if (stageImageUniformBudget > 0 &&
+                    stageImageUniforms - decl->elementCount + spanSize > stageImageUniformBudget) {
+                    decline("the units are spread too far apart to cover within this stage's "
+                            "GL_MAX_*_IMAGE_UNIFORMS");
+                    continue;
+                }
+
+                // Every use has to be `name[...]`, or the element index has nowhere to be
+                // rewritten and the array cannot be widened underneath it.
+                struct Subscript {
+                    SizeT open;
+                    SizeT close;
+                };
+                Vector<Subscript> subscripts;
+                Bool everyUseIsSubscripted = true;
+                for (SizeT pos = glslCode.find(plan.name); pos != String::npos;
+                     pos = glslCode.find(plan.name, pos + 1)) {
+                    if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue;
+                    const SizeT after = pos + plan.name.size();
+                    if (after < glslCode.size() && IsImagePassIdentifierChar(glslCode[after])) continue;
+                    if (pos >= decl->declStart && pos < decl->declStart + decl->declLength) {
+                        continue; // the declaration's own name
+                    }
+                    const SizeT open = glslCode.find_first_not_of(" \t\r\n", after);
+                    if (open == String::npos || glslCode[open] != '[') {
+                        everyUseIsSubscripted = false;
+                        break;
+                    }
+                    Int depth = 0;
+                    SizeT scan = open;
+                    for (; scan < glslCode.size(); ++scan) {
+                        if (glslCode[scan] == '[') {
+                            ++depth;
+                        } else if (glslCode[scan] == ']' && --depth == 0) {
+                            break;
+                        }
+                    }
+                    if (scan >= glslCode.size() || open + 1 >= scan) {
+                        everyUseIsSubscripted = false;
+                        break;
+                    }
+                    subscripts.push_back({open, scan});
+                }
+                if (!everyUseIsSubscripted) {
+                    decline("it is reached by something other than a subscript, so there is no element "
+                            "index to rewrite");
+                    continue;
+                }
+
+                const String mapName =
+                    MakeImageAliasName(IMAGE_UNIT_MAP_PREFIX, plan.name, glslCode, takenNames);
+                takenNames.push_back(mapName);
+
+                // The widened declaration, rebased on the lowest unit...
+                String layout = decl->layout;
+                const String bindingText = "binding = " + std::to_string(minUnit);
+                if (std::regex_search(layout, bindingValueRegex)) {
+                    layout = std::regex_replace(layout, bindingValueRegex, bindingText);
+                } else {
+                    layout = bindingText + (layout.empty() ? String() : ", " + layout);
+                }
+                String replacement = "layout(" + layout + ") uniform ";
+                if (!decl->qualifiers.empty()) {
+                    replacement += decl->qualifiers;
+                    replacement += ' ';
+                }
+                replacement += decl->type + " " + plan.name + "[" + std::to_string(spanSize) + "];";
+                // ...and the table that turns the application's element index into the offset of
+                // the unit that element was actually assigned. A const array is a constant
+                // expression when it is indexed by one, so a shader whose subscripts are literals
+                // keeps constant subscripts; and when the subscript is a loop counter the lookup
+                // stays dynamically uniform, which is what GLSL ES 3.20 requires of an image
+                // array index.
+                const SizeT elementCount = plan.units.size();
+                replacement += "\nconst highp int " + mapName + "[" + std::to_string(elementCount) + "] = int[" +
+                               std::to_string(elementCount) + "](";
+                for (SizeT element = 0; element < elementCount; ++element) {
+                    if (element != 0) replacement += ", ";
+                    replacement += std::to_string(plan.units[element] - minUnit);
+                }
+                replacement += ");";
+                edits.push_back({decl->declStart, decl->declLength, Move(replacement)});
+
+                // `name[EXPR]` -> `name[<map>[EXPR]]`, by insertion, so EXPR itself is untouched
+                // however it is spelled.
+                for (const Subscript& subscript : subscripts) {
+                    edits.push_back({subscript.open + 1, 0, mapName + "["});
+                    edits.push_back({subscript.close, 0, "]"});
+                }
+            }
+            if (edits.empty()) return glslCode;
+
+            // Back to front, so an earlier edit's offsets stay valid. Two inserts never share an
+            // offset: a subscript's opening and closing brackets are distinct positions and a
+            // declaration is replaced whole.
+            std::sort(edits.begin(), edits.end(),
+                      [](const ImageSourceEdit& a, const ImageSourceEdit& b) { return a.start > b.start; });
+            String result = glslCode;
+            for (const ImageSourceEdit& edit : edits) {
+                result.replace(edit.start, edit.length, edit.text);
+            }
+            return result;
+        }
+
         String SplitReadWriteImageUniforms(const String& glslCode, GLenum shaderType, Uint* outSplitCount) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);

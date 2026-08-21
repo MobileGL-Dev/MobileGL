@@ -127,14 +127,24 @@ void main()
             // One qualifier is all an ARRAY declaration can carry, and ESSL then gives the
             // array's elements the CONSECUTIVE units N, N+1, N+2, ... - so a per-element
             // assignment that is not consecutive (the conformance case uses 0, 2, 4, 6) has no
-            // spelling in a single declaration and cannot be expressed at all without splitting
-            // the array into one declaration per element and rewriting every use of it.
+            // spelling in a single declaration.
             //
-            // Scoped rather than disabled, exactly as ProgramPipelineScenario scopes its
-            // storage-block rebinding cases: the defect is per-backend and the frontend
-            // mechanism these cases exist for - per-element units surviving the trip to the
-            // pipeline composite - is fully exercised on Magma.
-            bool PerElementImageUnitsAreHonoured() const { return Gl().BackendName() == "DirectVulkan"; }
+            // RemapImageArrayElementUnits repairs it by WIDENING the array to cover every unit
+            // from the lowest it needs to the highest and routing each subscript through a const
+            // offset table. What that costs is image-uniform budget: units 0..6 need SEVEN
+            // fragment image uniforms where the application declared four. So the gate is the
+            // budget, not the backend - a driver that cannot afford the widening declines it
+            // (and says so at ERROR level) rather than addressing the wrong units silently.
+            // DirectVulkan has no such constraint and needs no widening at all.
+            bool PerElementImageUnitsAreHonoured() const {
+                if (Gl().BackendName() == "DirectVulkan") return true;
+                GLint maxFragmentImageUniforms = 0;
+                glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
+                while (glGetError() != GL_NO_ERROR) {
+                }
+                // The widest span either of the two fragment programs below needs: 0..6 and 1..7.
+                return maxFragmentImageUniforms >= 7;
+            }
 
             // The scenarios below need image load/store at all; a driver without it should skip
             // rather than fail.
@@ -164,7 +174,8 @@ void main()
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
         if (!PerElementImageUnitsAreHonoured()) {
-            GTEST_SKIP() << "non-consecutive per-element image units cannot be baked into ESSL";
+            GTEST_SKIP() << "fewer than 7 fragment image uniforms: the widening that covers a "
+                             "non-consecutive image array does not fit";
         }
         HeadlessGL& gl = Gl();
 
@@ -283,8 +294,12 @@ void main()
     TEST_F(ImageLoadStoreSsoScenario, AnImageArrayAlongsideAnotherDescriptorKeepsBothBindings) {
         if (!Ready()) return;
         if (!ImagesAreUsable()) GTEST_SKIP() << "fewer than 8 image units";
-        if (!PerElementImageUnitsAreHonoured()) {
-            GTEST_SKIP() << "non-consecutive per-element image units cannot be baked into ESSL";
+        // The defect this guards is the SPIR-V descriptor remap, which only Magma has; the units
+        // here are consecutive on purpose, so on Espryt this would exercise nothing the case
+        // above does not. Scoped by what it TESTS rather than by the image-array widening, which
+        // it deliberately never triggers.
+        if (Gl().BackendName() != "DirectVulkan") {
+            GTEST_SKIP() << "the descriptor binding remap under test is DirectVulkan's";
         }
         HeadlessGL& gl = Gl();
 

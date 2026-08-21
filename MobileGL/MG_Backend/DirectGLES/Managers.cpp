@@ -5357,6 +5357,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return inputs;
         }
 
+        // Every image ARRAY whose elements the application did NOT leave on units consecutive from
+        // element zero - the only shape ESSL can spell, since an image unit there comes solely
+        // from the one layout(binding=N) an array declaration carries. Desktop GL assigns them
+        // per element with glUniform1i, which ES makes an INVALID_OPERATION on an image uniform,
+        // so there is nothing to fix at the API end and the emitted text has to carry it
+        // (RemapImageArrayElementUnits). Empty for every program that does not do this, which is
+        // very nearly all of them - one walk of the reflection and no allocation in that case.
+        Vector<ImageArrayUnitPlan> CollectNonConsecutiveImageArrayPlans(
+            const MG_State::GLState::ProgramObject& stateProgramObject) {
+            Vector<ImageArrayUnitPlan> plans;
+            const Uint maxUniformLoc = stateProgramObject.GetMaxUniformLocation();
+            for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
+                const auto& name = stateProgramObject.GetUniformName(loc);
+                if (name.empty()) continue;
+                if (!IsImageUniformType(stateProgramObject.GetUniformType(loc))) continue;
+                // Reflection repeats the array's "g_image[0]" spelling at EVERY location the array
+                // spans, so only the location that name resolves back to is the array itself.
+                if (stateProgramObject.GetUniformLocation(name) != static_cast<Int>(loc)) continue;
+                const String baseName = ImageUniformBaseName(name);
+                if (baseName == name) continue; // a scalar image: one binding says it all
+
+                ImageArrayUnitPlan plan;
+                plan.name = baseName;
+                for (Uint element = loc; element <= maxUniformLoc &&
+                                         stateProgramObject.UniformLocationsAliasSameUniform(
+                                             static_cast<Int>(loc), static_cast<Int>(element));
+                     ++element) {
+                    plan.units.push_back(stateProgramObject.GetUniformSamplerOrImageUnitIndex(element));
+                }
+                if (plan.units.size() < 2) continue;
+
+                Bool consecutive = true;
+                for (SizeT element = 0; element < plan.units.size(); ++element) {
+                    if (plan.units[element] != plan.units[0] + static_cast<Int>(element)) {
+                        consecutive = false;
+                        break;
+                    }
+                }
+                // What ESSL does unaided is already right; leaving these out is what keeps the
+                // emitted text of every ordinary image shader byte-identical to before.
+                if (consecutive) continue;
+                plans.push_back(Move(plan));
+            }
+            return plans;
+        }
+
         Uint64 BackendProgramObjectImpl::ComputeImageUnitFormatSignature() const {
             if (m_formatlessImageUnits.empty()) return 0; // all but a handful of programs
             Uint64 signature = 0;
@@ -5854,6 +5900,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         "different bound formats; left format-less.",
                         conflicted.c_str(), stateProgramObject->GetExternalIndex());
             }
+            // ...and once more for image ARRAYS whose per-element units are not consecutive, which
+            // ESSL has no way to express in one declaration. Program-wide, like the bake, and read
+            // from the same snapshot of the reflection; the per-stage rewrite happens below.
+            const Vector<ImageArrayUnitPlan> nonConsecutiveImageArrays =
+                CollectNonConsecutiveImageArrayPlans(*stateProgramObject);
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -6184,6 +6235,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // strip, so both halves of a split image inherit the format.
                 source = BakeImageFormatQualifiers(std::move(source),
                                                    imageFormatBake.esslFormatQualifierByUniformName);
+                // An image ARRAY whose elements do not sit on consecutive units cannot be spelled
+                // by the single layout(binding=N) the rebind above stamped: ESSL gives element k
+                // the unit N+k and there is no glUniform1i to correct it with. Widen the array to
+                // cover the span and route its subscripts through a constant offset table. AFTER
+                // the rebind and the format bake, both of which look the array up by its GL
+                // uniform name and need the binding already there; BEFORE the read+write split,
+                // so both halves inherit the widened extent and the rebased binding.
+                if (!nonConsecutiveImageArrays.empty()) {
+                    Vector<String> declinedImageArrays;
+                    source = RemapImageArrayElementUnits(
+                        source, nonConsecutiveImageArrays,
+                        AdvertisedStageImageUniformLimit(shader->GetShaderStage()), &declinedImageArrays);
+                    for (const auto& declined : declinedImageArrays) {
+                        // MGLOG_E, unlatched, like the transpile- and compile-failure diagnostics
+                        // around it: this is the "linked, drew, produced wrong numbers, said
+                        // nothing" shape that cost earlier waves whole days, and one line per
+                        // declined array is bounded by program count. There is no honest GL answer
+                        // to give instead - the frontend has already reported LINK_STATUS = true.
+                        MGLOG_E("Image array %s. Its elements address image units GLSL ES cannot be made to reach "
+                                "from one declaration, so this stage will read and write the WRONG units. State "
+                                "program ID: %u, stage: %s.",
+                                declined.c_str(), stateProgramObject->GetExternalIndex(),
+                                MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+                    }
+                }
                 // Wedged between those two on purpose:
                 //  * AFTER RebindImageUniformsToFrontendUnits, so the binding it copies onto
                 //    both halves of a split image is already the frontend texture unit (and so
