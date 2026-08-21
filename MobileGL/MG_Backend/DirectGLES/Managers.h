@@ -1189,7 +1189,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendProgramObjectImpl();
             ~BackendProgramObjectImpl();
             void SyncToBackend(const SharedPtr<MG_State::GLState::ProgramObject>& stateProgramObject);
-            void Use() const;
+            void Use();
             void SetBaseInstance(Uint32 baseInstance) const;
             void SetBaseInstanceWordIndex(Int32 wordIndex) const;
             void SetDrawID(Uint32 drawId) const;
@@ -1332,6 +1332,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_passthroughTessControlPatchVertices = -1;
             Bool m_isInitialized = false;
             Bool m_backendProgramUsable = false;
+            // Set by SyncToBackend every time it relinks the driver program, cleared by the
+            // next Use(). Use() dedupes on a GL program NAME, and a relink replaces the
+            // executable behind that name without changing it - see the note at the
+            // glLinkProgram in SyncToBackend for what the driver runs otherwise.
+            Bool m_rebindAfterRelink = false;
 
             Int m_globalUboBackendBlockIndex = -1;
             Int m_globalUboBackendBlockSize = 0;
