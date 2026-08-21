@@ -680,7 +680,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORM_BLOCKS: // GL >= 3.1
-            *params = programObject->GetActiveUniformBlocksCount();
+            // Uniform blocks only. GetActiveUniformBlocksCount() is the internal block space,
+            // which also carries the storage blocks and the synthesized atomic counter blocks.
+            *params = programObject->GetGlUniformBlockCount();
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH: // ditto.
@@ -1716,7 +1718,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GL_INVALID_INDEX;
         }
 
-        const auto& index = programObject->GetUniformBlockIndex(uniformBlockName);
+        // GetGlUniformBlockIndex, not GetUniformBlockIndex: the latter answers in the internal
+        // block space, which also resolves storage blocks and the synthesized atomic counter
+        // blocks. Neither is a uniform block (GL 4.6 core 7.6), so both are GL_INVALID_INDEX here.
+        const auto index = programObject->GetGlUniformBlockIndex(uniformBlockName);
         MGLOG_D("GBI prog=%u name='%s' -> %d", program, uniformBlockName ? uniformBlockName : "(null)", (Int)index);
         return index;
     }
@@ -1730,7 +1735,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Program object" + std::to_string(program) + " that has been linked."));
             return;
         }
-        if (!programObject->IsActiveUniformBlock(uniformBlockIndex)) {
+        if (!programObject->IsActiveGlUniformBlock(uniformBlockIndex)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
@@ -1741,8 +1746,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                         std::to_string(program) + "."));
             return;
         }
+        // The GL_UNIFORM_BLOCK index space skips the storage and atomic counter blocks the
+        // block-keyed tables still carry; translate before touching them.
+        const Uint blockIndex = static_cast<Uint>(programObject->BlockIndexFromGlUniformBlock(uniformBlockIndex));
         MGLOG_D("UBB prog=%u idx=%u binding=%u", program, uniformBlockIndex, uniformBlockBinding);
-        programObject->SetUniformBlockBinding(uniformBlockIndex, uniformBlockBinding);
+        programObject->SetUniformBlockBinding(blockIndex, uniformBlockBinding);
     }
 
     void GetActiveUniformBlockiv_State(GLuint program, GLuint uniformBlockIndex, GLenum pname, GLint* params) {
@@ -1754,7 +1762,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Program object" + std::to_string(program) + " that has been linked."));
             return;
         }
-        if (!programObject->IsActiveUniformBlock(uniformBlockIndex)) {
+        if (!programObject->IsActiveGlUniformBlock(uniformBlockIndex)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
@@ -1765,61 +1773,68 @@ namespace MobileGL::MG_Impl::GLImpl {
                         std::to_string(program) + "."));
             return;
         }
+        // The GL_UNIFORM_BLOCK index space skips the storage and atomic counter blocks the
+        // block-keyed tables still carry; every accessor below is indexed by the block space.
+        const Uint blockIndex = static_cast<Uint>(programObject->BlockIndexFromGlUniformBlock(uniformBlockIndex));
         switch (pname) {
         case GL_UNIFORM_BLOCK_DATA_SIZE: {
-            *params = (GLint)programObject->GetUBOSizeAt(uniformBlockIndex);
+            *params = (GLint)programObject->GetUBOSizeAt(blockIndex);
             MGLOG_D("%s: GL_UNIFORM_BLOCK_DATA_SIZE = %d", __func__, *params);
             break;
         }
         case GL_UNIFORM_BLOCK_NAME_LENGTH: {
-            *params = (GLint)programObject->GetUniformBlockName(uniformBlockIndex).length() + 1;
+            *params = (GLint)programObject->GetUniformBlockName(blockIndex).length() + 1;
             MGLOG_D("%s: GL_UNIFORM_BLOCK_NAME_LENGTH = %d", __func__, *params);
             break;
         }
         case GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS: {
-            *params = programObject->GetUniformBlockActiveUniformCount(uniformBlockIndex);
+            *params = programObject->GetUniformBlockActiveUniformCount(blockIndex);
             MGLOG_D("%s: GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS = %d", __func__, *params);
             break;
         }
         case GL_UNIFORM_BLOCK_BINDING: {
-            *params = static_cast<GLint>(programObject->GetUniformBlockBinding(uniformBlockIndex));
+            *params = static_cast<GLint>(programObject->GetUniformBlockBinding(blockIndex));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_BINDING = %d", __func__, *params);
             break;
         }
         case GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER:
-            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangVertex));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangVertex));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_CONTROL_SHADER:
             *params =
-                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangTessControl));
+                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessControl));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_CONTROL_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_EVALUATION_SHADER:
             *params =
-                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangTessEvaluation));
+                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessEvaluation));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_EVALUATION_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_GEOMETRY_SHADER:
-            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangGeometry));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangGeometry));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_GEOMETRY_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER:
-            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangFragment));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangFragment));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_COMPUTE_SHADER:
-            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(uniformBlockIndex, EShLangCompute));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangCompute));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_COMPUTE_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES: {
             // Member entries of an arrayed block are recorded against the first instance;
             // every instance of the array reports that shared member set (matches
             // GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, which scans with the same owner index).
-            const Int ownerIndex = static_cast<Int>(programObject->GetUniformBlockMemberOwnerIndex(uniformBlockIndex));
+            //
+            // Both sides of the comparison are BLOCK indices: GetUniformBlockMemberOwnerIndex
+            // answers in that space, so the scan uses GetActiveUniformOwnerBlockIndex rather
+            // than the GL_UNIFORM_BLOCK-space GetActiveUniformBlockIndex.
+            const Int ownerIndex = static_cast<Int>(programObject->GetUniformBlockMemberOwnerIndex(blockIndex));
             GLint uniformIndexCount = 0;
             for (Uint uniformIndex = 0; uniformIndex < programObject->GetUniformCount(); ++uniformIndex) {
-                if (programObject->GetActiveUniformBlockIndex(uniformIndex) != ownerIndex) {
+                if (programObject->GetActiveUniformOwnerBlockIndex(uniformIndex) != ownerIndex) {
                     continue;
                 }
                 params[uniformIndexCount++] = static_cast<GLint>(uniformIndex);
@@ -1849,7 +1864,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  " is not a program object that has been linked."));
             return;
         }
-        if (!programObject->IsActiveUniformBlock(uniformBlockIndex)) {
+        if (!programObject->IsActiveGlUniformBlock(uniformBlockIndex)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
@@ -1859,7 +1874,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                         "not the index of an active uniform block in program."));
             return;
         }
-        const auto& name = programObject->GetUniformBlockName(uniformBlockIndex);
+        const auto& name = programObject->GetUniformBlockName(
+            static_cast<Uint>(programObject->BlockIndexFromGlUniformBlock(uniformBlockIndex)));
         CopyStr(bufSize, length, uniformBlockName, name.c_str(), (GLsizei)name.length());
         MGLOG_D("%s: \"%s\" at uniformBlockIndex %02d, length = %d", __func__, uniformBlockName, uniformBlockIndex,
                 length ? *length : 0);

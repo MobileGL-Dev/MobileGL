@@ -2413,6 +2413,172 @@ void main() {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+namespace {
+    // One program carrying all four block/uniform kinds at once: a real uniform block, a
+    // shader storage block, an atomic counter (which the transpiler lowers onto a synthesized
+    // gl_AtomicCounterBlock_N buffer block) and plain default-block uniforms.
+    //
+    // MobileGL does not pass EShReflectionSeparateBuffers to glslang's buildReflection, so
+    // glslang routes BUFFER blocks through indexToUniformBlock alongside the uniform blocks -
+    // which is why every one of these has to be classified explicitly rather than taken at
+    // face value from the reflection list.
+    // The storage block and the counter are declared FIRST on purpose: that pushes both
+    // uniform blocks off the front of the block list, so the GL uniform-block index and the
+    // internal block index of every one of them differ. A translation that quietly reused one
+    // space for the other would answer with the storage block's name, size and binding here.
+    const char* kMixedBlockKindsFs = R"(#version 430
+layout(std430, binding = 0) buffer AVeryLongStorageBlockName {
+    vec4 storageVec;
+};
+layout(binding = 1, offset = 0) uniform atomic_uint counter;
+layout(std140) uniform Blk {
+    vec4 uboVec;
+};
+layout(std140) uniform Blk2 {
+    vec4 uboVec2[3];
+};
+uniform float uScale;
+out vec4 o_color;
+void main() {
+    o_color = uboVec * uScale + uboVec2[1] + storageVec + vec4(float(atomicCounterIncrement(counter)));
+})";
+
+    const char* kMixedBlockKindsVs = R"(#version 430
+void main() { gl_Position = vec4(0.0); })";
+} // namespace
+
+// GL 4.6 core 7.6: GL_ACTIVE_UNIFORM_BLOCKS and the glGetActiveUniformBlock* /
+// glGetUniformBlockIndex family enumerate ACTUAL uniform blocks. An atomic counter buffer is
+// enumerated by GL_ACTIVE_ATOMIC_COUNTER_BUFFERS and a shader storage block by the
+// GL_SHADER_STORAGE_BLOCK program interface; neither may appear in the uniform-block list.
+TEST_F(ProgramTest, UniformBlockListExcludesStorageAndAtomicCounterBlocks) {
+    GLuint program = LinkVsFsProgram(kMixedBlockKindsVs, kMixedBlockKindsFs);
+
+    GLint activeBlocks = -1;
+    GetProgramiv(program, GL_ACTIVE_UNIFORM_BLOCKS, &activeBlocks);
+    ASSERT_EQ(activeBlocks, 2) << "only 'Blk' and 'Blk2' are GL uniform blocks";
+
+    // GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH is measured over that same list, so the far
+    // longer storage-block name must not raise it.
+    GLint maxBlockNameLength = -1;
+    GetProgramiv(program, GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH, &maxBlockNameLength);
+    EXPECT_EQ(maxBlockNameLength, static_cast<GLint>(std::strlen("Blk2") + 1));
+
+    const GLuint blk = GetUniformBlockIndex(program, "Blk");
+    const GLuint blk2 = GetUniformBlockIndex(program, "Blk2");
+    ASSERT_NE(blk, GL_INVALID_INDEX);
+    ASSERT_NE(blk2, GL_INVALID_INDEX);
+    EXPECT_LT(blk, 2u);
+    EXPECT_LT(blk2, 2u);
+    EXPECT_NE(blk, blk2);
+    EXPECT_EQ(GetUniformBlockIndex(program, "AVeryLongStorageBlockName"), GL_INVALID_INDEX);
+    EXPECT_EQ(GetUniformBlockIndex(program, "gl_AtomicCounterBlock_1"), GL_INVALID_INDEX);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // Every index in the list names one of the two, and each index answers with ITS OWN
+    // block's properties - the storage block sits ahead of both in the internal block space,
+    // so a query answered in the wrong space reports "AVeryLongStorageBlockName" here.
+    char nameBuf[128] = "";
+    GLsizei nameLen = 0;
+    GetActiveUniformBlockName(program, blk, sizeof(nameBuf), &nameLen, nameBuf);
+    EXPECT_STREQ(nameBuf, "Blk");
+    GetActiveUniformBlockName(program, blk2, sizeof(nameBuf), &nameLen, nameBuf);
+    EXPECT_STREQ(nameBuf, "Blk2");
+
+    GLint dataSize = -1;
+    GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_DATA_SIZE, &dataSize);
+    EXPECT_EQ(dataSize, 16) << "Blk is one vec4";
+    GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_DATA_SIZE, &dataSize);
+    EXPECT_EQ(dataSize, 48) << "Blk2 is a vec4[3]";
+
+    GLint nameLengthProp = -1;
+    GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_NAME_LENGTH, &nameLengthProp);
+    EXPECT_EQ(nameLengthProp, static_cast<GLint>(std::strlen("Blk2") + 1));
+
+    // glUniformBlockBinding lands on the block the GL index names, and reads back through the
+    // same index.
+    UniformBlockBinding(program, blk2, 7);
+    GLint binding = -1;
+    GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_BINDING, &binding);
+    EXPECT_EQ(binding, 7);
+    GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_BINDING, &binding);
+    EXPECT_NE(binding, 7) << "the rebind must not have leaked onto the neighbouring block";
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // An index past the end of the (now shorter) list is GL_INVALID_VALUE, not a silently
+    // answered query about a storage block.
+    GLint sink = -12345;
+    GetActiveUniformBlockiv(program, static_cast<GLuint>(activeBlocks), GL_UNIFORM_BLOCK_BINDING, &sink);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    EXPECT_EQ(sink, -12345);
+    UniformBlockBinding(program, static_cast<GLuint>(activeBlocks), 1);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+    GetActiveUniformBlockName(program, static_cast<GLuint>(activeBlocks), sizeof(nameBuf), &nameLen, nameBuf);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
+    // Each block's own member resolves against the block index this list hands out.
+    const GLuint uboVec = UniformIndexByName(program, "uboVec");
+    const GLuint uboVec2 = UniformIndexByName(program, "uboVec2[0]");
+    ASSERT_NE(uboVec, GL_INVALID_INDEX);
+    ASSERT_NE(uboVec2, GL_INVALID_INDEX);
+    EXPECT_EQ(QueryUniformiv(program, uboVec, GL_UNIFORM_BLOCK_INDEX), static_cast<GLint>(blk));
+    EXPECT_EQ(QueryUniformiv(program, uboVec2, GL_UNIFORM_BLOCK_INDEX), static_cast<GLint>(blk2));
+
+    GLint blockMemberCount = -1;
+    GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &blockMemberCount);
+    EXPECT_EQ(blockMemberCount, 1);
+    GLint blockMemberIndex = -1;
+    GetActiveUniformBlockiv(program, blk, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &blockMemberIndex);
+    EXPECT_EQ(static_cast<GLuint>(blockMemberIndex), uboVec);
+    GetActiveUniformBlockiv(program, blk2, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &blockMemberIndex);
+    EXPECT_EQ(static_cast<GLuint>(blockMemberIndex), uboVec2);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The GL_UNIFORM_BLOCK program interface hands out indices that are usable with
+// glUniformBlockBinding / glGetActiveUniformBlockiv (ARB_program_interface_query), so it has
+// to enumerate exactly the same list - not the internal block space that also carries the
+// storage and atomic counter blocks.
+TEST_F(ProgramTest, UniformBlockProgramInterfaceMatchesTheUniformBlockList) {
+    GLuint program = LinkVsFsProgram(kMixedBlockKindsVs, kMixedBlockKindsFs);
+
+    GLint interfaceBlocks = -1;
+    GetProgramInterfaceiv(program, GL_UNIFORM_BLOCK, GL_ACTIVE_RESOURCES, &interfaceBlocks);
+    GLint activeBlocks = -1;
+    GetProgramiv(program, GL_ACTIVE_UNIFORM_BLOCKS, &activeBlocks);
+    EXPECT_EQ(interfaceBlocks, activeBlocks);
+    ASSERT_EQ(interfaceBlocks, 2);
+
+    // The storage block is enumerated by its OWN interface instead.
+    GLint storageBlocks = -1;
+    GetProgramInterfaceiv(program, GL_SHADER_STORAGE_BLOCK, GL_ACTIVE_RESOURCES, &storageBlocks);
+    EXPECT_EQ(storageBlocks, 1);
+    EXPECT_EQ(GetProgramResourceIndex(program, GL_UNIFORM_BLOCK, "AVeryLongStorageBlockName"), GL_INVALID_INDEX);
+    EXPECT_NE(GetProgramResourceIndex(program, GL_SHADER_STORAGE_BLOCK, "AVeryLongStorageBlockName"),
+              GL_INVALID_INDEX);
+
+    for (const char* blockName : {"Blk", "Blk2"}) {
+        const GLuint interfaceIndex = GetProgramResourceIndex(program, GL_UNIFORM_BLOCK, blockName);
+        ASSERT_NE(interfaceIndex, GL_INVALID_INDEX) << blockName;
+        EXPECT_EQ(interfaceIndex, GetUniformBlockIndex(program, blockName)) << blockName;
+
+        // GL_NUM_ACTIVE_VARIABLES / GL_ACTIVE_VARIABLES must reach the same member the
+        // glGetActiveUniformBlockiv spelling does.
+        const GLenum numActive = GL_NUM_ACTIVE_VARIABLES;
+        GLint memberCount = -1;
+        GetProgramResourceiv(program, GL_UNIFORM_BLOCK, interfaceIndex, 1, &numActive, 1, nullptr, &memberCount);
+        ASSERT_EQ(memberCount, 1) << blockName;
+        const GLenum activeVariables = GL_ACTIVE_VARIABLES;
+        GLint memberIndex = -1;
+        GetProgramResourceiv(program, GL_UNIFORM_BLOCK, interfaceIndex, 1, &activeVariables, 1, nullptr,
+                             &memberIndex);
+        GLint viaBlockiv = -1;
+        GetActiveUniformBlockiv(program, interfaceIndex, GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, &viaBlockiv);
+        EXPECT_EQ(memberIndex, viaBlockiv) << blockName;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
 TEST_F(ProgramTest, DeleteShaderWhileAttachedKeepsNameUsableUntilDetach) {
     // GL CTS compiles through exactly this sequence (create, attach, DELETE, source,
     // compile): glDeleteShader on an attached shader only flags it, and the name must

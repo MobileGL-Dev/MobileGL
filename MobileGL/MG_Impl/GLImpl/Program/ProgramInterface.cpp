@@ -305,13 +305,17 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
             // GL_UNIFORM_BLOCK keeps the index space glUniformBlockBinding and
             // glGetActiveUniformBlockiv already use, so an index handed out here is usable
             // with them (which is exactly what the CTS does).
-            const Int glBlockCount = program.GetActiveUniformBlocksCount();
+            const Int glBlockCount = program.GetGlUniformBlockCount();
             for (Int glIndex = 0; glIndex < glBlockCount; ++glIndex) {
+                // The block-space index the block-keyed accessors want; the two spaces differ
+                // whenever the program also has a storage or atomic counter block, which
+                // glslang files under the same reflection list (no EShReflectionSeparateBuffers).
+                const Int blockIndex = program.BlockIndexFromGlUniformBlock(static_cast<Uint>(glIndex));
                 Resource resource;
-                resource.name = program.GetUniformBlockName(glIndex);
-                resource.bufferBinding = static_cast<GLint>(program.GetUniformBlockBinding(glIndex));
-                resource.bufferDataSize = static_cast<GLint>(program.GetUBOSizeAt(glIndex));
-                const Int tIndex = program.TProgramBlockIndex(static_cast<Uint>(glIndex));
+                resource.name = program.GetUniformBlockName(static_cast<Uint>(blockIndex));
+                resource.bufferBinding = static_cast<GLint>(program.GetUniformBlockBinding(static_cast<Uint>(blockIndex)));
+                resource.bufferDataSize = static_cast<GLint>(program.GetUBOSizeAt(static_cast<Uint>(blockIndex)));
+                const Int tIndex = program.TProgramBlockIndex(static_cast<Uint>(blockIndex));
                 if (tIndex >= 0 && tIndex < blockCount) {
                     resource.stages = UniformBlockStages(reflection.blockReflection[tIndex],
                                                       stagesFromMembers, tIndex);
@@ -388,12 +392,16 @@ namespace MobileGL::MG_Impl::GLImpl::ProgramInterface {
                         static_cast<GLuint>(i));
                 }
             }
-            for (SizeT blockIndex = 0; blockIndex < model.uniformBlocks.size(); ++blockIndex) {
+            for (SizeT glBlockIndex = 0; glBlockIndex < model.uniformBlocks.size(); ++glBlockIndex) {
                 // Members of an arrayed block are reflected once, against instance [0].
-                const Int owner = static_cast<Int>(program.GetUniformBlockMemberOwnerIndex(static_cast<Uint>(blockIndex)));
+                // GetUniformBlockMemberOwnerIndex takes and answers BLOCK indices, while
+                // Resource::blockIndex is a GL_UNIFORM_BLOCK index, so translate both ways.
+                const Int blockIndex = program.BlockIndexFromGlUniformBlock(static_cast<Uint>(glBlockIndex));
+                const Int owner = program.GlUniformBlockIndexFromBlock(
+                    static_cast<Int>(program.GetUniformBlockMemberOwnerIndex(static_cast<Uint>(blockIndex))));
                 for (SizeT i = 0; i < model.uniforms.size(); ++i) {
                     if (model.uniforms[i].blockIndex == owner) {
-                        model.uniformBlocks[blockIndex].activeVariables.push_back(static_cast<GLuint>(i));
+                        model.uniformBlocks[glBlockIndex].activeVariables.push_back(static_cast<GLuint>(i));
                     }
                 }
             }

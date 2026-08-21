@@ -279,17 +279,52 @@ namespace MobileGL::MG_State::GLState {
             if (tIndex < 0 || tIndex >= static_cast<Int>(Artifacts().tProgramUniformIndexToGl.size())) return -1;
             return Artifacts().tProgramUniformIndexToGl[tIndex];
         }
-        // GL uniform-block index -> glslang TProgram block index (the inverse of
+        // Block index -> glslang TProgram block index (the inverse of
         // GlBlockIndexFromTProgram). The interface-query layer needs it to reach block
         // properties glslang exposes but no typed getter here does.
-        Int TProgramBlockIndex(Uint glBlockIndex) const {
-            return glBlockIndex < Artifacts().glBlockIndexToTProgram.size()
-                ? Artifacts().glBlockIndexToTProgram[glBlockIndex]
+        Int TProgramBlockIndex(Uint blockIndex) const {
+            return blockIndex < Artifacts().glBlockIndexToTProgram.size()
+                ? Artifacts().glBlockIndexToTProgram[blockIndex]
                 : -1;
         }
         Int GlBlockIndexFromTProgram(Int tBlockIndex) const {
             if (tBlockIndex < 0 || tBlockIndex >= static_cast<Int>(Artifacts().tProgramBlockIndexToGl.size())) return -1;
             return Artifacts().tProgramBlockIndexToGl[tBlockIndex];
+        }
+
+        // ---- GL_UNIFORM_BLOCK index <-> block index translation ----
+        // The block index space above carries the storage blocks and the synthesized atomic
+        // counter blocks as well; GL_ACTIVE_UNIFORM_BLOCKS counts only actual uniform blocks
+        // (GL 4.6 core 7.6). Every glGetActiveUniformBlock* / glGetUniformBlockIndex /
+        // glUniformBlockBinding entry point speaks THIS space and translates into the block
+        // space before touching any of the block-keyed tables; the backends keep speaking the
+        // block space directly. See LinkArtifacts::glUniformBlockIndexToBlock.
+        Int GetGlUniformBlockCount() const {
+            return static_cast<Int>(Artifacts().glUniformBlockIndexToBlock.size());
+        }
+        Bool IsActiveGlUniformBlock(Uint glUniformBlockIndex) const {
+            return glUniformBlockIndex < Artifacts().glUniformBlockIndexToBlock.size();
+        }
+        Int BlockIndexFromGlUniformBlock(Uint glUniformBlockIndex) const {
+            return glUniformBlockIndex < Artifacts().glUniformBlockIndexToBlock.size()
+                ? Artifacts().glUniformBlockIndexToBlock[glUniformBlockIndex]
+                : -1;
+        }
+        Int GlUniformBlockIndexFromBlock(Int blockIndex) const {
+            if (blockIndex < 0 || blockIndex >= static_cast<Int>(Artifacts().blockIndexToGlUniformBlock.size())) {
+                return -1;
+            }
+            return Artifacts().blockIndexToGlUniformBlock[blockIndex];
+        }
+        // glGetUniformBlockIndex: GL_INVALID_INDEX for a name that is not an active UNIFORM
+        // block, which includes every storage block and every atomic counter block even though
+        // GetUniformBlockIndex() below resolves them (it answers in the block space, which the
+        // backends need to keep reaching them by name).
+        Uint GetGlUniformBlockIndex(const char* name) const {
+            const Uint blockIndex = GetUniformBlockIndex(name);
+            if (blockIndex == 0xFFFFFFFFu) return 0xFFFFFFFFu;
+            const Int glIndex = GlUniformBlockIndexFromBlock(static_cast<Int>(blockIndex));
+            return glIndex < 0 ? 0xFFFFFFFFu : static_cast<Uint>(glIndex);
         }
 
         Int GetActiveUniformIndex(const String& name) const {
@@ -340,12 +375,22 @@ namespace MobileGL::MG_State::GLState {
             return GetUniformArraySizeByTIndex(TProgramUniformIndex(index));
         }
 
-        Int GetActiveUniformBlockIndex(Uint index) const {
+        // The BLOCK index of the block owning this active uniform, or -1 when it owns none as
+        // far as GL is concerned. Internal: pair it with another block-space index, never with
+        // a GL_UNIFORM_BLOCK one (GetActiveUniformBlockIndex below is that one).
+        Int GetActiveUniformOwnerBlockIndex(Uint index) const {
             // An atomic counter is a DEFAULT-BLOCK uniform to GL, whatever block the
             // transpiler lowered it onto (GL 4.6 core 7.6, table 7.6): -1.
             if (IsActiveUniformAtomicCounter(index)) return -1;
             // Members of the synthesized global UBO are default-block uniforms to GL: -1.
             return GlBlockIndexFromTProgram(UniformAt(TProgramUniformIndex(index)).index);
+        }
+
+        // GL_UNIFORM_BLOCK_INDEX: an index into the GL_ACTIVE_UNIFORM_BLOCKS list, or -1. A
+        // buffer variable owns a storage block, which is not in that list, so it answers -1 too
+        // (and after the enumeration filter it is not an active uniform in the first place).
+        Int GetActiveUniformBlockIndex(Uint index) const {
+            return GlUniformBlockIndexFromBlock(GetActiveUniformOwnerBlockIndex(index));
         }
 
         // The transpiler lowers every atomic_uint onto a synthesized gl_AtomicCounterBlock_N
@@ -875,14 +920,19 @@ namespace MobileGL::MG_State::GLState {
         Int GetActiveAttributesCount() const {
             return static_cast<Int>(Artifacts().pipeInputReflection.size());
         }
-        // GL-visible uniform blocks only: the synthesized MGL_GLOBAL_UBO the relaxed parse
-        // materializes for default-block uniforms is filtered out by DoReflection.
+        // Size of the BLOCK index space - every block the relaxed parse produced except the
+        // synthesized MGL_GLOBAL_UBO, which DoReflection filters out. NOT the answer to
+        // glGetProgramiv(GL_ACTIVE_UNIFORM_BLOCKS): storage blocks and atomic counter blocks
+        // live in here too, and GetGlUniformBlockCount() is the one that excludes them.
         Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Artifacts().glBlockIndexToTProgram.size()); }
         GLuint GetComputeLocalSize(Uint dim) const {
             return dim < 3u ? Artifacts().computeLocalSize[dim] : 0u;
         }
         Int GetActiveAttributesMaxLength() const { return Artifacts().attribInNameMaxLength; }
         Int GetActiveUniformBlocksMaxNameLength() const { return Artifacts().uniformBlockNameMaxLength; }
+        // Answers in the BLOCK space, so it resolves storage and atomic counter blocks too -
+        // the backends reach those by name. glGetUniformBlockIndex must NOT: use
+        // GetGlUniformBlockIndex() for the GL entry point.
         Uint GetUniformBlockIndex(const char* name) const {
             auto it = Artifacts().uniformBlockIndexByName.find(name);
             if (it != Artifacts().uniformBlockIndexByName.end()) return it->second;
@@ -893,12 +943,11 @@ namespace MobileGL::MG_State::GLState {
             if (it != Artifacts().uniformBlockIndexByName.end()) return it->second;
             return 0xFFFFFFFFu; // GL_INVALID_INDEX
         }
-        Bool IsActiveUniformBlock(Uint index) const {
-            if (index >= GetActiveUniformBlocksCount()) return false;
-            return true;
-        }
+        // Takes a BLOCK index. The GL entry points validate their argument against the
+        // GL_UNIFORM_BLOCK space with IsActiveGlUniformBlock() first and translate; the bound
+        // test here is only the range of the space this index actually lives in.
         Uint GetUBOSizeAt(Uint index) const {
-            if (!IsActiveUniformBlock(index)) return 0;
+            if (index >= Artifacts().glBlockIndexToTProgram.size()) return 0;
             // glslang reports the unpadded end offset of the last member, but a std140 block
             // (like a std140 struct) occupies a vec4-rounded size, and that is what the
             // backend compiles: ES drivers reject draws whose bound UBO range is smaller
@@ -928,11 +977,14 @@ namespace MobileGL::MG_State::GLState {
         // fills GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, so the two queries always agree
         // (glslang's numMembers counts declared members, which diverges from the reflected
         // entry list for struct arrays and arrayed block instances).
+        // Takes a BLOCK index, and scans in the block space: GetUniformBlockMemberOwnerIndex
+        // answers there, so pairing it with the GL_UNIFORM_BLOCK-space
+        // GetActiveUniformBlockIndex would compare two different numberings.
         Int GetUniformBlockActiveUniformCount(Uint index) const {
             const Int ownerIndex = static_cast<Int>(GetUniformBlockMemberOwnerIndex(index));
             Int count = 0;
             for (Uint uniformIndex = 0; uniformIndex < Artifacts().activeUniformCount; ++uniformIndex) {
-                if (GetActiveUniformBlockIndex(uniformIndex) == ownerIndex) ++count;
+                if (GetActiveUniformOwnerBlockIndex(uniformIndex) == ownerIndex) ++count;
             }
             return count;
         }
@@ -1131,6 +1183,28 @@ namespace MobileGL::MG_State::GLState {
             Vector<Int> tProgramUniformIndexToGl;
             Vector<Int> glBlockIndexToTProgram;
             Vector<Int> tProgramBlockIndexToGl;
+            // GL_UNIFORM_BLOCK index space: ACTUAL uniform blocks only, a strict subsequence of
+            // glBlockIndexToTProgram above.
+            //
+            // That list is the BLOCK space - everything the relaxed parse produced except
+            // MGL_GLOBAL_UBO - and it is what the backends walk and what every block-keyed table
+            // here (uniformBlockBinding, uniformBlockIndexByName, blockReflection ordering) is
+            // indexed by. It is NOT the GL uniform-block list: MobileGL does not pass
+            // EShReflectionSeparateBuffers to buildReflection, so glslang routes BUFFER blocks
+            // through indexToUniformBlock too, and the list therefore also carries every shader
+            // storage block and every synthesized gl_AtomicCounterBlock_N. GL 4.6 core 7.6 gives
+            // those their own enumerations (GL_SHADER_STORAGE_BLOCK and
+            // GL_ACTIVE_ATOMIC_COUNTER_BUFFERS respectively), and GL_ACTIVE_UNIFORM_BLOCKS /
+            // glGetActiveUniformBlock*/glGetUniformBlockIndex must not see either.
+            //
+            // Kept as a SECOND space rather than filtering the first in place: DirectGLES assigns
+            // one ESSL uniform-buffer binding point per entry of the block list as it walks it
+            // (Managers.cpp CacheResourceLocations and the matching per-draw loop in
+            // DirectGLES.cpp), so compacting that list would renumber every backend binding
+            // point, and tProgramBlockIndexToGl[i] < 0 is what DoReflection and
+            // BuildGlobalUboRouting read as "member of the synthesized global UBO".
+            Vector<Int> glUniformBlockIndexToBlock; // GL uniform-block index -> block index
+            Vector<Int> blockIndexToGlUniformBlock; // block index -> GL uniform-block index (-1)
             // Per-link merged snapshot of the attached shaders' lexically extracted
             // layout(location = N) default-block uniform qualifiers (the relaxed parse drops
             // them from reflection; the DoReflection assigner restores them from here).
