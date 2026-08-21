@@ -154,10 +154,16 @@ namespace {
     }
 
     // The half of a compile that depends on nothing but the source text, the stage and the
-    // environment snapshot: preprocessing, the three lexical rejections, and the two lexical
-    // side-channel extractions. Split out so P0b layer 2 can memoize exactly this and
-    // nothing else - the glslang parse stays per-object because its TShader is consume-once.
-    // Deliberately free of any per-object state so the memo is sound.
+    // environment snapshot: preprocessing and the three lexical rejections. Split out so P0b
+    // layer 2 can memoize exactly this and nothing else - the glslang parse stays per-object
+    // because its TShader is consume-once. Deliberately free of any per-object state so the
+    // memo is sound.
+    //
+    // The side-channel EXTRACTIONS that used to live here are gone: what the relaxed parse
+    // destroys is now recovered from glslang itself, at the two points where it is destroyed
+    // (see ShaderCompileArtifacts::explicitUniformLocations and
+    // TMglGlslIoResolver::reserverResourceSlot). They could not stay here anyway - none of
+    // them is a function of the unexpanded source text, which is all this half can see.
     //
     // The compute local-size verdict reads `env` rather than the live backend, and
     // env.fingerprint is part of the P0b cache key, so a memo can never be returned against
@@ -195,28 +201,21 @@ namespace {
             return result;
         }
 
-        if (const std::optional<String> counterOffsetError =
-                FindAtomicCounterOffsetViolation(result.preprocessedSource)) {
-            result.outcome = ShaderPreprocessOutcome::AtomicCounterOffsetRejected;
-            result.infoLog = *counterOffsetError;
-            return result;
-        }
+        // NO ATOMIC-COUNTER OFFSET SCAN HERE ANY MORE: glslang raises both rules itself now, at
+        // the site where its relaxed remap folds the counter into a synthesized block
+        // (ParseHelper.cpp atomicCounterOffsetCheck, called from vkRelaxedRemapUniformVariable).
+        // A violation is an ordinary parse failure, so it reaches GL through the same path every
+        // other compile error does - and, unlike a scan of unexpanded text, it sees an offset
+        // spelled as a macro or a const expression.
 
         // The parse this feeds runs in the link-compatible configuration (Vulkan-client
         // env with relaxed rules): the TShader it produces is what glLinkProgram links and
         // what the backends' SPIR-V is generated from - there is no second, GL-client
         // parse. The GL frontend semantics the relaxed parse cannot provide are restored
-        // on top: explicit default-block uniform locations through the lexical
-        // side-channels below, dead-uniform/global-UBO filtering in
+        // on top, all of them out of glslang: explicit default-block uniform locations from
+        // the snapshot the parse takes, opaque bindings and unqualified storage blocks from
+        // the IO mapper's collect callback, dead-uniform/global-UBO filtering in
         // ProgramObject::DoReflection.
-        result.explicitUniformLocations = ExtractExplicitUniformLocations(result.preprocessedSource);
-        result.explicitOpaqueBindings = ExtractExplicitOpaqueBindings(result.preprocessedSource);
-        // The third side-channel, and the one that restores a GL DEFAULT rather than an
-        // application-declared value: a storage block with no layout(binding = N) has buffer
-        // binding 0 in GL, and by the time the reflection is built glslang's IO mapper has
-        // already invented one and written it into the qualifier.
-        result.storageBlocksWithoutBinding =
-            ExtractStorageBlocksWithoutExplicitBinding(result.preprocessedSource);
         result.outcome = ShaderPreprocessOutcome::Preprocessed;
         return result;
     }
@@ -319,10 +318,14 @@ namespace MobileGL::MG_State::GLState {
         Bool parsedOk = false;
         String parseLog;
         SharedPtr<glslang::TShader> parsedShader;
+        UnorderedMap<String, Int> explicitUniformLocations;
 
         if (verdict) {
             parsedOk = verdict->parsed;
             parseLog = verdict->infoLog;
+            // From the verdict, not from a parse - see ShaderParseVerdict for why they had to
+            // move into the payload when their origin moved into glslang.
+            explicitUniformLocations = verdict->explicitUniformLocations;
             MGLOG_D("ShaderCompileTask: shader %u (stage %d) L1c hit - the glslang parse was skipped; "
                     "compileStatus = %d",
                     externalIndex, static_cast<Int>(stage), static_cast<Int>(parsedOk));
@@ -335,6 +338,7 @@ namespace MobileGL::MG_State::GLState {
             parsedOk = result.has_value();
             if (parsedOk) {
                 parsedShader = result.value();
+                explicitUniformLocations = CollectExplicitUniformLocations(*parsedShader);
             } else {
                 parseLog = result.error().log;
             }
@@ -344,6 +348,7 @@ namespace MobileGL::MG_State::GLState {
                 // Empty on success by construction, matching what the publish below does with
                 // the artifacts' own log; the diagnostic the application reads on failure.
                 freshVerdict->infoLog = parseLog;
+                freshVerdict->explicitUniformLocations = explicitUniformLocations;
                 const SizeT verdictBytes = ShaderParseVerdictBytes(*freshVerdict);
                 GetShaderParseVerdictCache().Insert(parseKey, ShaderParseVerdictPtr(Move(freshVerdict)),
                                                     verdictBytes);
@@ -359,9 +364,7 @@ namespace MobileGL::MG_State::GLState {
             // `fresh` is about to be handed to the cache. Populated on the hit path too - it
             // is what ClaimParsedShader's deferred parse consumes.
             artifacts.preprocessedSource = shared.preprocessedSource;
-            artifacts.explicitUniformLocations = shared.explicitUniformLocations;
-            artifacts.explicitOpaqueBindings = shared.explicitOpaqueBindings;
-            artifacts.storageBlocksWithoutBinding = shared.storageBlocksWithoutBinding;
+            artifacts.explicitUniformLocations = Move(explicitUniformLocations);
             artifacts.infoLog.clear();
             if (shouldPopulateCache) {
                 cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
@@ -386,9 +389,6 @@ namespace MobileGL::MG_State::GLState {
             if (shouldPopulateCache) {
                 fresh->outcome = ShaderPreprocessOutcome::ParseFailed;
                 fresh->infoLog = artifacts.infoLog;
-                fresh->explicitUniformLocations.clear();
-                fresh->explicitOpaqueBindings.clear();
-                fresh->storageBlocksWithoutBinding.clear();
                 cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
             }
         }

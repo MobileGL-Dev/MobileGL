@@ -60,19 +60,23 @@ namespace MobileGL::MG_State::GLState {
         // ClaimParsedShader's re-parse so a later link never depends on the preprocessor
         // being deterministic across backend-state changes.
         String preprocessedSource;
+        // The explicit layout(location = N) qualifiers this stage's default-block uniforms
+        // declared, as glslang recorded them at the point its Vulkan-relaxed remap dropped
+        // them (CollectExplicitUniformLocations).
+        //
+        // Populated on the L1c HIT path too, out of the cached verdict rather than out of a
+        // parse - which is why the verdict carries them. Everything else the relaxed parse
+        // destroys is recovered at LINK instead, from the IO mapper's collect callback, and so
+        // has no field here at all.
         UnorderedMap<String, Int> explicitUniformLocations;
-        UnorderedMap<String, Uint> explicitOpaqueBindings;
-        // Block type names of this stage's shader storage blocks that declared no
-        // layout(binding = N), i.e. the ones GL puts on binding 0.
-        std::set<String> storageBlocksWithoutBinding;
         String infoLog;
         Bool compileStatus = false;
     };
 
     // The unit of asynchronous shader compilation: one glCompileShader's worth of pure CPU
-    // work - preprocess, the two lexical rejections, the two lexical extractions, and (unless
-    // the translation memo's compile half already knows the answer) the glslang parse - with
-    // every input it needs owned by the node itself.
+    // work - preprocess, the lexical rejections, and (unless the translation memo's compile
+    // half already knows the answer) the glslang parse plus the explicit-uniform-location
+    // snapshot it yields - with every input it needs owned by the node itself.
     //
     // That ownership is the whole point. The node reads no GL-thread state (the source is a
     // SharedPtr<const String> snapshot, the device limits come from the CompileEnv snapshot,

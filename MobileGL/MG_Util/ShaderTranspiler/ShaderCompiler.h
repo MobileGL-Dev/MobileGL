@@ -445,6 +445,24 @@ namespace MobileGL {
                 // identical question for the identical decision.
                 static Bool ModuleReadsLocatedInput(const Vector<Uint32>& spirv);
             };
+
+            // The explicit layout(location = N) qualifiers this shader's DEFAULT-BLOCK uniforms
+            // declared, keyed the way glslang's own reflection will later spell them.
+            //
+            // They cannot be read back off the parsed module, and that is not an oversight of
+            // this function: MobileGL parses every shader as a Vulkan client under relaxed
+            // rules, which sweeps plain uniforms into MGL_GLOBAL_UBO - where a location
+            // qualifier has no meaning - and DROPS the qualifier on the way past
+            // (ParseHelper.cpp vkRelaxedRemapUniformVariable). What this reads is the snapshot
+            // glslang takes at that exact site, handed over through TIntermediate; the GL
+            // location assigner in ProgramLinkTask::DoReflection is the only party left that
+            // can honour the number.
+            //
+            // Keyed by declared name (no "[0]" suffix), plus one synthesized key per outer
+            // index of an array-of-arrays - see the note in the implementation for why
+            // reflection needs those spelled out. A uniform declared in several stages must
+            // agree, which the caller enforces across stages.
+            UnorderedMap<String, Int> CollectExplicitUniformLocations(const glslang::TShader& shader);
         } // namespace ShaderTranspiler
     } // namespace MG_Util
 } // namespace MobileGL

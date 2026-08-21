@@ -29,9 +29,6 @@ namespace MobileGL::MG_State::GLState {
         // FindShaderStorageBindingViolation rejected it: a storage block declared a binding at or
         // past GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS.
         ResourceBindingRejected,
-        // FindAtomicCounterOffsetViolation rejected it: an atomic counter declared a
-        // layout(offset =) that is misaligned or reaches past GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE.
-        AtomicCounterOffsetRejected,
         // The source-only half was clean but glslang rejected the preprocessed source.
         // Memoizing this saves the parse itself on every later object with that source.
         ParseFailed,
@@ -39,18 +36,23 @@ namespace MobileGL::MG_State::GLState {
 
     // Everything ShaderObject::Compile() derives from the source text alone, i.e.
     // everything that is identical for two shader objects holding byte-identical source.
+    //
+    // "The source text alone" is now literally true: the preprocessed text, an accept/reject
+    // verdict, and the log that explains a rejection. Anything that needs to know what the
+    // shader MEANS is derived from the parse instead - see the note on the missing fields.
     struct ShaderPreprocessResult {
         ShaderPreprocessOutcome outcome = ShaderPreprocessOutcome::Preprocessed;
         // Valid unless the preprocessor itself never ran; kept even for the rejection
         // outcomes because that is the text the diagnostics refer to.
         String preprocessedSource;
-        UnorderedMap<String, Int> explicitUniformLocations;
-        UnorderedMap<String, Uint> explicitOpaqueBindings;
-        // Block type names of the shader storage blocks declared here with NO
-        // layout(binding = N). GL gives such a block binding 0; nothing downstream can still
-        // tell, because glslang's IO mapper auto-assigns one and writes it into the qualifier.
-        // See ExtractStorageBlocksWithoutExplicitBinding.
-        std::set<String> storageBlocksWithoutBinding;
+        // NO EXTRACTED SIDE CHANNELS ANY MORE, and their absence is the point. Explicit
+        // uniform locations, explicit opaque bindings and unqualified storage blocks used to be
+        // lexed out of the text here, which meant reading MACRO-UNEXPANDED source: MobileGL's
+        // preprocessor rewrites the text, it does not run the C preprocessor, so
+        // `binding = SOME_MACRO` reached the scanners verbatim. All three now come from
+        // glslang - the first from a snapshot taken inside the parse, the other two from the
+        // IO mapper's collect callback - and none of them is a function of the source text
+        // ALONE any more, which is the only thing this struct is allowed to hold.
         // The compile info log to publish; empty when outcome == Preprocessed.
         String infoLog;
 

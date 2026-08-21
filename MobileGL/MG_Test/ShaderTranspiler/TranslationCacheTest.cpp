@@ -475,11 +475,11 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
         v.explicitFragmentOutIndices = &fragIndex;
         variants.emplace_back("explicitFragmentOutIndices", BuildSpirvTranslationKey(v));
     }
-    {   // the merged layout(binding = N) opaque units
-        SpirvTranslationKeyInputs v = base;
-        v.explicitOpaqueUniformBindings = &opaque;
-        variants.emplace_back("explicitOpaqueUniformBindings", BuildSpirvTranslationKey(v));
-    }
+    // NOT the merged layout(binding = N) opaque units, which used to be a variant here: that
+    // map is an OUTPUT of mapIO (TMglGlslIoResolver writes it and never reads it), so it is a
+    // pure function of the stage sources this key already carries in full. It was dropped from
+    // SpirvTranslationKeyInputs with the glslang-capture migration; kKeyLayoutVersion moved to
+    // 4 so no blob written under the old shape can be honoured.
     {   // ShaderCompileBits (0 on both production parse paths; keyed so a future value
         // cannot alias a module parsed without it)
         SpirvTranslationKeyInputs v = base;

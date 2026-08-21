@@ -365,11 +365,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //     covers backend identity and the advertised extension vector;
     //   * per stage, in link order: the GL stage enum and the FULL preprocessed
     //     source, which is literally the text ParseShaderSource was given;
-    //   * the four link-time request maps mapIO resolves against
+    //   * the three link-time request maps mapIO resolves against
     //     (glBindAttribLocation / glBindFragDataLocation /
-    //     glBindFragDataLocationIndexed, and the merged layout(binding=) opaque
-    //     units) - these steer TMglGlslIoResolver and therefore the Locations and
-    //     Bindings baked into every module;
+    //     glBindFragDataLocationIndexed) - these steer TMglGlslIoResolver and
+    //     therefore the Locations and Bindings baked into every module. NOT the
+    //     merged layout(binding=) opaque units, which used to sit here: they are
+    //     an OUTPUT of mapIO (TMglGlslIoResolver writes that map and never reads
+    //     it), so they are a pure function of the stage sources already in this
+    //     key and keying on them discriminated nothing;
     //   * the ShaderCompileBits the parse ran under (always 0 in production; in
     //     the key so a future non-zero value cannot alias);
     //   * the SPIR-V validation switch (byte-identical output either way, but it
@@ -393,7 +396,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         const UnorderedMap<String, Uint>* explicitVertexInLocations = nullptr;
         const UnorderedMap<String, Uint>* explicitFragmentOutLocations = nullptr;
         const UnorderedMap<String, Uint>* explicitFragmentOutIndices = nullptr;
-        const UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
         Uint32 shaderCompileFlags = 0;
         Bool enableSpirvValidation = false;
         // ---- inputs that only matter because the PAYLOAD now carries the reflection ----
@@ -476,6 +478,16 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // successful parse, so a successful compile's observable log is empty no matter what
         // glslang wrote into it. Stored rather than assumed so the two cannot drift.
         String infoLog;
+        // The explicit default-block uniform locations the parse recovered
+        // (CollectExplicitUniformLocations), empty when `parsed` is false.
+        //
+        // IN THE PAYLOAD BECAUSE A HIT SKIPS THE PARSE. These used to come from a lexical scan
+        // of the source, which ran in the half a hit still executes; they now come from the
+        // glslang snapshot, which a hit never produces. They belong to the same key as the
+        // verdict itself - a pure function of (front-end env, stage, preprocessed source) - so
+        // no key widening is needed, only this field. Without it an L1c hit would publish a
+        // shader with no explicit locations at all and the program would first-fit them from 0.
+        UnorderedMap<String, Int> explicitUniformLocations;
     };
     using ShaderParseVerdictPtr = SharedPtr<const ShaderParseVerdict>;
 

@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <set>
 #include <vector>
 #include <unordered_map>
 #include <glslang/Public/ShaderLang.h>
@@ -27,14 +28,17 @@ namespace MobileGL {
         using ExplicitVarSlotMap = UnorderedMap<String, Uint>;
         TMglGlslIoResolver(const glslang::TIntermediate& intermediate, const ExplicitVarSlotMap& vertexIns,
                            const ExplicitVarSlotMap& fragOuts, const ExplicitVarSlotMap& fragOutIndices,
-                           ExplicitVarSlotMap* opaqueUniformBindings)
+                           ExplicitVarSlotMap* opaqueUniformBindings,
+                           std::set<String>* storageBlocksWithoutBinding = nullptr)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
-              m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings) {}
+              m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings),
+              m_storageBlocksWithoutBinding(storageBlocksWithoutBinding) {}
         TMglGlslIoResolver(const glslang::TProgram& program, const EShLanguage stage,
                            const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts,
-                           const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings)
+                           const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings,
+                           std::set<String>* storageBlocksWithoutBinding = nullptr)
             : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
-                                 opaqueUniformBindings) {}
+                                 opaqueUniformBindings, storageBlocksWithoutBinding) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         int resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
@@ -47,7 +51,17 @@ namespace MobileGL {
         const ExplicitVarSlotMap& m_explicitVertexIns;
         const ExplicitVarSlotMap& m_explicitFragOuts;
         const ExplicitVarSlotMap& m_explicitFragOutIndices;
+        // Two OUT channels, both filled from reserverResourceSlot and never read back by this
+        // resolver. They exist because the collect callback is the LAST place the shader's own
+        // declaration is still legible: ten lines later (iomapper.cpp:240) mapIO writes its
+        // auto-assigned binding into the very qualifier that says whether the shader declared
+        // one. Anything downstream that needs "as DECLARED" rather than "as ASSIGNED" has to be
+        // handed it from here.
         ExplicitVarSlotMap* m_explicitOpaqueUniformBindings = nullptr;
+        // Block TYPE names of the shader storage blocks that reached mapIO carrying NO
+        // layout(binding = N). GL 4.3 core 7.8 gives such a block binding ZERO; see
+        // ProgramLinkTask::SeedDefaultStorageBlockBindings for what is done with them.
+        std::set<String>* m_storageBlocksWithoutBinding = nullptr;
         std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
         std::map<glslang::TString, int> m_plainUniformLocationByName;
         bool m_plainUniformLocationsAssigned = false;

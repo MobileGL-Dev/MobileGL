@@ -26,7 +26,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // 2: L2 gained atomicCounterEsslBindingTop (wave3's atomic-counter block rebinding
         // prints it into the emitted ESSL), and L1c was added.
         // 3: L2 gained the two interface-block rename maps (wave4's UniquifyIoBlockNames).
-        constexpr Uint32 kKeyLayoutVersion = 3u;
+        // 4: the glslang-capture migration. L1 DROPPED explicitOpaqueUniformBindings from its
+        //    key (that map is an output of mapIO, not an input to it), and L1c's PAYLOAD gained
+        //    the explicit uniform locations - so a blob written under 3 describes a differently
+        //    shaped answer at both levels even where the bytes would have matched.
+        constexpr Uint32 kKeyLayoutVersion = 4u;
 
         // The repo's existing cache epoch (MG_Config::CacheVersion, the seed
         // ProgramFactory::ComputeHash uses). Strictly redundant for an in-memory
@@ -128,7 +132,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         builder.NameMap(inputs.explicitVertexInLocations ? *inputs.explicitVertexInLocations : kEmpty);
         builder.NameMap(inputs.explicitFragmentOutLocations ? *inputs.explicitFragmentOutLocations : kEmpty);
         builder.NameMap(inputs.explicitFragmentOutIndices ? *inputs.explicitFragmentOutIndices : kEmpty);
-        builder.NameMap(inputs.explicitOpaqueUniformBindings ? *inputs.explicitOpaqueUniformBindings : kEmpty);
         static const Vector<String> kNoXfb;
         builder.TextList(inputs.requestedXfbVaryings ? *inputs.requestedXfbVaryings : kNoXfb);
         builder.Value(inputs.xfbBufferMode);
@@ -146,7 +149,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         return MakeTranslationCacheKey(builder);
     }
 
-    SizeT ShaderParseVerdictBytes(const ShaderParseVerdict& verdict) { return verdict.infoLog.size(); }
+    SizeT ShaderParseVerdictBytes(const ShaderParseVerdict& verdict) {
+        SizeT bytes = verdict.infoLog.size();
+        for (const auto& [name, location] : verdict.explicitUniformLocations) {
+            bytes += name.size() + sizeof(Int);
+        }
+        return bytes;
+    }
 
     // Leaked for the same exit-order reason as the other two; see the note below.
     BoundedTranslationCache<ShaderParseVerdict>& GetShaderParseVerdictCache() {

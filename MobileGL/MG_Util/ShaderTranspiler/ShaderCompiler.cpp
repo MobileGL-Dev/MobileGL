@@ -358,6 +358,107 @@ namespace MobileGL {
                 glslang::SetThreadPoolAllocator(nullptr);
             }
 
+            namespace {
+                // glslang reflects an array-of-arrays default-block uniform as ONE RECORD PER
+                // outer-index tuple, carrying the innermost array type: `float u[2][3]` becomes
+                // "u[0][0]" and "u[1][0]" (that last "[0]" is EShReflectionBasicArraySuffix). The
+                // linker resolves such a name by stripping the single trailing "[0]", so it looks
+                // up "u[1]" - a key the root entry alone cannot answer, and the whole declaration
+                // silently loses its explicit location.
+                //
+                // Emit those pre-flattened keys next to the root, so the result is
+                // order-independent: each carries the location its own element starts at (element
+                // i of `float u[2][3]` at location L starts at L + i*3). Identifiers cannot
+                // contain brackets, so a synthesized key never collides with a real uniform name,
+                // and a 1-D array needs none of this - stripping "[0]" already reaches the root.
+                void RecordArrayOfArraysElementLocations(const String& name, const std::vector<int>& dimensions,
+                                                         const long long baseLocation,
+                                                         UnorderedMap<String, Int>& locations) {
+                    if (dimensions.size() < 2) return;
+                    // A pathological declaration must not be able to blow up the map; past the cap
+                    // only the root entry stands, which is what every case used to get.
+                    constexpr long long kMaxSynthesizedKeys = 4096;
+                    const long long innerSpan = dimensions.back();
+                    const SizeT outerDimensions = dimensions.size() - 1;
+                    long long elementCount = 1;
+                    for (SizeT d = 0; d < outerDimensions; ++d) {
+                        elementCount *= dimensions[d];
+                        if (elementCount > kMaxSynthesizedKeys) return;
+                    }
+                    for (long long element = 0; element < elementCount; ++element) {
+                        String key = name;
+                        long long remainder = element;
+                        for (SizeT d = 0; d < outerDimensions; ++d) {
+                            long long stride = 1;
+                            for (SizeT inner = d + 1; inner < outerDimensions; ++inner) stride *= dimensions[inner];
+                            key += "[" + std::to_string(remainder / stride) + "]";
+                            remainder %= stride;
+                        }
+                        locations.emplace(key, static_cast<Int>(std::min(baseLocation + element * innerSpan,
+                                                                         static_cast<long long>(INT_MAX / 2))));
+                    }
+                }
+            } // namespace
+
+            UnorderedMap<String, Int> CollectExplicitUniformLocations(const glslang::TShader& shader) {
+                UnorderedMap<String, Int> locations;
+                const glslang::TIntermediate* intermediate = shader.getIntermediate();
+                if (intermediate == nullptr) return locations;
+
+                // Half one: the uniforms the relaxed remap swallowed, out of the snapshot it
+                // takes on the way past.
+                for (const glslang::TIntermediate::TUniformLocation& record :
+                     intermediate->getUniformLocations()) {
+                    if (record.location < 0) continue;
+                    // Keep the first sighting. Two records for one name mean the parser saw the
+                    // declaration twice, and the first is the one the symbol table kept.
+                    locations.emplace(record.name, record.location);
+                    RecordArrayOfArraysElementLocations(record.name, record.arraySizes, record.location,
+                                                        locations);
+                }
+
+                // Half two: the OPAQUE uniforms, which the remap never touches (the guard in
+                // vkRelaxedRemapUniformVariable admits only types containing something
+                // non-opaque, atomic_uint, or a sampler inside a struct) and which therefore
+                // still carry their qualifier here.
+                //
+                // They belong in the same map even though reflection could also answer for them,
+                // and the distinction is not cosmetic: this map is what marks a location as
+                // SOURCE-EXPLICIT, i.e. API contract under ARB_explicit_uniform_location. A
+                // location that only reaches DoReflection through glslang's own layoutLocation()
+                // is treated as implementation-chosen and quietly moved on a collision, which is
+                // the wrong answer for one the shader declared.
+                //
+                // Read BEFORE any link: mapIO writes its own choices into these same qualifiers
+                // (iomapper.cpp:240), so this is only truthful while the shader is unlinked -
+                // which is exactly where ShaderCompileTask calls it.
+                const glslang::TIntermAggregate* linkerObjects = intermediate->findLinkerObjects();
+                if (linkerObjects == nullptr) return locations;
+                for (TIntermNode* node : linkerObjects->getSequence()) {
+                    const glslang::TIntermSymbol* symbol = node ? node->getAsSymbolNode() : nullptr;
+                    if (symbol == nullptr) continue;
+                    const glslang::TType& type = symbol->getType();
+                    const glslang::TQualifier& qualifier = type.getQualifier();
+                    if (qualifier.storage != glslang::EvqUniform || !qualifier.hasLocation()) continue;
+                    // A BLOCK has no glGetUniformLocation of its own, and its members are
+                    // addressed through the block. Only loose uniforms take locations.
+                    if (type.getBasicType() == glslang::EbtBlock || type.isBuiltIn()) continue;
+
+                    std::vector<int> arraySizes;
+                    if (type.isArray() && type.getArraySizes() != nullptr) {
+                        const glslang::TArraySizes& sizes = *type.getArraySizes();
+                        for (int dim = 0; dim < sizes.getNumDims(); ++dim) {
+                            arraySizes.push_back(sizes.getDimSize(dim));
+                        }
+                    }
+                    const String name = symbol->getAccessName().c_str();
+                    const Int location = static_cast<Int>(qualifier.layoutLocation);
+                    locations.emplace(name, location);
+                    RecordArrayOfArraysElementLocations(name, arraySizes, location, locations);
+                }
+                return locations;
+            }
+
             Result<SharedPtr<glslang::TProgram>> ShaderCompiler::LinkProgram(const ProgramAttrib& attrib) {
                 SharedPtr<glslang::TProgram> program = MakeShared<glslang::TProgram>();
                 for (auto& s : attrib.shaders) {
@@ -383,7 +484,8 @@ namespace MobileGL {
                         MakeUnique<TMglGlslIoResolver>(*program, (EShLanguage)stage, attrib.explicitVertexInLocations,
                                                        attrib.explicitFragmentOutLocations,
                                                        attrib.explicitFragmentOutIndices,
-                                                       attrib.explicitOpaqueUniformBindings);
+                                                       attrib.explicitOpaqueUniformBindings,
+                                                       attrib.storageBlocksWithoutBinding);
                     break;
                 }
                 auto ioMapper = UniquePtr<glslang::TIoMapper>(glslang::GetGlslIoMapper());

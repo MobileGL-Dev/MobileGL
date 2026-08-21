@@ -579,8 +579,9 @@ namespace MobileGL::MG_State::GLState {
 
         if (!ValidateAttachedShaders()) return;
 
-        // The two merges below read the COMPILE snapshots only - no parsed shader - so they
-        // run before the L1 probe, which needs the merged opaque bindings in its key.
+        // Reads the COMPILE snapshots only - no parsed shader - so it runs before the L1
+        // probe: a conflicting explicit uniform location must fail the link whether or not
+        // the memo has an answer for this program's sources.
         MergeShaderSideChannels();
         if (!artifacts.infoLog.empty()) return; // a conflicting explicit uniform location
 
@@ -617,11 +618,16 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
+        // The last two are OUT parameters that mapIO fills, not requests it honours: the IO
+        // mapper's collect callback is the last point at which a resource's qualifier still
+        // says what the SHADER declared rather than what glslang assigned, so both captures
+        // have to be taken from inside the link. See TMglGlslIoResolver::reserverResourceSlot.
         ProgramAttrib attrib{.shaders = Move(shaders),
                              .explicitVertexInLocations = in.explicitAttribLocations,
                              .explicitFragmentOutLocations = in.explicitFragDataLocation,
                              .explicitFragmentOutIndices = in.explicitFragDataIndex,
-                             .explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings};
+                             .explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings,
+                             .storageBlocksWithoutBinding = &artifacts.storageBlocksWithoutBinding};
 
         MGLOG_D("ProgramObject %u: Calling ShaderCompiler::LinkProgram", in.externalIndex);
         auto result = ShaderCompiler::LinkProgram(attrib);
@@ -638,6 +644,7 @@ namespace MobileGL::MG_State::GLState {
                                  artifacts.infoLog));
             return;
         }
+
 
         // A compute program must have a fixed local group size, and GL states that as a
         // property of the PROGRAM: "at least one" of its compute shaders declares it (GL 4.6
@@ -814,7 +821,6 @@ namespace MobileGL::MG_State::GLState {
         keyInputs.explicitVertexInLocations = &in.explicitAttribLocations;
         keyInputs.explicitFragmentOutLocations = &in.explicitFragDataLocation;
         keyInputs.explicitFragmentOutIndices = &in.explicitFragDataIndex;
-        keyInputs.explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings;
         // In the key ONLY because the payload now carries the reflection: transform feedback
         // is resolved by reading the linked intermediates and never perturbs the generated
         // SPIR-V, but it does shape xfbVaryings / xfbStrides / xfbBufferMode /
@@ -826,17 +832,18 @@ namespace MobileGL::MG_State::GLState {
         return BuildSpirvTranslationKey(keyInputs);
     }
 
-    // The link rejections that need nothing but the compile snapshots. They run before the
+    // The one link rejection that needs nothing but the compile snapshots. It runs before the
     // L1 memo is consulted, so a hit can never paper over a program that must fail to link.
-    // The two lexical side channels the relaxed parse cannot provide, merged across stages:
-    // explicit default-block uniform locations (which must agree, or the link fails) and
-    // sampler/image layout(binding = N) initial units. Reads the COMPILE snapshots only, so
-    // it is legal - and necessary - before any shader is parsed: the merged bindings are part
-    // of the L1 memo key.
+    //
+    // Only the explicit default-block uniform locations are merged here, and only because they
+    // are the one piece of relaxed-parse wreckage that has to be recovered at COMPILE time:
+    // the snapshot is taken inside the parse, so it is per-shader by construction, and the
+    // same uniform declared in several stages must agree or the program cannot link. The
+    // opaque bindings and the unqualified storage blocks used to be merged alongside them;
+    // both now arrive from mapIO during LinkProgram below, straight into `artifacts`, which is
+    // both later and strictly better informed - the IO mapper sees macro-expanded declarations
+    // and a per-shader lexer never could.
     void ProgramLinkTask::MergeShaderSideChannels() {
-        // Merge the shaders' lexically extracted explicit uniform locations. The same
-        // uniform declared in several stages must agree on its location (config-A glslang
-        // enforced this at mapIO; the relaxed parse no longer sees the qualifiers).
         for (const auto& shader : in.shaders) {
             const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);
             for (const auto& [name, location] : compiled.explicitUniformLocations) {
@@ -850,21 +857,7 @@ namespace MobileGL::MG_State::GLState {
                     return;
                 }
             }
-            // Sampler/image layout(binding = N) initial units, likewise invisible to the
-            // relaxed parse. Stage order matches the old per-stage mapIO capture, so a
-            // name declared in several stages keeps the last stage's binding as before.
-            for (const auto& [name, binding] : compiled.explicitOpaqueBindings) {
-                artifacts.explicitOpaqueUniformBindings[name] = binding;
-            }
-            // Storage blocks declared with NO layout(binding = N), which GL puts on binding 0.
-            // A UNION across stages, unlike the maps above: a block that any stage declared
-            // unqualified is unqualified, because GLSL requires every stage declaring the same
-            // block to declare it identically - so the stages cannot disagree, and a stage whose
-            // grammar the scanner did not recognise simply contributes nothing.
-            artifacts.storageBlocksWithoutBinding.insert(compiled.storageBlocksWithoutBinding.begin(),
-                                                         compiled.storageBlocksWithoutBinding.end());
         }
-
     }
 
     // An L1 hit: the entire front end, published without constructing a TShader or a
@@ -1117,7 +1110,7 @@ namespace MobileGL::MG_State::GLState {
                 artifacts.activeUniformCount, tProgramUniformCount);
 
         // Effective explicit location per TProgram uniform, from two sources:
-        //  - the lexical side-channel for default-block uniforms - the relaxed parse
+        //  - the parse-time snapshot for default-block uniforms - the relaxed parse
         //    dropped their layout(location = N) qualifiers when collecting them into
         //    MGL_GLOBAL_UBO, so reflection cannot provide them ("source-explicit");
         //  - glslang's layoutLocation() for opaque uniforms, where the qualifier
@@ -1681,9 +1674,13 @@ namespace MobileGL::MG_State::GLState {
     // Seeded INSIDE `artifacts`, so an L1 translation-cache hit that republishes the artifacts
     // wholesale carries it too; a seed applied outside them would silently vanish on a hit.
     //
-    // Only blocks the lexical scanner recognised in full AND recognised as unqualified are
-    // seeded. A block whose grammar it did not understand keeps today's behaviour rather than
-    // being defaulted on a guess - the shape of the input decides, never an assumption about it.
+    // The blocks are named by TMglGlslIoResolver at mapIO's collect callback, which runs over
+    // every declared block of every stage BEFORE the write-back above happens - so "declared no
+    // binding" is a fact read off the AST, not a guess made about the text. The lexical scanner
+    // this replaced could only report positively, dropping any declaration whose grammar it did
+    // not fully recognise, and could not read `binding = SOME_MACRO` at all (it ran on
+    // macro-unexpanded source, and reading "no literal" as "no binding" once aliased eight
+    // Flywheel storage blocks onto 0).
     //
     // THE COLLISION IS DELIBERATE, and it is GL's. Several unqualified blocks all default to 0
     // and alias there until the application rebinds them; a real GL driver does the same, which

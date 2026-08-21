@@ -15,6 +15,7 @@ add_executable(
         LegalizeResourceArrayIndexTest.cpp
         FlattenAtomicCounterBlockTest.cpp
         WidenImageFormatsTest.cpp
+        GlslangCaptureTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

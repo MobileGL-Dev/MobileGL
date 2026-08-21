@@ -2131,9 +2131,11 @@ void main() {
 }
 
 // The case the old masker actually broke: an apostrophe in real (non-comment) text. Everything after
-// it looked like string interior, so ExtractExplicitUniformLocations tokenized a blank source and
-// handed the GL location assigner an empty map - the uniform silently lost its explicit location.
-TEST_F(ProgramUtilTest, PreprocessApostropheInDirectiveKeepsLaterCodeVisibleToExtractors) {
+// it looked like string interior, so the rewriter's own scans went blind past it - which is still
+// what this pins, now that the explicit location itself is recovered from the parse rather than
+// from a scan. The two halves have to agree end to end: the preprocessed text must still declare
+// the uniform, AND the parse must still hand its location back.
+TEST_F(ProgramUtilTest, PreprocessApostropheInDirectiveKeepsLaterCodeVisibleToTheParse) {
     using namespace MG_Util::ShaderTranspiler;
 
     String source = R"(#version 460 core
@@ -2148,15 +2150,15 @@ void main() {
 )";
     PreprocessShaderSource(ShaderStage::Fragment, source);
 
-    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
-    ASSERT_EQ(locations.count("tint"), 1u) << "extractor went blind past the apostrophe:\n" << source;
-    EXPECT_EQ(locations.at("tint"), 7);
-
     ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
     auto res = ShaderCompiler::CompileShader(attrib);
     if (!res) {
         FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
     }
+
+    const UnorderedMap<String, Int> locations = CollectExplicitUniformLocations(*res.value());
+    ASSERT_EQ(locations.count("tint"), 1u) << "the rewriter went blind past the apostrophe:\n" << source;
+    EXPECT_EQ(locations.at("tint"), 7);
 }
 
 // PreprocessShaderSource used to rediscover "where does the #version directive end?" once per
@@ -2340,8 +2342,7 @@ namespace {
         auto result = MakeShared<ShaderPreprocessResult>();
         result->outcome = ShaderPreprocessOutcome::Preprocessed;
         result->preprocessedSource = preprocessed;
-        result->explicitUniformLocations["uMarker"] = 7;
-        result->explicitOpaqueBindings["sMarker"] = 3;
+        result->infoLog = "marker:" + preprocessed;
         return result;
     }
 } // namespace
@@ -2358,12 +2359,9 @@ TEST_F(ProgramUtilTest, ShaderPreprocessCacheRoundTripsAndSeparatesStages) {
     ASSERT_NE(hit, nullptr);
     EXPECT_TRUE(hit->Preprocessed());
     EXPECT_EQ(hit->preprocessedSource, "vertex-preprocessed");
-    const auto uniformIt = hit->explicitUniformLocations.find("uMarker");
-    ASSERT_NE(uniformIt, hit->explicitUniformLocations.end());
-    EXPECT_EQ(uniformIt->second, 7);
-    const auto bindingIt = hit->explicitOpaqueBindings.find("sMarker");
-    ASSERT_NE(bindingIt, hit->explicitOpaqueBindings.end());
-    EXPECT_EQ(bindingIt->second, 3u);
+    // The whole payload round-trips, not just the text: every field the entry carries has to
+    // come back, or a hit would publish a half-populated result.
+    EXPECT_EQ(hit->infoLog, "marker:vertex-preprocessed");
 
     // Byte-identical source, different stage: a different key, so still a miss. Two
     // stages sharing one entry would hand a fragment shader a vertex preprocess.
@@ -4418,267 +4416,6 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
     EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
 }
 
-// KHR-GL43.shader_atomic_counters.negative-offset-1: an atomic counter whose layout(offset = N)
-// puts its last byte past GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE is a COMPILE-time error, and the CTS
-// never links the shader at all. MobileGL only had the rule at link, because the Vulkan-relaxed
-// parse never reaches glslang's fixOffset().
-TEST_F(ProgramUtilTest, AtomicCounterOffsetCeilingIsCheckedAtCompile) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const auto violation = [](const String& body) {
-        return FindAtomicCounterOffsetViolation("#version 430 core\n" + body + "void main() {}\n");
-    };
-    const String maxSize = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE);
-    const String lastLegal = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 4);
-
-    // The boundary itself: the last counter that still fits, and the first that does not.
-    EXPECT_FALSE(violation("layout(binding = 0, offset = " + lastLegal + ") uniform atomic_uint c;\n").has_value());
-    EXPECT_TRUE(violation("layout(binding = 0, offset = " + maxSize + ") uniform atomic_uint c;\n").has_value());
-
-    // An array occupies one word per element, so what has to fit is the LAST one.
-    EXPECT_FALSE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 16) +
-                           ") uniform atomic_uint c[4];\n")
-                     .has_value());
-    EXPECT_TRUE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 8) +
-                          ") uniform atomic_uint c[4];\n")
-                    .has_value());
-
-    // An offset that is not a multiple of 4 (GL 4.6 core 7.7), and one that is.
-    EXPECT_TRUE(violation("layout(offset = 2) uniform atomic_uint c;\n").has_value());
-    EXPECT_FALSE(violation("layout(offset = 8) uniform atomic_uint c;\n").has_value());
-
-    // Things the scanner must NOT judge: a counter with no explicit offset, an `offset` that is
-    // an ordinary identifier rather than a layout qualifier, an array sized by an expression,
-    // and an offset qualifier that belongs to a different declaration.
-    EXPECT_FALSE(violation("uniform atomic_uint c;\nconst int offset = 99999;\n").has_value());
-    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(offset = " + maxSize +
-                           ") uniform atomic_uint c[kCount];\n")
-                     .has_value());
-    EXPECT_FALSE(violation("layout(offset = " + maxSize + ") uniform Block { int x; };\n"
-                           "uniform atomic_uint c;\n")
-                     .has_value());
-    // A source with no counter at all never pays for the scan and never reports one.
-    EXPECT_FALSE(FindAtomicCounterOffsetViolation("#version 430 core\nvoid main() {}\n").has_value());
-}
-
-// KHR-GL43.explicit_uniform_location.uniform-loc-nondecimal: GLSL integer literals are C-style, so
-// layout(location = 0xA) is 10 and layout(location = 010) is OCTAL 8. The extractor used to accept
-// a base-10 digit run and nothing else: the hex spelling failed the test entirely and the
-// declaration silently lost its explicit location, while the octal one was read as decimal 10.
-// The identical defect sat on every array dimension and on layout(binding = N).
-TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsReadsNonDecimalIntegerLiterals) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(location = 0xA) uniform vec4 hexLower;
-layout(location = 0X1f) uniform vec4 hexUpper;
-layout(location = 010) uniform vec4 octal;
-layout(location = 3u) uniform vec4 unsignedSuffix;
-layout(location = 0x2) uniform float hexArray[0x3];
-layout(location = 1.0) uniform vec4 notAnInteger;
-layout(location = 7f) uniform vec4 unknownSuffix;
-void main() {}
-)";
-
-    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
-    ASSERT_EQ(locations.count("hexLower"), 1u);
-    EXPECT_EQ(locations.at("hexLower"), 10);
-    ASSERT_EQ(locations.count("hexUpper"), 1u);
-    EXPECT_EQ(locations.at("hexUpper"), 31);
-    ASSERT_EQ(locations.count("octal"), 1u);
-    EXPECT_EQ(locations.at("octal"), 8) << "a leading zero is octal in GLSL, not decimal";
-    ASSERT_EQ(locations.count("unsignedSuffix"), 1u);
-    EXPECT_EQ(locations.at("unsignedSuffix"), 3);
-    ASSERT_EQ(locations.count("hexArray"), 1u);
-    EXPECT_EQ(locations.at("hexArray"), 2);
-
-    // Still never guessed at: a float and an unknown suffix are skipped, not rounded.
-    EXPECT_EQ(locations.count("notAnInteger"), 0u);
-    EXPECT_EQ(locations.count("unknownSuffix"), 0u);
-}
-
-// A hexadecimal array dimension has to size the declarator's span too, or the declarator after it
-// in the same statement starts at the wrong location.
-TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsSpansANonDecimalArrayDimension) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(
-        "#version 430 core\nlayout(location = 50) uniform float first[0x3], second;\nvoid main() {}\n");
-    ASSERT_EQ(locations.count("first"), 1u);
-    EXPECT_EQ(locations.at("first"), 50);
-    ASSERT_EQ(locations.count("second"), 1u);
-    EXPECT_EQ(locations.at("second"), 53) << "0x3 is three elements, not zero and not three hundred";
-}
-
-// KHR-GL43.explicit_uniform_location.uniform-loc-array-of-arrays: glslang reflects
-// `float u[2][3]` as "u[0][0]" and "u[1][0]", and the linker resolves such a name by stripping the
-// single trailing "[0]" - so the map has to answer "u[1]", not just "u". Without the pre-flattened
-// keys both records missed the map entirely and were first-fitted from location 0.
-TEST_F(ProgramUtilTest, ExtractExplicitUniformLocationsExpandsArrayOfArraysElements) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(location = 2) uniform float two_d[2][3];
-layout(location = 20) uniform float three_d[2][2][4];
-layout(location = 40) uniform float one_d[3];
-void main() {}
-)";
-
-    const UnorderedMap<String, Int> locations = ExtractExplicitUniformLocations(source);
-
-    // The root entry is unchanged - the synthesized keys are additional, never a replacement.
-    ASSERT_EQ(locations.count("two_d"), 1u);
-    EXPECT_EQ(locations.at("two_d"), 2);
-    // One key per outer index, each starting a run of the innermost dimension (3 here).
-    ASSERT_EQ(locations.count("two_d[0]"), 1u);
-    EXPECT_EQ(locations.at("two_d[0]"), 2);
-    ASSERT_EQ(locations.count("two_d[1]"), 1u);
-    EXPECT_EQ(locations.at("two_d[1]"), 5);
-
-    // Three dimensions: glslang expands all but the innermost, so both outer indices are spelled.
-    ASSERT_EQ(locations.count("three_d"), 1u);
-    EXPECT_EQ(locations.at("three_d"), 20);
-    ASSERT_EQ(locations.count("three_d[0][0]"), 1u);
-    EXPECT_EQ(locations.at("three_d[0][0]"), 20);
-    ASSERT_EQ(locations.count("three_d[0][1]"), 1u);
-    EXPECT_EQ(locations.at("three_d[0][1]"), 24);
-    ASSERT_EQ(locations.count("three_d[1][0]"), 1u);
-    EXPECT_EQ(locations.at("three_d[1][0]"), 28);
-    ASSERT_EQ(locations.count("three_d[1][1]"), 1u);
-    EXPECT_EQ(locations.at("three_d[1][1]"), 32);
-
-    // A 1-D array needs no expansion: stripping "[0]" already reaches the root.
-    ASSERT_EQ(locations.count("one_d"), 1u);
-    EXPECT_EQ(locations.at("one_d"), 40);
-    EXPECT_EQ(locations.count("one_d[0]"), 0u);
-
-    // The declarator after an array-of-arrays still advances by the WHOLE element count.
-    const UnorderedMap<String, Int> pair = ExtractExplicitUniformLocations(
-        "#version 430 core\nlayout(location = 0) uniform float a[2][3], b;\nvoid main() {}\n");
-    ASSERT_EQ(pair.count("b"), 1u);
-    EXPECT_EQ(pair.at("b"), 6);
-}
-
-// KHR-GL43.explicit_uniform_location: layout(binding = 0x2) on a sampler is the same literal defect
-// as the location one, and losing it costs the sampler its initial texture unit.
-TEST_F(ProgramUtilTest, ExtractExplicitOpaqueBindingsReadsNonDecimalIntegerLiterals) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(binding = 0x2) uniform sampler2D hexUnit;
-layout(binding = 012) uniform sampler2D octalUnit;
-layout(binding = 1u) uniform sampler2D suffixedUnit;
-void main() {}
-)";
-
-    const UnorderedMap<String, Uint> bindings = ExtractExplicitOpaqueBindings(source);
-    ASSERT_EQ(bindings.count("hexUnit"), 1u);
-    EXPECT_EQ(bindings.at("hexUnit"), 2u);
-    ASSERT_EQ(bindings.count("octalUnit"), 1u);
-    EXPECT_EQ(bindings.at("octalUnit"), 10u) << "012 is octal ten, not twelve";
-    ASSERT_EQ(bindings.count("suffixedUnit"), 1u);
-    EXPECT_EQ(bindings.at("suffixedUnit"), 1u);
-}
-
-// GL 4.3 core 7.8 puts a storage block with no layout(binding = N) on binding ZERO. Nothing
-// downstream can still tell which blocks those are, because glslang's IO mapper auto-assigns a
-// binding out of one flat space and writes it into the qualifier - so the reflection reports the
-// invention. This scanner is the only surviving record, and it reports POSITIVELY: a block is
-// named only when it was recognised in full AND recognised as unqualified.
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingNamesOnlyUnqualifiedBlocks) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    // KHR-GL43.compute_shader.resource-ubo's own shape: an unqualified storage block alongside
-    // the uniform blocks whose presence is what pushes it off binding 0 today.
-    const String source = R"(#version 430 core
-layout(local_size_x = 1) in;
-layout(std140) uniform InputBuffer { vec4 data[4]; } g_in_buffer[12];
-layout(std430) buffer OutputBuffer { vec4 data0[4]; } g_out_buffer;
-layout(std430, binding = 3) buffer BoundBlock { vec4 data1[4]; } g_bound;
-layout(binding = 5, std430) buffer BoundFirst { vec4 data2[4]; } g_bound_first;
-void main() { g_out_buffer.data0[0] = g_in_buffer[0].data[0]; }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("OutputBuffer"), 1u)
-        << "the block the test binds at 0 with glBindBufferBase must be recognised";
-    EXPECT_EQ(unqualified.count("BoundBlock"), 0u)
-        << "a declared binding must never be defaulted away";
-    EXPECT_EQ(unqualified.count("BoundFirst"), 0u)
-        << "the binding may appear anywhere in the layout list, not only last";
-    // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, and
-    // its default is already handled where uniformBlockBinding is seeded. Naming it here would
-    // make the seeder default a resource it does not own.
-    EXPECT_EQ(unqualified.count("InputBuffer"), 0u) << "uniform blocks are out of scope";
-}
-
-// The scanner must not mistake a member qualifier, a buffer-typed sampler, or the
-// "layout(...) buffer;" default-qualifier form for a block declaration - and must record nothing
-// at all for grammar it does not fully recognise, so that anything surprising keeps today's
-// behaviour instead of being defaulted on a guess.
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingIgnoresNonBlockBufferTokens) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(local_size_x = 1) in;
-uniform samplerBuffer texelSampler;
-layout(std430) buffer;
-layout(std430) buffer Real { vec4 v[4]; } realInstance;
-void main() { realInstance.v[0] = texelFetch(texelSampler, 0); }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("Real"), 1u);
-    // samplerBuffer is one identifier token, so it can never match the `buffer` keyword; and the
-    // default-qualifier form declares no block, so there is no name to record.
-    EXPECT_EQ(unqualified.size(), 1u)
-        << "only the one real block declaration may be recorded";
-}
-
-// The dangerous direction, because a false positive here DEFAULTS AWAY a binding the shader
-// really declared. Memory qualifiers may sit between the layout list and the `buffer` keyword in
-// either order, and the binding has to survive them.
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingKeepsBindingsAcrossMemoryQualifiers) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(local_size_x = 1) in;
-layout(std430, binding = 1) coherent restrict buffer AfterLayout { uint a; } afterLayout;
-readonly layout(std430, binding = 2) buffer BeforeLayout { uint b; } beforeLayout;
-writeonly buffer NoBindingAtAll { uint c; } noBinding;
-void main() { noBinding.c = afterLayout.a + beforeLayout.b; }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("AfterLayout"), 0u)
-        << "coherent/restrict must not break the qualifier run and lose the binding";
-    EXPECT_EQ(unqualified.count("BeforeLayout"), 0u)
-        << "a qualifier may precede the layout list too";
-    EXPECT_EQ(unqualified.count("NoBindingAtAll"), 1u)
-        << "a memory-qualified block with no binding is still an unqualified block";
-}
-
-// This scans preprocessor-visible text, so a block can be declared twice - once with a binding
-// and once without. Reporting it as unqualified would default away a binding the active
-// declaration carries, so any name seen WITH a binding is dropped outright.
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingDropsNamesSeenBothWays) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-layout(local_size_x = 1) in;
-layout(std430, binding = 4) buffer Ambiguous { uint a; } bound;
-layout(std430) buffer Ambiguous { uint a; } unbound;
-layout(std430) buffer Clear { uint b; } clearInstance;
-void main() { clearInstance.b = 0u; }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("Ambiguous"), 0u)
-        << "seen both ways is a doubt, and a doubt must not become a default";
-    EXPECT_EQ(unqualified.count("Clear"), 1u)
-        << "the unambiguous block alongside it is still recognised";
-}
-
 // KHR-GL43.shader_image_size.advanced-nonMS-* is nothing but its passing twin basic-nonMS-* plus a
 // GLSL subroutine, and glslang refuses the keyword outright when the target is SPIR-V ("subroutine
 // : not allowed when generating SPIR-V"), so every stage of those shaders failed to compile. The
@@ -4819,64 +4556,3 @@ subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
         << "an inactive #if arm must not have an unconditional forwarding body appended for it";
 }
 
-// THE TEXT THIS SCANS IS NOT MACRO-EXPANDED. MobileGL's preprocessing rewrites the source, it
-// does not run the C preprocessor, so a `#define` and every use of it both survive into what
-// RunSourceOnlyPipeline hands here. `binding = SOME_MACRO` is therefore the ordinary spelling in
-// real shader packs - Flywheel's indirect engine writes every one of its storage blocks that way
-// - and reading "no integer literal" as "no binding" defaulted all of them onto binding 0 at
-// once, where they aliased and the whole engine drew nothing
-// (minecraft-1.21.1-neoforge-create-indirect-in-world, both backends).
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingKeepsAMacroSpelledBinding) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    // Flywheel's own shape, verbatim in structure: the binding is a macro, the block carries
-    // memory qualifiers, and the macro's definition is still sitting in the text above it.
-    const String source = R"(#version 460 core
-#define _FLW_MODEL_BUFFER_BINDING 3
-#define _FLW_DRAW_BUFFER_BINDING 4
-layout(local_size_x = 32) in;
-layout(std430, binding = _FLW_MODEL_BUFFER_BINDING) restrict readonly buffer ModelBuffer {
-    uint models[];
-};
-layout(std430, binding = _FLW_DRAW_BUFFER_BINDING) restrict buffer DrawBuffer {
-    uint draws[];
-};
-layout(std430) buffer ReallyUnqualified { uint u; } reallyUnqualified;
-void main() { draws[0] = models[0] + reallyUnqualified.u; }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("ModelBuffer"), 0u)
-        << "a binding spelled as a macro is still a declared binding, never an absent one";
-    EXPECT_EQ(unqualified.count("DrawBuffer"), 0u)
-        << "every block of the engine would otherwise be defaulted onto 0 together";
-    EXPECT_EQ(unqualified.count("ReallyUnqualified"), 1u)
-        << "a block that truly declares no binding is still recognised in the same shader";
-}
-
-// The other two ways an unexpanded macro can hide a binding: as a whole layout entry, and as the
-// whole qualifier run. Both have to read as doubt for the same reason the macro-valued binding
-// does - what the scanner cannot expand, it must not claim is absent.
-TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingDoubtsAMacroQualifier) {
-    using namespace MG_Util::ShaderTranspiler;
-
-    const String source = R"(#version 430 core
-#define FLW_BINDING binding = 2
-#define SSBO_QUALIFIER layout(std430, binding = 6) restrict
-layout(local_size_x = 1) in;
-layout(std430, FLW_BINDING) buffer EntryMacro { uint a; } entryMacro;
-SSBO_QUALIFIER buffer RunMacro { uint b; } runMacro;
-layout(std430, row_major) buffer PlainLayout { uint c; } plainLayout;
-void main() { plainLayout.c = entryMacro.a + runMacro.b; }
-)";
-
-    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
-    EXPECT_EQ(unqualified.count("EntryMacro"), 0u)
-        << "an unreadable layout entry may itself be the binding";
-    EXPECT_EQ(unqualified.count("RunMacro"), 0u)
-        << "a macro standing in for the whole qualifier run may carry the binding";
-    // The counterweight: recognising doubt must not swallow the layout identifiers a buffer
-    // block legally carries, or nothing would ever be defaulted again.
-    EXPECT_EQ(unqualified.count("PlainLayout"), 1u)
-        << "std430/row_major are GLSL, not macros, and leave no doubt behind";
-}

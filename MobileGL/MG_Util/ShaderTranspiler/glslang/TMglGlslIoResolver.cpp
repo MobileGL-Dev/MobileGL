@@ -12,6 +12,10 @@
 
 #include "TMglGlslIoResolver.h"
 
+#include <cstring>
+
+#include <MG_Util/ShaderTranspiler/Types.h>
+
 namespace MobileGL {
     bool TMglGlslIoResolver::ShouldAssignPlainUniformLocation(const glslang::TType& type) const {
         if (!doAutoLocationMapping()) {
@@ -149,12 +153,47 @@ namespace MobileGL {
         return TDefaultGlslIoResolver::resolveInOutLocation(stage, ent);
     }
 
+    // THE COLLECT CALLBACK IS THE CAPTURE POINT, and the reason is a matter of ten lines of
+    // glslang. mapIO gathers every declared symbol of every stage and calls this on each of
+    // them (iomapper.cpp addStage -> TSlotCollector) BEFORE it resolves anything; only
+    // afterwards, in doMap(), does it write the slots it chose back into the types
+    // (iomapper.cpp:240, `layoutBinding = at->second.newBinding`). Up to here
+    // `qualifier.hasBinding()` still answers "did the SHADER say so?"; past it, every resource
+    // carries a number and the question can no longer be asked at all.
+    //
+    // Both captures below used to be lexical scans of the shader source, which had to run
+    // before the preprocessor's macros were expanded and therefore could not read
+    // `binding = SOME_MACRO` - the spelling Flywheel's indirect engine uses for every one of
+    // its storage blocks. Asking the AST instead makes the macro case ordinary.
     void TMglGlslIoResolver::reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) {
         const glslang::TType& type = ent.symbol->getType();
+        const glslang::TQualifier& qualifier = type.getQualifier();
+        // getAccessName() is the BLOCK TYPE name for a block and the declared name for
+        // everything else (IntermTraverse.cpp TIntermSymbol::getAccessName) - which is exactly
+        // the key both consumers want.
+        const glslang::TString& name = ent.symbol->getAccessName();
+
         if (m_explicitOpaqueUniformBindings != nullptr && type.getBasicType() == glslang::EbtSampler &&
-            type.getQualifier().hasBinding()) {
-            const glslang::TString& name = ent.symbol->getAccessName();
-            (*m_explicitOpaqueUniformBindings)[name.c_str()] = type.getQualifier().layoutBinding;
+            qualifier.hasBinding()) {
+            (*m_explicitOpaqueUniformBindings)[name.c_str()] = qualifier.layoutBinding;
+        }
+
+        // A storage block that declared no binding. UNION across stages by construction - one
+        // resolver serves the whole program - which is what GLSL's "every stage must declare
+        // the same block identically" rule makes correct.
+        //
+        // NOT the atomic-counter blocks glslang SYNTHESIZES, which are storage blocks by every
+        // structural test available here and are still not what this set means. Relaxed parsing
+        // folds each atomic_uint into a "gl_AtomicCounterBlock_<GL binding>" block
+        // (ParseContextBase::growAtomicCounterBlock) and leaves it unbound because MobileGL asks
+        // for auto-mapped bindings - so it arrives looking exactly like an unqualified
+        // application block. Seeding one to GL binding 0 would overwrite the counter buffer's
+        // real binding, which is the trailing number in that very name.
+        if (m_storageBlocksWithoutBinding != nullptr && type.getBasicType() == glslang::EbtBlock &&
+            qualifier.storage == glslang::EvqBuffer && !qualifier.hasBinding() &&
+            name.compare(0, std::strlen(MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX),
+                         MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX) != 0) {
+            m_storageBlocksWithoutBinding->insert(name.c_str());
         }
 
         TDefaultGlslIoResolver::reserverResourceSlot(ent, infoSink);

@@ -1205,9 +1205,10 @@ namespace MobileGL::MG_State::GLState {
             // BuildGlobalUboRouting read as "member of the synthesized global UBO".
             Vector<Int> glUniformBlockIndexToBlock; // GL uniform-block index -> block index
             Vector<Int> blockIndexToGlUniformBlock; // block index -> GL uniform-block index (-1)
-            // Per-link merged snapshot of the attached shaders' lexically extracted
-            // layout(location = N) default-block uniform qualifiers (the relaxed parse drops
-            // them from reflection; the DoReflection assigner restores them from here).
+            // Per-link merged snapshot of the layout(location = N) qualifiers the attached
+            // shaders' default-block uniforms declared, as glslang recorded them at the point
+            // its relaxed remap dropped them (the relaxed parse drops them from reflection; the
+            // DoReflection assigner restores them from here).
             UnorderedMap<String, Int> linkedExplicitUniformLocations;
             // Per-link snapshot of the default-block uniform INITIALIZERS the attached shaders
             // declared ("uniform int i = 1;"). Desktop GLSL says that value is what the uniform
@@ -1232,6 +1233,10 @@ namespace MobileGL::MG_State::GLState {
             Vector<Int> uniformIndexInTProgram;
             // ditto. Will be set at glUniform1i
             Vector<Int> uniformSamplerOrImageUnitIndex;
+            // Sampler/image layout(binding = N) initial texture/image units, captured by
+            // TMglGlslIoResolver at mapIO's collect callback - the last point at which the
+            // qualifier still says what the shader declared. An OUTPUT of the link, not an
+            // input to it: nothing supplies this map, the resolver fills it.
             UnorderedMap<String, Uint> explicitOpaqueUniformBindings;
 
             // Ordered by uniform block index
@@ -1256,9 +1261,10 @@ namespace MobileGL::MG_State::GLState {
             // overwrites it - default and rebind travel one path.
             UnorderedMap<String, Int> shaderStorageBlockBinding;
             // Block type names of the storage blocks the program's shaders declared with NO
-            // layout(binding = N), merged across stages by MergeShaderSideChannels. Input to the
-            // seeding above; see ExtractStorageBlocksWithoutExplicitBinding for why it has to be
-            // captured lexically.
+            // layout(binding = N). Input to the seeding above; filled during mapIO by
+            // TMglGlslIoResolver, which is the last observer that can still tell a declared
+            // binding from an invented one - and, unlike the per-shader lexer this replaced,
+            // sees the declaration with its macros expanded.
             std::set<String> storageBlocksWithoutBinding;
 
             Uint activeUniformCount = 0;

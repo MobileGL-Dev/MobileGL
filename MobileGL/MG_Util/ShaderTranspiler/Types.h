@@ -69,7 +69,13 @@ namespace MobileGL {
                 // Dual-source blend color index per fragment output (glBindFragDataLocationIndexed) ->
                 // emitted as layout(index = N).
                 UnorderedMap<String, Uint> explicitFragmentOutIndices;
+                // ---- OUT parameters, written by TMglGlslIoResolver during mapIO ----
+                // Neither is an input: the resolver only ever writes them. They exist because
+                // the IO mapper's collect callback is the last point at which a resource's
+                // qualifier still says what the SHADER declared rather than what glslang
+                // assigned - see the comment on TMglGlslIoResolver::reserverResourceSlot.
                 UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
+                std::set<String>* storageBlocksWithoutBinding = nullptr;
             };
 
             struct ProgramBinaryAttrib {
