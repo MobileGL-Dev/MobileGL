@@ -3479,3 +3479,104 @@ void main() {
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// GL 4.6 core 7.6.1: a uniform LOCATION is a property of the default uniform block. A member of
+// a named uniform block or a buffer block has none, and glGetUniformLocation must answer -1 for
+// it - which is what glGetProgramResourceLocation(GL_UNIFORM, ...) already did, so the two used
+// to disagree. The location such a member was handed was not merely reported, it was CONSUMED:
+// it came out of the same first-fit table the default-block uniforms draw from.
+TEST_F(ProgramTest, BlockMembersConsumeNoUniformLocation) {
+    const char* csSource = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 1) buffer ResultBuffer { vec4 bufferMember; };
+layout(std140, binding = 2) uniform SettingsBlock { vec4 blockMember; };
+layout(location = 0) uniform float uDead[3];
+uniform float uImplicit;
+void main() { bufferMember = blockMember * uImplicit; }
+)";
+    const GLuint cs = CompileShaderChecked(GL_COMPUTE_SHADER, csSource);
+    const GLuint program = CreateProgram();
+    AttachShader(program, cs);
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    char infoLog[1024] = "";
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    ASSERT_EQ(linkStatus, GL_TRUE) << infoLog;
+
+    for (const char* member : {"bufferMember", "blockMember"}) {
+        EXPECT_EQ(GetUniformLocation(program, member), -1) << member << " is a block member, not a GL uniform";
+        EXPECT_EQ(GetProgramResourceLocation(program, GL_UNIFORM, member), -1)
+            << member << ": the two location queries must agree";
+    }
+
+    // uDead[3] reserves 0..2 without becoming visible, so the first location left for the one
+    // default-block uniform is 3. It used to be 4, because a block member took 3 first.
+    EXPECT_EQ(GetUniformLocation(program, "uImplicit"), 3)
+        << "a block member consumed a location the default-block uniform was entitled to";
+    EXPECT_EQ(GetUniformLocation(program, "uDead"), -1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The same defect at the boundary, which is where the conformance suite catches it. The location
+// table's ceiling is raised to hold every uniform it must place; counting block members into that
+// raise pushed the ceiling to GL_MAX_UNIFORM_LOCATIONS itself, and the first-fit pass then handed
+// out the one location past the legal 0..MAX-1 range
+// (KHR-GL43.explicit_uniform_location.uniform-loc-mix-with-implicit-max, whose compute program
+// carries an SSBO: "Uniform u2 returned location (4095) is greater than implementation dependent
+// limit (4095)"). Its -array sibling shares the root cause and failed one step further along, with
+// the pool reported exhausted and no link at all.
+TEST_F(ProgramTest, ImplicitLocationStaysInRangeWhenABufferBlockSharesTheProgram) {
+    GLint maxLocations = 0;
+    GetIntegerv(GL_MAX_UNIFORM_LOCATIONS, &maxLocations);
+    ASSERT_GE(maxLocations, 1024) << "GL 4.3 requires at least 1024 uniform locations";
+
+    // The CTS shape: explicit unused arrays fill the pool except for a hole of `implicitCount`
+    // locations at `holeBase`, and the one implicit uniform must land exactly in that hole.
+    const auto runCase = [&](int holeBase, int implicitCount) {
+        String decls;
+        int nextName = 0;
+        if (holeBase > 0) {
+            decls += "layout(location = 0) uniform float u" + std::to_string(nextName++) + "[" +
+                     std::to_string(holeBase) + "];\n";
+        }
+        const int tailBase = holeBase + implicitCount;
+        if (tailBase < maxLocations) {
+            decls += "layout(location = " + std::to_string(tailBase) + ") uniform float u" +
+                     std::to_string(nextName++) + "[" + std::to_string(maxLocations - tailBase) + "];\n";
+        }
+        const String implicitName = "u" + std::to_string(nextName);
+        decls += "uniform float " + implicitName + "[" + std::to_string(implicitCount) + "];\n";
+
+        // The buffer block is the whole point: it is one more uniform the table has to seat, and
+        // seating it inside the location space is what used to push the implicit uniform out.
+        const String csSource = "#version 430 core\n"
+                                "layout(local_size_x = 1) in;\n"
+                                "layout(std430, binding = 1) buffer ResultBuffer { vec4 cs_result; };\n" +
+                                decls + "void main() { cs_result = vec4(" + implicitName + "[0]); }\n";
+        const GLuint cs = CompileShaderChecked(GL_COMPUTE_SHADER, csSource.c_str());
+        const GLuint program = CreateProgram();
+        AttachShader(program, cs);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        char infoLog[1024] = "";
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        ASSERT_EQ(linkStatus, GL_TRUE) << "hole at " << holeBase << " x" << implicitCount << ": " << infoLog;
+
+        const GLint location = GetUniformLocation(program, implicitName.c_str());
+        EXPECT_EQ(location, holeBase) << "the implicit uniform must take the one free span left";
+        EXPECT_LT(location + implicitCount, maxLocations + 1)
+            << "locations " << location << ".." << (location + implicitCount - 1)
+            << " must stay inside 0.." << (maxLocations - 1);
+        EXPECT_EQ(GetUniformLocation(program, "cs_result"), -1);
+    };
+
+    // The three holes the CTS walks, for its single-uniform and its 3-element-array subcase.
+    for (const int implicitCount : {1, 3}) {
+        runCase(0, implicitCount);
+        runCase(3, implicitCount);
+        runCase(maxLocations - implicitCount, implicitCount);
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
