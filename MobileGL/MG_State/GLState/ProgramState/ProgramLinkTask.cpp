@@ -1124,6 +1124,24 @@ namespace MobileGL::MG_State::GLState {
                 // span is left; grow the table instead of leaving the uniform without
                 // a location (which would make it unsettable via glUniform*).
                 const SizeT base = artifacts.uniformIndexInTProgram.size();
+                // The growth stops at the pool GL advertises. GL 4.6 core 7.6.1 bounds every
+                // uniform location by GL_MAX_UNIFORM_LOCATIONS, and the conformance suite reads a
+                // returned location >= the advertised maximum as a failure outright
+                // (KHR-GLES31.explicit_uniform_location.uniform-loc-mix-with-implicit-max). Minting
+                // 4095, 4096, ... is strictly worse than refusing: those are locations no
+                // application may legally name and no later query can make legal, so they would
+                // only turn a link-time exhaustion into a silently unwritable uniform. Unreachable
+                // for any program that fits glslang's per-stage uniform-component limits - it takes
+                // a fragmented pool of thousands of explicitly-located slots to get here.
+                if (base + static_cast<SizeT>(locationSpan) > kMaxUniformLocations) {
+                    artifacts.infoLog = std::format(
+                        "Uniform locations exhausted: '{}' needs {} location(s) and no free span is left below "
+                        "GL_MAX_UNIFORM_LOCATIONS ({}).",
+                        uniform.name, locationSpan, kMaxUniformLocations);
+                    DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+                    ProgramObject::ResetLinkArtifacts(artifacts);
+                    return false;
+                }
                 artifacts.uniformIndexInTProgram.resize(base + locationSpan,
                                                         glslang::TQualifier::layoutLocationEnd);
                 artifacts.uniformSamplerOrImageUnitIndex.resize(base + locationSpan, -1);
