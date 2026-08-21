@@ -5665,6 +5665,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &arrayImageSpirv;
             }
 
+            // The SAMPLER half of the same 1D story, and a defect one layer deeper than the one
+            // above. SPIRV-Cross DOES widen a 1D sampler's coordinate for ES - it just prints the
+            // OFFSET and the two GRADIENT operands with the arity the desktop shader spelled, so
+            // textureLodOffset(sampler1DArray, vec2, float, int) is emitted against a
+            // sampler2DArray and the driver answers "no matching overloaded function found",
+            // losing the stage and silently no-oping every dispatch that used it. Widening the
+            // operands alone would be an INVALID module (the validator derives the required arity
+            // from the image's own Dim), so the pass moves the type to 2D and widens coordinate,
+            // offset and gradients together.
+            //
+            // NO KEY MATERIAL, by the same test LegalizeStorageBlockArrayIndexingForEssl passes:
+            // it takes the module and nothing else, no capability bit arms it, and it self-gates
+            // on the module's own content (BinaryHasOffsetOrGrad1DSampledImage). The module is
+            // already the largest thing in the L2 key, so it is covered completely.
+            Vector<unsigned int> sampled1DSpirv;
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DSampledImagesForEssl(
+                    *effectiveSpirv, sampled1DSpirv, enableSpirvValidation) &&
+                !sampled1DSpirv.empty()) {
+                effectiveSpirv = &sampled1DSpirv;
+            }
+
             // GLSL ES has no format-less image: `writeonly uniform uimage2D` is legal desktop
             // GLSL 4.2 and an Adreno ES compile error ("all images have to define layout
             // format"), which loses the whole program. Give each such image the format the

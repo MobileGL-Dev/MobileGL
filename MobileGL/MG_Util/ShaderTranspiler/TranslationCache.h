@@ -566,9 +566,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //
     // Unconditional passes take no input but the module and so need no key material:
     // StripUboMemberRelaxedPrecision, LowerRectImages, Lower1DArrayImages,
-    // LegalizeStorageBlockArrayIndexing and FlattenAtomicCounterBlockOffsets. Each self-gates
-    // on the module's own content and is armed by nothing, so the SPIR-V already in this key
-    // covers them completely.
+    // Lower1DSampledImages, LegalizeStorageBlockArrayIndexing and
+    // FlattenAtomicCounterBlockOffsets. Each self-gates on the module's own content and is
+    // armed by nothing, so the SPIR-V already in this key covers them completely.
     //
     // THE TEST FOR THAT CLAIM IS NOT THE SIGNATURE. LowerViewportIndexForEssl is equally
     // module-only to look at, yet SupportsViewportArray is in this key because that bit ARMS

@@ -33,6 +33,7 @@
 #include "SpirvPasses/FixIterationRPSubgroupScratchPass.h"
 #include "SpirvPasses/NormalizeRectCoordinatesPass.h"
 #include "SpirvPasses/Lower1DArrayImagesPass.h"
+#include "SpirvPasses/Lower1DSampledImagesPass.h"
 #include "SpirvPasses/BakeImageFormatsPass.h"
 #include "SpirvPasses/WidenImageFormatsPass.h"
 #include "SpirvPasses/ClampMultisampleFetchPass.h"
@@ -1126,6 +1127,39 @@ namespace MobileGL {
                 optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
                 return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::Lower1DSampledImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary,
+                                                             const bool enableSpirvValidation) {
+                using namespace spvtools;
+
+                // The overwhelmingly common answer, and the reason the probe exists: no 1D sampler
+                // is reached by an offset or a gradient, so the module is handed back byte for
+                // byte without an Optimizer ever being built. Every ESSL shader in the process
+                // passes through here, so the cost of the case with nothing to do is the cost of
+                // this pass. Note the probe is deliberately NARROWER than "declares a 1D sampler":
+                // SPIRV-Cross emits the plain sample and fetch forms correctly, and taking those
+                // over would be a regression looking for somewhere to happen.
+                if (!Lower1DSampledImagesPass::BinaryHasOffsetOrGrad1DSampledImage(inputBinary)) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(Lower1DSampledImagesPass::CreateLower1DSampledImagesPass());
+                // Mandatory, not tidying - the same collision Lower1DArrayImagesForEssl documents
+                // one screen up. Rewriting a 1D sampled image type to the 2D one makes it
+                // structurally IDENTICAL to any real 2D sampled image of the same sampled type the
+                // module already declared, and SPIR-V forbids duplicate non-aggregate type
+                // declarations. That is not exotic here: it is the exact shape of the headline
+                // case, whose compute shader declares sampler1D and sampler2D side by side. The
+                // same applies to the OpTypeSampledImage and OpTypePointer instructions above
+                // them, and to the Sampled1D capability the rewrite turns into a second Shader.
+                optimizer.RegisterPass(CreateRemoveDuplicatesPass());
+
+                return RunOptimizerChecked("Lower1DSampledImagesForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,

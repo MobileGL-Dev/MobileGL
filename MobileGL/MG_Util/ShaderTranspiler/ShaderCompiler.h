@@ -209,6 +209,19 @@ namespace MobileGL {
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);
+                // The SAMPLED-image counterpart. SPIRV-Cross widens a 1D sampler's COORDINATE for
+                // ES and prints the OFFSET and GRADIENT operands with their original 1D arity, so
+                // textureOffset / textureLodOffset / texelFetchOffset / textureGrad on a
+                // sampler1D(Array) come out with no ESSL overload ("no matching overloaded
+                // function found") and the stage is lost. Rewrites the type to 2D and widens
+                // coordinate, offset and gradients together. DirectGLES transpile path only -
+                // Vulkan has 1D images natively. Copies the input through untouched unless the
+                // module actually carries such an operand on a 1D sampler, so a shader that only
+                // samples or fetches keeps SPIRV-Cross's own correct emission. See
+                // Lower1DSampledImagesPass for what it declines and why.
+                static bool Lower1DSampledImagesForEssl(const Vector<Uint32>& inputBinary,
+                                                        Vector<uint32_t>& outputBinary,
+                                                        bool enableSpirvValidation = false);
                 // Gives each format-less storage image the format bound to its image unit, so
                 // the emitted ESSL can carry the format layout qualifier GLSL ES requires of
                 // every image and desktop GLSL lets a writeonly declaration omit. `glFormatByName`
