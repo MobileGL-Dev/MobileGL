@@ -211,6 +211,12 @@ namespace {
         // ProgramObject::DoReflection.
         result.explicitUniformLocations = ExtractExplicitUniformLocations(result.preprocessedSource);
         result.explicitOpaqueBindings = ExtractExplicitOpaqueBindings(result.preprocessedSource);
+        // The third side-channel, and the one that restores a GL DEFAULT rather than an
+        // application-declared value: a storage block with no layout(binding = N) has buffer
+        // binding 0 in GL, and by the time the reflection is built glslang's IO mapper has
+        // already invented one and written it into the qualifier.
+        result.storageBlocksWithoutBinding =
+            ExtractStorageBlocksWithoutExplicitBinding(result.preprocessedSource);
         result.outcome = ShaderPreprocessOutcome::Preprocessed;
         return result;
     }
@@ -355,6 +361,7 @@ namespace MobileGL::MG_State::GLState {
             artifacts.preprocessedSource = shared.preprocessedSource;
             artifacts.explicitUniformLocations = shared.explicitUniformLocations;
             artifacts.explicitOpaqueBindings = shared.explicitOpaqueBindings;
+            artifacts.storageBlocksWithoutBinding = shared.storageBlocksWithoutBinding;
             artifacts.infoLog.clear();
             if (shouldPopulateCache) {
                 cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
@@ -381,6 +388,7 @@ namespace MobileGL::MG_State::GLState {
                 fresh->infoLog = artifacts.infoLog;
                 fresh->explicitUniformLocations.clear();
                 fresh->explicitOpaqueBindings.clear();
+                fresh->storageBlocksWithoutBinding.clear();
                 cache->Insert(stage, sourceHash, *source, compileEnv.fingerprint, Move(fresh));
             }
         }

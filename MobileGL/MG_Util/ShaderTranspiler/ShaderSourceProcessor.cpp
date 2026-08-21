@@ -1548,6 +1548,89 @@ namespace MobileGL {
                 }
             } // namespace
 
+            std::set<String> ExtractStorageBlocksWithoutExplicitBinding(const String& source) {
+                std::set<String> names;
+                // Fast path: no storage block, nothing to record. `buffer` as a whole token is
+                // what declares one; samplerBuffer/imageBuffer/textureBuffer tokenize as single
+                // identifiers and so cannot match below, but this substring test is only a
+                // cheap pre-filter and is allowed to be generous.
+                if (source.find("buffer") == String::npos) return names;
+
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                Int braceDepth = 0;
+                // Block names seen WITH a binding. Subtracted at the end so a name that is
+                // declared unqualified in one place and qualified in another is never reported:
+                // this scans preprocessor-visible text, so both arms of a #if can be present,
+                // and defaulting a block the active arm binds explicitly would be a regression.
+                // A name is dropped whenever there is any doubt, never kept.
+                std::set<String> qualified;
+                // The binding the qualifier run currently being scanned declared, -1 for none.
+                // Several layout(...) lists may precede one declaration and the later one wins -
+                // the same accumulate-then-consume shape FindShaderStorageBindingViolation uses.
+                long long binding = -1;
+                long long literal = 0;
+                for (SizeT pos = 0; pos < count; ++pos) {
+                    const String& text = tokens[pos].text;
+                    if (text == "{") {
+                        ++braceDepth;
+                        binding = -1;
+                        continue;
+                    }
+                    if (text == "}") {
+                        if (braceDepth > 0) --braceDepth;
+                        continue;
+                    }
+                    // Only depth-0 declarations are block declarations; `buffer` inside a block
+                    // body or a function is a member qualifier or an identifier.
+                    if (braceDepth != 0) continue;
+
+                    if (text == "layout" && pos + 1 < count && tokens[pos + 1].text == "(") {
+                        SizeT j = pos + 2;
+                        Int parenDepth = 1;
+                        while (j < count && parenDepth > 0) {
+                            const String& layoutToken = tokens[j].text;
+                            if (layoutToken == "(") {
+                                ++parenDepth;
+                            } else if (layoutToken == ")") {
+                                --parenDepth;
+                            } else if (parenDepth == 1 && layoutToken == "binding" && j + 2 < count &&
+                                       tokens[j + 1].text == "=" &&
+                                       ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                binding = std::min(literal, static_cast<long long>(INT_MAX / 2));
+                                j += 2;
+                            }
+                            ++j;
+                        }
+                        pos = j - 1;
+                        continue;
+                    }
+
+                    if (text == "buffer") {
+                        // Recorded ONLY for the fully recognised shape: a block type name
+                        // followed by the body's '{'. The "layout(...) buffer;"
+                        // default-qualifier form declares no block and has no name to key on,
+                        // and anything else here is grammar this scanner does not judge - both
+                        // fall through and keep today's behaviour.
+                        if (pos + 2 < count && IsIdentifierToken(tokens[pos + 1]) &&
+                            tokens[pos + 2].text == "{") {
+                            (binding < 0 ? names : qualified).insert(tokens[pos + 1].text);
+                        }
+                        binding = -1;
+                        continue;
+                    }
+
+                    // Qualifiers may sit between the layout list and the `buffer` keyword;
+                    // anything else ends the run, so a binding never leaks onto an unrelated
+                    // declaration - and, just as importantly, the ABSENCE of one never does.
+                    if (!IsNonLayoutQualifierKeyword(text)) binding = -1;
+                }
+                for (const String& name : qualified) {
+                    names.erase(name);
+                }
+                return names;
+            }
+
             std::optional<String> FindShaderStorageBindingViolation(const String& source, Int maxBindings) {
                 // A backend that advertises nothing has no ceiling to enforce.
                 if (maxBindings <= 0) return std::nullopt;

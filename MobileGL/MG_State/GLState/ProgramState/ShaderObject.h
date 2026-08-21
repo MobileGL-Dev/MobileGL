@@ -112,6 +112,13 @@ namespace MobileGL {
             const UnorderedMap<String, Uint>& GetExplicitOpaqueBindings() const {
                 return Compiled().explicitOpaqueBindings;
             }
+            // Block type names of this shader's storage blocks that declared NO
+            // layout(binding = N), captured lexically because glslang's IO mapper invents one
+            // and overwrites the qualifier before anything can ask (see
+            // ExtractStorageBlocksWithoutExplicitBinding).
+            const std::set<String>& GetStorageBlocksWithoutBinding() const {
+                return Compiled().storageBlocksWithoutBinding;
+            }
             Bool GetCompileStatus() const { return Compiled().compileStatus; }
             Bool GetDeleteStatus() const { return m_deleteStatus; }
 

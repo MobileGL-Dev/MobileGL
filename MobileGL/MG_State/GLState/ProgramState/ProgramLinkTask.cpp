@@ -828,6 +828,13 @@ namespace MobileGL::MG_State::GLState {
             for (const auto& [name, binding] : compiled.explicitOpaqueBindings) {
                 artifacts.explicitOpaqueUniformBindings[name] = binding;
             }
+            // Storage blocks declared with NO layout(binding = N), which GL puts on binding 0.
+            // A UNION across stages, unlike the maps above: a block that any stage declared
+            // unqualified is unqualified, because GLSL requires every stage declaring the same
+            // block to declare it identically - so the stages cannot disagree, and a stage whose
+            // grammar the scanner did not recognise simply contributes nothing.
+            artifacts.storageBlocksWithoutBinding.insert(compiled.storageBlocksWithoutBinding.begin(),
+                                                         compiled.storageBlocksWithoutBinding.end());
         }
 
     }
@@ -1505,6 +1512,7 @@ namespace MobileGL::MG_State::GLState {
         for (Int i = 0; i < blockCount; ++i) {
             artifacts.blockReflection.push_back(MakeResourceReflection(program.getUniformBlock(i)));
         }
+        SeedDefaultStorageBlockBindings();
 
         const Int uniformCount = program.getNumUniformVariables();
         artifacts.uniformReflection.clear();
@@ -1551,6 +1559,63 @@ namespace MobileGL::MG_State::GLState {
                 "%zu output(s)",
                 in.externalIndex, artifacts.uniformReflection.size(), artifacts.blockReflection.size(),
                 artifacts.pipeInputReflection.size(), artifacts.pipeOutputReflection.size());
+    }
+
+    // GL 4.3 core 7.8: a shader storage block declared without a layout(binding = N) qualifier
+    // has a buffer binding of ZERO. MobileGL could not report that, because by the time this
+    // reflection is built the number in the block's qualifier is one glslang INVENTED.
+    //
+    // Every shader is parsed as a Vulkan client, so glslang's IO mapper takes the `set = openGl
+    // ? resource : ent.newSet` branch with openGl == 0 (iomapper.cpp resolveBinding) - i.e. it
+    // allocates out of ONE flat binding space shared by every sampler, image, uniform block,
+    // storage block and the synthesized MGL_GLOBAL_UBO - and then writes the result back into
+    // the type's qualifier (iomapper.cpp, `base->getWritableType().getQualifier().layoutBinding =
+    // at->second.newBinding`). getBinding() therefore answers with the auto-assigned slot and
+    // cannot be distinguished from a declared one. An unqualified block lands on 0 only when
+    // nothing else in the program claimed 0 first, which is why a lone storage block in a
+    // trivial shader looked correct and KHR-GL43.compute_shader.resource-ubo - whose shader also
+    // declares twelve uniform blocks - wrote everything to a binding nothing was bound at.
+    //
+    // THE FLAT SPACE IS LEFT ALONE. It is load-bearing: DirectVulkan indexes bindingKinds[],
+    // uniformBlockIndexByBinding[] and storageBlockIndexByBinding[] by that one number and
+    // asserts when two resources collide on it, so forcing the SPIR-V decoration to 0 would
+    // collide an unqualified block with the global UBO and take working programs down. What is
+    // repaired is the GL-VISIBLE binding, through the record GL already has for exactly this -
+    // the same per-name map glShaderStorageBlockBinding writes, which both backends already
+    // consult (ProgramInterface's GL_BUFFER_BINDING, DirectGLES's SPIRV-Cross binding rewrite,
+    // DirectVulkan's GetShaderStorageBlockBinding). Seeding it here means the default and a
+    // later rebind travel the same path, and basic-noBindingLayout - which rebinds all three of
+    // its unqualified blocks - keeps working because a rebind simply overwrites the seed.
+    //
+    // Seeded INSIDE `artifacts`, so an L1 translation-cache hit that republishes the artifacts
+    // wholesale carries it too; a seed applied outside them would silently vanish on a hit.
+    //
+    // Only blocks the lexical scanner recognised in full AND recognised as unqualified are
+    // seeded. A block whose grammar it did not understand keeps today's behaviour rather than
+    // being defaulted on a guess - the shape of the input decides, never an assumption about it.
+    //
+    // THE COLLISION IS DELIBERATE, and it is GL's. Several unqualified blocks all default to 0
+    // and alias there until the application rebinds them; a real GL driver does the same, which
+    // is why every program that has more than one either rebinds or uses one of them.
+    // basic-noBindingLayout is that regression test - it rebinds all three of its blocks
+    // immediately after linking, and the DirectGLES transpile is lazy (first use, not link), so
+    // the ESSL it eventually emits already carries the rebound 0/1/2 and never the aliased seed.
+    // What this replaces was not a safer arrangement, only an accidental one: the three blocks
+    // got glslang's 0/1/2 and an application that rebound them to anything else still wrote to
+    // the wrong buffers.
+    void ProgramLinkTask::SeedDefaultStorageBlockBindings() {
+        if (artifacts.storageBlocksWithoutBinding.empty()) return;
+        for (const ProgramObject::BlockReflection& block : artifacts.blockReflection) {
+            if (!block.type.isBuffer) continue;
+            // An instance array reflects as "B[0]", "B[1]", ... and each element is its own GL
+            // resource with its own binding; the scanner keys on the block TYPE name, so the
+            // subscript is stripped before the lookup. GL gives element k of an unqualified
+            // array binding 0 + k, the same base + element rule a declared binding follows.
+            const String base = StripArrayElementSuffix(block.name);
+            if (!artifacts.storageBlocksWithoutBinding.contains(base)) continue;
+            // First writer wins: never overwrite a binding the application has already chosen.
+            artifacts.shaderStorageBlockBinding.emplace(block.name, BlockArrayElement(block.name));
+        }
     }
 
     Bool ProgramLinkTask::ValidateFragmentOutputLocations() {

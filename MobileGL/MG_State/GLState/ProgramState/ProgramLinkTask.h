@@ -189,6 +189,11 @@ namespace MobileGL::MG_State::GLState {
         // Copies every reflection record the GL query surface reads out of the glslang
         // TProgram into LinkArtifacts own owned tables. Runs at the tail of DoReflection.
         void SnapshotGlslangReflection();
+        // Gives every storage block whose shader declared no layout(binding = N) the binding
+        // GL 4.3 core 7.8 says it has - zero - because glslang's IO mapper has by then invented
+        // one and overwritten the qualifier. See the definition for why the invented binding is
+        // deliberately left in place for the backends' own use.
+        void SeedDefaultStorageBlockBindings();
         Bool ValidateFragmentOutputLocations();
         Bool ResolveTransformFeedbackVaryings();
         void ResolveGsTriangleStripCapture(const glslang::TIntermediate* captureIntermediate);

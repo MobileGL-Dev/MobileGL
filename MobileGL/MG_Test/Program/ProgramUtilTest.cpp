@@ -4538,3 +4538,102 @@ void main() {}
     ASSERT_EQ(bindings.count("suffixedUnit"), 1u);
     EXPECT_EQ(bindings.at("suffixedUnit"), 1u);
 }
+
+// GL 4.3 core 7.8 puts a storage block with no layout(binding = N) on binding ZERO. Nothing
+// downstream can still tell which blocks those are, because glslang's IO mapper auto-assigns a
+// binding out of one flat space and writes it into the qualifier - so the reflection reports the
+// invention. This scanner is the only surviving record, and it reports POSITIVELY: a block is
+// named only when it was recognised in full AND recognised as unqualified.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingNamesOnlyUnqualifiedBlocks) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // KHR-GL43.compute_shader.resource-ubo's own shape: an unqualified storage block alongside
+    // the uniform blocks whose presence is what pushes it off binding 0 today.
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std140) uniform InputBuffer { vec4 data[4]; } g_in_buffer[12];
+layout(std430) buffer OutputBuffer { vec4 data0[4]; } g_out_buffer;
+layout(std430, binding = 3) buffer BoundBlock { vec4 data1[4]; } g_bound;
+layout(binding = 5, std430) buffer BoundFirst { vec4 data2[4]; } g_bound_first;
+void main() { g_out_buffer.data0[0] = g_in_buffer[0].data[0]; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("OutputBuffer"), 1u)
+        << "the block the test binds at 0 with glBindBufferBase must be recognised";
+    EXPECT_EQ(unqualified.count("BoundBlock"), 0u)
+        << "a declared binding must never be defaulted away";
+    EXPECT_EQ(unqualified.count("BoundFirst"), 0u)
+        << "the binding may appear anywhere in the layout list, not only last";
+    // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, and
+    // its default is already handled where uniformBlockBinding is seeded. Naming it here would
+    // make the seeder default a resource it does not own.
+    EXPECT_EQ(unqualified.count("InputBuffer"), 0u) << "uniform blocks are out of scope";
+}
+
+// The scanner must not mistake a member qualifier, a buffer-typed sampler, or the
+// "layout(...) buffer;" default-qualifier form for a block declaration - and must record nothing
+// at all for grammar it does not fully recognise, so that anything surprising keeps today's
+// behaviour instead of being defaulted on a guess.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingIgnoresNonBlockBufferTokens) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+uniform samplerBuffer texelSampler;
+layout(std430) buffer;
+layout(std430) buffer Real { vec4 v[4]; } realInstance;
+void main() { realInstance.v[0] = texelFetch(texelSampler, 0); }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("Real"), 1u);
+    // samplerBuffer is one identifier token, so it can never match the `buffer` keyword; and the
+    // default-qualifier form declares no block, so there is no name to record.
+    EXPECT_EQ(unqualified.size(), 1u)
+        << "only the one real block declaration may be recorded";
+}
+
+// The dangerous direction, because a false positive here DEFAULTS AWAY a binding the shader
+// really declared. Memory qualifiers may sit between the layout list and the `buffer` keyword in
+// either order, and the binding has to survive them.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingKeepsBindingsAcrossMemoryQualifiers) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 1) coherent restrict buffer AfterLayout { uint a; } afterLayout;
+readonly layout(std430, binding = 2) buffer BeforeLayout { uint b; } beforeLayout;
+writeonly buffer NoBindingAtAll { uint c; } noBinding;
+void main() { noBinding.c = afterLayout.a + beforeLayout.b; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("AfterLayout"), 0u)
+        << "coherent/restrict must not break the qualifier run and lose the binding";
+    EXPECT_EQ(unqualified.count("BeforeLayout"), 0u)
+        << "a qualifier may precede the layout list too";
+    EXPECT_EQ(unqualified.count("NoBindingAtAll"), 1u)
+        << "a memory-qualified block with no binding is still an unqualified block";
+}
+
+// This scans preprocessor-visible text, so a block can be declared twice - once with a binding
+// and once without. Reporting it as unqualified would default away a binding the active
+// declaration carries, so any name seen WITH a binding is dropped outright.
+TEST_F(ProgramUtilTest, ExtractStorageBlocksWithoutExplicitBindingDropsNamesSeenBothWays) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 4) buffer Ambiguous { uint a; } bound;
+layout(std430) buffer Ambiguous { uint a; } unbound;
+layout(std430) buffer Clear { uint b; } clearInstance;
+void main() { clearInstance.b = 0u; }
+)";
+
+    const std::set<String> unqualified = ExtractStorageBlocksWithoutExplicitBinding(source);
+    EXPECT_EQ(unqualified.count("Ambiguous"), 0u)
+        << "seen both ways is a doubt, and a doubt must not become a default";
+    EXPECT_EQ(unqualified.count("Clear"), 1u)
+        << "the unambiguous block alongside it is still recognised";
+}

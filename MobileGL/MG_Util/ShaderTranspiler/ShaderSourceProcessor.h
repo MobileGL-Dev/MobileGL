@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #pragma once
+#include <set>
+
 #include <Includes.h>
 #include <MG_State/GLState/ProgramState/ShaderObject.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
@@ -64,6 +66,24 @@ namespace MobileGL {
             // mapIO can capture them, so they are recovered lexically (same narrow
             // grammar discipline as ExtractExplicitUniformLocations).
             UnorderedMap<String, Uint> ExtractExplicitOpaqueBindings(const String& source);
+
+            // The BLOCK TYPE NAMES of the shader storage blocks this source declares WITHOUT a
+            // layout(binding = N) qualifier. GL 4.3 core 7.8 gives such a block a buffer binding
+            // of ZERO, which the application may then move with glShaderStorageBlockBinding.
+            //
+            // Exists because nothing downstream can still tell. Every shader is parsed as a
+            // Vulkan client, so glslang's IO mapper allocates a binding for the block out of one
+            // flat space shared with every sampler, image and uniform block in the program
+            // (iomapper.cpp resolveBinding: `set = openGl ? resource : ent.newSet`, and openGl is
+            // 0 here) - and then WRITES IT BACK into the type's qualifier, so the reflection
+            // reports an auto-assigned number as if the shader had declared it. An unqualified
+            // block therefore lands on 0 only when nothing else claimed 0 first.
+            //
+            // Reported POSITIVELY - only blocks the scanner recognised in full, and recognised as
+            // carrying no binding - so anything outside its narrow grammar is left to the
+            // existing behaviour rather than defaulted on a guess. Same discipline as
+            // ExtractExplicitOpaqueBindings.
+            std::set<String> ExtractStorageBlocksWithoutExplicitBinding(const String& source);
 
             // A shader storage block whose layout(binding = N) reaches or passes
             // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS is a compile-time error in GL 4.3 core 4.4.5,
