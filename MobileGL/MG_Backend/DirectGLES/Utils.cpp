@@ -857,6 +857,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             struct ImageUniformDecl {
                 String name;
+                String stageName;   // the stage-tagged name the rewritten declaration takes; empty
+                                    // for a declaration this pass leaves alone
                 String writeName;   // the writeonly half's name, when split
                 String layout;      // raw contents of layout(...)
                 String qualifiers;  // memory/precision qualifiers, normalized, no trailing space
@@ -901,11 +903,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return out;
             }
 
-            // A name for the writeonly half that no identifier in the shader (and no other
-            // half already minted) can collide with.
-            String MakeImageWriteAliasName(const String& name, const String& source,
-                                           const Vector<String>& taken) {
-                String candidate = String(IMAGE_WRITE_ALIAS_PREFIX) + name;
+            // A name for a rewritten declaration that no identifier in the shader (and no other
+            // alias already minted for this stage) can collide with.
+            String MakeImageAliasName(const String& prefix, const String& name, const String& source,
+                                      const Vector<String>& taken) {
+                String candidate = prefix + name;
                 // "__" anywhere in an identifier is reserved (GLSL ES 3.20 3.7), which a name
                 // that already starts with '_' would otherwise produce.
                 for (SizeT doubled = candidate.find("__"); doubled != String::npos;
@@ -951,7 +953,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount) {
+        String ImageStageAliasPrefix(GLenum shaderType) {
+            switch (shaderType) {
+            case GL_VERTEX_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Vs_";
+            case GL_FRAGMENT_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Fs_";
+            case GL_COMPUTE_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Cs_";
+            case GL_GEOMETRY_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Gs_";
+            case GL_TESS_CONTROL_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Tcs_";
+            case GL_TESS_EVALUATION_SHADER: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Tes_";
+            // A stage this build does not know. Still a tag of its own rather than the bare
+            // name, so the anti-collision property below never depends on the switch being
+            // exhaustive - it only stops being able to say WHICH stage a name came from.
+            default: return String(IMAGE_STAGE_ALIAS_PREFIX) + "Xs_";
+            }
+        }
+
+        String SplitReadWriteImageUniforms(const String& glslCode, GLenum shaderType, Uint* outSplitCount) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1014,13 +1031,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             };
 
             // Walk every `image*(` call and attribute its first argument to a declaration.
-            struct StoreSite {
+            // EVERY recognized use is recorded, not only the stores: a declaration this pass
+            // renames has to take all of its uses with it, and the "every occurrence was one I
+            // saw" check below is what makes the recorded set provably the complete set.
+            struct ImageUseSite {
                 SizeT declIndex;
                 SizeT start;
                 SizeT length;
                 SizeT callOpen; // the '(' of the call this argument belongs to
+                Bool stores;    // an imageStore, i.e. the use a split redirects to the write half
             };
-            Vector<StoreSite> storeSites;
+            Vector<ImageUseSite> useSites;
             for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
                 if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue; // uimage2D, myimageFoo
                 SizeT tokenEnd = pos;
@@ -1065,12 +1086,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 switch (ClassifyImageBuiltin(builtin)) {
                 case ImageBuiltinAccess::Load:
                     decl.loaded = true;
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, false});
                     break;
                 case ImageBuiltinAccess::Store:
                     decl.stored = true;
-                    storeSites.push_back({declIndex, argStart, argEnd - argStart, openParen});
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, true});
                     break;
                 case ImageBuiltinAccess::None:
+                    // imageSize/imageSamples touch nothing, but they still NAME the variable, so
+                    // a rename has to reach them.
+                    useSites.push_back({declIndex, argStart, argEnd - argStart, openParen, false});
                     break;
                 default:
                     decl.unknownUse = true;
@@ -1087,12 +1112,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             Vector<ImageSourceEdit> edits;
-            Vector<String> takenAliases;
+            Vector<String> takenNames;
+            const String stagePrefix = ImageStageAliasPrefix(shaderType);
             for (auto& decl : decls) {
                 if (decl.unknownUse) continue; // leave it exactly as it was; no guessing
+                // EVERY declaration this pass rewrites is also RENAMED, per stage - the
+                // qualifier it is about to add is a per-stage decision, and GLSL requires a
+                // uniform declared in two stages to be declared IDENTICALLY (GLSL 4.3 4.3.9 /
+                // GLSL ES 3.20 4.3.9). A shader that stores to an image in the vertex stage and
+                // loads it in the fragment stage gets `writeonly` on one and `readonly` on the
+                // other, and on Adreno the linker merges the two same-named declarations and
+                // SILENTLY DISCARDS the vertex-stage stores: no GL error, no link log,
+                // LINK_STATUS = 1, and the image still holding its initial contents afterwards
+                // (KHR-GL4x.shader_image_load_store.advanced-memory-dependentInvocation, and any
+                // shader pack that writes an image in one stage to read it in another). A
+                // per-stage name means there is no cross-stage variable left to merge.
+                //
+                // Unconditional, rather than only when another stage is known to declare the same
+                // name, because this pass sees ONE stage at a time and a conditional rename would
+                // have to guess. Nothing downstream reads these names: the two passes that key on
+                // the GL uniform name (RebindImageUniformsToFrontendUnits, BakeImageFormatQualifiers)
+                // both run BEFORE this one, RemoveLayoutBinding recognises an image declaration by
+                // its TYPE token, and CacheResourceLocations skips image uniforms outright because
+                // ES image units come only from layout(binding=N). The declarations this pass
+                // LEAVES ALONE - already readonly/writeonly in the source, or r32f/r32i/r32ui,
+                // which need no qualifier - keep their names, and they are exactly the ones that
+                // already match across stages.
+                decl.stageName = MakeImageAliasName(stagePrefix, decl.name, glslCode, takenNames);
+                takenNames.push_back(decl.stageName);
                 if (decl.loaded && decl.stored) {
-                    decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
-                    takenAliases.push_back(decl.writeName);
+                    // Minted from the ALREADY stage-tagged name, so two stages that both split
+                    // the same image do not collide on the write half either.
+                    decl.writeName =
+                        MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.stageName, glslCode, takenNames);
+                    takenNames.push_back(decl.writeName);
                     decl.split = true;
                     if (outSplitCount != nullptr) ++*outSplitCount;
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
@@ -1100,24 +1153,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // there is no visibility to restore and no reason to pay for the cache
                     // behaviour.
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.name, /*forceCoherent=*/true) +
+                                     BuildImageDeclaration(decl, "readonly", decl.stageName,
+                                                           /*forceCoherent=*/true) +
                                          "\n" +
                                          BuildImageDeclaration(decl, "writeonly", decl.writeName,
                                                                /*forceCoherent=*/true)});
                 } else if (decl.stored) {
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "writeonly", decl.name)});
+                                     BuildImageDeclaration(decl, "writeonly", decl.stageName)});
                 } else {
                     // Loaded only, or only ever handed to imageSize (or unused): readonly is
                     // the qualifier that keeps every one of those legal.
                     edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.name)});
+                                     BuildImageDeclaration(decl, "readonly", decl.stageName)});
                 }
             }
-            for (const StoreSite& site : storeSites) {
+            for (const ImageUseSite& site : useSites) {
                 const ImageUniformDecl& decl = decls[site.declIndex];
-                if (!decl.split) continue;
-                edits.push_back({site.start, site.length, decl.writeName});
+                // Empty exactly when the declaration was poisoned above and left untouched; its
+                // uses must keep naming the variable that is still called that.
+                if (decl.stageName.empty()) continue;
+                edits.push_back(
+                    {site.start, site.length, decl.split && site.stores ? decl.writeName : decl.stageName});
+                if (!decl.split || !site.stores) continue;
                 // ...and an explicit barrier behind it. `coherent` on both halves is what makes
                 // the store VISIBLE to a load through the other variable, but it says nothing
                 // about ORDER within one invocation - and the whole reason a declaration is split
