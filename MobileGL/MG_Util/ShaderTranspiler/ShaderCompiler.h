@@ -156,6 +156,20 @@ namespace MobileGL {
                 static bool LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
                                                                   Vector<uint32_t>& outputBinary,
                                                              bool enableSpirvValidation = false);
+                // Makes every index into an ARRAY OF SHADER STORAGE BLOCKS a constant integral
+                // expression. GL 4.3 allows any dynamically-uniform index there; the Qualcomm
+                // ES compiler enforces the ES 3.1 constant-expression rule and refuses the whole
+                // stage ("indexing into an SSBO array using a non-constant expression is not
+                // permitted"), which loses the program while the frontend still reports
+                // GL_LINK_STATUS = TRUE. Same two halves as the fragment-output legalization:
+                // fold the loop-derived indices, then lower whatever is genuinely dynamic to a
+                // switch over the array's range. DirectGLES transpile path only - Vulkan has no
+                // such restriction and must keep seeing one descriptor array. Copies the input
+                // through untouched when no block array is indexed dynamically, which is every
+                // shader but a handful. See LegalizeStorageBlockArrayIndexPass.
+                static bool LegalizeStorageBlockArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
+                                                                     Vector<uint32_t>& outputBinary,
+                                                                     bool enableSpirvValidation = false);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,

@@ -5405,6 +5405,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     effectiveSpirv = &outputIndexSpirv;
                 }
 
+                // Same rule, different resource, every stage: GL 4.3 lets an array of storage
+                // blocks be indexed with any dynamically-uniform expression, GLSL ES keeps the
+                // ES 3.1 constant-expression rule, and the Qualcomm compiler enforces it
+                // ("indexing into an SSBO array using a non-constant expression is not
+                // permitted") - losing the stage, the program, and every dispatch that used
+                // it, while the frontend keeps reporting the link glslang performed. Fold or
+                // lower the index here, on the ESSL path only: the same module is legal for
+                // DirectVulkan, which binds the array as one descriptor array.
+                Vector<unsigned int> blockArrayIndexSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LegalizeStorageBlockArrayIndexingForEssl(
+                        *effectiveSpirv, blockArrayIndexSpirv, enableSpirvValidation) &&
+                    !blockArrayIndexSpirv.empty()) {
+                    effectiveSpirv = &blockArrayIndexSpirv;
+                }
+
                 MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
                     MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
