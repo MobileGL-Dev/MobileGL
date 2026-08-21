@@ -18,6 +18,7 @@
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
 
 #include "EsslBuiltinFunctionNames.h"
 
@@ -1599,6 +1600,92 @@ namespace MobileGL {
                     // Qualifiers may sit between the layout list and the `buffer` keyword; anything
                     // else ends the run, so a binding never leaks onto an unrelated declaration.
                     if (!IsNonLayoutQualifierKeyword(text)) binding = -1;
+                }
+                return std::nullopt;
+            }
+
+            std::optional<String> FindAtomicCounterOffsetViolation(const String& source) {
+                // Fast path: both keywords are required for a violation to exist, and the pair is
+                // absent from every shader-pack source.
+                if (source.find("atomic_uint") == String::npos || source.find("offset") == String::npos) {
+                    return std::nullopt;
+                }
+
+                constexpr long long kAtomicCounterSize = 4; // one 32-bit word per counter
+                const long long maxBufferSize = static_cast<long long>(MAX_ATOMIC_COUNTER_BUFFER_SIZE);
+                const Vector<CodeToken> tokens = TokenizeCode(source);
+                const SizeT count = tokens.size();
+                // The offset the qualifier run currently being scanned declared, -1 for none.
+                // Same accumulate-then-consume shape as the storage-binding scan above.
+                long long offset = -1;
+                long long literal = 0;
+                for (SizeT pos = 0; pos < count; ++pos) {
+                    const String& text = tokens[pos].text;
+                    if (text == "layout" && pos + 1 < count && tokens[pos + 1].text == "(") {
+                        SizeT j = pos + 2;
+                        Int parenDepth = 1;
+                        while (j < count && parenDepth > 0) {
+                            const String& layoutToken = tokens[j].text;
+                            if (layoutToken == "(") {
+                                ++parenDepth;
+                            } else if (layoutToken == ")") {
+                                --parenDepth;
+                            } else if (parenDepth == 1 && layoutToken == "offset" && j + 2 < count &&
+                                       tokens[j + 1].text == "=" &&
+                                       ParseGlslIntegerLiteral(tokens[j + 2].text, literal)) {
+                                offset = literal;
+                                j += 2;
+                            }
+                            ++j;
+                        }
+                        pos = j - 1;
+                        continue;
+                    }
+                    if (text == "atomic_uint") {
+                        // How far the declaration reaches: `atomic_uint c[N]` occupies N words
+                        // from the offset. An unparsable or absent declarator (an expression-sized
+                        // array, or the "layout(...) uniform atomic_uint;" default-qualifier form,
+                        // which declares no counter at all) is left alone rather than guessed at -
+                        // over-rejection here would be a compile failure the application cannot
+                        // work around.
+                        long long elements = 1;
+                        SizeT k = pos + 1;
+                        if (k < count && IsIdentifierToken(tokens[k])) {
+                            ++k;
+                            if (k < count && tokens[k].text == "[") {
+                                elements = (k + 2 < count && tokens[k + 2].text == "]" &&
+                                            ParseGlslIntegerLiteral(tokens[k + 1].text, literal))
+                                               ? std::max<long long>(1, literal)
+                                               : -1;
+                            }
+                        } else {
+                            elements = -1;
+                        }
+                        // Clamped so the byte arithmetic below cannot overflow on an absurd
+                        // literal; any element count at or past the ceiling already fails.
+                        elements = std::min(elements, maxBufferSize);
+
+                        if (offset >= 0 && elements > 0) {
+                            if (offset % kAtomicCounterSize != 0) {
+                                return "ERROR: invalid value " + std::to_string(offset) +
+                                       " for layout specifier 'offset': an atomic counter offset must be a "
+                                       "multiple of 4.";
+                            }
+                            if (offset > maxBufferSize - elements * kAtomicCounterSize) {
+                                return "ERROR: invalid value " + std::to_string(offset) +
+                                       " for layout specifier 'offset': an atomic counter ending at byte " +
+                                       std::to_string(offset + elements * kAtomicCounterSize) +
+                                       " passes GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE (" +
+                                       std::to_string(maxBufferSize) + ").";
+                            }
+                        }
+                        offset = -1;
+                        continue;
+                    }
+                    // `uniform` and the precision/auxiliary qualifiers may sit between the layout
+                    // list and the type keyword; anything else ends the run, so an offset never
+                    // leaks onto an unrelated declaration.
+                    if (text != "uniform" && !IsNonLayoutQualifierKeyword(text)) offset = -1;
                 }
                 return std::nullopt;
             }

@@ -514,15 +514,17 @@ namespace MobileGL::MG_Impl::GLImpl {
     // recorded DataType is always Float64 - what IsLong adds is that this is the *unconverted* form,
     // as opposed to VertexAttribFormat(GL_DOUBLE), which asks for a float conversion.
     //
-    // Whether the backend can FEED it is detected, not assumed: DirectVulkan needs shaderFloat64,
-    // and DirectGLES can never have it at all. What that costs is the ARRAY, not the call: GL 4.6
-    // core 10.3.2 defines no error for a well-formed glVertexAttribLFormat, and a GL 4.3 context
-    // has 64-bit attributes in core, so declining the call would be non-conformant and would make
-    // the four pure state queries (VERTEX_ATTRIB_ARRAY_SIZE / _TYPE / _LONG / _RELATIVE_OFFSET)
-    // unanswerable (KHR-GL43.vertex_attrib_binding.basic-state1/3). The format is therefore
-    // RECORDED here and the enabled array is dropped at draw instead - loudly, once, naming the
-    // reason. The matching startup POST row is in MG_Util/SelfTest/DriverPost.cpp; the draw-side
-    // drop is DirectGLES/Managers.cpp and, on DirectVulkan, VertexInputStateFactory's Float64 case.
+    // Whether the backend can FEED it at full precision is detected, not assumed: DirectVulkan
+    // needs shaderFloat64, and DirectGLES can never have it at all. What that costs is PRECISION,
+    // not the call and no longer the array: GL 4.6 core 10.3.2 defines no error for a well-formed
+    // glVertexAttribLFormat, and a GL 4.3 context has 64-bit attributes in core, so declining the
+    // call would be non-conformant and would make the four pure state queries
+    // (VERTEX_ATTRIB_ARRAY_SIZE / _TYPE / _LONG / _RELATIVE_OFFSET) unanswerable
+    // (KHR-GL43.vertex_attrib_binding.basic-state1/3). The format is therefore RECORDED here and
+    // the array is NARROWED to float32 at draw, matching the fp64 demotion every shader already
+    // gets (DemoteFloat64Pass) - loudly, once, naming the cost. The matching startup POST row is in
+    // MG_Util/SelfTest/DriverPost.cpp; the draw-side narrowing is DirectGLES/Managers.cpp and, on
+    // DirectVulkan, VertexInputStateFactory's Float64 case.
     static void VertexAttribLFormatSeparate_State(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao,
                                                   GLuint attribindex, GLint size, GLenum type,
                                                   GLuint relativeoffset) {
@@ -534,9 +536,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
             MGLOG_W_ONCE("VertexAttribLFormat: attribute %u asked for a 64-bit (GL_DOUBLE) format, but this "
                     "backend has no double-precision vertex attribute support - the format is recorded "
-                    "and queryable, but the array will be DROPPED at draw and the attribute will read "
-                    "its generic current value; see the \"64-bit vertex attributes\" / \"shaderFloat64\" "
-                    "POST row for what that costs",
+                    "and queryable, and the array is FETCHED AT FLOAT32 PRECISION at draw (the same "
+                    "narrowing the shader's dvec inputs already get); see the \"64-bit vertex "
+                    "attributes\" / \"shaderFloat64\" POST row for what that costs",
                     attribindex);
         }
 

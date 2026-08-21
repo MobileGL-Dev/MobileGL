@@ -66,6 +66,9 @@ namespace MGITest {
         constexpr int kExtent = 6;
         constexpr GLuint kFilledValue = 7u;
         constexpr GLuint kStoredValue = 13u;
+        // What the atomic cases add to a filled texel. Distinct from both values above, so a
+        // wrong answer cannot be read as either the untouched fill or a plain store.
+        constexpr GLuint kAtomicAddend = 5u;
 
         // Everything that differs between the eleven kinds, in one row.
         struct TargetKind {
@@ -127,6 +130,25 @@ namespace MGITest {
         std::string SingleStoreSource(const TargetKind& kind) {
             return std::string(kComputePrologue) + "layout (location = 0, r32ui) writeonly uniform " +
                    kind.imageType + " i0;\n\nvoid main()\n{\n    " + StoreStatement(kind, "i0", "13u") + "\n}\n";
+        }
+
+        // The third direction, and the one neither of the two above can stand in for: an
+        // imageAtomic* reaches its texel through a SPIR-V operand path of its own
+        // (OpImageTexelPointer), not through OpImageRead or OpImageWrite. SPIRV-Cross's "ES has
+        // no 1D image, address it as 2D" coordinate widening is applied on the read and write
+        // paths and NOT on that one, so a 1D image whose loads and stores are both correct could
+        // still lose its entire stage to a single imageAtomicAdd - which is what
+        // KHR-GL4x.shader_image_load_store.basic-allTargets-atomic measured, with the driver
+        // answering "'imageAtomicAdd' : no matching overloaded function found".
+        //
+        // No readonly/writeonly here: an atomic needs both directions, and r32ui is one of the
+        // three formats GLSL ES exempts from the qualifier rule, so the bare declaration is legal.
+        // Returns the value the texel held BEFORE the add, so one dispatch checks the atomic's
+        // return value and the load case that follows checks its memory effect.
+        std::string SingleAtomicSource(const TargetKind& kind) {
+            return std::string(kComputePrologue) + "layout (location = 0, r32ui) coherent uniform " +
+                   kind.imageType + " i0;\n" + kResultBlock + "void main()\n{\n    ssb.sum = imageAtomicAdd(i0, " +
+                   kind.coord + (kind.multisample ? ", 0, " : ", ") + std::to_string(kAtomicAddend) + "u);\n}\n";
         }
 
         class ImageTargetKindScenario : public ScenarioTest {
@@ -374,6 +396,39 @@ namespace MGITest {
                 glUseProgram(0);
             }
 
+            // Fill a texture of `kind`, add to texel (0,0,0) atomically, and require BOTH the
+            // value the atomic returned and the value it left behind. The read-back runs as a
+            // second program, for the same reason the store case does: a backend that gets the
+            // atomic's return right and its memory effect wrong cannot cancel itself out.
+            void RunAtomicCase(const TargetKind& kind) {
+                const GLuint atomicProgram = MakeComputeProgram(SingleAtomicSource(kind));
+                const GLuint loadProgram = MakeComputeProgram(SingleLoadSource(kind));
+                if (atomicProgram == 0 || loadProgram == 0) return;
+                const GLuint texture = MakeTexture(kind, true);
+                if (texture == 0) return;
+                const GLuint ssbo = MakeResultBuffer();
+
+                glBindImageTexture(0, texture, 0, GL_TRUE, 0, GL_READ_WRITE, GL_R32UI);
+                ASSERT_EQ(FirstGLError(), 0u) << kind.name << ": glBindImageTexture errored";
+
+                glUseProgram(atomicProgram);
+                glUniform1i(0, 0);
+                glDispatchCompute(1, 1, 1);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                EXPECT_EQ(FirstGLError(), 0u) << kind.name << ": the atomic dispatch leaked a GL error";
+                EXPECT_EQ(ReadResult(ssbo), kFilledValue)
+                    << kind.name << ": imageAtomicAdd did not return the value the texel held before it";
+
+                glUseProgram(loadProgram);
+                glUniform1i(0, 0);
+                glDispatchCompute(1, 1, 1);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                EXPECT_EQ(FirstGLError(), 0u) << kind.name << ": the loading dispatch leaked a GL error";
+                EXPECT_EQ(ReadResult(ssbo), kFilledValue + kAtomicAddend)
+                    << kind.name << ": imageAtomicAdd did not leave the sum in the texel";
+                glUseProgram(0);
+            }
+
             // The same texture, bound four times over, varying nothing but `layered` and `layer`.
             //
             // GL 4.6 core 8.26 (and ES 3.2 8.22, word for word): "If the texture identified by
@@ -514,6 +569,29 @@ namespace MGITest {
 
 #undef MGL_DEFINE_LOAD_CASE
 #undef MGL_DEFINE_STORE_CASE
+
+    // ---- and the atomic direction, on the two kinds ES has to emulate -------
+    //
+    // Deliberately NOT every kind. imageAtomic* takes its own SPIR-V operand path
+    // (OpImageTexelPointer), and the only kinds whose coordinate that path has to RESHAPE are the
+    // two 1D ones - everything else addresses its ES texture with the coordinate the application
+    // wrote. GL_TEXTURE_1D_ARRAY is the control (its reshape has been in
+    // Lower1DArrayImagesForEssl from the start, and basic-allTargets-atomic passes on it);
+    // GL_TEXTURE_1D is the one that had none, so `imageAtomicAdd(g_image_1d, coord.x, 2)` reached
+    // the driver as a scalar against an iimage2D and took the whole fragment stage - and its six
+    // other images - with it.
+
+#define MGL_DEFINE_ATOMIC_CASE(CaseName, Kind)                                                                  \
+    TEST_F(ImageTargetKindScenario, AtomicallyAddsTo##CaseName) {                                               \
+        if (!Ready()) return;                                                                                   \
+        if (!ImagesAreUsable()) GTEST_SKIP() << "no compute image uniforms";                                    \
+        RunAtomicCase(Kind);                                                                                    \
+    }
+
+    MGL_DEFINE_ATOMIC_CASE(Texture1D, kKind1D)
+    MGL_DEFINE_ATOMIC_CASE(Texture1DArray, kKind1DArray)
+
+#undef MGL_DEFINE_ATOMIC_CASE
 
     // ---- and the same texture bound four times, varying only layered/layer ---
     //

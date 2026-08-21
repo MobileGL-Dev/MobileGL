@@ -564,8 +564,20 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //     compile-time constants (GLSL_ES true, VULKAN_SEMANTICS false);
     //   * the SPIR-V validation switch, as in L1.
     //
-    // Unconditional passes (StripUboMemberRelaxedPrecision, LowerRectImages,
-    // Lower1DArrayImages) take no input but the module and so need no key material.
+    // Unconditional passes take no input but the module and so need no key material:
+    // StripUboMemberRelaxedPrecision, LowerRectImages, Lower1DArrayImages,
+    // LegalizeStorageBlockArrayIndexing and FlattenAtomicCounterBlockOffsets. Each self-gates
+    // on the module's own content and is armed by nothing, so the SPIR-V already in this key
+    // covers them completely.
+    //
+    // THE TEST FOR THAT CLAIM IS NOT THE SIGNATURE. LowerViewportIndexForEssl is equally
+    // module-only to look at, yet SupportsViewportArray is in this key because that bit ARMS
+    // it at the call site. So a new pass needs BOTH checks - what it takes, and what decides
+    // whether it runs - before "no key material" is a conclusion rather than an assumption.
+    // Note also where an application-authored value can hide: the atomic-counter
+    // layout(offset = N) qualifiers that FlattenAtomicCounterBlockOffsets rewrites are not a
+    // separate input at all, because glslang already baked them into the module as member
+    // Offset decorations - i.e. into the key's biggest field.
     struct EsslTranslationResult {
         String essl;
         // Which interface blocks FlattenXfbInterfaceBlocksForEssl actually rewrote

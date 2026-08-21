@@ -882,12 +882,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SizeT length;
                 String text;
             };
+
+            // The offset just past the `;` that terminates the call whose argument list opens at
+            // `openParen`, or npos when what follows is not a plain statement. Parentheses alone
+            // are counted: every other bracket a GLSL argument list can contain is balanced
+            // inside them, and imageStore returns void, so a well-formed call site is always
+            // `imageStore(...);` and anything else is a shape this pass declines to edit.
+            SizeT FindEndOfCallStatement(const String& code, SizeT openParen) {
+                Int depth = 0;
+                SizeT scan = openParen;
+                for (; scan < code.size(); ++scan) {
+                    if (code[scan] == '(') {
+                        ++depth;
+                    } else if (code[scan] == ')' && --depth == 0) {
+                        break;
+                    }
+                }
+                if (scan >= code.size()) return String::npos;
+                const SizeT after = code.find_first_not_of(" \t\r\n", scan + 1);
+                if (after == String::npos || code[after] != ';') return String::npos;
+                return after + 1;
+            }
         } // namespace
 
-        String SplitReadWriteImageUniforms(const String& glslCode) {
+        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            // Written before any early return, so the caller never reads a stale count.
+            if (outSplitCount != nullptr) *outSplitCount = 0;
             if (glslCode.find("image") == String::npos) {
                 return glslCode;
             }
@@ -949,6 +972,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SizeT declIndex;
                 SizeT start;
                 SizeT length;
+                SizeT callOpen; // the '(' of the call this argument belongs to
             };
             Vector<StoreSite> storeSites;
             for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
@@ -998,7 +1022,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     break;
                 case ImageBuiltinAccess::Store:
                     decl.stored = true;
-                    storeSites.push_back({declIndex, argStart, argEnd - argStart});
+                    storeSites.push_back({declIndex, argStart, argEnd - argStart, openParen});
                     break;
                 case ImageBuiltinAccess::None:
                     break;
@@ -1024,6 +1048,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
                     takenAliases.push_back(decl.writeName);
                     decl.split = true;
+                    if (outSplitCount != nullptr) ++*outSplitCount;
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
                     // single-declaration cases below stay as they were - nothing aliases them, so
                     // there is no visibility to restore and no reason to pay for the cache
@@ -1047,6 +1072,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const ImageUniformDecl& decl = decls[site.declIndex];
                 if (!decl.split) continue;
                 edits.push_back({site.start, site.length, decl.writeName});
+                // ...and an explicit barrier behind it. `coherent` on both halves is what makes
+                // the store VISIBLE to a load through the other variable, but it says nothing
+                // about ORDER within one invocation - and the whole reason a declaration is split
+                // is that the shader both stores and loads through it, which on the ES side is now
+                // a write to one variable followed by a read of another the compiler has no reason
+                // to believe alias. Adreno duly serves the load from before the store
+                // (KHR-GL4x.shader_image_load_store.advanced-memory-order's store/load/compare
+                // loop reads back the previous iteration's value). memoryBarrierImage() is the
+                // GLSL primitive for exactly that ordering, is core GLSL ES 3.10 in every stage,
+                // and is not an execution barrier, so it is legal in non-uniform control flow too.
+                //
+                // Confined to the split pair: a single-declaration repair has nothing aliasing it
+                // and must not pay for this, and a shader that never got split never sees it at
+                // all.
+                const SizeT statementEnd = FindEndOfCallStatement(glslCode, site.callOpen);
+                if (statementEnd != String::npos) {
+                    edits.push_back({statementEnd, 0, " memoryBarrierImage();"});
+                }
             }
             if (edits.empty()) {
                 return glslCode;

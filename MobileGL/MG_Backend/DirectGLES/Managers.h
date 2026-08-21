@@ -509,10 +509,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
             PendingAttribValueMask& GetPendingAttribValueMaskMemo() { return m_pendingAttribValueMask; }
 
         private:
+            // Narrows one enabled GL_DOUBLE array into a tightly packed float32 stream held in
+            // this VAO's own scratch buffer and declares the attribute against it. ES has no
+            // 64-bit vertex format, but the source bytes are ordinary IEEE-754 doubles and every
+            // fp64 value in every shader is already narrowed to 32 bits (DemoteFloat64Pass), so
+            // narrowing the ARRAY is the coherent completion of that decision rather than
+            // dropping it. Returns false when the stream cannot be built, in which case the
+            // caller must DISABLE the array - leaving a 64-bit array enabled with no pointer is
+            // what the Adreno driver turns into a SIGSEGV at the next draw.
+            Bool SyncFloat64AttributeAsFloat32(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib,
+                                               Uint32 fetchBaseInstance);
+
+            // What the converted float32 stream in m_convertedAttributeBufferIds[i] was built
+            // from. A hit skips the CPU conversion and the re-upload; the buffer's change serial
+            // is part of the key, so a glBufferSubData into the source invalidates it.
+            struct ConvertedFloat64Stream {
+                Bool valid = false;
+                Uint64 sourceLifetimeId = 0;
+                Uint64 sourceChangeSerial = 0;
+                SizeT sourceOffset = 0;
+                SizeT sourceStride = 0;
+                SizeT componentCount = 0;
+                SizeT elementCount = 0;
+            };
+
             ResolvedDrawBuffers m_resolvedDrawBuffers;
             PendingAttribValueMask m_pendingAttribValueMask;
             Uint m_backendVAOId = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
+            // Scratch stores for the buffer-backed GL_DOUBLE narrowing. Deliberately separate
+            // from m_clientAttributeBufferIds: that one holds the per-draw upload of a
+            // CLIENT-MEMORY array, and an attribute index can carry both shapes over its life.
+            Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_convertedAttributeBufferIds;
+            Array<ConvertedFloat64Stream, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
+                m_convertedAttributeStreams;
+            // True while at least one attribute of this VAO is fed by a converted stream. Such a
+            // stream is derived from buffer CONTENT, which no VAO version covers, so the config
+            // version early-out in SyncToBackend must not be trusted while it is set.
+            Bool m_hasConvertedFloat64Attribute = false;
             Bool m_isInitialized = false;
             Uint16 m_syncedIndexBufferVersion = 0;
             // Identity of the buffer the version above was stamped against. Raw and never

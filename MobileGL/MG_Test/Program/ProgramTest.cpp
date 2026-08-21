@@ -1934,10 +1934,19 @@ TEST_F(ProgramTest, GetActiveUniformsivErrors) {
     EXPECT_EQ(GetError(), GL_INVALID_VALUE);
     EXPECT_EQ(params[0], -999);
 
-    // E3: GL 4.2 token -> GL_INVALID_ENUM here.
+    // E3: the GL 4.2 / ARB_shader_atomic_counters token is ACCEPTED, not rejected.
+    //
+    // This case used to assert GL_INVALID_ENUM, which was right only while the token was
+    // unimplemented. It is implemented now, and `validIndex` names an ordinary uniform rather
+    // than an atomic counter, so the spec answer is -1 with no error (GL 4.6 core table 7.6).
+    // ProgramInterfaceTest's atomic-counter case asserts the same -1 for a non-counter
+    // uniform; leaving this one inverted made the two contradict each other.
     GetActiveUniformsiv(program, 1, &validIndex, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX, params);
-    EXPECT_EQ(GetError(), GL_INVALID_ENUM);
-    EXPECT_EQ(params[0], -999);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(params[0], -1);
+    // Restored: the cases below assert that a REJECTED call leaves params untouched, and this
+    // one legitimately wrote to it.
+    params[0] = -999;
 
     // E4a: a live shader name -> GL_INVALID_OPERATION.
     GLuint shader = CreateShader(GL_VERTEX_SHADER);
@@ -2159,6 +2168,69 @@ void main() {
     EXPECT_EQ(readback, 40.0f);
     GetUniformfv(program, locGuard, &readback);
     EXPECT_EQ(readback, 9.0f); // untouched by the overlong write
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// Repro for KHR-GLES31.explicit_uniform_location.uniform-loc-arrays-of-arrays: an
+// array-of-arrays uniform reaches the GL surface as one entry PER SUB-ARRAY ("u0[0]",
+// "u0[1]" - glslang stops expanding at reflection granularity), while SPIRV-Reflect keeps
+// it as a single leaf carrying every dimension. Routing the single leaf only ever covered
+// the first sub-array, so every element from u0[1][0] on found no UBO offset and fell
+// through to the fallback scratch at the tail of the shadow - storage the GPU never reads,
+// which made those glUniform writes silently vanish.
+TEST_F(ProgramTest, ArrayOfArraysUniformElementOffsets) {
+    // Arrays of arrays need GLSL 4.30; both stages take the same version.
+    const char* vsSource = R"(#version 430 core
+in vec4 a_position;
+void main() {
+    gl_Position = a_position;
+})";
+    const char* fsSource = R"(#version 430 core
+uniform float u0[2][3];
+uniform vec3 u1[2][2];
+out vec4 o_color;
+void main() {
+    float s = 0.0;
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 3; ++j) s += u0[i][j];
+    }
+    vec3 v = vec3(0.0);
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 2; ++j) v += u1[i][j];
+    }
+    o_color = vec4(v, s);
+})";
+    GLuint program = LinkVsFsProgram(vsSource, fsSource);
+    UseProgram(program);
+    auto programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+
+    // std140 gives a float array element and a vec3 array element the same 16-byte slot,
+    // and a flattened array-of-arrays is one contiguous run of those slots.
+    constexpr Uint kStd140ElementStride = 16u;
+
+    const auto checkFlattenedRun = [&](const char* base, int outer, int inner) {
+        Uint firstOffset = MG_State::GLState::ProgramObject::kInvalidUniformOffset;
+        for (int i = 0; i < outer; ++i) {
+            for (int j = 0; j < inner; ++j) {
+                const std::string name =
+                    std::string(base) + "[" + std::to_string(i) + "][" + std::to_string(j) + "]";
+                const GLint location = GetUniformLocation(program, name.c_str());
+                ASSERT_GE(location, 0) << name;
+                const Uint offset = programObject->GetUniformOffset(static_cast<Uint>(location));
+                ASSERT_NE(offset, MG_State::GLState::ProgramObject::kInvalidUniformOffset) << name;
+                const Uint element = static_cast<Uint>(i * inner + j);
+                if (element == 0) {
+                    firstOffset = offset;
+                } else {
+                    EXPECT_EQ(offset, firstOffset + element * kStd140ElementStride) << name;
+                }
+            }
+        }
+    };
+
+    checkFlattenedRun("u0", 2, 3);
+    checkFlattenedRun("u1", 2, 2);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 

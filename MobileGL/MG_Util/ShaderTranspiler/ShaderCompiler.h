@@ -156,6 +156,32 @@ namespace MobileGL {
                 static bool LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
                                                                   Vector<uint32_t>& outputBinary,
                                                              bool enableSpirvValidation = false);
+                // Makes every index into an ARRAY OF SHADER STORAGE BLOCKS a constant integral
+                // expression. GL 4.3 allows any dynamically-uniform index there; the Qualcomm
+                // ES compiler enforces the ES 3.1 constant-expression rule and refuses the whole
+                // stage ("indexing into an SSBO array using a non-constant expression is not
+                // permitted"), which loses the program while the frontend still reports
+                // GL_LINK_STATUS = TRUE. Same two halves as the fragment-output legalization:
+                // fold the loop-derived indices, then lower whatever is genuinely dynamic to a
+                // switch over the array's range. DirectGLES transpile path only - Vulkan has no
+                // such restriction and must keep seeing one descriptor array. Copies the input
+                // through untouched when no block array is indexed dynamically, which is every
+                // shader but a handful. See LegalizeStorageBlockArrayIndexPass.
+                static bool LegalizeStorageBlockArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
+                                                                     Vector<uint32_t>& outputBinary,
+                                                                     bool enableSpirvValidation = false);
+                // Collapses each synthesized gl_AtomicCounterBlock_<N> into one uint array at
+                // offset 0, re-indexing every counter access to the element that used to sit at
+                // its byte offset. glslang preserves the application's layout(offset = N) as the
+                // member's Offset decoration, no std140/std430 layout can express a first member
+                // at a non-zero offset, and GLSL ES has no member layout(offset=) - so SPIRV-Cross
+                // throws and takes the whole stage with it. DirectGLES transpile path only.
+                // Copies the input through untouched when every counter block is already packed
+                // naturally, which is every shader that omits the offset qualifier. See
+                // FlattenAtomicCounterBlockPass.
+                static bool FlattenAtomicCounterBlockOffsetsForEssl(const Vector<Uint32>& inputBinary,
+                                                                    Vector<uint32_t>& outputBinary,
+                                                                    bool enableSpirvValidation = false);
                 // Rebases loads of the InstanceIndex builtin to (InstanceIndex - BaseInstance) so
                 // shaders see GL's zero-based gl_InstanceID. Vertex shaders only; DirectVulkan
                 // backend only (glslang's relaxed mode aliases gl_InstanceID to gl_InstanceIndex,
@@ -168,10 +194,13 @@ namespace MobileGL {
                                             bool enableSpirvValidation = false);
                 // GL_TEXTURE_1D_ARRAY storage images rewritten to the 2D-array shape the texture
                 // is actually stored in on ES, with the layer moved from the coordinate's second
-                // component to its third. DirectGLES transpile path only - Vulkan binds a real
-                // VK_IMAGE_VIEW_TYPE_1D_ARRAY and must see the module unchanged. Copies the input
-                // through untouched when the module declares no such image, which is every shader
-                // but a handful. See Lower1DArrayImagesPass for what it declines and why.
+                // component to its third - and, when the module performs an image ATOMIC on one,
+                // the non-arrayed GL_TEXTURE_1D storage image to the 2D shape with its coordinate
+                // widened to (u, 0), which is the one 1D shape SPIRV-Cross does not widen itself.
+                // DirectGLES transpile path only - Vulkan binds a real VK_IMAGE_VIEW_TYPE_1D(_ARRAY)
+                // and must see the module unchanged. Copies the input through untouched when the
+                // module declares no such image, which is every shader but a handful. See
+                // Lower1DArrayImagesPass for what it declines and why.
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);

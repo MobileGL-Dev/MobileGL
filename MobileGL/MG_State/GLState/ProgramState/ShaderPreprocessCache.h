@@ -29,6 +29,9 @@ namespace MobileGL::MG_State::GLState {
         // FindShaderStorageBindingViolation rejected it: a storage block declared a binding at or
         // past GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS.
         ResourceBindingRejected,
+        // FindAtomicCounterOffsetViolation rejected it: an atomic counter declared a
+        // layout(offset =) that is misaligned or reaches past GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE.
+        AtomicCounterOffsetRejected,
         // The source-only half was clean but glslang rejected the preprocessed source.
         // Memoizing this saves the parse itself on every later object with that source.
         ParseFailed,

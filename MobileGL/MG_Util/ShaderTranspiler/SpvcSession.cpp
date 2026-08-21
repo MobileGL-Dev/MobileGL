@@ -48,13 +48,16 @@ namespace MobileGL {
                 return SPVC_BASETYPE_UNKNOWN;
             }
 
-            // Record one flattened leaf uniform of the global UBO into the metadata maps.
-            static void RecordGlobalUboLeaf(const SpvReflectBlockVariable& member, const String& name,
-                                            Uint32 offsetInUBO, SpvcMetadata& metadata) {
+            // Write one metadata entry. `name` is already the glslang-reflection spelling the
+            // GL uniform locations are keyed on, and `arrayStride`/`sizeInBytes` describe the
+            // entry rather than the whole declaration (they differ for a sub-array of an
+            // array-of-arrays - see RecordGlobalUboLeaf).
+            static void RecordGlobalUboLeafEntry(const SpvReflectBlockVariable& member, const String& name,
+                                                 Uint32 offsetInUBO, Uint32 arrayStride, SizeT sizeInBytes,
+                                                 SpvcMetadata& metadata) {
                 metadata.plainUniformOffsetsInUBO[name] = offsetInUBO;
-                metadata.plainUniformMemberSizesInBytes[name] = member.size;
-                metadata.plainUniformArrayStridesInUBO[name] =
-                    member.array.dims_count > 0 ? member.array.stride : 0;
+                metadata.plainUniformMemberSizesInBytes[name] = sizeInBytes;
+                metadata.plainUniformArrayStridesInUBO[name] = arrayStride;
 
                 Uint32 vectorSize = member.numeric.vector.component_count;
                 if (vectorSize == 0) vectorSize = 1;
@@ -65,6 +68,70 @@ namespace MobileGL {
                     .vectorSize = vectorSize,
                     .matCol = matCol,
                 };
+            }
+
+            // Record one flattened leaf uniform of the global UBO into the metadata maps.
+            //
+            // SPIRV-Reflect keeps `float u[2][3]` as ONE leaf carrying every dimension in
+            // array.dims[] and the INNERMOST element stride in array.stride (the outer
+            // ArrayStride decoration is overwritten as ParseType recurses into the element
+            // type, which is also why array.size == product(dims) * stride). glslang's
+            // reflection - which owns the names GL uniform locations are keyed on - stops at
+            // "reflection granularity" instead (reflection.cpp: !type.isArrayOfArrays()), so
+            // the same declaration arrives on the GL side as "u[0]" and "u[1]", each a
+            // `float[3]` holding its own three locations.
+            //
+            // Emitting a single "u" leaf here therefore only ever routes the FIRST sub-array:
+            // the routing loop stops as soon as a location belongs to a different uniform, and
+            // every element from "u[1][0]" on finds no offset and falls through to the fallback
+            // scratch storage at the tail of the shadow - bytes the GPU never reads, so those
+            // glUniform writes are silently lost
+            // (KHR-GLES31.explicit_uniform_location.uniform-loc-arrays-of-arrays). Expand every
+            // dimension but the last, exactly as glslang does, and give each sub-array its own
+            // byte offset.
+            static void RecordGlobalUboLeaf(const SpvReflectBlockVariable& member, const String& name,
+                                            Uint32 offsetInUBO, SpvcMetadata& metadata) {
+                const Uint32 arrayStride = member.array.dims_count > 0 ? member.array.stride : 0;
+                const Bool isArrayOfArrays = member.array.dims_count > 1 && arrayStride > 0;
+                if (!isArrayOfArrays) {
+                    RecordGlobalUboLeafEntry(member, name, offsetInUBO, arrayStride, member.size, metadata);
+                    return;
+                }
+
+                // Extent 0 is SPIRV-Reflect's OpTypeRuntimeArray marker, which a plain uniform
+                // cannot be - but it must not be expanded (or divided by) if it ever appears.
+                Uint32 subArrayCount = 1;
+                for (Uint32 dim = 0; dim + 1 < member.array.dims_count; ++dim) {
+                    const Uint32 extent = member.array.dims[dim];
+                    if (extent == 0) {
+                        MGLOG_W_ONCE("RecordGlobalUboLeaf: multi-dimensional uniform '%s' has a non-constant "
+                                "dimension, recording the base entry only",
+                                name.c_str());
+                        RecordGlobalUboLeafEntry(member, name, offsetInUBO, arrayStride, member.size, metadata);
+                        return;
+                    }
+                    subArrayCount *= extent;
+                }
+                const Uint32 innerExtent = member.array.dims[member.array.dims_count - 1] > 0
+                                               ? member.array.dims[member.array.dims_count - 1]
+                                               : 1;
+                const Uint32 subArrayStride = innerExtent * arrayStride;
+
+                // Row-major odometer over dims[0 .. dims_count-2]: the last dimension varies
+                // fastest, so `subArray` counts sub-arrays in exactly memory order.
+                Vector<Uint32> indices(member.array.dims_count - 1, 0);
+                for (Uint32 subArray = 0; subArray < subArrayCount; ++subArray) {
+                    String elementName = name;
+                    for (const Uint32 index : indices) {
+                        elementName += "[" + std::to_string(index) + "]";
+                    }
+                    RecordGlobalUboLeafEntry(member, elementName, offsetInUBO + subArray * subArrayStride,
+                                             arrayStride, subArrayStride, metadata);
+                    for (SizeT dim = indices.size(); dim-- > 0;) {
+                        if (++indices[dim] < member.array.dims[dim]) break;
+                        indices[dim] = 0;
+                    }
+                }
             }
 
             // Flatten a (possibly nested struct / struct array) member of the global UBO

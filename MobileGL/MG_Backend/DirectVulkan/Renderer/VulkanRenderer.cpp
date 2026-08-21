@@ -972,6 +972,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    // The fetch half of the fp64 demotion the shader side already does unconditionally
+    // (DemoteFloat64Pass): the source bytes are ordinary IEEE-754 doubles, so a GL_DOUBLE array is
+    // deinterleaved into a tightly packed float32 stream rather than dropped. `normalized` is not
+    // consulted - GL ignores it for floating-point array types.
+    static Bool ConvertFloat64VertexStreamToFloat32(
+        const MG_State::GLState::VertexAttribute& attribute,
+        const Uint8* sourceData,
+        SizeT sourceStride,
+        SizeT elementCount,
+        Vector<Float>& outData) {
+        if (sourceData == nullptr || attribute.Size < 1 || attribute.Size > 4 || sourceStride == 0) {
+            return false;
+        }
+
+        const SizeT componentCount = static_cast<SizeT>(attribute.Size);
+        outData.resize(elementCount * componentCount);
+        for (SizeT element = 0; element < elementCount; ++element) {
+            const Uint8* sourceElement = sourceData + element * sourceStride;
+            Float* destinationElement = outData.data() + element * componentCount;
+            for (SizeT component = 0; component < componentCount; ++component) {
+                // GL byte strides and offsets are arbitrary, so no component carries an 8-byte
+                // alignment guarantee; copy it out before narrowing it.
+                Double value = 0.0;
+                Memcpy(&value, sourceElement + component * sizeof(Double), sizeof(Double));
+                destinationElement[component] = static_cast<Float>(value);
+            }
+        }
+        return true;
+    }
+
     static Bool RepackVertexStream(const Uint8* sourceData,
                                    SizeT sourceStride,
                                    SizeT elementSize,
@@ -3590,6 +3620,14 @@ void main() {
             case VertexInputStateFactory::VertexStreamConversion::ScaledIntegerToFloat32:
                 if (!ConvertScaledIntegerVertexStreamToFloat32(attribute, sourceData, sourceStride,
                                                                elementCount, m_vertexConversionScratch)) {
+                    return false;
+                }
+                uploadData = m_vertexConversionScratch.data();
+                uploadSize = static_cast<VkDeviceSize>(m_vertexConversionScratch.size() * sizeof(Float));
+                break;
+            case VertexInputStateFactory::VertexStreamConversion::Float64ToFloat32:
+                if (!ConvertFloat64VertexStreamToFloat32(attribute, sourceData, sourceStride, elementCount,
+                                                         m_vertexConversionScratch)) {
                     return false;
                 }
                 uploadData = m_vertexConversionScratch.data();
@@ -8926,6 +8964,7 @@ void main() {
                 outMapping.baseSlice = baseSlice;
                 outMapping.availableSlices = std::max(1u, image.depth >> mipLevel);
                 return true;
+            case TextureTarget::Texture1DArray:
             case TextureTarget::Texture2DArray:
             case TextureTarget::Texture2DMultisampleArray:
             case TextureTarget::TextureCubeMap:
@@ -8933,15 +8972,18 @@ void main() {
                 // A cube map is an array of six faces here (see TryResolveTextureShapeInfo), and GL
                 // numbers its faces on the same z axis an array texture numbers its layers, so both
                 // arrive as a plain layer range.
+                //
+                // GL_TEXTURE_1D_ARRAY belongs here too, and needs no remap: this backend STORES it
+                // as a VK_IMAGE_TYPE_1D image whose layers live in arrayLayers (ToVulkanLevelExtent
+                // moves the count across), and GL 4.6 core 18.3.2 ADDRESSES it as a stack of slices
+                // on z with an image height of 1 - so the frontend's y/height are already the 0/1
+                // Vulkan requires and the layer lands in baseArrayLayer either way.
                 outMapping.slicesAreDepth = false;
                 outMapping.baseSlice = baseSlice;
                 outMapping.availableSlices = image.arrayLayers;
                 return true;
             default:
-                // GL_TEXTURE_1D_ARRAY carries its layers on the Y axis (srcY/srcHeight), which
-                // would have to be remapped against a Vulkan extent that also has to stay height 1
-                // for a VK_IMAGE_TYPE_1D image; GL_TEXTURE_BUFFER has no image at all. Declined
-                // rather than mis-addressed.
+                // GL_TEXTURE_BUFFER has no image at all. Declined rather than mis-addressed.
                 return false;
             }
         }

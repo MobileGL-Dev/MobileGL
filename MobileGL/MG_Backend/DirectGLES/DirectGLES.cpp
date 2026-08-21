@@ -2134,19 +2134,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (tailSpanDirty) { // Scissor box. Resolved and shadowed like the viewport above, and
               // for the same reason: what has to reach the driver is NOT simply the parameter
-              // field. (0,0,0,0) is where RenderStateParameters::ScissorBox starts and the only
-              // thing that ever writes it is glScissor, so that value means "the application has
-              // never called glScissor" - it is not a GL scissor box. GL's initial box is the
-              // whole window, which the frontend has no way to spell before a surface exists.
-              // The pre-resync code got away with pushing the field verbatim only by accident:
-              // the shadow held the same default, the field never compared unequal, and the ES
-              // context kept its own correct default. Under the forced full push that accident
-              // is gone, glScissor(0,0,0,0) shrinks the scissor to an EMPTY rectangle, and
-              // everything drawn with GL_SCISSOR_TEST enabled before the app's first glScissor
-              // is clipped away - Minecraft 26.2 keeps only its unscissored sky and hand and
-              // loses the terrain and the whole GUI.
+              // field. RenderStateParameters::ScissorBoxes starts all-zero, which means "the
+              // application has never called glScissor" - it is not a GL scissor box. GL's
+              // initial box is the whole window, which the frontend has no way to spell before a
+              // surface exists. The pre-resync code got away with pushing the field verbatim only
+              // by accident: the shadow held the same default, the field never compared unequal,
+              // and the ES context kept its own correct default. Under the forced full push that
+              // accident is gone, glScissor(0,0,0,0) shrinks the scissor to an EMPTY rectangle,
+              // and everything drawn with GL_SCISSOR_TEST enabled before the app's first
+              // glScissor is clipped away - Minecraft 26.2 keeps only its unscissored sky and
+              // hand and loses the terrain and the whole GUI.
+              //
+              // The condition is the WRITTEN FLAG, not the extent. An empty rectangle is a
+              // perfectly legal thing to ask for - glScissor(0,0,0,0) means "the scissor test
+              // rejects every fragment" - so testing `width <= 0 || height <= 0` substituted the
+              // whole surface for a deliberately empty box and inverted the request into "accept
+              // every fragment", no matter how many times the application had already called
+              // glScissor. KHR-GL43.viewport_array.scissor_zero_dimension is exactly that: all 16
+              // boxes zero-sized with the test enabled, requiring the draw to be clipped away
+              // entirely. Reading the flag preserves the Minecraft protection bit-for-bit - before
+              // the first glScissor the bit is clear and the surface size is still substituted -
+              // while an explicit empty box now reaches the driver verbatim. Negative extents
+              // cannot arrive here at all: all three entry points reject them with
+              // GL_INVALID_VALUE before storing (GL_RenderState.cpp's ValidateNonNegativeExtent).
                 IntVec4 backendScissorBox = parameters.ScissorBoxes[0];
-                if (backendScissorBox.z() <= 0 || backendScissorBox.w() <= 0) {
+                if ((parameters.ScissorBoxWrittenMask & 1u) == 0) {
                     Int surfaceWidth = 0;
                     Int surfaceHeight = 0;
                     if (QueryCurrentSurfaceSize(surfaceWidth, surfaceHeight)) {
@@ -5894,29 +5906,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!out.texture) return false;
         const TextureTarget stateTarget = MG_Util::ConvertGLEnumToTextureTarget(appTarget);
         out.target = TextureImpl::ConvertTextureTargetToBackendGLEnum(stateTarget);
-        if (stateTarget == TextureTarget::Texture1DArray) {
-            out.x = x;
-            out.y = 0;
-            out.z = y;
-            return true;
-        }
+        // No axis remap for GL_TEXTURE_1D_ARRAY. The frontend STORES a 1D array with its layers
+        // on y (GetBackendUploadSize moves them across to the ES 2D array's z), but this entry
+        // point does not ADDRESS it that way: GL 4.6 core 18.3.2 treats every array texture as a
+        // stack of slices on z and gives a 1D array a height of 1 - exactly the shape the ES 2D
+        // array has - so GL's (x, 0, layer) and the ES image's (x, 0, layer) already agree.
+        // Remapping y into z here fetched the wrong slice for every call that spelled the layer
+        // the way GL defines it.
         out.x = x;
         out.y = y;
         out.z = z;
         return true;
-    }
-
-    // The region extent swaps the same two axes for a 1D array, and does so for whichever side
-    // of the copy is one - GL forbids a copy whose two endpoints disagree about how many layers
-    // move, so at most one of the two can be a 1D array only in the degenerate single-layer
-    // case, where the swap is the identity anyway.
-    static void ApplyGLESCopyImageExtent(GLenum appSrcTarget, GLenum appDstTarget, GLsizei& height, GLsizei& depth) {
-        const TextureTarget srcStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appSrcTarget);
-        const TextureTarget dstStateTarget = MG_Util::ConvertGLEnumToTextureTarget(appDstTarget);
-        if (srcStateTarget != TextureTarget::Texture1DArray && dstStateTarget != TextureTarget::Texture1DArray) {
-            return;
-        }
-        std::swap(height, depth);
     }
 
     static TextureInternalFormat GetCopyImageEndpointFormat(const CopyImageEndpoint& endpoint) {
@@ -6029,9 +6029,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        GLsizei copyHeight = srcHeight;
-        GLsizei copyDepth = srcDepth;
-        ApplyGLESCopyImageExtent(srcTarget, dstTarget, copyHeight, copyDepth);
+        // Verbatim: GL already spells a 1D array's extent the way the ES 2D array it maps onto
+        // wants it (height 1, layers on depth) - see MakeGLESCopyImageEndpoint.
+        const GLsizei copyHeight = srcHeight;
+        const GLsizei copyDepth = srcDepth;
 
         const TextureInternalFormat srcFormat = GetCopyImageEndpointFormat(srcEndpoint);
         const TextureInternalFormat dstFormat = GetCopyImageEndpointFormat(dstEndpoint);

@@ -301,6 +301,8 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripNoPerspectivePass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EmulateNoPerspectivePass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LegalizeFragmentOutputIndexPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LegalizeStorageBlockArrayIndexPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenAtomicCounterBlockPass.cpp
 
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp

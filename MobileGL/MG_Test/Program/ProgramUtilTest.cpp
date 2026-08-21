@@ -3348,11 +3348,38 @@ namespace {
         return count;
     }
 
+    // Same word walk, for the NON-arrayed half of the family (Arrayed == 0).
+    SizeT Count1DNonArrayedStorageImageTypes(const Vector<Uint32>& spirv) {
+        constexpr unsigned kOpTypeImage = 25, kDim1D = 0;
+        SizeT count = 0;
+        for (SizeT i = 5; i < spirv.size();) {
+            const unsigned wordCount = spirv[i] >> 16;
+            const unsigned opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            if (opcode == kOpTypeImage && wordCount >= 8 && spirv[i + 3] == kDim1D && spirv[i + 5] == 0u &&
+                spirv[i + 7] == 2u) {
+                ++count;
+            }
+            i += wordCount;
+        }
+        return count;
+    }
+
     const char* k1DArrayImageCompute = R"(#version 440 core
 layout (local_size_x = 1) in;
 layout (location = 0, r32ui) readonly uniform uimage1DArray i0;
 layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
 void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r; }
+)";
+
+    // KHR-GL4x.shader_image_load_store.basic-allTargets-atomic's own shape, minus the six other
+    // targets: a non-arrayed 1D storage image reached ONLY through an atomic. r32ui because ES
+    // defines image atomics on r32i/r32ui/r32f alone.
+    const char* k1DImageAtomicCompute = R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (r32ui) coherent uniform uimage1D i0;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageAtomicAdd(i0, 2, 7u); }
 )";
 } // namespace
 
@@ -3464,9 +3491,11 @@ void main() { ssb.sum = imageLoad(i0, ivec2(2, 3)).r + imageLoad(i1, ivec3(1, 1,
     EXPECT_NE(essl.find("ivec3(2, 0, 3)"), String::npos) << essl;
 }
 
-// Scope, half one: a NON-arrayed 1D storage image is emitted correctly by the very same
-// SPIRV-Cross code, so the pass must not touch it - replacing working emission with our own buys
-// nothing and risks everything.
+// Scope, half one: a NON-arrayed 1D storage image that is only READ or WRITTEN is emitted
+// correctly by the very same SPIRV-Cross code, so the pass must not touch it - replacing working
+// emission with our own buys nothing and risks everything. (The atomic shape below is the one
+// exception, and it is gated on an OpImageTexelPointer actually being present, which is why this
+// fixture still passes through byte for byte.)
 TEST_F(ProgramUtilTest, Lower1DArrayImagesLeavesNonArrayed1DImagesToSpirvCross) {
     using namespace MG_Util::ShaderTranspiler;
 
@@ -3487,6 +3516,94 @@ void main() { ssb.sum = imageLoad(i0, 2).r; }
     ASSERT_FALSE(essl.empty());
     EXPECT_NE(essl.find("uimage2D "), String::npos)
         << "SPIRV-Cross's own 1D-as-2D emulation must still be what handles this:\n" << essl;
+}
+
+// The negative control for the ATOMIC half, and the reason the non-arrayed case is in scope at
+// all: SPIRV-Cross widens a 1D image coordinate in OpImageRead and OpImageWrite but not in
+// OpImageTexelPointer, so the atomic comes out addressing an `uimage2D` with a scalar. Every ES
+// driver answers "no matching overloaded function found" and the whole stage - with every other
+// image in it - is lost. Pinning the upstream behaviour here means a future SPIRV-Cross bump that
+// fixes it fails this test instead of leaving the lowering as silent dead weight.
+TEST_F(ProgramUtilTest, SpirvCrossEmitsAScalarCoordinateForA1DImageAtomic) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(k1DImageAtomicCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_EQ(Count1DNonArrayedStorageImageTypes(spirv), 1u)
+        << "glslang no longer emits a Dim1D/non-arrayed/Sampled=2 image for uimage1D";
+
+    const String essl = DecompileToEssl(spirv);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("uimage2D"), String::npos)
+        << "SPIRV-Cross declares the 1D image as 2D on ES; that half it does do:\n" << essl;
+    EXPECT_NE(essl.find("imageAtomicAdd(i0, 2"), String::npos)
+        << "SPIRV-Cross is expected to pass the SCALAR coordinate straight through to the atomic. "
+           "If this no longer happens, the non-arrayed half of Lower1DArrayImagesForEssl may no "
+           "longer be needed:\n"
+        << essl;
+    EXPECT_EQ(essl.find("ivec2("), String::npos)
+        << "nothing else in this fixture builds an ivec2, so its absence is the defect:\n" << essl;
+}
+
+// The fix: the type becomes a plain 2D image - which is what MobileGL stores a GL_TEXTURE_1D in,
+// height 1 - and the coordinate becomes (u, 0), so the atomic type-checks against the declaration
+// SPIRV-Cross was already emitting.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesWidensThe1DAtomicCoordinate) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> raw = BuildSpirvForStage(k1DImageAtomicCompute, GL_COMPUTE_SHADER);
+    ASSERT_FALSE(raw.empty());
+
+    Vector<Uint32> spirv;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(raw, spirv));
+    ASSERT_EQ(Count1DNonArrayedStorageImageTypes(spirv), 1u)
+        << "the shared chain must leave the 1D image for this pass to handle";
+
+    const Uint64 failuresBefore = ShaderCompiler::SpirvValidationFailureCount();
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
+    ASSERT_FALSE(lowered.empty());
+
+    EXPECT_EQ(Count1DNonArrayedStorageImageTypes(lowered), 0u)
+        << "no non-arrayed 1D storage image type may survive when an atomic reaches one:\n"
+        << DisassembleSpirv(lowered);
+    EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), failuresBefore)
+        << "the lowered module must stay validator-clean";
+
+    const String essl = DecompileToEssl(lowered);
+    ASSERT_FALSE(essl.empty());
+    EXPECT_NE(essl.find("uimage2D"), String::npos)
+        << "the declaration must still be the 2D one the ES texture is:\n" << essl;
+    EXPECT_NE(essl.find("imageAtomicAdd(i0, ivec2(2, 0)"), String::npos)
+        << "the atomic must address the image with the same (u, 0) SPIRV-Cross writes for a read "
+           "or a write:\n"
+        << essl;
+}
+
+// The declined shape for the atomic half, for the same reason as the arrayed one: after the
+// rewrite the image is 2D, so imageSize() yields two components where the shader consumes one and
+// there is no correct scalar to substitute.
+TEST_F(ProgramUtilTest, Lower1DArrayImagesDeclinesA1DAtomicModuleThatQueriesTheImageSize) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const Vector<Uint32> spirv = BuildSpirvForStage(R"(#version 440 core
+layout (local_size_x = 1) in;
+layout (r32ui) coherent uniform uimage1D i0;
+layout (std430, binding = 0) buffer SSB { uint sum; } ssb;
+void main() { ssb.sum = imageAtomicAdd(i0, 2, 7u) + uint(imageSize(i0)); }
+)",
+                                                   GL_COMPUTE_SHADER);
+    ASSERT_FALSE(spirv.empty());
+    const auto traits = Lower1DArrayImagesPass::InspectBinary(spirv);
+    ASSERT_TRUE(traits.declaresImage && traits.queriesImageSize)
+        << "the fixture must contain the shape the pass declines";
+
+    Vector<Uint32> lowered;
+    ASSERT_TRUE(ShaderCompiler::Lower1DArrayImagesForEssl(spirv, lowered, true));
+    EXPECT_EQ(lowered, spirv) << "a declined module must be handed back untouched, not partly rewritten";
+    EXPECT_EQ(Count1DNonArrayedStorageImageTypes(lowered), 1u)
+        << "declining means the 1D type is still there for the driver to reject";
 }
 
 // Scope, half two: a 1D-array SAMPLER reaches SPIRV-Cross's sampler path, which does check
@@ -3945,6 +4062,49 @@ TEST_F(ProgramUtilTest, StorageBlockBindingCeilingIsCheckedAtItsExactBoundary) {
 
     // A backend that advertises no binding points has no ceiling to enforce.
     EXPECT_FALSE(FindShaderStorageBindingViolation("layout(binding = 36) buffer B { int x; };\n", 0).has_value());
+}
+
+// KHR-GL43.shader_atomic_counters.negative-offset-1: an atomic counter whose layout(offset = N)
+// puts its last byte past GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE is a COMPILE-time error, and the CTS
+// never links the shader at all. MobileGL only had the rule at link, because the Vulkan-relaxed
+// parse never reaches glslang's fixOffset().
+TEST_F(ProgramUtilTest, AtomicCounterOffsetCeilingIsCheckedAtCompile) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto violation = [](const String& body) {
+        return FindAtomicCounterOffsetViolation("#version 430 core\n" + body + "void main() {}\n");
+    };
+    const String maxSize = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE);
+    const String lastLegal = std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 4);
+
+    // The boundary itself: the last counter that still fits, and the first that does not.
+    EXPECT_FALSE(violation("layout(binding = 0, offset = " + lastLegal + ") uniform atomic_uint c;\n").has_value());
+    EXPECT_TRUE(violation("layout(binding = 0, offset = " + maxSize + ") uniform atomic_uint c;\n").has_value());
+
+    // An array occupies one word per element, so what has to fit is the LAST one.
+    EXPECT_FALSE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 16) +
+                           ") uniform atomic_uint c[4];\n")
+                     .has_value());
+    EXPECT_TRUE(violation("layout(offset = " + std::to_string(MAX_ATOMIC_COUNTER_BUFFER_SIZE - 8) +
+                          ") uniform atomic_uint c[4];\n")
+                    .has_value());
+
+    // An offset that is not a multiple of 4 (GL 4.6 core 7.7), and one that is.
+    EXPECT_TRUE(violation("layout(offset = 2) uniform atomic_uint c;\n").has_value());
+    EXPECT_FALSE(violation("layout(offset = 8) uniform atomic_uint c;\n").has_value());
+
+    // Things the scanner must NOT judge: a counter with no explicit offset, an `offset` that is
+    // an ordinary identifier rather than a layout qualifier, an array sized by an expression,
+    // and an offset qualifier that belongs to a different declaration.
+    EXPECT_FALSE(violation("uniform atomic_uint c;\nconst int offset = 99999;\n").has_value());
+    EXPECT_FALSE(violation("const int kCount = 4;\nlayout(offset = " + maxSize +
+                           ") uniform atomic_uint c[kCount];\n")
+                     .has_value());
+    EXPECT_FALSE(violation("layout(offset = " + maxSize + ") uniform Block { int x; };\n"
+                           "uniform atomic_uint c;\n")
+                     .has_value());
+    // A source with no counter at all never pays for the scan and never reports one.
+    EXPECT_FALSE(FindAtomicCounterOffsetViolation("#version 430 core\nvoid main() {}\n").has_value());
 }
 
 // KHR-GL43.explicit_uniform_location.uniform-loc-nondecimal: GLSL integer literals are C-style, so

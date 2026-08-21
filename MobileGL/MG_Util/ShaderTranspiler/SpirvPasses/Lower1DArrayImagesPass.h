@@ -46,13 +46,30 @@ namespace MobileGL {
             // through it has its coordinate widened from (u, layer) to (u, 0, layer). SPIRV-Cross
             // is then looking at an ordinary 2D array image and its 1D path never fires.
             //
+            // The NON-arrayed 1D storage image is handled too, but only in one shape. SPIRV-Cross
+            // applies the widening above in OpImageRead (spirv_glsl.cpp) and in OpImageWrite - and
+            // NOT in OpImageTexelPointer, which is the operand path every imageAtomic* goes
+            // through. So `imageAtomicAdd(g_image_1d, coord.x, 2)` comes out with a SCALAR
+            // coordinate against a variable it declared `iimage2D`, and the ES compiler answers
+            // "'imageAtomicAdd' : no matching overloaded function found" - losing the whole stage
+            // and with it every other image in it, which is how
+            // KHR-GL4x.shader_image_load_store.basic-allTargets-atomic lost a seven-image fragment
+            // shader over one of them.
+            //
+            // That case is lowered here for the same reason as the arrayed one: the type becomes
+            // Dim2D and every coordinate is widened from u to (u, 0) in the module, so SPIRV-Cross
+            // has no 1D image left to emulate and read, write and atomic are all spelled by one
+            // piece of code. It is gated on the module ACTUALLY performing an image atomic on such
+            // an image, so a shader that only loads and stores through a 1D image keeps taking
+            // SPIRV-Cross's own (correct) emission byte for byte and this pass cannot regress it.
+            //
             // Deliberately narrow, on three axes:
             //
             //   * STORAGE images only (Sampled == 2). Sampled images reach SPIRV-Cross's sampler
             //     path, which is correct today; rewriting them would replace working emission
             //     with our own for no reason.
-            //   * ARRAYED only. A non-arrayed 1D storage image is emitted correctly by the same
-            //     SPIRV-Cross code, and is left to it.
+            //   * ARRAYED always; NON-arrayed only when the module holds an OpImageTexelPointer
+            //     into one, i.e. only when SPIRV-Cross's own emission is already broken for it.
             //   * ESSL only. Vulkan has VK_IMAGE_VIEW_TYPE_1D_ARRAY natively and Magma binds it
             //     directly, so the module must reach that backend unchanged.
             //
@@ -81,13 +98,15 @@ namespace MobileGL {
                 // cost one module parse and no optimizer run at all - not one parse to ask about
                 // size queries and a second inside an Optimizer that then early-outs.
                 struct ModuleTraits {
-                    // The module declares a 1D-array storage image, i.e. there is anything to do.
+                    // The module declares an image this pass would rewrite - a 1D-array storage
+                    // image, or a non-arrayed 1D storage image the module performs an atomic on -
+                    // i.e. there is anything to do.
                     bool declaresImage = false;
                     // ...and queries its size, which is the shape this pass refuses to translate:
-                    // afterwards the image is a 2D array, so the query yields three components
-                    // where the shader consumes two, and there is no correct two-component answer
-                    // to substitute. The caller leaves such a module alone rather than half
-                    // rewriting it.
+                    // afterwards the image is a 2D (array) one, so the query yields a component
+                    // more than the shader consumes, and there is no correct narrower answer to
+                    // substitute. The caller leaves such a module alone rather than half rewriting
+                    // it.
                     bool queriesImageSize = false;
                 };
                 static ModuleTraits InspectBinary(const Vector<Uint32>& binary);

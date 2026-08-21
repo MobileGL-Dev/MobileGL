@@ -519,13 +519,12 @@ namespace MobileGL::MG_Util::SelfTest {
                                      "narrowed members, so an application that hard-codes std140 offsets "
                                      "computed for doubles must query them instead"));
             builder.Warn("64-bit vertex attributes",
-                         "not supported (ES has no GL_DOUBLE vertex format, and after the fp64 demotion "
-                         "above there is no 64-bit shader input left to feed either); "
-                         "glVertexAttribLFormat / glVertexArrayAttribLFormat succeed and their state is "
-                         "queryable, but an ENABLED 64-bit array is DROPPED at draw and the attribute "
-                         "reads its generic current value - feed the attribute with "
-                         "glVertexAttribPointer(GL_FLOAT) instead, which a demoted dvec input reads "
-                         "correctly");
+                         "narrowed to float32 (ES has no GL_DOUBLE vertex format, and after the fp64 "
+                         "demotion above there is no 64-bit shader input left to feed either); "
+                         "glVertexAttribLFormat / glVertexArrayAttribLFormat succeed, their state is "
+                         "queryable, and an ENABLED 64-bit array IS fetched - the source doubles are "
+                         "deinterleaved into a float32 stream at draw, so values outside float32's "
+                         "range or precision are rounded rather than exact");
             if (glesFuncs.glPatchParameteri != nullptr) {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
@@ -2337,12 +2336,12 @@ namespace MobileGL::MG_Util::SelfTest {
                                         "for doubles must query them instead",
                                         features.shaderFloat64 == VK_TRUE ? "supported" : "unsupported")));
         builder.Warn("64-bit vertex attributes",
-                     "not supported; there is no 64-bit shader input left to feed after the fp64 demotion "
-                     "above, and no VK_FORMAT_R64*_SFLOAT vertex fetch to feed it with on most devices "
-                     "anyway. glVertexAttribLFormat succeeds and its state is queryable, but an ENABLED "
-                     "64-bit array is DROPPED at pipeline build and the attribute reads its generic "
-                     "current value - feed the attribute with glVertexAttribPointer(GL_FLOAT) instead, "
-                     "which a demoted dvec input reads correctly");
+                     "narrowed to float32; there is no 64-bit shader input left to feed after the fp64 "
+                     "demotion above, and no VK_FORMAT_R64*_SFLOAT vertex fetch to feed it with on most "
+                     "devices anyway. glVertexAttribLFormat succeeds, its state is queryable, and an "
+                     "ENABLED 64-bit array IS fetched - the source doubles are deinterleaved into a "
+                     "float32 stream at draw, so values outside float32's range or precision are "
+                     "rounded rather than exact");
 
         Bool shaderDrawParameters = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {

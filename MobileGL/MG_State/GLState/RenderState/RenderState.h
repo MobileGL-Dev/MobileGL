@@ -328,6 +328,18 @@ namespace MobileGL {
         // turns it into a real glEnable/glDisable.
         Uint32 ScissorTestEnabledMask = 0;
         Array<IntVec4, MAX_VIEWPORTS> ScissorBoxes{}; // x, y, width, height
+        // One bit per viewport, set the first time the application writes that index's scissor
+        // rectangle - glScissor broadcasts and sets all 16, glScissorIndexed/glScissorArrayv set
+        // the indices they name. It exists because the RECTANGLE cannot answer "has the
+        // application spoken?": ScissorBoxes starts all-zero (its spec initial value is the size
+        // of a window the frontend does not know yet, see the RenderState constructor), and
+        // glScissor(0, 0, 0, 0) is a legal GL state meaning "the scissor test rejects every
+        // fragment". A backend that reads an empty rectangle as the never-written sentinel
+        // therefore INVERTS that request into "accept every fragment"; DirectGLES did exactly
+        // that and KHR-GL43.viewport_array.scissor_zero_dimension caught it. Deliberately beside
+        // ScissorBoxes so it shares their tail span (after LogicOp) and DirectGLES' span memcmp
+        // picks a transition up like any other state.
+        Uint32 ScissorBoxWrittenMask = 0;
         // glEnable(GL_CLIP_DISTANCE0 + i) for i in [0, 8), one bit each. A bitmask rather than
         // eight bools because every consumer wants the set, not an individual flag, and because
         // the SYNC_CAPABILITY/SET_CAPABILITY macros key off a "<Name>Enabled" field name that

@@ -716,6 +716,86 @@ void main() {
         EXPECT_EQ(TakeError(), GL_INVALID_ENUM);
     }
 
+    // The CLASSIC query surface has to agree with the interface query above. MobileGL lowers
+    // every atomic_uint onto a synthesized gl_AtomicCounterBlock_N, and glGetActiveUniform /
+    // glGetActiveUniformsiv used to report that lowering: GL_UNSIGNED_INT instead of
+    // GL_UNSIGNED_INT_ATOMIC_COUNTER, the synthesized block's index instead of the -1 a
+    // default-block uniform owes, and GL_INVALID_ENUM for
+    // GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX - the last of which is what made
+    // KHR-GL43.shader_atomic_counters.basic-program-query a forced FAIL.
+    TEST_F(ProgramInterfaceTest, AtomicCounterClassicUniformQueries) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout (binding = 0, offset = 0) uniform atomic_uint ac_counter0;
+layout (binding = 1, offset = 0) uniform atomic_uint ac_counter1;
+uniform float plain;
+void main() {
+   color = vec4(float(atomicCounterIncrement(ac_counter0) + atomicCounterIncrement(ac_counter1)) + plain);
+}
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        const auto indexOf = [p](const char* name) {
+            const GLchar* names[1] = {name};
+            GLuint index = GL_INVALID_INDEX;
+            GetUniformIndices(p, 1, names, &index);
+            return index;
+        };
+        const auto uniformiv = [p](GLuint index, GLenum pname) {
+            GLint value = -12345;
+            const GLuint indices[1] = {index};
+            GetActiveUniformsiv(p, 1, indices, pname, &value);
+            return value;
+        };
+
+        const GLuint counter0 = indexOf("ac_counter0");
+        const GLuint counter1 = indexOf("ac_counter1");
+        const GLuint plain = indexOf("plain");
+        ASSERT_NE(counter0, GL_INVALID_INDEX);
+        ASSERT_NE(counter1, GL_INVALID_INDEX);
+        ASSERT_NE(plain, GL_INVALID_INDEX);
+
+        // (a) glGetActiveUniform and glGetActiveUniformsiv(GL_UNIFORM_TYPE) both report the
+        //     GL-level type.
+        GLint size = 0;
+        GLenum type = 0;
+        GLchar nameBuffer[64] = {'\0'};
+        GetActiveUniform(p, counter0, sizeof(nameBuffer), nullptr, &size, &type, nameBuffer);
+        EXPECT_EQ(type, static_cast<GLenum>(GL_UNSIGNED_INT_ATOMIC_COUNTER));
+        EXPECT_EQ(std::string(nameBuffer), "ac_counter0");
+        EXPECT_EQ(uniformiv(counter0, GL_UNIFORM_TYPE), GL_UNSIGNED_INT_ATOMIC_COUNTER);
+        EXPECT_EQ(uniformiv(counter1, GL_UNIFORM_TYPE), GL_UNSIGNED_INT_ATOMIC_COUNTER);
+        EXPECT_EQ(uniformiv(plain, GL_UNIFORM_TYPE), GL_FLOAT);
+
+        // (b) an atomic counter is a DEFAULT-BLOCK uniform, whatever it was lowered onto.
+        EXPECT_EQ(uniformiv(counter0, GL_UNIFORM_BLOCK_INDEX), -1);
+        EXPECT_EQ(uniformiv(counter1, GL_UNIFORM_BLOCK_INDEX), -1);
+        EXPECT_EQ(uniformiv(plain, GL_UNIFORM_BLOCK_INDEX), -1);
+
+        // (c) the pname is accepted, answers with the buffer's index, and reports -1 for a
+        //     uniform that is not a counter. Two bindings mean two distinct buffers.
+        const GLint buffer0 = uniformiv(counter0, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX);
+        const GLint buffer1 = uniformiv(counter1, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX);
+        EXPECT_GE(buffer0, 0);
+        EXPECT_GE(buffer1, 0);
+        EXPECT_NE(buffer0, buffer1);
+        EXPECT_LT(buffer0, Interfaceiv(p, GL_ATOMIC_COUNTER_BUFFER, GL_ACTIVE_RESOURCES));
+        EXPECT_LT(buffer1, Interfaceiv(p, GL_ATOMIC_COUNTER_BUFFER, GL_ACTIVE_RESOURCES));
+        EXPECT_EQ(uniformiv(plain, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX), -1);
+        // No leftover error: the CTS harness fails the subcase on one.
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+
+        // The classic surface and the interface query name the same buffer.
+        const std::vector<GLint> interfaceBuffer =
+            PropsOf(p, GL_UNIFORM, "ac_counter0", {GL_ATOMIC_COUNTER_BUFFER_INDEX});
+        ASSERT_EQ(interfaceBuffer.size(), 1u);
+        EXPECT_EQ(interfaceBuffer[0], buffer0);
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
     // Two counters that share a binding AND an offset must fail to link. glslang's own check
     // lives in fixOffset(), which the Vulkan-relaxed parse never reaches - it folds the
     // atomic_uint into a storage block and returns from declareVariable() first - so the pair

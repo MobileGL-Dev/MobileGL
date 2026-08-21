@@ -49,10 +49,22 @@ namespace MobileGL {
                            imageType->GetSingleWordInOperand(kSampledOperand) == 2u;
                 }
 
+                // The other half of the 1D storage-image family: not arrayed. SPIRV-Cross emits
+                // read and write through one of these correctly, and an ATOMIC through one
+                // incorrectly (see the header), so this predicate only ever decides anything
+                // together with the atomic probe below.
+                bool Is1DNonArrayedStorageImageType(const Instruction* imageType) {
+                    return imageType != nullptr && imageType->opcode() == spv::Op::OpTypeImage &&
+                           imageType->NumInOperands() > kSampledOperand &&
+                           static_cast<spv::Dim>(imageType->GetSingleWordInOperand(kDimOperand)) == spv::Dim::Dim1D &&
+                           imageType->GetSingleWordInOperand(kArrayedOperand) == 0u &&
+                           imageType->GetSingleWordInOperand(kSampledOperand) == 2u;
+                }
+
                 // Any Dim1D image, sampled or storage. Used only to decide whether the Image1D
                 // capability is still needed - deliberately wider than the rewrite's own
-                // predicate, so a module that also holds a non-arrayed 1D image (which this pass
-                // leaves to SPIRV-Cross) keeps the capability it still requires.
+                // predicate, so a module that also holds a 1D image this pass left alone keeps the
+                // capability it still requires.
                 bool IsDim1DImageType(const Instruction* imageType) {
                     return imageType != nullptr && imageType->opcode() == spv::Op::OpTypeImage &&
                            imageType->NumInOperands() > kSampledOperand &&
@@ -110,6 +122,60 @@ namespace MobileGL {
                     return opcode == spv::Op::OpImageQuerySize || opcode == spv::Op::OpImageQuerySizeLod ||
                            opcode == spv::Op::OpImageQueryLevels || opcode == spv::Op::OpImageQuerySamples;
                 }
+
+                // Which 1D storage images this module is to be rewritten for. Arrayed ones always;
+                // non-arrayed ones only when an atomic reaches one, because that is the only shape
+                // SPIRV-Cross gets wrong for them and taking over a path it gets right would be a
+                // regression looking for somewhere to happen.
+                struct LoweringScope {
+                    bool arrayed = false;
+                    bool nonArrayed = false;
+
+                    bool Any() const { return arrayed || nonArrayed; }
+                    bool Covers(const Instruction* imageType) const {
+                        return (arrayed && Is1DArrayStorageImageType(imageType)) ||
+                               (nonArrayed && Is1DNonArrayedStorageImageType(imageType));
+                    }
+                };
+
+                // OpImageTexelPointer is the operand path of every imageAtomic*; nothing else in a
+                // GLSL-derived module produces one.
+                bool PerformsAtomicOnNonArrayed1DImage(IRContext* context) {
+                    for (auto& function : *context->module()) {
+                        for (auto& block : function) {
+                            for (auto& instruction : block) {
+                                if (instruction.opcode() != spv::Op::OpImageTexelPointer ||
+                                    instruction.NumInOperands() < 1) {
+                                    continue;
+                                }
+                                if (Is1DNonArrayedStorageImageType(
+                                        ResolveImageType(context, instruction.GetSingleWordInOperand(0)))) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                }
+
+                // One walk of the type table, then - and only when the module declares a
+                // non-arrayed 1D storage image at all - one walk of the code. Every other shader
+                // pays the type walk and nothing else.
+                LoweringScope ResolveLoweringScope(IRContext* context) {
+                    LoweringScope scope;
+                    bool hasNonArrayed = false;
+                    for (const Instruction& type : context->module()->types_values()) {
+                        if (Is1DArrayStorageImageType(&type)) {
+                            scope.arrayed = true;
+                        } else if (Is1DNonArrayedStorageImageType(&type)) {
+                            hasNonArrayed = true;
+                        }
+                    }
+                    if (hasNonArrayed) {
+                        scope.nonArrayed = PerformsAtomicOnNonArrayed1DImage(context);
+                    }
+                    return scope;
+                }
             } // namespace
 
             Lower1DArrayImagesPass::ModuleTraits Lower1DArrayImagesPass::InspectBinary(const Vector<Uint32>& binary) {
@@ -126,15 +192,11 @@ namespace MobileGL {
 
                 // The type table settles it for the cheap half, and it is the half almost every
                 // shader takes: no such type declared, nothing to inspect further.
-                for (const Instruction& type : context->module()->types_values()) {
-                    if (Is1DArrayStorageImageType(&type)) {
-                        traits.declaresImage = true;
-                        break;
-                    }
-                }
-                if (!traits.declaresImage) {
+                const LoweringScope scope = ResolveLoweringScope(context.get());
+                if (!scope.Any()) {
                     return traits;
                 }
+                traits.declaresImage = true;
 
                 for (auto& function : *context->module()) {
                     for (auto& block : function) {
@@ -142,7 +204,7 @@ namespace MobileGL {
                             if (!QueriesImageSize(instruction.opcode()) || instruction.NumInOperands() < 1) {
                                 continue;
                             }
-                            if (Is1DArrayStorageImageType(
+                            if (scope.Covers(
                                     ResolveImageType(context.get(), instruction.GetSingleWordInOperand(0)))) {
                                 traits.queriesImageSize = true;
                                 return traits;
@@ -160,27 +222,21 @@ namespace MobileGL {
 
                 // Nothing to do unless the module actually declares one. Every other shader pays
                 // one walk of the type table and is handed back unchanged.
-                bool hasType = false;
-                for (const Instruction& type : irContext->types_values()) {
-                    if (Is1DArrayStorageImageType(&type)) {
-                        hasType = true;
-                        break;
-                    }
-                }
-                if (!hasType) {
+                const LoweringScope scope = ResolveLoweringScope(irContext);
+                if (!scope.Any()) {
                     return Status::SuccessWithoutChange;
                 }
 
                 // The same refusal the caller makes, restated here so the pass is safe wherever
                 // it is registered. Rewriting the type while leaving an OpImageQuerySize on it
                 // produces a query whose result type has one component too few - an invalid
-                // module - and there is no correct two-component size to substitute, because the
-                // ES texture genuinely has a height the GL one does not.
+                // module - and there is no correct narrower size to substitute, because the ES
+                // texture genuinely has a height the GL one does not.
                 for (auto& function : *irContext->module()) {
                     for (auto& block : function) {
                         for (auto& instruction : block) {
                             if (QueriesImageSize(instruction.opcode()) && instruction.NumInOperands() >= 1 &&
-                                Is1DArrayStorageImageType(
+                                scope.Covers(
                                     ResolveImageType(irContext, instruction.GetSingleWordInOperand(0)))) {
                                 return Status::SuccessWithoutChange;
                             }
@@ -188,9 +244,12 @@ namespace MobileGL {
                     }
                 }
 
-                // (u, layer) -> (u, 0, layer). The height the ES 2D array carries is 1, so Y is
-                // always 0 and the layer has to move from the second component to the third; a
-                // plain widening that appended the 0 would read layer 0 of every access instead.
+                // Arrayed: (u, layer) -> (u, 0, layer). The height the ES 2D array carries is 1,
+                // so Y is always 0 and the layer has to move from the second component to the
+                // third; a plain widening that appended the 0 would read layer 0 of every access
+                // instead. Non-arrayed: u -> (u, 0), which is exactly what SPIRV-Cross itself
+                // writes for the operations it does widen - reproduced here so read, write and
+                // atomic all come out of one place.
                 for (auto& function : *irContext->module()) {
                     for (auto& block : function) {
                         for (auto& instruction : block) {
@@ -199,38 +258,44 @@ namespace MobileGL {
                                 instruction.NumInOperands() <= coordinateOperand) {
                                 continue;
                             }
-                            if (!Is1DArrayStorageImageType(
-                                    ResolveImageType(irContext, instruction.GetSingleWordInOperand(0)))) {
+                            const Instruction* imageType =
+                                ResolveImageType(irContext, instruction.GetSingleWordInOperand(0));
+                            if (!scope.Covers(imageType)) {
                                 continue;
                             }
+                            const bool arrayed = Is1DArrayStorageImageType(imageType);
 
                             const uint32_t coordinateId = instruction.GetSingleWordInOperand(coordinateOperand);
 
                             // Built from the COORDINATE's own component type rather than a
-                            // hardcoded signed int. GLSL only ever spells these ivec2, but SPIR-V
-                            // permits an unsigned coordinate, and extracting a uint component
-                            // into an int result is an invalid module rather than a wrong answer -
-                            // the kind of defect that reaches a driver as "compiles here, not
-                            // there".
+                            // hardcoded signed int. GLSL only ever spells these int/ivec2, but
+                            // SPIR-V permits an unsigned coordinate, and extracting a uint
+                            // component into an int result is an invalid module rather than a
+                            // wrong answer - the kind of defect that reaches a driver as "compiles
+                            // here, not there".
                             Instruction* coordinateDef = irContext->get_def_use_mgr()->GetDef(coordinateId);
                             if (coordinateDef == nullptr) return Status::Failure;
                             const auto* coordinateType = typeMgr->GetType(coordinateDef->type_id());
-                            const auto* coordinateVector = coordinateType != nullptr ? coordinateType->AsVector()
-                                                                                     : nullptr;
-                            if (coordinateVector == nullptr || coordinateVector->element_count() != 2) {
+                            if (coordinateType == nullptr) return Status::Failure;
+                            // Arrayed coordinates are the two-component (u, layer); non-arrayed
+                            // ones are the bare scalar u. Anything else is a shape this pass does
+                            // not translate, and declining leaves the module byte for byte.
+                            const auto* coordinateVector = arrayed ? coordinateType->AsVector() : nullptr;
+                            if (arrayed && (coordinateVector == nullptr || coordinateVector->element_count() != 2)) {
                                 return Status::Failure;
                             }
-                            const auto* component = coordinateVector->element_type();
+                            const auto* component =
+                                arrayed ? coordinateVector->element_type() : coordinateType;
                             const auto* componentInteger = component != nullptr ? component->AsInteger() : nullptr;
                             if (componentInteger == nullptr) return Status::Failure;
 
-                            spvtools::opt::analysis::Vector widenedVector(component, 3);
-                            const uint32_t int3TypeId = typeMgr->GetTypeInstruction(&widenedVector);
+                            spvtools::opt::analysis::Vector widenedVector(component, arrayed ? 3 : 2);
+                            const uint32_t widenedTypeId = typeMgr->GetTypeInstruction(&widenedVector);
                             const uint32_t intTypeId = typeMgr->GetTypeInstruction(component);
                             const uint32_t zeroId = componentInteger->IsSigned()
                                                         ? constantMgr->GetSIntConstId(0)
                                                         : constantMgr->GetUIntConstId(0);
-                            if (int3TypeId == 0 || intTypeId == 0 || zeroId == 0) {
+                            if (widenedTypeId == 0 || intTypeId == 0 || zeroId == 0) {
                                 return Status::Failure;
                             }
 
@@ -238,15 +303,20 @@ namespace MobileGL {
                                 irContext, &instruction,
                                 IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
 
-                            Instruction* u =
-                                builder.AddCompositeExtract(intTypeId, coordinateId, {0});
-                            Instruction* layer =
-                                builder.AddCompositeExtract(intTypeId, coordinateId, {1});
-                            if (u == nullptr || layer == nullptr) {
-                                return Status::Failure;
+                            Instruction* widened = nullptr;
+                            if (arrayed) {
+                                Instruction* u =
+                                    builder.AddCompositeExtract(intTypeId, coordinateId, {0});
+                                Instruction* layer =
+                                    builder.AddCompositeExtract(intTypeId, coordinateId, {1});
+                                if (u == nullptr || layer == nullptr) {
+                                    return Status::Failure;
+                                }
+                                widened = builder.AddCompositeConstruct(
+                                    widenedTypeId, {u->result_id(), zeroId, layer->result_id()});
+                            } else {
+                                widened = builder.AddCompositeConstruct(widenedTypeId, {coordinateId, zeroId});
                             }
-                            Instruction* widened = builder.AddCompositeConstruct(
-                                int3TypeId, {u->result_id(), zeroId, layer->result_id()});
                             if (widened == nullptr) {
                                 return Status::Failure;
                             }
@@ -256,21 +326,22 @@ namespace MobileGL {
                     }
                 }
 
-                // Only now, with no access still spelling the 1D-array coordinate, does the type
-                // become the 2D array one. Arrayed stays 1: this is a 2D ARRAY image, which is
-                // what the texture was stored as.
+                // Only now, with no access still spelling a 1D coordinate, does the type become
+                // the 2D one. Arrayed is left exactly as it was - a 1D array becomes a 2D ARRAY
+                // image, which is what the texture was stored as, and a non-arrayed 1D becomes the
+                // plain 2D image MobileGL stores a GL_TEXTURE_1D in (height 1).
                 for (Instruction& type : irContext->types_values()) {
-                    if (Is1DArrayStorageImageType(&type)) {
+                    if (scope.Covers(&type)) {
                         type.SetInOperand(kDimOperand, {static_cast<uint32_t>(spv::Dim::Dim2D)});
                     }
                 }
 
                 // Image1D describes the types just rewritten - but only drop it if no 1D image
-                // type is left at all. A module may hold a non-arrayed 1D storage image, which
-                // this pass deliberately leaves to SPIRV-Cross, and that one still needs the
-                // capability. Shader is always declared by any module reaching here, so restating
-                // it keeps the instruction valid without leaving a capability a consumer could
-                // key off.
+                // type is left at all. A module may hold a 1D image this pass left alone (a
+                // SAMPLED one always, and a non-arrayed storage one whenever no atomic reaches
+                // it), and that one still needs the capability. Shader is always declared by any
+                // module reaching here, so restating it keeps the instruction valid without
+                // leaving a capability a consumer could key off.
                 bool anyDim1DLeft = false;
                 for (const Instruction& type : irContext->types_values()) {
                     if (IsDim1DImageType(&type)) {

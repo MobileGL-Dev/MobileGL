@@ -108,8 +108,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
 
-            const VkFormat sourceVkFormat =
+            VkFormat sourceVkFormat =
                 ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
+            VertexStreamConversion conversion = VertexStreamConversion::None;
+            // Gated on the SAME flag ToVkVertexFormat gates its 64-bit path on, and that is
+            // load-bearing rather than belt-and-braces: the narrowing is only correct because
+            // DemoteFloat64Pass already turned the shader's `dvec` input into a `vec`, and that
+            // pass runs precisely when the backend declares no 64-bit vertex support. With the
+            // flag set, a dvec3/dvec4 is declined by ToVkVertexFormat AND left 64-bit in the
+            // module, so a float32 stream would be fed to a Float64 input.
+            const Bool narrowFloat64Arrays =
+                MG_Backend::pActiveBackendObject == nullptr ||
+                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes;
+            if (sourceVkFormat == VK_FORMAT_UNDEFINED && attr.Type == DataType::Float64 && narrowFloat64Arrays) {
+                // No native 64-bit fetch here (see ToVkVertexFormat's Float64 case), but the
+                // source bytes are ordinary IEEE-754 doubles and DemoteFloat64Pass has already
+                // narrowed every dvec input to a vec, so the array is narrowed to match rather
+                // than dropped. Mirrors what DirectGLES does for the same state.
+                const VkFormat narrowedFormat = ToFloat32VertexFormat(attr.Size);
+                if (narrowedFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(narrowedFormat)) {
+                    sourceVkFormat = narrowedFormat;
+                    conversion = VertexStreamConversion::Float64ToFloat32;
+                    MGLOG_W_ONCE("Vertex attribute location=%u is a 64-bit (GL_DOUBLE) array; fetching it at "
+                            "float32 precision through format=%d (size=%d long=%s)",
+                            location, static_cast<Int>(narrowedFormat), attr.Size, attr.IsLong ? "true" : "false");
+                }
+            }
             if (sourceVkFormat == VK_FORMAT_UNDEFINED) {
                 MGLOG_E_ONCE("Unsupported vertex attribute layout (location=%u, type=%s, size=%d): the array is "
                         "enabled but cannot be mapped to a VkFormat",
@@ -119,8 +143,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             VkFormat vkFormat = sourceVkFormat;
-            VertexStreamConversion conversion = VertexStreamConversion::None;
-            if (!SupportsVertexBufferFormat(vkFormat)) {
+            if (conversion == VertexStreamConversion::None && !SupportsVertexBufferFormat(vkFormat)) {
                 if (IsScaledIntegerVertexFormat(vkFormat)) {
                     const VkFormat fallbackFormat = ToFloat32VertexFormat(attr.Size);
                     if (fallbackFormat != VK_FORMAT_UNDEFINED && SupportsVertexBufferFormat(fallbackFormat)) {
@@ -189,7 +212,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (sourceStride != 0) {
                 if (conversion == VertexStreamConversion::Repack) {
                     stride = static_cast<Uint32>(attribByteSize);
-                } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32) {
+                } else if (conversion == VertexStreamConversion::ScaledIntegerToFloat32 ||
+                           conversion == VertexStreamConversion::Float64ToFloat32) {
                     stride = static_cast<Uint32>(attr.Size * static_cast<Int>(sizeof(Float)));
                 }
             }
@@ -336,11 +360,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // no 64-bit vertex attribute support: DemoteFloat64Pass has already narrowed every
             // `dvec` input to a `vec` by then, so PackDoubleVertexInputsPass finds nothing to pack
             // and a UINT-formatted attribute would be fed to a float input - garbage with no
-            // diagnostic anywhere. Declining here drops the array instead (the caller skips
-            // UNDEFINED attributes and reports them through unsupportedAttribMask), which is what
-            // DirectGLES does for the same state. The frontend RECORDS the format either way, so
-            // this gate is the only thing standing between a legal glVertexAttribLFormat and a
-            // mismatched pipeline.
+            // diagnostic anywhere. Declining here hands the attribute to the caller's
+            // Float64ToFloat32 fallback instead, which narrows the source doubles to match the
+            // demoted `vec` input - the same thing DirectGLES does for the same state. The
+            // frontend RECORDS the format either way, so this gate is the only thing standing
+            // between a legal glVertexAttribLFormat and a mismatched pipeline.
             if (MG_Backend::pActiveBackendObject == nullptr ||
                 !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
                 return VK_FORMAT_UNDEFINED;

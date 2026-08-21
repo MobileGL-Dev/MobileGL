@@ -559,3 +559,76 @@ TEST_F(RenderStateTest, IndexedRectangleQueriesRejectAnOutOfRangeIndex) {
     MG_Impl::GLImpl::GetDoublei_v(GL_DEPTH_RANGE, kMaxViewports - 1, doubles);
     ExpectSingleGlError(GL_NO_ERROR);
 }
+
+// ---------------------------------------------------------------------------------------------
+// "Has the application written this scissor rectangle?" - the flag, not the extent
+// ---------------------------------------------------------------------------------------------
+// glScissor(0, 0, 0, 0) is legal GL and means "the scissor test rejects every fragment", but it
+// is byte-identical to the never-written default, whose meaning is the opposite ("the whole
+// window", which the frontend cannot spell before a surface exists). DirectGLES resolved the two
+// by looking at the EXTENT and so inverted every deliberately empty box into the full surface -
+// KHR-GL43.viewport_array.scissor_zero_dimension is exactly that draw, and it came back holding
+// the drawn colour where the untouched fill was required.
+//
+// These drive RenderState directly instead of the GL entry points on purpose: the flag's whole
+// content is what it says BEFORE the first scissor call of a context, and this binary shares one
+// context across every case in the file, so a pristine object is the only place that state
+// still exists by the time these run.
+
+namespace {
+    constexpr Uint32 kAllViewportsWritten =
+        RenderStateParameters::MAX_VIEWPORTS >= 32 ? ~0u : (1u << RenderStateParameters::MAX_VIEWPORTS) - 1u;
+} // namespace
+
+TEST_F(RenderStateTest, AnEmptyScissorBoxIsDistinguishableFromNeverHavingBeenWritten) {
+    MG_State::GLState::RenderState state;
+    EXPECT_EQ(state.GetAllParameters().ScissorBoxWrittenMask, 0u)
+        << "a fresh context has never been given a scissor box, and the all-zero rectangle it "
+           "starts with must not be mistaken for one";
+
+    // Not one stored byte moves here - every box already held (0,0,0,0) - and yet this is the
+    // call that turns "the frontend does not know the window size" into "reject every fragment".
+    state.SetScissorBox(IntVec4(0, 0, 0, 0));
+    EXPECT_EQ(state.GetAllParameters().ScissorBoxWrittenMask, kAllViewportsWritten);
+    for (GLuint index = 0; index < kMaxViewports; ++index) {
+        EXPECT_EQ(state.GetScissorBoxIndexed(index), IntVec4(0, 0, 0, 0)) << "index " << index;
+    }
+}
+
+TEST_F(RenderStateTest, AnIndexedScissorWriteClaimsOnlyItsOwnIndex) {
+    MG_State::GLState::RenderState state;
+    state.SetScissorBoxIndexed(5, IntVec4(0, 0, 0, 0));
+    EXPECT_EQ(state.GetAllParameters().ScissorBoxWrittenMask, 1u << 5);
+
+    state.SetScissorBoxIndexed(0, IntVec4(0, 0, 0, 0));
+    EXPECT_EQ(state.GetAllParameters().ScissorBoxWrittenMask, (1u << 5) | 1u);
+
+    // ARB_viewport_array makes the non-indexed setter a write to every index, so it claims all 16.
+    state.SetScissorBox(IntVec4(1, 2, 3, 4));
+    EXPECT_EQ(state.GetAllParameters().ScissorBoxWrittenMask, kAllViewportsWritten);
+}
+
+TEST_F(RenderStateTest, TheFirstScissorWriteBumpsTheVersionEvenWhenTheValueDoesNotMove) {
+    // Load-bearing, and not merely tidy: DirectGLES' SyncRenderState early-outs on an unchanged
+    // render-state version BEFORE it reaches the span memcmp that would otherwise notice the
+    // flag. A version-less transition would sit in the parameter block, never be pushed, and the
+    // empty box would go on rendering as the whole surface.
+    MG_State::GLState::RenderState state;
+    const Uint initial = state.GetVersion();
+    state.SetScissorBox(IntVec4(0, 0, 0, 0));
+    EXPECT_GT(state.GetVersion(), initial) << "claiming the rectangle is itself a state change";
+
+    // Once claimed, a genuinely redundant write stays free - the flag costs one transition, not
+    // a version bump per call.
+    const Uint settled = state.GetVersion();
+    state.SetScissorBox(IntVec4(0, 0, 0, 0));
+    EXPECT_EQ(state.GetVersion(), settled);
+
+    MG_State::GLState::RenderState indexed;
+    const Uint indexedInitial = indexed.GetVersion();
+    indexed.SetScissorBoxIndexed(3, IntVec4(0, 0, 0, 0));
+    EXPECT_GT(indexed.GetVersion(), indexedInitial);
+    const Uint indexedSettled = indexed.GetVersion();
+    indexed.SetScissorBoxIndexed(3, IntVec4(0, 0, 0, 0));
+    EXPECT_EQ(indexed.GetVersion(), indexedSettled);
+}

@@ -843,6 +843,21 @@ namespace MobileGL {
                     stored = box;
                     stateChanged = true;
                 }
+                // "The application has written this rectangle" is a DIFFERENT predicate from "the
+                // value moved", and the backends need the first one: glScissor(0, 0, 0, 0) as the
+                // very first scissor call leaves every stored box byte-identical to its
+                // never-written default, and that call is precisely the one whose meaning a
+                // backend must stop guessing at (see ScissorBoxWrittenMask).
+                //
+                // The transition has to count as a state change for the version too. DirectGLES'
+                // SyncRenderState early-outs on an unchanged render-state version BEFORE it
+                // reaches the span memcmp that would otherwise notice the mask, so a version-less
+                // flag flip would sit in the parameter block and never be pushed. It is a
+                // once-per-index transition, so the steady state still costs nothing.
+                if (m_parameters.ScissorBoxWrittenMask != kAllViewportsMask) {
+                    m_parameters.ScissorBoxWrittenMask = kAllViewportsMask;
+                    stateChanged = true;
+                }
                 if (stateChanged) ++m_version;
             }
 
@@ -855,9 +870,15 @@ namespace MobileGL {
                     MOBILEGL_ASSERT(false, "Scissor box index out of range: %u", index);
                     return;
                 }
-                if (m_parameters.ScissorBoxes[index] == box) return;
+                // See SetScissorBox: a first write is state even when it does not move the value,
+                // so the unchanged-value early-out may only fire once this index is already
+                // marked written.
+                const Uint32 writtenBit = 1u << index;
+                const Bool alreadyWritten = (m_parameters.ScissorBoxWrittenMask & writtenBit) != 0;
+                if (alreadyWritten && m_parameters.ScissorBoxes[index] == box) return;
 
                 m_parameters.ScissorBoxes[index] = box;
+                m_parameters.ScissorBoxWrittenMask |= writtenBit;
                 ++m_version;
             }
 

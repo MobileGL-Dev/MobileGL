@@ -281,6 +281,9 @@ namespace MobileGL::MG_State::GLState {
         }
 
         GLenum GetActiveUniformType(Uint index) const {
+            // The lowered counter is a plain uint inside a synthesized block; what the GL
+            // client declared - and what glGetActiveUniform must report - is an atomic_uint.
+            if (IsActiveUniformAtomicCounter(index)) return GL_UNSIGNED_INT_ATOMIC_COUNTER;
             return UniformAt(TProgramUniformIndex(index)).glDefineType;
         }
 
@@ -298,8 +301,55 @@ namespace MobileGL::MG_State::GLState {
         }
 
         Int GetActiveUniformBlockIndex(Uint index) const {
+            // An atomic counter is a DEFAULT-BLOCK uniform to GL, whatever block the
+            // transpiler lowered it onto (GL 4.6 core 7.6, table 7.6): -1.
+            if (IsActiveUniformAtomicCounter(index)) return -1;
             // Members of the synthesized global UBO are default-block uniforms to GL: -1.
             return GlBlockIndexFromTProgram(UniformAt(TProgramUniformIndex(index)).index);
+        }
+
+        // The transpiler lowers every atomic_uint onto a synthesized gl_AtomicCounterBlock_N
+        // block, but GL keeps seeing an atomic counter as a default-block uniform of type
+        // GL_UNSIGNED_INT_ATOMIC_COUNTER that points at an atomic-counter BUFFER. These two
+        // answer for that GL-level declaration; without them the query surface reports the
+        // lowering instead (GL_UNSIGNED_INT, block index 0) and
+        // KHR-GL43.shader_atomic_counters.basic-program-query fails on both.
+        //
+        // The returned value is an index into the GL_ACTIVE_ATOMIC_COUNTER_BUFFERS list, i.e.
+        // the RANK of the owning counter block among the counter blocks in glslang's block
+        // order - exactly how ProgramInterface numbers the GL_ATOMIC_COUNTER_BUFFER
+        // resources glGetActiveAtomicCounterBufferiv answers from. -1 when this uniform is
+        // not an atomic counter.
+        // Answered from the OWNED reflection snapshot, never from Artifacts().program. This
+        // arrived reading the live TProgram, which is null for every program served from the
+        // translation cache's L1 - and unlike the other query-surface accessors that made the
+        // same mistake, this one DEREFERENCES it, so the second program built from a given set
+        // of sources would have taken the process down rather than answered wrongly. The
+        // snapshot carries the same three facts in the same TPROGRAM index space:
+        // getUniform(i).index -> UniformAt(i).index, getNumUniformBlocks() ->
+        // blockReflection.size(), getUniformBlock(i).name -> BlockAt(i).name.
+        Int GetActiveUniformAtomicCounterBufferIndex(Uint index) const {
+            const Int tIndex = TProgramUniformIndex(index);
+            if (tIndex < 0) return -1;
+            const Int owner = UniformAt(tIndex).index;
+            if (owner < 0) return -1;
+            const Int blockCount = static_cast<Int>(Artifacts().blockReflection.size());
+            if (owner >= blockCount) return -1;
+            const SizeT prefixLength = StringView(MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX).size();
+            Int counterBufferIndex = 0;
+            for (Int i = 0; i < blockCount; ++i) {
+                const auto& blockName = BlockAt(i).name;
+                if (blockName.compare(0, prefixLength, MG_Util::ShaderTranspiler::ATOMIC_COUNTER_BLOCK_PREFIX) != 0) {
+                    continue;
+                }
+                if (i == owner) return counterBufferIndex;
+                ++counterBufferIndex;
+            }
+            return -1;
+        }
+
+        Bool IsActiveUniformAtomicCounter(Uint index) const {
+            return GetActiveUniformAtomicCounterBufferIndex(index) >= 0;
         }
 
         // GL_UNIFORM_OFFSET: byte offset within the owning named block; -1 for a default-block

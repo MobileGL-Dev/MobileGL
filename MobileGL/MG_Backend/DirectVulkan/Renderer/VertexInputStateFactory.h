@@ -23,6 +23,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             None = 0,
             Repack,
             ScaledIntegerToFloat32,
+            // GL_DOUBLE source data narrowed to a tightly packed float32 stream: the fetch half
+            // of the fp64 demotion the shader side already does unconditionally.
+            Float64ToFloat32,
         };
 
         struct BackendVertexInputState {

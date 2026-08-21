@@ -197,8 +197,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //  * stored only            -> add `writeonly`
         //  * both                   -> emit TWO declarations on the same binding and of the
         //                              same type, `coherent readonly <name>` and `coherent
-        //                              writeonly <IMAGE_WRITE_ALIAS_PREFIX><name>`, and point
-        //                              every imageStore at the second one. Several image
+        //                              writeonly <IMAGE_WRITE_ALIAS_PREFIX><name>`, point
+        //                              every imageStore at the second one, and follow each of
+        //                              those stores with `memoryBarrierImage();`. Several image
         //                              variables may share an image unit as long as they have
         //                              the same type and format, which is exactly what the pair
         //                              is.
@@ -209,6 +210,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // read-after-write cross-variable. The single-declaration repairs above do not get it -
         // nothing aliases them.
         //
+        // The barrier is the other half of the same problem, and coherent alone did not cover it:
+        // visibility is not ORDER. Within one invocation the ES compiler sees a write to one
+        // variable and a read of another it has no reason to believe alias, and is free to serve
+        // the read from before the write - which is what advanced-memory-order's store/load/
+        // compare loop measured on Adreno. memoryBarrierImage() orders exactly those two, is core
+        // GLSL ES 3.10 in every stage, and is not an execution barrier, so it is legal in
+        // non-uniform control flow. It costs something in a shader that stores to a read+write
+        // image in a loop, which is why it is confined to the split pair.
+        //
         // Budget note: the split DOUBLES the image-uniform count of the stage it fires in, so
         // a driver advertising a tight GL_MAX_{FRAGMENT,VERTEX,...}_IMAGE_UNIFORMS can turn a
         // shader that used to compile into a link failure. ES only guarantees 4 fragment image
@@ -218,7 +228,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Runs on the transpiled ESSL, so it must see the bindings the frontend units were
         // already rewritten to and must run before those bindings are stripped - see the call
         // site in Managers.cpp.
-        String SplitReadWriteImageUniforms(const String& glslCode);
+        //
+        // `outSplitCount`, when given, receives the number of declarations that were actually
+        // doubled - i.e. exactly how many image uniforms this stage gained over what the
+        // application declared. Zero for every shader but a handful, and the only number the
+        // budget note above can be reported with.
+        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount = nullptr);
         // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
         // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.
         constexpr const char* LOD_BIAS_UNIFORM_PREFIX = "mg_lodBias_";

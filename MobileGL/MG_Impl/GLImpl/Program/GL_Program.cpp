@@ -528,6 +528,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_UNIFORM_ARRAY_STRIDE:
         case GL_UNIFORM_MATRIX_STRIDE:
         case GL_UNIFORM_IS_ROW_MAJOR:
+        // GL 4.2 / ARB_shader_atomic_counters adds this one to the accepted set. Leaving it
+        // out did not merely lose the answer: the leftover GL_INVALID_ENUM is what made
+        // KHR-GL43.shader_atomic_counters.basic-program-query force a FAIL.
+        case GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX:
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -582,6 +586,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                 break;
             case GL_UNIFORM_IS_ROW_MAJOR:
                 params[i] = programObject->GetActiveUniformIsRowMajor(idx);
+                break;
+            case GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX:
+                // Index into the GL_ACTIVE_ATOMIC_COUNTER_BUFFERS list, -1 for every uniform
+                // that is not an atomic counter (GL 4.6 core table 7.6).
+                params[i] = programObject->GetActiveUniformAtomicCounterBufferIndex(idx);
                 break;
             default:
                 break;

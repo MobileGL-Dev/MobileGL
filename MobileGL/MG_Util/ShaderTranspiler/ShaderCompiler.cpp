@@ -41,6 +41,8 @@
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
 #include "SpirvPasses/LegalizeFragmentOutputIndexPass.h"
+#include "SpirvPasses/LegalizeStorageBlockArrayIndexPass.h"
+#include "SpirvPasses/FlattenAtomicCounterBlockPass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 #include "source/opt/build_module.h"
@@ -941,6 +943,100 @@ namespace MobileGL {
                 return true;
             }
 
+            bool ShaderCompiler::LegalizeStorageBlockArrayIndexingForEssl(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const bool enableSpirvValidation) {
+                using namespace spvtools;
+
+                // Detection gates everything: a module that declares no array of storage
+                // blocks, or indexes one only with constants - every shader but a handful -
+                // pays one BuildModule and is handed back byte for byte, so the folding chain
+                // can never perturb a shader that did not need it.
+                if (!LegalizeStorageBlockArrayIndexPass::BinaryHasDynamicStorageBlockArrayIndexing(
+                        inputBinary)) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                // Stock passes do the real work, exactly as in the fragment-output
+                // legalization. The only bespoke member of the chain is the loop-control hint
+                // the stock unroller demands (see the pass header); with it set, the
+                // `for (i = 0; i < 4; ++i) arr[i]...` shape folds to literals here and the
+                // fallback below never runs.
+                Optimizer folder(SPV_ENV_VULKAN_1_1);
+                // First, because both the unroller and the marking pass below read the
+                // induction variable as an OpPhi, and glslang emits it as loads and stores of
+                // a Function variable.
+                folder.RegisterPass(CreateLocalMultiStoreElimPass());
+                folder.RegisterPass(LegalizeStorageBlockArrayIndexPass::CreateMarkLoopsForUnrollPass());
+                folder.RegisterPass(CreateLoopUnrollPass(true));
+                // Fold the unrolled induction values into the access chains, then clear out
+                // what constant conditions leave behind.
+                folder.RegisterPass(CreateCCPPass());
+                folder.RegisterPass(CreateSimplificationPass());
+                folder.RegisterPass(CreateDeadBranchElimPass());
+                folder.RegisterPass(CreateBlockMergePass());
+
+                Vector<uint32_t> folded;
+                if (!RunOptimizerChecked("LegalizeStorageBlockArrayIndexingForEssl.fold", folder,
+                                         inputBinary, folded, true, enableSpirvValidation) ||
+                    folded.empty()) {
+                    // Fail open onto the fallback rather than onto the illegal module.
+                    folded = inputBinary;
+                }
+
+                if (!LegalizeStorageBlockArrayIndexPass::BinaryHasDynamicStorageBlockArrayIndexing(
+                        folded)) {
+                    outputBinary = folded;
+                    return true;
+                }
+
+                // Genuinely dynamic (uniform-derived, non-constant trip count, ...): lower it.
+                Optimizer lowerer(SPV_ENV_VULKAN_1_1);
+                lowerer.RegisterPass(
+                    LegalizeStorageBlockArrayIndexPass::CreateLowerToConstantSwitchPass());
+                // The chains the lowering replaced are dead now; remove_outputs must stay
+                // false here for the same reason it does in SanitizeAndOptimizeBinary.
+                lowerer.RegisterPass(CreateAggressiveDCEPass(false));
+
+                if (!RunOptimizerChecked("LegalizeStorageBlockArrayIndexingForEssl.lower", lowerer, folded,
+                                         outputBinary, true, enableSpirvValidation) ||
+                    outputBinary.empty()) {
+                    outputBinary = folded;
+                    return true;
+                }
+
+                if (LegalizeStorageBlockArrayIndexPass::BinaryHasDynamicStorageBlockArrayIndexing(
+                        outputBinary)) {
+                    // MGLOG_W, latched, for the same reason the fragment-output one is: this
+                    // runs per shader compile and shader packs compile lazily mid-session.
+                    MGLOG_W_ONCE("[spirv] LegalizeStorageBlockArrayIndexingForEssl: an array of storage "
+                                 "blocks is still indexed dynamically; a strict ES driver will reject "
+                                 "this shader");
+                }
+                return true;
+            }
+
+            bool ShaderCompiler::FlattenAtomicCounterBlockOffsetsForEssl(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                const bool enableSpirvValidation) {
+                using namespace spvtools;
+
+                // Detection gates everything: a module with no atomic counter, or one whose
+                // counters sit at their natural std430 offsets - which is every shader that omits
+                // the offset qualifier - pays one BuildModule and is handed back byte for byte.
+                if (!FlattenAtomicCounterBlockPass::BinaryHasOffsetAtomicCounterBlock(inputBinary)) {
+                    outputBinary = inputBinary;
+                    return true;
+                }
+
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FlattenAtomicCounterBlockPass::CreateFlattenAtomicCounterBlockPass());
+
+                return RunOptimizerChecked("FlattenAtomicCounterBlockOffsetsForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
             bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary,
                                                  Vector<uint32_t>& outputBinary,
                                                  const bool enableSpirvValidation) {
@@ -956,26 +1052,27 @@ namespace MobileGL {
                 using namespace spvtools;
 
                 // Declined rather than half-translated: after the rewrite the image is a 2D
-                // array, so a size query on it yields three components where the shader consumes
-                // two. Handing back a differently-shaped size silently is worse than leaving the
-                // module alone and letting the driver say what it does not like - and unlike the
-                // access path there is no correct answer to substitute, because the ES texture
+                // (array) one, so a size query on it yields a component more than the shader
+                // consumes. Handing back a differently-shaped size silently is worse than leaving
+                // the module alone and letting the driver say what it does not like - and unlike
+                // the access path there is no correct answer to substitute, because the ES texture
                 // genuinely has a height the GL one does not.
                 //
                 // MGLOG_W, latched: per shader compile, and shader packs compile lazily
                 // mid-session. (Parked at MGLOG_I until the Log.h ordering fix made W live.)
                 const auto traits = Lower1DArrayImagesPass::InspectBinary(inputBinary);
                 // The overwhelmingly common answer, and the reason the inspection exists: no
-                // 1D-array storage image, so the module is handed back byte for byte without an
-                // Optimizer ever being built. Every ESSL shader in the process passes through
-                // here, so the cost of the case with nothing to do is the cost of this pass.
+                // 1D storage image this pass owns, so the module is handed back byte for byte
+                // without an Optimizer ever being built. Every ESSL shader in the process passes
+                // through here, so the cost of the case with nothing to do is the cost of this
+                // pass.
                 if (!traits.declaresImage) {
                     outputBinary = inputBinary;
                     return true;
                 }
                 if (traits.queriesImageSize) {
-                    MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
-                            "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
+                    MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D "
+                            "storage image, which cannot be answered in the 2D shape ES stores it in; "
                             "leaving the module alone, and a strict ES driver will reject it");
                     outputBinary = inputBinary;
                     return true;
@@ -983,8 +1080,8 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
-                // Mandatory, not tidying. Rewriting a 1D-array image type to the 2D-array one
-                // makes it structurally IDENTICAL to any real 2D-array image of the same sampled
+                // Mandatory, not tidying. Rewriting a 1D(-array) image type to the 2D(-array) one
+                // makes it structurally IDENTICAL to any real 2D(-array) image of the same sampled
                 // type and format that the module already declared - and SPIR-V forbids duplicate
                 // non-aggregate type declarations, so the result fails validation. That collision
                 // is not exotic: it is the shape of this whole change's headline case, where one
