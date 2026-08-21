@@ -293,6 +293,41 @@ void main()
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
 }
 
+// The split is the one thing that makes a stage declare MORE image uniforms than the application
+// did, and MobileGL keeps advertising GL_MAX_*_IMAGE_UNIFORMS unadjusted (lowering it would fail
+// basic-api and NotSupported-out every case that only uses readonly/writeonly images). So the
+// count has to be reportable, or a link failure caused by the doubling looks like a driver
+// mystery - which is what KHR-GL4x.shader_image_load_store.multiple-uniforms will hit the moment
+// the format work stops masking it.
+TEST(SplitReadWriteImageUniformsTest, TheSplitCountIsReportedToTheCaller) {
+    const String twoSplits = R"(#version 320 es
+layout(binding = 0, rgba8) uniform highp image2D goku;
+layout(binding = 1, rgba16f) uniform highp image2D gohan;
+layout(binding = 2, rgba8) uniform highp image2D storeOnly;
+void main()
+{
+    imageStore(goku, ivec2(0), imageLoad(goku, ivec2(0)));
+    imageStore(gohan, ivec2(0), imageLoad(gohan, ivec2(0)));
+    imageStore(storeOnly, ivec2(0), vec4(0.0));
+}
+)";
+    Uint splitCount = 99u;
+    SplitReadWriteImageUniforms(twoSplits, &splitCount);
+    EXPECT_EQ(splitCount, 2u) << "only the read+write pair counts; the store-only repair adds no uniform";
+
+    // Every early return has to write the count too, or a caller reads whatever was there before.
+    const String noImages = R"(#version 320 es
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = vec4(1.0);
+}
+)";
+    splitCount = 99u;
+    SplitReadWriteImageUniforms(noImages, &splitCount);
+    EXPECT_EQ(splitCount, 0u);
+}
+
 // imageSize reads no texels and writes none, so it decides nothing; readonly is what keeps
 // such a declaration legal.
 TEST(SplitReadWriteImageUniformsTest, ImageSizeAloneDoesNotCountAsALoadOrAStore) {

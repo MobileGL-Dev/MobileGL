@@ -4754,6 +4754,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return reflectionName;
             }
 
+            // GL_MAX_<stage>_IMAGE_UNIFORMS as the ES driver reports it, which is also exactly what
+            // MobileGL advertises for it (GL_Getter answers from the same DynamicBackendParameters).
+            // -1 for a stage the ES side has no such limit for, which is the "cannot say" answer
+            // the diagnostic that reads it prints rather than a made-up number. [[maybe_unused]]
+            // because its only caller is an MGLOG_E argument, and MGLOG_E compiles to nothing in a
+            // build whose MOBILEGL_LOG_ACTIVE_LEVEL is above ERROR.
+            [[maybe_unused]] Int AdvertisedStageImageUniformLimit(ShaderStage stage) {
+                switch (stage) {
+                case ShaderStage::Vertex: return g_GLESCapabilities.MaxVertexImageUniforms;
+                case ShaderStage::Geometry: return g_GLESCapabilities.MaxGeometryImageUniforms;
+                case ShaderStage::Fragment: return g_GLESCapabilities.MaxFragmentImageUniforms;
+                case ShaderStage::Compute: return g_GLESCapabilities.MaxComputeImageUniforms;
+                default: return -1;
+                }
+            }
+
             // Whether a glslang layout format is one GLSL ES has in core; the rest reach ES only
             // through GL_NV_image_formats. Asked of DECLARED formats, which this backend passes
             // through untouched - the emitted ESSL still has to be legal for the driver.
@@ -5026,6 +5042,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
             std::set<String> flattenedXfbBlockNames;
+            // Stages whose ESSL had a read+write image declaration doubled into a coherent
+            // read/write pair, and by how many. Empty for every program but a handful; consulted
+            // ONLY when the link then fails, because the doubling spends the driver's per-stage
+            // GL_MAX_*_IMAGE_UNIFORMS budget that MobileGL keeps advertising unadjusted (halving
+            // the advertised value would fail basic-api and NotSupported-out cases that never pay
+            // the doubling, so the limit must stay honest and the connection has to be made here
+            // instead). See the budget note on SplitReadWriteImageUniforms.
+            struct SplitImageUniformStage {
+                ShaderStage stage;
+                Uint splitCount;
+            };
+            Vector<SplitImageUniformStage> splitImageUniformStages;
 
             // Desktop GLSL keeps SEPARATE name namespaces for input and output interface
             // blocks, so ONE stage may legally declare `in FOO {...}` and `out FOO {...}` at
@@ -5475,7 +5503,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //    declaration and preserves its binding - an image unit cannot be set from
                 //    the API in ES, so the qualifier is the only binding mechanism there is,
                 //    and both halves of the pair have to still be carrying theirs when it runs.
-                source = SplitReadWriteImageUniforms(source);
+                Uint splitImageUniformCount = 0;
+                source = SplitReadWriteImageUniforms(source, &splitImageUniformCount);
+                if (splitImageUniformCount != 0) {
+                    splitImageUniformStages.push_back({shader->GetShaderStage(), splitImageUniformCount});
+                }
                 source = RemoveLayoutBinding(source);
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
@@ -5620,6 +5652,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // in an INFO-level artifact.
                 MGLOG_E("Program linking failed. State program ID: %u, backend program ID: %u, driver log: %s",
                         stateProgramObject->GetExternalIndex(), m_backendProgramId, log.data());
+                // The one link failure MobileGL can name a cause for that the driver's log never
+                // will: ESSL has no legal single declaration for a read+write image outside
+                // r32f/r32i/r32ui, so those are split into a coherent pair and the stage ends up
+                // declaring more image uniforms than the application did - against a
+                // GL_MAX_*_IMAGE_UNIFORMS that is still the driver's raw number, because lowering
+                // it would fail basic-api and NotSupported-out every case that only ever uses
+                // readonly/writeonly images. A shader declaring more than half a stage's budget in
+                // read+write images therefore links here and nowhere else, and without this line
+                // the next reader has only a generic driver message to go on.
+                for (const SplitImageUniformStage& split : splitImageUniformStages) {
+                    MGLOG_E("...and %u read+write image uniform(s) in stage %s were split into coherent "
+                            "read/write pairs, so that stage declares %u image uniform(s) more than the "
+                            "program did; GL_MAX_*_IMAGE_UNIFORMS for it is %d. If the driver log names "
+                            "image uniforms, that is the cause.",
+                            split.splitCount,
+                            MG_Util::ConvertGLEnumToString(
+                                MG_Util::ConvertShaderStageToGLEnum(split.stage)).c_str(),
+                            split.splitCount, AdvertisedStageImageUniformLimit(split.stage));
+                }
             } else {
                 MGLOG_D("Program linked successfully. ID: %u", m_backendProgramId);
             }

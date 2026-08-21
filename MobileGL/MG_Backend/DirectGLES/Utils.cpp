@@ -905,10 +905,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-        String SplitReadWriteImageUniforms(const String& glslCode) {
+        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+            // Written before any early return, so the caller never reads a stale count.
+            if (outSplitCount != nullptr) *outSplitCount = 0;
             if (glslCode.find("image") == String::npos) {
                 return glslCode;
             }
@@ -1046,6 +1048,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     decl.writeName = MakeImageWriteAliasName(decl.name, glslCode, takenAliases);
                     takenAliases.push_back(decl.writeName);
                     decl.split = true;
+                    if (outSplitCount != nullptr) ++*outSplitCount;
                     // Both halves carry `coherent`; see BuildImageDeclaration. The
                     // single-declaration cases below stay as they were - nothing aliases them, so
                     // there is no visibility to restore and no reason to pay for the cache

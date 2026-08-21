@@ -228,7 +228,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Runs on the transpiled ESSL, so it must see the bindings the frontend units were
         // already rewritten to and must run before those bindings are stripped - see the call
         // site in Managers.cpp.
-        String SplitReadWriteImageUniforms(const String& glslCode);
+        //
+        // `outSplitCount`, when given, receives the number of declarations that were actually
+        // doubled - i.e. exactly how many image uniforms this stage gained over what the
+        // application declared. Zero for every shader but a handful, and the only number the
+        // budget note above can be reported with.
+        String SplitReadWriteImageUniforms(const String& glslCode, Uint* outSplitCount = nullptr);
         // Prefix of the per-sampler float uniform that carries GL_TEXTURE_LOD_BIAS into
         // the shader (see EmulateTextureLodBias); the suffix is the sampler's own name.
         constexpr const char* LOD_BIAS_UNIFORM_PREFIX = "mg_lodBias_";
