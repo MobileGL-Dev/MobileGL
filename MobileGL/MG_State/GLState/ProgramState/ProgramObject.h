@@ -373,6 +373,13 @@ namespace MobileGL::MG_State::GLState {
             const auto& uniform = UniformAt(TProgramUniformIndex(index));
             if (GlBlockIndexFromTProgram(uniform.index) < 0) return -1;
             if (!uniform.type.isArray) return 0;
+            // An atomic counter reaches the std140 branch below only because the transpiler
+            // lowered it onto a synthesized block; the buffer it actually addresses is an
+            // ATOMIC COUNTER buffer, whose elements are tightly packed uints (GL 4.6 core 7.6:
+            // "each counter is a single 4-byte value"). Its array stride is therefore 4, not the
+            // vec4 round-up std140 would apply
+            // (KHR-GL43.shader_atomic_counters.basic-program-query wants 4 for ac_counter67[0]).
+            if (IsActiveUniformAtomicCounter(index)) return 4;
             if (uniform.type.isMatrix) {
                 const bool rowMajor = GetActiveUniformIsRowMajor(index) != 0;
                 const int vectors = rowMajor ? uniform.type.matrixRows : uniform.type.matrixCols;

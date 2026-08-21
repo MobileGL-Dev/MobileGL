@@ -3401,3 +3401,81 @@ void main() { fragColor = vec4(1.0); }
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// GL 4.6 core 7.6: an atomic counter is a default-block uniform that addresses an ATOMIC COUNTER
+// buffer, where every counter is a tightly packed 4-byte value. MobileGL lowers each atomic_uint
+// onto a synthesized block, which used to drag the whole array-stride query onto the std140 rule
+// that rounds an element stride up to a vec4 - so an atomic counter array reported 16
+// (KHR-GL43.shader_atomic_counters.basic-program-query: "GL_UNIFORM_ARRAY_STRIDE is 16 should be
+// 4"). The offsets, matrix stride and row-major flag are pinned alongside it because the same
+// synthesized block feeds all four queries.
+TEST_F(ProgramTest, AtomicCounterArrayReportsThePackedFourByteStride) {
+    const char* vsSource = R"(#version 430 core
+void main() { gl_Position = vec4(1.0); }
+)";
+    const char* fsSource = R"(#version 430 core
+layout(location = 0) out vec4 o_color;
+layout(binding = 0, offset = 0) uniform atomic_uint ac_counter0;
+layout(binding = 0, offset = 4) uniform atomic_uint ac_counter1;
+layout(binding = 0) uniform atomic_uint ac_counter2;
+layout(binding = 0) uniform atomic_uint ac_counter67[2];
+layout(binding = 0) uniform atomic_uint ac_counter3;
+void main() {
+  uint c = 0u;
+  c += atomicCounterIncrement(ac_counter0);
+  c += atomicCounterIncrement(ac_counter1);
+  c += atomicCounterIncrement(ac_counter2);
+  c += atomicCounterIncrement(ac_counter3);
+  c += atomicCounterIncrement(ac_counter67[0]);
+  c += atomicCounterIncrement(ac_counter67[1]);
+  o_color = vec4(float(c));
+}
+)";
+    const GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    const GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    const GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    GLint activeUniforms = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    ASSERT_EQ(activeUniforms, 5);
+
+    // Declared offset -> expected {array size, array stride}. layout(offset=) pins the first two;
+    // the rest are packed after them in declaration order, the array taking two 4-byte slots.
+    struct Expectation {
+        const char* name;
+        GLint size;
+        GLint offset;
+        GLint arrayStride;
+    };
+    const Expectation expectations[] = {
+        {"ac_counter0", 1, 0, 0},       {"ac_counter1", 1, 4, 0},  {"ac_counter2", 1, 8, 0},
+        {"ac_counter67[0]", 2, 12, 4},  {"ac_counter3", 1, 20, 0},
+    };
+
+    for (const auto& expected : expectations) {
+        const char* queryName = expected.name;
+        GLuint index = GL_INVALID_INDEX;
+        GetUniformIndices(program, 1, &queryName, &index);
+        ASSERT_NE(index, GL_INVALID_INDEX) << expected.name << " is not an active uniform";
+
+        GLint value = -2;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_TYPE, &value);
+        EXPECT_EQ(value, static_cast<GLint>(GL_UNSIGNED_INT_ATOMIC_COUNTER)) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_SIZE, &value);
+        EXPECT_EQ(value, expected.size) << expected.name;
+        // An atomic counter is a default-block uniform however it was lowered.
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_BLOCK_INDEX, &value);
+        EXPECT_EQ(value, -1) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_OFFSET, &value);
+        EXPECT_EQ(value, expected.offset) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_ARRAY_STRIDE, &value);
+        EXPECT_EQ(value, expected.arrayStride) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_MATRIX_STRIDE, &value);
+        EXPECT_EQ(value, 0) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_IS_ROW_MAJOR, &value);
+        EXPECT_EQ(value, 0) << expected.name;
+        GetActiveUniformsiv(program, 1, &index, GL_UNIFORM_ATOMIC_COUNTER_BUFFER_INDEX, &value);
+        EXPECT_EQ(value, 0) << expected.name;
+    }
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
