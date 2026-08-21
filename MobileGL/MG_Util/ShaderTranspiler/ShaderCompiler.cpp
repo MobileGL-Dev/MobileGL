@@ -948,26 +948,27 @@ namespace MobileGL {
                 using namespace spvtools;
 
                 // Declined rather than half-translated: after the rewrite the image is a 2D
-                // array, so a size query on it yields three components where the shader consumes
-                // two. Handing back a differently-shaped size silently is worse than leaving the
-                // module alone and letting the driver say what it does not like - and unlike the
-                // access path there is no correct answer to substitute, because the ES texture
+                // (array) one, so a size query on it yields a component more than the shader
+                // consumes. Handing back a differently-shaped size silently is worse than leaving
+                // the module alone and letting the driver say what it does not like - and unlike
+                // the access path there is no correct answer to substitute, because the ES texture
                 // genuinely has a height the GL one does not.
                 //
                 // MGLOG_W, latched: per shader compile, and shader packs compile lazily
                 // mid-session. (Parked at MGLOG_I until the Log.h ordering fix made W live.)
                 const auto traits = Lower1DArrayImagesPass::InspectBinary(inputBinary);
                 // The overwhelmingly common answer, and the reason the inspection exists: no
-                // 1D-array storage image, so the module is handed back byte for byte without an
-                // Optimizer ever being built. Every ESSL shader in the process passes through
-                // here, so the cost of the case with nothing to do is the cost of this pass.
+                // 1D storage image this pass owns, so the module is handed back byte for byte
+                // without an Optimizer ever being built. Every ESSL shader in the process passes
+                // through here, so the cost of the case with nothing to do is the cost of this
+                // pass.
                 if (!traits.declaresImage) {
                     outputBinary = inputBinary;
                     return true;
                 }
                 if (traits.queriesImageSize) {
-                    MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D-array "
-                            "storage image, which cannot be answered in the 2D-array shape ES stores it in; "
+                    MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D "
+                            "storage image, which cannot be answered in the 2D shape ES stores it in; "
                             "leaving the module alone, and a strict ES driver will reject it");
                     outputBinary = inputBinary;
                     return true;
@@ -975,8 +976,8 @@ namespace MobileGL {
 
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(Lower1DArrayImagesPass::CreateLower1DArrayImagesPass());
-                // Mandatory, not tidying. Rewriting a 1D-array image type to the 2D-array one
-                // makes it structurally IDENTICAL to any real 2D-array image of the same sampled
+                // Mandatory, not tidying. Rewriting a 1D(-array) image type to the 2D(-array) one
+                // makes it structurally IDENTICAL to any real 2D(-array) image of the same sampled
                 // type and format that the module already declared - and SPIR-V forbids duplicate
                 // non-aggregate type declarations, so the result fails validation. That collision
                 // is not exotic: it is the shape of this whole change's headline case, where one

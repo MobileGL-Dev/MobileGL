@@ -168,10 +168,13 @@ namespace MobileGL {
                                             bool enableSpirvValidation = false);
                 // GL_TEXTURE_1D_ARRAY storage images rewritten to the 2D-array shape the texture
                 // is actually stored in on ES, with the layer moved from the coordinate's second
-                // component to its third. DirectGLES transpile path only - Vulkan binds a real
-                // VK_IMAGE_VIEW_TYPE_1D_ARRAY and must see the module unchanged. Copies the input
-                // through untouched when the module declares no such image, which is every shader
-                // but a handful. See Lower1DArrayImagesPass for what it declines and why.
+                // component to its third - and, when the module performs an image ATOMIC on one,
+                // the non-arrayed GL_TEXTURE_1D storage image to the 2D shape with its coordinate
+                // widened to (u, 0), which is the one 1D shape SPIRV-Cross does not widen itself.
+                // DirectGLES transpile path only - Vulkan binds a real VK_IMAGE_VIEW_TYPE_1D(_ARRAY)
+                // and must see the module unchanged. Copies the input through untouched when the
+                // module declares no such image, which is every shader but a handful. See
+                // Lower1DArrayImagesPass for what it declines and why.
                 static bool Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);

@@ -5329,7 +5329,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // 1D-array image comes out as ivec2(ivec2(u, layer), 0) - three components in a
                 // two-component constructor, which every driver rejects, taking the whole
                 // program with it. The pass does the conversion properly - type to 2D array,
-                // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
+                // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own. It also
+                // owns the NON-arrayed 1D storage image whenever the module performs an atomic on
+                // one: SPIRV-Cross widens the coordinate in OpImageRead and OpImageWrite but not
+                // in OpImageTexelPointer, so imageAtomic* alone came out with a scalar coordinate
+                // against an iimage2D and lost the stage.
                 Vector<unsigned int> arrayImageSpirv;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
                                                                                           arrayImageSpirv, enableSpirvValidation) &&
