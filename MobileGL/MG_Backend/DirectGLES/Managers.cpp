@@ -5150,12 +5150,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // The GL internal format a glslang layout format names, for the seventeen non-core
-            // formats WidenImageFormatsForEssl carries exactly plus nothing else: the only
+            // The GL internal format a glslang layout format names, for the eighteen non-core
+            // formats WidenImageFormatsForEssl carries losslessly plus nothing else: the only
             // question asked of it is "does this DECLARED format widen", and answering 0 for
             // everything else is the same "no" a non-widenable format gets. Kept as its own
             // switch rather than routed through the frontend's enum converters because a
             // TLayoutFormat is a glslang value and the reflection snapshot stores it raw.
+            //
+            // IT MUST LIST EXACTLY WHAT WideningOfSpirvImageFormat DOES. This table is what arms
+            // the pass (ImageFormatWillBeWidened -> declaresWidenableImageFormat), so a format the
+            // pass would carry but this switch answers 0 for never gets the chance: the module
+            // reaches SPIRV-Cross with its original qualifier, the throw takes the stage, and the
+            // only visible symptom is the "no GLSL ES spelling" diagnostic for a format that has
+            // one. That is exactly what r11f_g11f_b10f did until it was added here.
             Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
                 switch (format) {
                 case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
@@ -5175,6 +5182,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
                 case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
                 case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                // Not a channel widening but a lossless re-encoding into rgba16f - the one entry
+                // here whose carrier has a different per-channel layout. See
+                // WidenImageFormatsPass.h.
+                case glslang::ElfR11fG11fB10f: return 0x8C3A; // GL_R11F_G11F_B10F
                 default:
                     return 0;
                 }
@@ -5235,11 +5246,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // spelling still has to become legal ESSL somehow.
                     const auto declaredFormat = static_cast<glslang::TLayoutFormat>(type.layoutFormat);
                     if (!IsCoreEsslLayoutFormat(declaredFormat)) {
-                        // Seventeen of the twenty-six non-core formats are re-declared in the core
-                        // format that carries them exactly, with every access masked back to the
-                        // channels GL says they have (WidenImageFormatsForEssl, and the matching
-                        // storage/bind widening in TextureImpl). Those need neither the extension
-                        // nor the diagnostic: there IS a legal spelling for them now.
+                        // Eighteen of the twenty-six non-core formats are re-declared in a core
+                        // format that carries them losslessly, with every access masked back to
+                        // the channels GL says they have (WidenImageFormatsForEssl, and the
+                        // matching storage/bind widening in TextureImpl). Those need neither the
+                        // extension nor the diagnostic: there IS a legal spelling for them now.
                         if (ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
                             inputs.declaresWidenableImageFormat = true;
                         } else {
