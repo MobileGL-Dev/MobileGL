@@ -113,6 +113,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // transfer type cannot tell the two apart (GL_UNSIGNED_BYTE serves both RG8 and
             // RG8UI), so the carrier decides.
             Bool IntegerData = false;
+            // The frontend shadow is a PACKED word rather than SourceChannels separate components
+            // of the carrier's own type, so the upload has to DECODE it instead of padding it out
+            // (PrepareImageWidenedUpload). True only for r11f_g11f_b10f, whose shadow is one
+            // GL_UNSIGNED_INT_10F_11F_11F_REV per texel and whose carrier is GL_RGBA16F: the
+            // channel repack every other entry uses would read three floats out of a four-byte
+            // texel and shear the level.
+            Bool PackedFloatSource = false;
 
             explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
         };
