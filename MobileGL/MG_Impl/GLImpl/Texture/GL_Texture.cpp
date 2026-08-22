@@ -186,6 +186,37 @@ namespace MobileGL::MG_Impl::GLImpl {
             return TextureImpl::ValidateTextureInternalFormat(textureInternalFormat);
         }
 
+        // How many LAYERS a texture of this target has, given its base level's state-side extent.
+        // GL keeps a 1D array's layer count in the height and every other layered target's in the
+        // depth; a cube map has exactly six and a 3D texture has one (its depth is spatial).
+        Uint LayerCountOfImmutableTexture(TextureTarget target, const IntVec3& baseSize) {
+            switch (target) {
+            case TextureTarget::Texture1DArray:
+                return static_cast<Uint>(std::max(baseSize.y(), 1));
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::TextureCubeMapArray:
+            case TextureTarget::Texture2DMultisampleArray:
+                return static_cast<Uint>(std::max(baseSize.z(), 1));
+            case TextureTarget::TextureCubeMap:
+                return 6;
+            default:
+                return 1;
+            }
+        }
+
+        // GL 4.6 core 8.19: TexStorage* leaves the texture describing itself as a full-extent view
+        // of its own storage - TEXTURE_VIEW_MIN_LEVEL 0, TEXTURE_VIEW_NUM_LEVELS <levels>,
+        // TEXTURE_VIEW_MIN_LAYER 0, TEXTURE_VIEW_NUM_LAYERS the layer count. That is not just a
+        // query detail: glTextureView COMPOSES onto these ("<numlevels> and the value of
+        // TEXTURE_VIEW_NUM_LEVELS from the original texture minus <minlevel>", 8.18), so leaving
+        // them at the mutable-texture default of 0 would clamp every view to zero levels.
+        void SeedImmutableViewState(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Uint levels) {
+            if (!textureObject) return;
+            textureObject->SetViewLevelLayerRange(
+                0, levels, 0,
+                LayerCountOfImmutableTexture(textureObject->GetTarget(), textureObject->GetBaseSize()));
+        }
+
         Bool ValidateTextureMutable(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                     const char* caller) {
             if (!textureObject || !textureObject->IsImmutable()) return true;
@@ -1373,15 +1404,20 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
             *params = GL_IMAGE_FORMAT_COMPATIBILITY_BY_SIZE;
             break;
-        // Texture views are not implemented; a texture that is not a view reports the defaults
-        // GL 4.6 core table 23.17 gives (0 layers/levels of offset, and its own extent).
+        // GL 4.6 core table 23.17. All four start at 0 and stay there on a mutable texture;
+        // TexStorage* seeds them with the texture's full extent and glTextureView composes onto
+        // that (see SeedImmutableViewState and TextureView).
         case GL_TEXTURE_VIEW_MIN_LEVEL:
+            *params = static_cast<GLint>(textureObject->GetViewMinLevel());
+            break;
         case GL_TEXTURE_VIEW_MIN_LAYER:
-            *params = 0;
+            *params = static_cast<GLint>(textureObject->GetViewMinLayer());
             break;
         case GL_TEXTURE_VIEW_NUM_LEVELS:
+            *params = static_cast<GLint>(textureObject->GetViewNumLevels());
+            break;
         case GL_TEXTURE_VIEW_NUM_LAYERS:
-            *params = 0;
+            *params = static_cast<GLint>(textureObject->GetViewNumLayers());
             break;
         default:
             MG_State::pGLContext->RecordError(
@@ -2845,6 +2881,28 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = static_cast<GLint>(textureObject->GetImmutableLevels());
             }
             break;
+        // GL 4.6 core table 23.17. Zero on a mutable texture; TexStorage* seeds the full extent
+        // and glTextureView composes onto it (SeedImmutableViewState / TextureView).
+        case GL_TEXTURE_VIEW_MIN_LEVEL:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetViewMinLevel());
+            }
+            break;
+        case GL_TEXTURE_VIEW_NUM_LEVELS:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetViewNumLevels());
+            }
+            break;
+        case GL_TEXTURE_VIEW_MIN_LAYER:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetViewMinLayer());
+            }
+            break;
+        case GL_TEXTURE_VIEW_NUM_LAYERS:
+            if (params) {
+                *params = static_cast<GLint>(textureObject->GetViewNumLayers());
+            }
+            break;
         case GL_TEXTURE_BORDER_COLOR:
             if (params) {
                 const auto& borderColor = textureObject->GetBorderColor();
@@ -3001,6 +3059,28 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_IMMUTABLE_LEVELS:
             if (params) {
                 *params = static_cast<GLfloat>(textureObject->GetImmutableLevels());
+            }
+            break;
+        // GL 4.6 core table 23.17; the float form answers the same state as the integer one
+        // (KHR-GL43.texture_view.gettexparameter queries both).
+        case GL_TEXTURE_VIEW_MIN_LEVEL:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetViewMinLevel());
+            }
+            break;
+        case GL_TEXTURE_VIEW_NUM_LEVELS:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetViewNumLevels());
+            }
+            break;
+        case GL_TEXTURE_VIEW_MIN_LAYER:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetViewMinLayer());
+            }
+            break;
+        case GL_TEXTURE_VIEW_NUM_LAYERS:
+            if (params) {
+                *params = static_cast<GLfloat>(textureObject->GetViewNumLayers());
             }
             break;
         case GL_TEXTURE_BORDER_COLOR:
@@ -4779,6 +4859,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // longer pre-existing chain has to be dropped explicitly.
         textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
+        SeedImmutableViewState(textureObject, static_cast<Uint>(levels));
     }
 
     void TextureStorage2D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height) {
@@ -4830,7 +4911,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (const auto uploadTarget : textureObject->GetUploadTargets()) {
             for (GLsizei level = 0; level < levels; ++level) {
                 const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
-                const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
+                // GL 4.6 core 8.19: for GL_TEXTURE_1D_ARRAY the state-side HEIGHT is the LAYER
+                // COUNT, and layers do not halve down the mip chain - level i is
+                // (max(1, width >> i), height). Shrinking it made every mipmapped 1D array
+                // level report fewer layers than it has.
+                const Bool heightIsLayerCount = textureObject->GetTarget() == TextureTarget::Texture1DArray;
+                const GLsizei levelHeight =
+                    heightIsLayerCount ? height : std::max<GLsizei>(1, height >> level);
                 const SizeT byteSize =
                     static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
                 textureMipmapObject->AllocateStorage(uploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
@@ -4853,6 +4940,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureMipmapObject->TruncateMipmapLevels(uploadTarget, static_cast<Uint>(levels));
         }
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
+        SeedImmutableViewState(textureObject, static_cast<Uint>(levels));
     }
 
     void TextureStorage3D(GLuint texture, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,
@@ -4927,6 +5015,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // See TextureStorage1D.
         textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, static_cast<Uint>(levels));
         textureObject->SetImmutableLevels(static_cast<Uint>(levels));
+        SeedImmutableViewState(textureObject, static_cast<Uint>(levels));
     }
 
     // Shared front half of glTextureStorage2DMultisample/3DMultisample. The target forms are reached
@@ -5005,6 +5094,211 @@ namespace MobileGL::MG_Impl::GLImpl {
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
             TexStorage3DMultisample(target, samples, internalformat, width, height, depth, fixedsamplelocations);
         });
+    }
+
+    namespace {
+        void RecordTextureViewError(ErrorCode code, const String& message) {
+            MG_State::pGLContext->RecordError(code,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "TextureView", message));
+        }
+
+        // The internalformat the view-compatibility rule has to compare against, which is NOT
+        // always ConvertTextureInternalFormatToGLEnum(GetFormat()): MobileGL answers every
+        // compressed request with uncompressed storage and only remembers the requested enum on
+        // the side, so a BPTC parent would otherwise present itself as RGBA8 and admit an RGBA8
+        // view that table 8.21 forbids.
+        GLenum ResolveTextureViewSourceFormat(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
+            const auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(textureObject.get());
+            if (mipmapTexture != nullptr && !textureObject->GetUploadTargets().empty()) {
+                const TextureUploadTarget uploadTarget = textureObject->GetUploadTargets()[0];
+                const GLenum stored = mipmapTexture->GetMipmapCompressedFormat(uploadTarget, 0);
+                if (stored != GL_NONE) return stored;
+                const GLenum requested = mipmapTexture->GetMipmapRequestedCompressedFormat(uploadTarget, 0);
+                if (requested != GL_NONE) return requested;
+            }
+            return MG_Util::ConvertTextureInternalFormatToGLEnum(textureObject->GetFormat());
+        }
+
+        Bool BackendSupportsTextureViews() {
+            const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
+            if (!activeBackendObject) return false;
+            // Deliberately the ADVERTISED extension list rather than a separate capability bit:
+            // it makes "MobileGL claims GL_ARB_texture_view" and "glTextureView actually works"
+            // the same fact by construction. DirectVulkan always advertises it; DirectGLES only
+            // does when the driver has EXT/OES_texture_view, because ES cannot otherwise give two
+            // texture names one storage (see the no-EXT discussion in BackendObject_DirectGLES).
+            const auto& extensions = activeBackendObject->GetRendererInfo().RendererGLInfo.Extensions;
+            return std::find(extensions.begin(), extensions.end(), E_GL_ARB_texture_view) != extensions.end();
+        }
+    } // namespace
+
+    // glTextureView - ARB_texture_view, core since GL 4.3 (GL 4.6 core 8.18).
+    //
+    // Creates a texture whose STORAGE is another texture's, optionally reinterpreting the format
+    // and narrowing the level/layer range. The error list below is the spec's, in the order the
+    // conformance suite (KHR-GL43.texture_view.errors, cases a..s) walks it.
+    void TextureView(GLuint texture, GLenum target, GLuint origtexture, GLenum internalformat, GLuint minlevel,
+                     GLuint numlevels, GLuint minlayer, GLuint numlayers) {
+        if (!BackendSupportsTextureViews()) {
+            // The honest answer when the backend cannot share one storage between two texture
+            // names. Raising an error - and withholding the GL_ARB_texture_view string - is the
+            // only alternative to a silent no-op that leaves the view with no storage at all,
+            // which is indistinguishable from success at the call site and renders garbage.
+            MGLOG_W_ONCE("glTextureView: the active backend has no texture-view support "
+                         "(GL_EXT_texture_view / GL_OES_texture_view absent); raising GL_INVALID_OPERATION");
+            RecordTextureViewError(ErrorCode::InvalidOperation,
+                                   "The active backend does not support texture views.");
+            return;
+        }
+
+        const TextureTarget viewTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        if (!TextureImpl::ValidateTextureTarget(viewTarget)) return;
+
+        // a) <texture> is 0.
+        if (texture == 0) {
+            RecordTextureViewError(ErrorCode::InvalidValue, "texture must not be zero.");
+            return;
+        }
+        // b) <texture> is not a name returned by glGenTextures.
+        if (!MG_State::pGLContext->ValidateTextureName(texture)) {
+            RecordTextureViewError(ErrorCode::InvalidOperation,
+                                   std::format("texture {} is not a name returned by glGenTextures.", texture));
+            return;
+        }
+        // c) <texture> has already been bound and given a target. A name that any bind (or
+        // glCreateTextures, or an earlier glTextureView) has instantiated owns a texture object;
+        // only a still-uninstantiated reservation may become a view.
+        if (MG_State::pGLContext->ValidateTextureObject(texture)) {
+            RecordTextureViewError(ErrorCode::InvalidOperation,
+                                   std::format("texture {} has already been bound and given a target.", texture));
+            return;
+        }
+        // d) <origtexture> is not the name of a texture object. Note the error code differs from
+        // (b): INVALID_VALUE here, INVALID_OPERATION there.
+        auto origTextureObject = MG_State::pGLContext->GetTextureObject(origtexture);
+        if (origtexture == 0 || !origTextureObject) {
+            RecordTextureViewError(ErrorCode::InvalidValue,
+                                   std::format("origtexture {} is not the name of a texture object.", origtexture));
+            return;
+        }
+        // e) <origtexture> is a mutable texture object. A view aliases storage that can never be
+        // respecified underneath it, so only immutable storage qualifies.
+        if (!origTextureObject->IsImmutable()) {
+            RecordTextureViewError(ErrorCode::InvalidOperation,
+                                   std::format("origtexture {} does not have immutable storage.", origtexture));
+            return;
+        }
+        // f) target is incompatible with origtexture's target (table 8.20).
+        const TextureTarget origTarget = origTextureObject->GetTarget();
+        if (!TextureImpl::IsLegalTextureViewTargetPair(origTarget, viewTarget)) {
+            RecordTextureViewError(
+                ErrorCode::InvalidOperation,
+                std::format("target {} is not a legal texture-view target for an origtexture whose target is {}.",
+                            MG_Util::ConvertGLEnumToString(target),
+                            MG_Util::ConvertGLEnumToString(MG_Util::ConvertTextureTargetToGLEnum(origTarget))));
+            return;
+        }
+        // k)..q) the per-target <numlayers> constraints, all INVALID_VALUE.
+        const Uint requiredLayers = TextureImpl::RequiredTextureViewLayerCount(viewTarget);
+        if (requiredLayers != 0 && numlayers != requiredLayers) {
+            RecordTextureViewError(ErrorCode::InvalidValue,
+                                   std::format("target {} requires numlayers to be {}, but it is {}.",
+                                               MG_Util::ConvertGLEnumToString(target), requiredLayers, numlayers));
+            return;
+        }
+        if (viewTarget == TextureTarget::TextureCubeMapArray && (numlayers == 0 || numlayers % 6 != 0)) {
+            RecordTextureViewError(
+                ErrorCode::InvalidValue,
+                std::format("GL_TEXTURE_CUBE_MAP_ARRAY requires numlayers to be a multiple of 6, but it is {}.",
+                            numlayers));
+            return;
+        }
+        // g)/h) the format-compatibility rule (table 8.21). A format WITH a view class may be
+        // reinterpreted as any other format in the same class; a format with NO entry in the
+        // table - every depth, stencil and depth/stencil format among them - may only ever be
+        // viewed as itself, which is why the Better Clouds D24S8 view must name
+        // GL_DEPTH24_STENCIL8 exactly.
+        const GLenum origFormat = ResolveTextureViewSourceFormat(origTextureObject);
+        const auto origViewClass = TextureImpl::GetTextureViewClass(origFormat);
+        if (origViewClass == TextureImpl::TextureViewClass::None) {
+            if (internalformat != origFormat) {
+                RecordTextureViewError(
+                    ErrorCode::InvalidOperation,
+                    std::format("origtexture's internal format {} has no view class, so internalformat must be "
+                                "identical to it, but it is {}.",
+                                MG_Util::ConvertGLEnumToString(origFormat),
+                                MG_Util::ConvertGLEnumToString(internalformat)));
+                return;
+            }
+        } else if (TextureImpl::GetTextureViewClass(internalformat) != origViewClass) {
+            RecordTextureViewError(
+                ErrorCode::InvalidOperation,
+                std::format("internalformat {} is not in the same view class as origtexture's internal format {}.",
+                            MG_Util::ConvertGLEnumToString(internalformat),
+                            MG_Util::ConvertGLEnumToString(origFormat)));
+            return;
+        }
+        const TextureInternalFormat viewInternalFormat =
+            MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+        if (!TextureImpl::ValidateTextureInternalFormat(viewInternalFormat)) return;
+
+        // i)/j) the range checks, both against the ORIGINAL's view state rather than its raw
+        // level/layer counts. On a plain immutable texture TexStorage* seeded those with the full
+        // extent, so the two agree; on a view-of-a-view they are what bounds the child to the
+        // parent's already-narrowed window.
+        const Uint origNumLevels = origTextureObject->GetViewNumLevels();
+        const Uint origNumLayers = origTextureObject->GetViewNumLayers();
+        if (minlevel >= origNumLevels) {
+            RecordTextureViewError(ErrorCode::InvalidValue,
+                                   std::format("minlevel {} is larger than origtexture's greatest level {}.", minlevel,
+                                               origNumLevels == 0 ? 0 : origNumLevels - 1));
+            return;
+        }
+        if (minlayer >= origNumLayers) {
+            RecordTextureViewError(ErrorCode::InvalidValue,
+                                   std::format("minlayer {} is larger than origtexture's greatest layer {}.", minlayer,
+                                               origNumLayers == 0 ? 0 : origNumLayers - 1));
+            return;
+        }
+        // r)/s) a cube-map or cube-map-array view demands square levels, because its faces are
+        // square by definition and the storage it borrows is not reshaped.
+        if (viewTarget == TextureTarget::TextureCubeMap || viewTarget == TextureTarget::TextureCubeMapArray) {
+            const IntVec3 baseSize = origTextureObject->GetBaseSize();
+            if (baseSize.x() != baseSize.y()) {
+                RecordTextureViewError(
+                    ErrorCode::InvalidOperation,
+                    std::format("a cube-map texture view requires origtexture's width and height to match, but "
+                                "they are {}x{}.",
+                                baseSize.x(), baseSize.y()));
+                return;
+            }
+        }
+
+        // GL 4.6 core 8.18, verbatim:
+        //   TEXTURE_VIEW_MIN_LEVEL  = <minlevel> + origtexture's TEXTURE_VIEW_MIN_LEVEL
+        //   TEXTURE_VIEW_NUM_LEVELS = min(<numlevels>, origtexture's TEXTURE_VIEW_NUM_LEVELS - <minlevel>)
+        //   TEXTURE_VIEW_MIN_LAYER  = <minlayer> + origtexture's TEXTURE_VIEW_MIN_LAYER
+        //   TEXTURE_VIEW_NUM_LAYERS = min(<numlayers>, origtexture's TEXTURE_VIEW_NUM_LAYERS - <minlayer>)
+        // Because the offsets ADD all the way down, the composed values are already expressed in
+        // the ROOT's coordinates - which is exactly what lets the view point straight at the root
+        // and skip the chain.
+        const auto& storageOwner =
+            origTextureObject->IsTextureView() ? origTextureObject->GetViewStorageOwner() : origTextureObject;
+        const Uint composedMinLevel = minlevel + origTextureObject->GetViewMinLevel();
+        const Uint composedNumLevels = std::min(numlevels, origNumLevels - minlevel);
+        const Uint composedMinLayer = minlayer + origTextureObject->GetViewMinLayer();
+        const Uint composedNumLayers = std::min(numlayers, origNumLayers - minlayer);
+
+        const auto& viewObject = MG_State::pGLContext->CreateTextureViewObject(
+            texture, viewTarget, storageOwner, composedMinLevel, composedNumLevels, composedMinLayer,
+            composedNumLayers);
+        if (!viewObject) {
+            RecordTextureViewError(ErrorCode::InvalidOperation, "Failed to create the texture view object.");
+            return;
+        }
+        viewObject->SetInternalFormat(viewInternalFormat);
+        viewObject->SetSamples(storageOwner->GetSamples());
+        viewObject->SetFixedSampleLocations(storageOwner->HasFixedSampleLocations());
     }
 
     void TexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width) {
@@ -5112,6 +5406,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = activeUnit.GetBindingSlot(textureTarget).GetBoundObject();
         if (!textureObject) return;
         textureObject->SetImmutableLevels(1);
+        SeedImmutableViewState(textureObject, 1);
     }
 
     void TexStorage2DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,

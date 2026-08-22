@@ -134,7 +134,21 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_RGB16:
             case GL_RGB10:
             case GL_RGB12:
-                return {GL_RGBA32F, GL_RGBA, GL_FLOAT};
+                // Same reasoning as GL_RGB16_SNORM above, and the same shape: keep the
+                // unsigned-normalized encoding whenever the driver has it, because
+                // GL_RGBA16 is the SAME-WIDTH four-channel sibling and GL_RGBA32F is not.
+                // That matters beyond storage size. ARB_texture_view puts all five 48-bit
+                // formats in one view class, so a GL_RGB16 texture viewed as GL_RGB16UI has
+                // to alias storage the ES driver also considers compatible; against a
+                // GL_RGBA32F carrier the view is a different class and glTextureView is
+                // refused outright (KHR-GL4x.texture_view.view_classes). Against GL_RGBA16
+                // the whole class lands on ES's 64-bit class and every channel reinterprets
+                // bit-exactly. EXT_texture_norm16 - the absence of which is what NoNorm16
+                // means - is also what makes GL_RGBA16 colour-renderable, so the two
+                // questions have one answer.
+                return (options & PixelFormatNormalizeOptionBit::NoNorm16)
+                           ? ThreeChannelWidening{GL_RGBA32F, GL_RGBA, GL_FLOAT}
+                           : ThreeChannelWidening{GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT};
             // Floating point.
             case GL_RGB16F:
                 return {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT};

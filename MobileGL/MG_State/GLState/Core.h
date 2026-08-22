@@ -111,6 +111,11 @@ namespace MobileGL {
                 // Per-target default texture object (name 0); see TextureState::GetDefaultTextureObject.
                 const SharedPtr<ITextureObject>& GetDefaultTextureObject(TextureTarget target) const;
                 const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
+                // See TextureState::CreateTextureViewObject (glTextureView, GL 4.6 core 8.18).
+                const SharedPtr<ITextureObject>& CreateTextureViewObject(Uint index, TextureTarget target,
+                                                                         const SharedPtr<ITextureObject>& storageOwner,
+                                                                         Uint minLevel, Uint numLevels, Uint minLayer,
+                                                                         Uint numLayers);
                 void MarkTextureObjectForDeletion(Uint index);
                 TextureUnit& GetTextureUnitObject(Int unit);
                 ImageTextureBinding& GetImageTextureBinding(Int unit);

@@ -98,6 +98,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
+    Scenarios/TextureViewScenario.cpp
     Scenarios/PackedWordReadbackScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
     Scenarios/LayeredTextureReadbackScenario.cpp

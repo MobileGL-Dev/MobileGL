@@ -114,7 +114,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     class VkClearManager {
     public:
         static PendingClearKey MakePendingClearKey(const MG_State::GLState::FramebufferAttachmentObject& attachment);
-        static PendingClearKey MakePendingClearKey(MG_State::GLState::ITextureObject* texture, Uint32 mipLevel = 0,
+        // Resolves a GL texture view to the storage it views before keying; see the definition.
+        static PendingClearKey MakePendingClearKey(MG_State::GLState::ITextureObject* rawTexture, Uint32 mipLevel = 0,
                                                    Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
 
         Bool Initialize();

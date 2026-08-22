@@ -48,6 +48,13 @@ namespace MobileGL::MG_State::GLState {
         TextureState();
         void GenerateNames(Uint number, Vector<Uint>& textures);
         const SharedPtr<ITextureObject>& CreateTextureObject(Uint index, TextureTarget target);
+        // glTextureView (GL 4.6 core 8.18). `storageOwner` must already be a texture with
+        // immutable storage and must NOT itself be a view - the caller composes a view-of-a-view
+        // onto the root first, and passes the composed (root-relative) level/layer range here.
+        const SharedPtr<ITextureObject>& CreateTextureViewObject(Uint index, TextureTarget target,
+                                                                 const SharedPtr<ITextureObject>& storageOwner,
+                                                                 Uint minLevel, Uint numLevels, Uint minLayer,
+                                                                 Uint numLayers);
         const SharedPtr<ITextureObject>& GetTextureObject(Uint index);
         // The context's default texture object (name 0) for `target`. GL 3.3 core 3.8: texture
         // zero names a real, per-target texture object shared by every texture unit; binding 0

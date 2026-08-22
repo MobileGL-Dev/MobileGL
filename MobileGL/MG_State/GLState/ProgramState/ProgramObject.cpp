@@ -369,6 +369,7 @@ namespace MobileGL::MG_State::GLState {
         // link, so a stale set would otherwise default a block the new sources do declare a
         // binding for.
         artifacts.storageBlocksWithoutBinding.clear();
+        artifacts.uniformBlocksWithoutBinding.clear();
         artifacts.attribs.clear();
         artifacts.attribTypes.clear();
         artifacts.activeUniformCount = 0;

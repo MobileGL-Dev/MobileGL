@@ -792,6 +792,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BackendTextureObject(const BackendTextureObject&) = delete;
             BackendTextureObject& operator=(const BackendTextureObject&) = delete;
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // The storage half of the sync for a texture created by glTextureView. Instead of
+            // allocating storage and replaying uploads, it makes this object's ES name BE a view
+            // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
+            // two names one image and independent per-texture parameters at the same time. The
+            // parameter and sampler halves are unchanged and run on this name as on any other.
+            void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // The storage half of the sync for a texture created by glTextureView. Instead of
+            // allocating storage and replaying uploads, it makes this object's ES name BE a view
+            // of the storage texture's ES name (EXT/OES_texture_view), which is what gives the
+            // two names one image and independent per-texture parameters at the same time. The
+            // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             // Marks the texture as one whose ES storage has to be image-bindable, which for a
@@ -824,6 +836,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // `contextId`/`samplingGeneration` are the frontend context's current
             // values, hoisted by the caller so a per-draw list walk reads them once
             // instead of per texture. `t` must be the live frontend texture.
+            // True while a driver-side re-mint has left the parameter caches describing a texture
+            // that no longer exists; SyncTextureObjectToBackend re-pushes them in the same sync.
+            Bool NeedsParameterResync() const { return m_forceTextureParamsResync || m_forceSamplerResync; }
+
             Bool IsDrawSyncClean(const MG_State::GLState::ITextureObject* t, Uint64 contextId,
                                  Uint64 samplingGeneration) const {
                 if (!m_isInitialized || m_syncedShapeContextId == 0 || m_syncedShapeContextId != contextId ||
@@ -867,6 +883,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // it is only the IMAGE binding ES cannot spell - and the private name below carries
             // the split the shader was rewritten against. 0 when this texture takes no split.
             Uint m_bufferImageSplitViewId = 0;
+            // For a texture created by glTextureView: the ES name of the storage texture this
+            // one was last made a view OF. EXT_texture_view may be called only once per name, so
+            // a storage texture that got re-minted underneath (RecreateBackendTexture) has to be
+            // detected here and answered with a fresh name for the view as well - otherwise the
+            // view would keep aliasing storage that no longer exists.
+            Uint m_viewSourceBackendTextureId = 0;
+            // For a texture created by glTextureView: the ES name of the storage texture this
+            // one was last made a view OF. EXT_texture_view may be called only once per name, so
+            // a storage texture that got re-minted underneath (RecreateBackendTexture) has to be
+            // detected here and answered with a fresh name for the view as well - otherwise the
+            // view would keep aliasing storage that no longer exists.
             // ES context generation the id was created under; a dtor running after
             // that context died must not delete a foreign (recycled) name.
             Uint m_contextGeneration = 0;
@@ -915,6 +942,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter already pushed onto it: the params-version early-out has to be overridden
             // once, or an unchanged version would skip the re-push forever.
             Bool m_forceTextureParamsResync = false;
+            // The same problem for the FILTER state, which lives in m_cacheSamplerParameters and
+            // is gated on the frontend sampler's version rather than on the params version. A
+            // re-mint leaves that cache describing values the new driver texture never received,
+            // and an unchanged sampler version would then skip re-pushing them forever. This
+            // matters more than mis-filtering: ES makes a texture INCOMPLETE when its filters do
+            // not suit its level set (any integer texture with a non-NEAREST filter, or a
+            // single-level texture with a mipmapping filter), and an incomplete texture samples
+            // (0, 0, 0, 1) rather than its contents.
+            Bool m_forceSamplerResync = false;
         };
 
         void ActivateTextureUnit(Uint unit);

@@ -47,7 +47,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto attachedTexture = attachment.GetTexture();
             if (attachedTexture && attachedTexture.get() == &texture) {
                 outAttachment = attachmentType;
-                outLevel = attachment.GetTextureLevel();
+                outLevel = static_cast<Int>(ToStorageMipLevel(attachment.GetTexture().get(),
+                                                             attachment.GetTextureLevel()));
                 return true;
             }
         }
@@ -416,16 +417,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                            numericDomain == SamplerNumericDomain::UnsignedInteger;
         SamplerResolveMemo* viewFormatMemo =
             binding < m_samplerResolveMemo.size() ? &m_samplerResolveMemo[binding] : nullptr;
+        // The format this GL texture presents to the shader. For a texture created by
+        // glTextureView that is the format the VIEW reinterpreted its storage as (GL 4.6 core
+        // 8.18), not the storage image's own - resolving the numeric domain against the latter
+        // would pick a sampled view for a format the shader never declared. The probe is behind
+        // IsTextureView() so nothing about the ordinary per-draw path changes.
+        const VkFormat sampledSourceFormat =
+            texture->IsTextureView()
+                ? m_textureManager->ResolveTextureViewWindow(*texture, *resource).format
+                : resource->format;
         VkFormat sampledViewFormat;
         if (viewFormatMemo != nullptr && viewFormatMemo->viewFormatValid &&
-            viewFormatMemo->viewFormatSource == resource->format &&
+            viewFormatMemo->viewFormatSource == sampledSourceFormat &&
             viewFormatMemo->viewFormatDomain == numericDomain) {
             sampledViewFormat = viewFormatMemo->viewFormat;
         } else {
             sampledViewFormat =
-                VkTextureManager::ResolveSampledImageViewFormat(resource->format, numericDomain);
+                VkTextureManager::ResolveSampledImageViewFormat(sampledSourceFormat, numericDomain);
             if (viewFormatMemo != nullptr) {
-                viewFormatMemo->viewFormatSource = resource->format;
+                viewFormatMemo->viewFormatSource = sampledSourceFormat;
                 viewFormatMemo->viewFormatDomain = numericDomain;
                 viewFormatMemo->viewFormat = sampledViewFormat;
                 viewFormatMemo->viewFormatValid = true;
@@ -440,9 +450,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         // No reinterpretation requested: bind the depth-or-color aspect view the sync above
-        // already produced instead of re-entering GetOrCreateSampledImageView's sync path.
+        // already produced instead of re-entering GetOrCreateSampledImageView's sync path. A GL
+        // texture view is excluded because resource->sampledView belongs to the texture it VIEWS
+        // - same image, but the storage texture's level range and depth/stencil aspect, which is
+        // exactly the state a view exists to differ on.
         const VkImageView sampledImageView =
-            sampledViewFormat == resource->format
+            (!texture->IsTextureView() && sampledViewFormat == resource->format)
                 ? resource->sampledView
                 : m_textureManager->GetOrCreateSampledImageView(*texture, sampledViewFormat);
         if (sampledImageView == VK_NULL_HANDLE) {
@@ -547,7 +560,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                             resource->sampledLevelCount),
             .imageView = samplerBindingOverride.imageView != VK_NULL_HANDLE ?
                 samplerBindingOverride.imageView :
-                (resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView),
+                // Same reason as in ResolveSamplerDescriptor: the resource's own views describe
+                // the storage texture, so a view has to be asked for its own.
+                (samplerBindingOverride.texture->IsTextureView()
+                     ? m_textureManager->GetOrCreateSampledImageView(*samplerBindingOverride.texture,
+                                                                     VK_FORMAT_UNDEFINED)
+                     : (resource->sampledView != VK_NULL_HANDLE ? resource->sampledView : resource->fullView)),
             .imageLayout = samplerBindingOverride.imageLayout != VK_IMAGE_LAYOUT_UNDEFINED ?
                 samplerBindingOverride.imageLayout : resource->layout,
         };
@@ -1020,8 +1038,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         binding);
         const VkFormat reflectedFormat = programObj.storageImageFormatByBinding[binding];
         const Bool useBindingFormat = programObj.storageImageUsesBindingFormatByBinding[binding];
+        // The storage's own VkFormat is the wrong reference for a GL texture view: the view
+        // reinterprets it (GL 4.6 core table 8.21), and it is the VIEW's format the shader's
+        // image declaration was written against. Same correction the sampled path makes above.
+        const VkFormat storageImageSourceFormat =
+            imageBinding.Texture->IsTextureView()
+                ? m_textureManager->ResolveTextureViewWindow(*imageBinding.Texture, *resource).format
+                : resource->format;
         const VkFormat viewFormat = ResolveStorageImageViewFormat(
-            reflectedFormat, imageBinding.Format, resource->format, useBindingFormat);
+            reflectedFormat, imageBinding.Format, storageImageSourceFormat, useBindingFormat);
         if (viewFormat == VK_FORMAT_UNDEFINED) {
             MGLOG_E_ONCE("ResolveStorageImageDescriptor: unsupported glBindImageTexture format=0x%x "
                     "for binding=%u imageUnit=%d textureId=%d bindingPolicy=%s",
@@ -1029,8 +1054,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     useBindingFormat ? "true" : "false");
             return false;
         }
+        // glBindImageTexture named a level and a layer of the bound texture; on a GL texture
+        // view both are relative to the view, and the storage image is what the descriptor
+        // actually points at (see ToStorageMipLevel).
+        const Int32 storageImageLayer =
+            imageBinding.Layered != GL_FALSE
+                ? imageBinding.Layer
+                : static_cast<Int32>(ToStorageArrayLayer(imageBinding.Texture.get(), imageBinding.Layer));
         const VkImageView view = m_textureManager->GetOrCreateStorageImageView(
-            *imageBinding.Texture, mipLevel, viewFormat, imageBinding.Layered != GL_FALSE, imageBinding.Layer);
+            *imageBinding.Texture, ToStorageMipLevel(imageBinding.Texture.get(), static_cast<Int>(mipLevel)),
+            viewFormat, imageBinding.Layered != GL_FALSE, storageImageLayer);
         if (view == VK_NULL_HANDLE) {
             MGLOG_E_ONCE("ResolveStorageImageDescriptor: failed to resolve storage view textureId=%d mip=%u "
                     "bindingFormat=0x%x imageFormat=%d reflectedFormat=%d selectedFormat=%d bindingPolicy=%s",

@@ -60,6 +60,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetTextureParameteriv(GLuint texture, GLenum pname, GLint* params);
     void GetTextureLevelParameterfv(GLuint texture, GLint level, GLenum pname, GLfloat* params);
     void GetTextureLevelParameteriv(GLuint texture, GLint level, GLenum pname, GLint* params);
+    void TextureView(GLuint texture, GLenum target, GLuint origtexture, GLenum internalformat, GLuint minlevel,
+                     GLuint numlevels, GLuint minlayer, GLuint numlayers);
     void TexStorage1D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width);
     void TexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
     void TexStorage3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height,

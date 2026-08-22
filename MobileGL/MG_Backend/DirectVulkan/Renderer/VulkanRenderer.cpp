@@ -1258,7 +1258,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         return depthAttachment.GetTexture().get() != stencilAttachment.GetTexture().get() ||
                depthAttachment.GetTextureUploadTarget() != stencilAttachment.GetTextureUploadTarget() ||
-               depthAttachment.GetTextureLevel() != stencilAttachment.GetTextureLevel();
+               ToStorageMipLevel(depthAttachment.GetTexture().get(), depthAttachment.GetTextureLevel()) !=
+                   ToStorageMipLevel(stencilAttachment.GetTexture().get(), stencilAttachment.GetTextureLevel());
     }
 
     static Bool IsColorAttachment(FramebufferAttachmentType attachmentType) {
@@ -1475,11 +1476,15 @@ void main() {
         static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
             const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
             if (IsCubeMapFaceUploadTarget(uploadTarget)) {
-                return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+                // The face index IS the layer index, so it takes the same view shift as one that
+                // arrived through GetTextureLayer (see ToStorageArrayLayer).
+                const Int face = static_cast<Int>(uploadTarget) -
+                                 static_cast<Int>(TextureUploadTarget::CubeMapPositiveX);
+                return ToStorageArrayLayer(attachment.GetTexture().get(), face);
             }
             // Every other layered attachment names its layer directly. Returning 0 regardless made
             // every blit, copy and ReadPixels against such an attachment read layer zero.
-            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            return ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
         }
 
         // A 3D image has arrayLayers == 1: its "layer" is a z slice, which has to travel as an
@@ -1755,10 +1760,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = resource->mipLevels;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -1871,10 +1876,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = resource->mipLevels;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -2020,10 +2025,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = 1;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -9020,7 +9025,15 @@ void main() {
         // and an overlap check). Refused outright, and refused for real rather than through an
         // assertion the release build drops: recording the pair anyway is a validation error and,
         // on a tiler, a copy whose source has already been overwritten.
-        if (srcEndpoint.Texture == dstEndpoint.Texture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
+        // Compared by STORAGE, not by GL object: a texture view and the texture it views are two
+        // different objects over one VkImage (ARB_texture_view), and GL 4.6 core 8.18 explicitly
+        // permits copying between them - so an object-identity test would let exactly the case
+        // this guard exists for through.
+        const auto* srcStorageTexture =
+            srcEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*srcEndpoint.Texture) : nullptr;
+        const auto* dstStorageTexture =
+            dstEndpoint.Texture ? &VkTextureManager::StorageTextureOf(*dstEndpoint.Texture) : nullptr;
+        if (srcStorageTexture == dstStorageTexture && srcEndpoint.Renderbuffer == dstEndpoint.Renderbuffer) {
             MGLOG_E_ONCE("%s: in-place copy on objectId=%u is not supported; declining the copy", __func__,
                          CopyImageEndpointName(srcEndpoint));
             return;
@@ -9090,6 +9103,15 @@ void main() {
             MGLOG_E_ONCE("%s: source or destination image failed to sync; declining the copy", __func__);
             return;
         }
+        // Storage space from here down. srcImage/dstImage are the STORAGE textures' resources
+        // (SyncTextureAndGetDescriptor resolves a view to the texture it views), while srcLevel /
+        // dstLevel and the z origins below arrived relative to whichever name the application
+        // passed - so a view's level 0 has to become the parent level it opened onto before it
+        // can index a subresource, exactly as at every other attachment boundary.
+        srcLevel = static_cast<GLint>(ToStorageMipLevel(srcEndpoint.Texture.get(), srcLevel));
+        dstLevel = static_cast<GLint>(ToStorageMipLevel(dstEndpoint.Texture.get(), dstLevel));
+        srcZ = static_cast<GLint>(ToStorageArrayLayer(srcEndpoint.Texture.get(), srcZ));
+        dstZ = static_cast<GLint>(ToStorageArrayLayer(dstEndpoint.Texture.get(), dstZ));
         if (srcLevel < 0 || dstLevel < 0 || static_cast<Uint32>(srcLevel) >= srcImage.mipLevels ||
             static_cast<Uint32>(dstLevel) >= dstImage.mipLevels) {
             MGLOG_E_ONCE("%s: mip level out of range (src %d of %u, dst %d of %u); declining the copy", __func__,
@@ -9828,8 +9850,8 @@ void main() {
             vkFormat = resource->format;
             trackedLayout = &resource->layout;
             imageAspect = resource->aspect;
-            mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
-            baseArrayLayer = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
+            baseArrayLayer = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
         } else if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
             const auto& renderbufferObject = attachment.GetRenderbuffer();
             const Bool clearReady = MaterializePendingClearForRenderbuffer(frame.commandBuffer, renderbufferObject);
@@ -10192,10 +10214,14 @@ void main() {
                     textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
                 const Bool isCubeFace = textureUploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
                     textureUploadTarget <= TextureUploadTarget::CubeMapNegativeZ;
-                const Uint32 arrayLayer = isCubeFace
-                    ? static_cast<Uint32>(textureUploadTarget) -
-                        static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX)
+                // Storage space: `resource` is the storage texture's, so a view's level and
+                // layer have to be shifted into its numbering (see ToStorageMipLevel).
+                const Int glArrayLayer = isCubeFace
+                    ? static_cast<Int>(textureUploadTarget) -
+                        static_cast<Int>(TextureUploadTarget::CubeMapPositiveX)
                     : 0;
+                const Uint32 arrayLayer = ToStorageArrayLayer(textureObject.get(), glArrayLayer);
+                const Uint32 storageLevel = ToStorageMipLevel(textureObject.get(), level);
                 // A 1D array's levelSize.y() is its LAYER count, and those layers are the rows
                 // GL wants back - but in Vulkan they are array layers of a one-row image, not
                 // rows of layer 0, so the read has to be told which of the two it is looking at.
@@ -10204,7 +10230,7 @@ void main() {
                         ? static_cast<Uint32>(std::max<Int>(levelSize.y(), 1))
                         : 1u;
                 ReadDepthStencilImageToClient(resource->image, resource->format, &resource->layout, resource->aspect,
-                                              static_cast<Uint32>(level), arrayLayer, 0, 0, levelSize.x(),
+                                              storageLevel, arrayLayer, 0, 0, levelSize.x(),
                                               levelSize.y(), format, type, pixels,
                                               /*defaultFramebufferOrientation=*/false, sourceLayers);
             } else {
@@ -10281,13 +10307,15 @@ void main() {
             frame.commandBuffer, resource->image, resource->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
             srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, resource->aspect,
-            static_cast<Uint32>(level), 1);
+            ToStorageMipLevel(textureObject.get(), level), 1);
         MOBILEGL_ASSERT(ok, "%s: failed to transition texture image", __func__);
 
         VkBufferImageCopy copyRegion{};
         copyRegion.imageSubresource.aspectMask = resource->aspect;
-        copyRegion.imageSubresource.mipLevel = static_cast<Uint32>(level);
-        copyRegion.imageSubresource.baseArrayLayer = 0;
+        // Storage space, as above: a texture view reads its own level 0 out of whichever level
+        // and layer of the parent it opened onto.
+        copyRegion.imageSubresource.mipLevel = ToStorageMipLevel(textureObject.get(), level);
+        copyRegion.imageSubresource.baseArrayLayer = ToStorageArrayLayer(textureObject.get(), 0);
         copyRegion.imageSubresource.layerCount = static_cast<Uint32>(arrayLayers);
         copyRegion.imageExtent = {static_cast<Uint32>(width),
                                   is1dArrayImage ? 1u : static_cast<Uint32>(height),
@@ -10302,7 +10330,7 @@ void main() {
             frame.commandBuffer, resource->image, resource->layout, originalLayout,
             VK_PIPELINE_STAGE_TRANSFER_BIT, restoreStageMask,
             VK_ACCESS_TRANSFER_READ_BIT, restoreAccessMask, resource->aspect,
-            static_cast<Uint32>(level), 1);
+            ToStorageMipLevel(textureObject.get(), level), 1);
         MOBILEGL_ASSERT(ok, "%s: failed to restore texture image layout", __func__);
 
         if (!SubmitReadbackCommandsAndWait(frame)) {

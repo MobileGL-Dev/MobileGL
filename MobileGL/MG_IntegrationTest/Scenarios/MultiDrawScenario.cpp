@@ -518,5 +518,62 @@ void main() {
             ExpectSameImage(batched, unrolled, "a batch with zero-count sub-draws");
         }
 
+        // The base-vertex family's argument checks (GL 4.6 core 10.3.9). These are what
+        // KHR-GL4x.draw_elements_base_vertex_tests.invalid_* assert, and the reason the group sat
+        // NotSupported for so long hid the fact that the entry points forwarded any argument
+        // straight to the backend: a negative count reached the emulation as a huge unsigned
+        // size. Each case drains the error queue first so the assertion names the call it made.
+        TEST_F(MultiDrawScenario, BaseVertexDrawsRejectMalformedArguments) {
+            if (!Ready()) return;
+            constexpr int kPad = 0;
+            BuildScene(kPad, kQuadIndices, sizeof(kQuadIndices));
+            // A bound program and VAO are prerequisites, not decoration: the entry points check
+            // "is there something to execute" (GL_INVALID_OPERATION) before they look at any
+            // argument, so without these every case below would pass for the wrong reason.
+            glUseProgram(m_program);
+            glBindVertexArray(m_vao);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "scene setup left a GL error behind";
+
+            const auto expectError = [&](const char* what, GLenum expected) {
+                EXPECT_EQ(FirstGLError(), expected) << what;
+                // FirstGLError stops at the first one; make sure nothing else is queued so the
+                // next case starts clean.
+                while (glGetError() != GL_NO_ERROR) {
+                }
+            };
+
+            glDrawElementsBaseVertex(GL_TRIANGLES, -1, GL_UNSIGNED_INT, nullptr, 0);
+            expectError("glDrawElementsBaseVertex with a negative count", GL_INVALID_VALUE);
+
+            glDrawElementsBaseVertex(GL_TRIANGLES, 3, GL_NONE, nullptr, 0);
+            expectError("glDrawElementsBaseVertex with a non-index type", GL_INVALID_ENUM);
+
+            glDrawRangeElementsBaseVertex(GL_TRIANGLES, 3, 0, 3, GL_UNSIGNED_INT, nullptr, 0);
+            expectError("glDrawRangeElementsBaseVertex with end < start", GL_INVALID_VALUE);
+
+            // start = -1 arrives as 0xFFFFFFFF, so this is the same end < start rule seen from
+            // the other side - and it is the shape the CTS's invalid_count case actually uses.
+            glDrawRangeElementsBaseVertex(GL_TRIANGLES, static_cast<GLuint>(-1), 2, 1, GL_UNSIGNED_INT, nullptr, 0);
+            expectError("glDrawRangeElementsBaseVertex with a wrapped start", GL_INVALID_VALUE);
+
+            glDrawElementsInstancedBaseVertex(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr, -1, 0);
+            expectError("glDrawElementsInstancedBaseVertex with a negative instancecount", GL_INVALID_VALUE);
+
+            const GLsizei negativeCount = -1;
+            const void* offsets[1] = {reinterpret_cast<const void*>(0)};
+            const GLint baseVertices[1] = {0};
+            glMultiDrawElementsBaseVertex(GL_TRIANGLES, &negativeCount, GL_UNSIGNED_INT, offsets, 1, baseVertices);
+            expectError("glMultiDrawElementsBaseVertex with a negative element of count", GL_INVALID_VALUE);
+
+            const GLsizei validCount = 6;
+            glMultiDrawElementsBaseVertex(GL_TRIANGLES, &validCount, GL_UNSIGNED_INT, offsets, -1, baseVertices);
+            expectError("glMultiDrawElementsBaseVertex with a negative drawcount", GL_INVALID_VALUE);
+
+            // The well-formed call still has to go through, or the checks above would be
+            // indistinguishable from a blanket rejection.
+            glMultiDrawElementsBaseVertex(GL_TRIANGLES, &validCount, GL_UNSIGNED_INT, offsets, 1, baseVertices);
+            expectError("a well-formed glMultiDrawElementsBaseVertex", GL_NO_ERROR);
+        }
+
     } // namespace
 } // namespace MGITest

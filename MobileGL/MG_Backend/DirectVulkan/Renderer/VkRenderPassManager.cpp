@@ -67,19 +67,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        // Every branch has to go through ToStorageArrayLayer, including the two that name layer 0
+        // implicitly: a layered attachment of a texture VIEW starts at the view's first layer, not
+        // at the image's, and a cube FACE index is a layer index like any other. Leaving either
+        // unshifted made the render pass write layers [0, n) while the clear key, the blit, the
+        // copy and the readback for the same attachment all addressed [minLayer, minLayer + n) -
+        // they resolve the layer through their own copies of this helper, which do shift.
+        const auto* texture = attachment.GetTexture().get();
         if (attachment.IsLayered()) {
-            return 0;
+            return ToStorageArrayLayer(texture, 0);
         }
         const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
         if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
-            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            return ToStorageArrayLayer(texture, attachment.GetTextureLayer());
         }
-        return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+        const Int face =
+            static_cast<Int>(uploadTarget) - static_cast<Int>(TextureUploadTarget::CubeMapPositiveX);
+        return ToStorageArrayLayer(texture, face);
     }
 
+    // The attachment's size is GL geometry, and GL_TEXTURE_1D_ARRAY keeps its layer count in the
+    // state-side HEIGHT rather than in z (see ToVulkanLevelExtent, which exists for exactly this
+    // remap). Reading z directly gave every layered 1D-array attachment layerCount = 1, so a
+    // geometry shader writing gl_Layer = 1..n had its output silently dropped and the parent's
+    // upper layers were never written at all.
     static Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
         if (attachment.IsLayered()) {
-            return static_cast<Uint32>(std::max(attachment.GetSize().z(), 1));
+            const auto& texture = attachment.GetTexture();
+            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+            return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
         }
         return 1u;
     }
@@ -633,11 +649,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (att.IsTexture()) {
                 const Uint64 textureLifetimeId = att.GetTexture()->GetLifetimeId();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLifetimeId, sizeof(textureLifetimeId)));
-                const Int textureLevel = att.GetTextureLevel();
+                const Int textureLevel = static_cast<Int>(ToStorageMipLevel(att.GetTexture().get(),
+                                                                             att.GetTextureLevel()));
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLevel, sizeof(textureLevel)));
                 const TextureUploadTarget textureUploadTarget = att.GetTextureUploadTarget();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureUploadTarget, sizeof(textureUploadTarget)));
-                const Int textureLayer = att.GetTextureLayer();
+                const Int textureLayer = static_cast<Int>(ToStorageArrayLayer(att.GetTexture().get(),
+                                                                              att.GetTextureLayer()));
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayer, sizeof(textureLayer)));
                 const Bool textureLayered = att.IsLayered();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayered, sizeof(textureLayered)));
@@ -1006,7 +1024,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
 
             auto& att = fbo.GetAttachment(drawbuf);
-            const Uint32 attachmentMipLevel = static_cast<Uint32>(std::max(att.GetTextureLevel(), 0));
+            const Uint32 attachmentMipLevel = ToStorageMipLevel(att.GetTexture().get(), att.GetTextureLevel());
             const auto textureTarget = texture->GetTarget();
             const Uint32 attachmentIndex = static_cast<Uint32>(attachmentDescriptions.size());
             attachmentDescriptions.emplace_back();
@@ -1049,8 +1067,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             .key = VkClearManager::MakePendingClearKey(att)
                         });
                     }
-                    const IntVec2 attachmentExtent =
-                        ResolveRenderPassFramebufferExtent(isDefaultFbo, att.GetSize(), swapchainExtent);
+                    // Same remap as ResolveAttachmentLayerCount, for the same reason: a
+                    // 1D-array attachment's GL height is its layer count, and using it as the
+                    // framebuffer height asks for a framebuffer taller than the VK_IMAGE_TYPE_1D
+                    // image it is built over.
+                    const IntVec2 attachmentExtent = ResolveRenderPassFramebufferExtent(
+                        isDefaultFbo, ToVulkanLevelExtent(texture->GetTarget(), att.GetSize()), swapchainExtent);
                     if (width == 0)
                         width = attachmentExtent.x();
                     if (height == 0)
@@ -1144,7 +1166,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (a.IsTexture() && b.IsTexture()) {
                 return a.GetTexture().get() == b.GetTexture().get() &&
                        a.GetTextureUploadTarget() == b.GetTextureUploadTarget() &&
-                       a.GetTextureLevel() == b.GetTextureLevel();
+                       ToStorageMipLevel(a.GetTexture().get(), a.GetTextureLevel()) ==
+                           ToStorageMipLevel(b.GetTexture().get(), b.GetTextureLevel());
             }
             if (a.IsRenderbuffer() && b.IsRenderbuffer()) {
                 return a.GetRenderbuffer().get() == b.GetRenderbuffer().get();
@@ -1199,9 +1222,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 depthAttachmentDescription.format = depthTextureResource->format;
                 depthAttachmentSampleCount = depthTextureResource->sampleCount;
                 depthAttachmentId = static_cast<Int>(texture.GetExternalIndex());
-                attachmentExtent =
-                    ResolveRenderPassFramebufferExtent(isDefaultFbo, selectedDepthStencilAttachment->GetSize(),
-                                                       swapchainExtent);
+                attachmentExtent = ResolveRenderPassFramebufferExtent(
+                    isDefaultFbo,
+                    ToVulkanLevelExtent(texture.GetTarget(), selectedDepthStencilAttachment->GetSize()),
+                    swapchainExtent);
             } else {
                 const auto& renderbuffer = selectedDepthStencilAttachment->GetRenderbuffer();
                 depthRenderbufferResource = GetOrCreateRenderbufferResource(renderbuffer);
@@ -1254,7 +1278,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } else if (selectedDepthStencilAttachment->IsTexture()) {
                 auto& texture = *selectedDepthStencilAttachment->GetTexture();
                 const Uint32 attachmentMipLevel =
-                    static_cast<Uint32>(std::max(selectedDepthStencilAttachment->GetTextureLevel(), 0));
+                    ToStorageMipLevel(selectedDepthStencilAttachment->GetTexture().get(),
+                                      selectedDepthStencilAttachment->GetTextureLevel());
                 MOBILEGL_ASSERT(depthTextureResource->layout != VK_IMAGE_LAYOUT_UNDEFINED ||
                                     depthAttachmentDescription.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD,
                                 "GetOrCreateRenderPass: depth attachment textureId=%d has undefined tracked layout with LOAD_OP_LOAD",

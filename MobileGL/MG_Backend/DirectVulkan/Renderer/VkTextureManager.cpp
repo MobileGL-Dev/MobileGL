@@ -220,6 +220,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkTextureManager::TextureIdentity VkTextureManager::MakeTextureIdentity(
         MG_State::GLState::ITextureObject* texture) {
+        // A GL texture view (ARB_texture_view) is identified by the texture whose STORAGE it
+        // views, not by itself. Everything this identity keys - the TextureResource, the tracked
+        // image layout, the alive-object weak reference, the storage-usage marks, the per-draw
+        // sync memos - is a property of the IMAGE, and a view shares that image exactly. Doing
+        // the resolution here rather than at each call site is what makes it impossible to miss
+        // one: a layout update posted against a view's own identity would have found no resource
+        // at all, which is precisely how an attached view came back blank.
+        //
+        // One hop suffices and cannot recurse: glTextureView composes a view-of-a-view onto the
+        // root at creation, so a storage owner is never itself a view.
+        if (texture != nullptr) {
+            const auto& storageOwner = texture->GetViewStorageOwner();
+            if (storageOwner) {
+                texture = storageOwner.get();
+            }
+        }
         return TextureIdentity{
             .texture = texture,
             .lifetimeId = texture ? texture->GetLifetimeId() : 0,
@@ -694,6 +710,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkTextureManager::EraseTrackedTexture(const TextureIdentity& identity) {
+        m_viewRequestedImageFlags.erase(identity);
+        m_viewRequestedFormats.erase(identity);
         auto resourceIt = m_textureResources.find(identity);
         if (resourceIt != m_textureResources.end()) {
             DeferResourceRelease(Move(resourceIt->second));
@@ -737,8 +755,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_drawSyncedThisDraw.clear();
     }
 
-    VkTextureManager::TextureResource* VkTextureManager::SyncTextureAndGetDescriptor(MG_State::GLState::ITextureObject& texture) {
+    VkTextureManager::TextureResource* VkTextureManager::SyncTextureAndGetDescriptor(MG_State::GLState::ITextureObject& textureOrView) {
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE, "SyncTextureAndGetDescriptor: m_device == VK_NULL_HANDLE");
+
+        // A GL texture view has no image of its own; it resolves to - and shares - the resource
+        // of the texture whose storage it views, so that there is exactly one VkImage, one
+        // tracked layout and one upload path per storage. Everything that makes the view a
+        // different texture (format, level/layer window, sampled aspect) is applied where the
+        // VkImageViews are built, keyed in alternateSampledViews / attachmentViews.
+        MG_State::GLState::ITextureObject& texture = StorageTextureOf(textureOrView);
+        if (&texture != &textureOrView) {
+            NoteTextureViewImageRequirements(textureOrView, texture);
+        }
 
         const TextureIdentity identity = MakeTextureIdentity(&texture);
 
@@ -838,7 +866,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkImageView VkTextureManager::GetOrCreateViewAtMipLevel(MG_State::GLState::ITextureObject& texture, Uint32 mipLevel) {
         TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels) {
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
+        // A GL texture view shares this resource with the texture it views, so it must not touch
+        // perMipViews: that vector is indexed by mip level alone and holds views built with the
+        // STORAGE texture's format and full layer range. Route it through the keyed attachment
+        // cache instead, where its own window is part of the key.
+        if (texture.IsTextureView()) {
+            const TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
+            return GetOrCreateAttachmentViewAtMipLevel(texture, mipLevel, window.baseArrayLayer, window.layerCount,
+                                                       window.viewType);
+        }
+        if (mipLevel >= resource->mipLevels) {
             return VK_NULL_HANDLE;
         }
 
@@ -866,7 +906,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                       Uint32 layerCount,
                                                                       VkImageViewType viewType) {
         TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels) {
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
+        // mipLevel and baseArrayLayer arrive in STORAGE space - every caller runs them through
+        // ToStorageMipLevel / ToStorageArrayLayer at the GL attachment boundary. What a GL texture
+        // view still contributes here is its own internal format, which may reinterpret the
+        // storage's (GL 4.6 core table 8.21) and is what the attachment must actually be written
+        // through.
+        VkFormat viewFormatOverride = VK_FORMAT_UNDEFINED;
+        if (texture.IsTextureView()) {
+            viewFormatOverride = ResolveTextureViewWindow(texture, *resource).format;
+        }
+        if (mipLevel >= resource->mipLevels) {
             return VK_NULL_HANDLE;
         }
         // A 3D image has arrayLayers == 1 and keeps its GL layers on the z axis, so a per-slice
@@ -894,10 +946,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const Bool framebufferSrgbEnabled =
             MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
-        const VkFormat attachmentFormat = ResolveSrgbAttachmentWriteFormat(resource->format, framebufferSrgbEnabled);
+        const VkFormat baseAttachmentFormat =
+            viewFormatOverride != VK_FORMAT_UNDEFINED ? viewFormatOverride : resource->format;
+        const VkFormat attachmentFormat =
+            ResolveSrgbAttachmentWriteFormat(baseAttachmentFormat, framebufferSrgbEnabled);
 
-        if (attachmentFormat == resource->format && baseArrayLayer == 0 && layerCount == resource->arrayLayers &&
-            viewType == resource->viewType) {
+        // The shortcut back to the per-mip vector is only sound for the storage texture itself;
+        // for a view every field below is part of what distinguishes it from its parent.
+        if (viewFormatOverride == VK_FORMAT_UNDEFINED && attachmentFormat == resource->format &&
+            baseArrayLayer == 0 && layerCount == resource->arrayLayers && viewType == resource->viewType) {
             return GetOrCreateViewAtMipLevel(texture, mipLevel);
         }
 
@@ -932,7 +989,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkImageView VkTextureManager::GetOrCreateSampledViewAtMipLevel(MG_State::GLState::ITextureObject& texture,
                                                                    Uint32 mipLevel) {
         TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels) {
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
+        // As in GetOrCreateViewAtMipLevel: perMipSampledViews belongs to the storage texture's
+        // own format and aspect, so a GL view has to go to the keyed cache.
+        if (texture.IsTextureView()) {
+            if (mipLevel >= resource->mipLevels) {
+                return VK_NULL_HANDLE;
+            }
+            TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
+            // Storage space already (see ToStorageMipLevel); only the level COUNT narrows.
+            window.baseMipLevel = mipLevel;
+            window.levelCount = 1;
+            return GetOrCreateWindowedSampledView(texture, *resource, window);
+        }
+        if (mipLevel >= resource->mipLevels) {
             return VK_NULL_HANDLE;
         }
 
@@ -960,14 +1032,76 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return perMipSampledView;
     }
 
-    VkImageView VkTextureManager::GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture,
-                                                               VkFormat format) {
-        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE ||
-            resource->sampledView == VK_NULL_HANDLE) {
+    // Builds (and caches) one sampled VkImageView over `resource`'s image for an arbitrary
+    // window - the shared back end of every GL-texture-view sampled path. Keyed by the whole
+    // window, which is what keeps a D24S8's depth-aspect view and its stencil-aspect view apart
+    // in the same cache while both name the same image, the same levels and the same layers.
+    VkImageView VkTextureManager::GetOrCreateWindowedSampledView(MG_State::GLState::ITextureObject& texture,
+                                                                 TextureResource& resource,
+                                                                 const TextureViewWindow& window) {
+        const TextureResource::SampledImageViewKey key{
+            .baseMipLevel = window.baseMipLevel,
+            .levelCount = window.levelCount,
+            .baseArrayLayer = window.baseArrayLayer,
+            .layerCount = window.layerCount,
+            .viewType = window.viewType,
+            .format = window.format,
+            .aspect = window.sampledAspect,
+            .componentSwizzle = PackComponentSwizzle(window.components),
+        };
+        const auto existing = resource.alternateSampledViews.find(key);
+        if (existing != resource.alternateSampledViews.end()) {
+            return existing->second;
+        }
+
+        if (window.format != resource.format &&
+            (resource.imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) == 0) {
+            MGLOG_E_ONCE("%s: textureId=%d needs a mutable-format image to be viewed as format=%d "
+                         "(image format=%d)",
+                         __func__, texture.GetExternalIndex(), static_cast<Int>(window.format),
+                         static_cast<Int>(resource.format));
             return VK_NULL_HANDLE;
         }
 
+        const VkImageView view =
+            CreateImageView(resource.image, window.format, window.sampledAspect, window.viewType,
+                            window.baseMipLevel, window.levelCount, window.baseArrayLayer, window.layerCount,
+                            &window.components);
+        if (view == VK_NULL_HANDLE) {
+            MGLOG_E_ONCE("%s: failed to create sampled view for textureId=%d format=%d aspect=0x%x "
+                         "mips=[%u,%u) layers=[%u,%u)",
+                         __func__, texture.GetExternalIndex(), static_cast<Int>(window.format),
+                         static_cast<Uint32>(window.sampledAspect), window.baseMipLevel,
+                         window.baseMipLevel + window.levelCount, window.baseArrayLayer,
+                         window.baseArrayLayer + window.layerCount);
+            return VK_NULL_HANDLE;
+        }
+        resource.alternateSampledViews.emplace(key, view);
+        return view;
+    }
+
+    VkImageView VkTextureManager::GetOrCreateSampledImageView(MG_State::GLState::ITextureObject& texture,
+                                                               VkFormat format) {
+        TextureResource* resource = SyncTextureAndGetDescriptor(texture);
+        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
+
+        // A GL texture view never has a sampledView of its own on this resource - that one
+        // belongs to the storage texture, with the storage texture's format, level range and
+        // depth/stencil aspect. The window is the view's whole identity, so it always goes to the
+        // keyed cache, even when the requested format happens to match the image's.
+        if (texture.IsTextureView()) {
+            TextureViewWindow window = ResolveTextureViewWindow(texture, *resource);
+            if (format != VK_FORMAT_UNDEFINED) {
+                window.format = format;
+            }
+            return GetOrCreateWindowedSampledView(texture, *resource, window);
+        }
+
+        if (resource->sampledView == VK_NULL_HANDLE) {
+            return VK_NULL_HANDLE;
+        }
         if (format == VK_FORMAT_UNDEFINED || format == resource->format) {
             return resource->sampledView;
         }
@@ -987,8 +1121,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const TextureResource::SampledImageViewKey key{
             .baseMipLevel = resource->sampledBaseMipLevel,
             .levelCount = resource->sampledLevelCount,
+            .baseArrayLayer = 0,
+            .layerCount = resource->arrayLayers,
             .viewType = resource->viewType,
             .format = format,
+            .aspect = VK_IMAGE_ASPECT_COLOR_BIT,
+            .componentSwizzle = PackComponentSwizzle(
+                ResolveSampledViewComponents(texture, ResolveTextureFormatInfo(texture.GetFormat()))),
         };
         const auto existing = resource->alternateSampledViews.find(key);
         if (existing != resource->alternateSampledViews.end()) {
@@ -1029,6 +1168,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkImageView VkTextureManager::GetOrCreateStorageImageView(MG_State::GLState::ITextureObject& texture,
                                                                Uint32 mipLevel, VkFormat format,
                                                                Bool layered, Int32 layer) {
+        // mipLevel and layer arrive in STORAGE space; ResolveStorageImageDescriptor converts
+        // the glBindImageTexture values with ToStorageMipLevel / ToStorageArrayLayer.
         TextureResource* resource = SyncTextureAndGetDescriptor(texture);
         if (resource == nullptr || resource->image == VK_NULL_HANDLE || mipLevel >= resource->mipLevels ||
             resource->sampleCount != VK_SAMPLE_COUNT_1_BIT ||
@@ -1053,8 +1194,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return VK_NULL_HANDLE;
         }
 
-        Uint32 baseArrayLayer = 0;
-        Uint32 layerCount = resource->arrayLayers;
+        // A GL texture view opens onto a WINDOW of the storage's layers; a layered image
+        // binding of it must not reach past that window into the parent's other layers.
+        Uint32 baseArrayLayer = ToStorageArrayLayer(&texture, 0);
+        Uint32 layerCount = texture.IsTextureView()
+                                ? std::min(static_cast<Uint32>(texture.GetViewNumLayers()),
+                                           resource->arrayLayers - baseArrayLayer)
+                                : resource->arrayLayers;
         VkImageViewType viewType = resource->viewType;
         if (!layered) {
             switch (resource->viewType) {
@@ -1087,7 +1233,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const Bool isFullResourceView = baseArrayLayer == 0 && layerCount == resource->arrayLayers &&
                                         viewType == resource->viewType;
-        if (format == resource->format && isFullResourceView) {
+        if (format == resource->format && isFullResourceView && !texture.IsTextureView()) {
             return GetOrCreateViewAtMipLevel(texture, mipLevel);
         }
 
@@ -1613,7 +1759,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool storageUpgradePending =
             !outResource.storageUsageResolved &&
             m_storageImageTextures.find(MakeTextureIdentity(&texture)) != m_storageImageTextures.end();
-        if (outResource.image != VK_NULL_HANDLE && !storageUpgradePending &&
+        // Same shape for a GL texture view's demands on the image (MUTABLE_FORMAT for a
+        // format-reinterpreting view, CUBE_COMPATIBLE for a cube view of an array texture):
+        // nothing about the texture itself changed, but the live image cannot carry the view.
+        // Masked by what this format can actually be given: MUTABLE_FORMAT is deliberately
+        // withheld from formats the driver already refused it for (see SyncTextureResource), and
+        // without this mask the "upgrade still pending" test below could never come true again -
+        // costing every later sync of that texture the whole slow path, forever.
+        VkImageCreateFlags requestedViewFlags = GetViewRequestedImageFlags(texture);
+        if (m_mutableFormatUnsupported.find(outResource.format) != m_mutableFormatUnsupported.end()) {
+            requestedViewFlags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+        }
+        const Bool viewFlagUpgradePending =
+            (outResource.imageCreateFlags & requestedViewFlags) != requestedViewFlags;
+        if (outResource.image != VK_NULL_HANDLE && !storageUpgradePending && !viewFlagUpgradePending &&
             outResource.syncedContentVersion == syncingContentVersion &&
             outResource.syncedShapeVersion == syncingShapeVersion &&
             outResource.syncedTextureParamsVersion == texture.GetTextureParamsVersion() &&
@@ -1807,6 +1966,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_mutableFormatUnsupported.find(format) == m_mutableFormatUnsupported.end()) {
             imageCreateFlags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
         }
+        // Flags a GL texture view over this storage asked for (see NoteTextureViewImageRequirements).
+        // MUTABLE_FORMAT is still withheld from formats the driver has already refused it for, so a
+        // reinterpreting view degrades to no view rather than to no texture.
+        const VkImageCreateFlags requestedViewFlags = GetViewRequestedImageFlags(texture);
+        if (requestedViewFlags != 0) {
+            imageCreateFlags |= requestedViewFlags;
+            if (m_mutableFormatUnsupported.find(format) != m_mutableFormatUnsupported.end()) {
+                imageCreateFlags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+            }
+        }
         // sRGB color images attach through their UNORM twin while GL_FRAMEBUFFER_SRGB is
         // disabled (see ResolveSrgbAttachmentWriteFormat), which needs format-reinterpreting
         // views - multisample sRGB render targets included.
@@ -1967,6 +2136,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     viewFormats.push_back(viewFormat);
                 }
             }
+            // ...plus every format a glTextureView over this storage reinterprets it as. Those
+            // are NOT enumerable from ResolveSampledImageViewFormat - an application may name any
+            // member of the format's view class (GL 4.6 core table 8.21) - so without this the
+            // list would forbid the very view the MUTABLE_FORMAT bit was requested for.
+            AppendViewRequestedFormats(texture, viewFormats);
             formatListInfo.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
             formatListInfo.viewFormatCount = static_cast<Uint32>(viewFormats.size());
             formatListInfo.pViewFormats = viewFormats.data();
@@ -2390,6 +2564,164 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkTextureManager::DeferViewRelease invalid current frame index %u (size=%zu)",
                         m_currentFrameIndex, m_deferredViewReleases.size());
         m_deferredViewReleases[m_currentFrameIndex].push_back(view);
+    }
+
+    MG_State::GLState::ITextureObject& VkTextureManager::StorageTextureOf(
+        MG_State::GLState::ITextureObject& texture) {
+        const auto& storageOwner = texture.GetViewStorageOwner();
+        return storageOwner ? *storageOwner : texture;
+    }
+
+    // The VkImageViewType a GL texture view's own target asks for. Deliberately derived from the
+    // GL target rather than inherited from the storage image: a 2D view of a 2D-array texture is
+    // a VK_IMAGE_VIEW_TYPE_2D over one layer, and a cube view of the same image is a
+    // VK_IMAGE_VIEW_TYPE_CUBE over six - which is the whole reason table 8.20 lists those pairs.
+    static VkImageViewType ResolveTextureViewImageViewType(TextureTarget target,
+                                                           VkImageViewType storageViewType) {
+        switch (target) {
+        case TextureTarget::Texture1D:
+            return VK_IMAGE_VIEW_TYPE_1D;
+        case TextureTarget::Texture1DArray:
+            return VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+        case TextureTarget::Texture2D:
+        case TextureTarget::TextureRectangle:
+        case TextureTarget::Texture2DMultisample:
+            return VK_IMAGE_VIEW_TYPE_2D;
+        case TextureTarget::Texture2DArray:
+        case TextureTarget::Texture2DMultisampleArray:
+            return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        case TextureTarget::TextureCubeMap:
+            return VK_IMAGE_VIEW_TYPE_CUBE;
+        case TextureTarget::TextureCubeMapArray:
+            return VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+        default:
+            return storageViewType;
+        }
+    }
+
+    VkTextureManager::TextureViewWindow VkTextureManager::ResolveTextureViewWindow(
+        MG_State::GLState::ITextureObject& texture, const TextureResource& resource) const {
+        TextureViewWindow window{};
+        window.format = resource.format;
+        window.viewType = resource.viewType;
+        window.baseArrayLayer = 0;
+        window.layerCount = resource.arrayLayers;
+        window.sampledAspect =
+            ResolveSampledImageViewAspectMask(resource.aspect, texture.GetDepthStencilTextureMode());
+        window.components = ResolveSampledViewComponents(texture, ResolveTextureFormatInfo(texture.GetFormat()));
+        ResolveViewMipRange(texture, resource.mipLevels, window.baseMipLevel, window.levelCount);
+        if (!texture.IsTextureView()) {
+            return window;
+        }
+
+        window.isTextureView = true;
+        // GL 4.6 core 8.18: the view's TEXTURE_BASE_LEVEL / TEXTURE_MAX_LEVEL are relative to the
+        // view, so ResolveViewMipRange above already clamped them against the view's own level
+        // count (TextureObjectView reports it); shifting by TEXTURE_VIEW_MIN_LEVEL puts them back
+        // into the storage image's numbering.
+        window.baseMipLevel += static_cast<Uint32>(texture.GetViewMinLevel());
+        window.baseArrayLayer = static_cast<Uint32>(texture.GetViewMinLayer());
+        window.layerCount = static_cast<Uint32>(texture.GetViewNumLayers());
+        window.viewType = ResolveTextureViewImageViewType(texture.GetTarget(), resource.viewType);
+        // The view's OWN internalformat, which may reinterpret the storage's (table 8.21).
+        const VkFormat viewFormat = ResolveTextureFormatInfo(texture.GetFormat()).format;
+        if (viewFormat != VK_FORMAT_UNDEFINED) {
+            window.format = viewFormat;
+        }
+        // Recomputed against the view's own format: a depth/stencil storage viewed as
+        // depth/stencil still has to honour the VIEW's DEPTH_STENCIL_TEXTURE_MODE, which is the
+        // one parameter Better Clouds deliberately sets differently on the two names.
+        window.sampledAspect =
+            ResolveSampledImageViewAspectMask(GetAspectMaskForFormat(window.format) != VK_IMAGE_ASPECT_NONE
+                                                  ? GetAspectMaskForFormat(window.format)
+                                                  : resource.aspect,
+                                              texture.GetDepthStencilTextureMode());
+
+        // Clamp to what the image actually has; a malformed view must degrade to an empty range
+        // rather than reach vkCreateImageView with an out-of-bounds subresource.
+        if (window.baseMipLevel >= resource.mipLevels) {
+            window.baseMipLevel = resource.mipLevels - 1;
+            window.levelCount = 1;
+        } else {
+            window.levelCount = std::min(window.levelCount, resource.mipLevels - window.baseMipLevel);
+        }
+        if (window.levelCount == 0) window.levelCount = 1;
+        if (window.baseArrayLayer >= resource.arrayLayers) {
+            window.baseArrayLayer = resource.arrayLayers - 1;
+            window.layerCount = 1;
+        } else {
+            window.layerCount = std::min(window.layerCount, resource.arrayLayers - window.baseArrayLayer);
+        }
+        if (window.layerCount == 0) window.layerCount = 1;
+        return window;
+    }
+
+    // The extra VkImageCreateFlags a GL texture view needs on the image it views. Recorded
+    // BEFORE the storage texture is synced (see SyncTextureAndGetDescriptor) so the very first
+    // resolve of a view already creates - or recreates and copies forward - an image the view can
+    // legally be built over, instead of handing back VK_NULL_HANDLE for a frame.
+    void VkTextureManager::NoteTextureViewImageRequirements(MG_State::GLState::ITextureObject& viewTexture,
+                                                            MG_State::GLState::ITextureObject& storageTexture) {
+        const TextureIdentity storageIdentity = MakeTextureIdentity(&storageTexture);
+        VkImageCreateFlags required = 0;
+        const VkFormat viewFormat = ResolveTextureFormatInfo(viewTexture.GetFormat()).format;
+        const VkFormat storageFormat = ResolveTextureFormatInfo(storageTexture.GetFormat()).format;
+        if (viewFormat != VK_FORMAT_UNDEFINED && storageFormat != VK_FORMAT_UNDEFINED &&
+            viewFormat != storageFormat) {
+            required |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+            // The image may be created with a NARROWED format list (see SyncTextureResource), and
+            // that list is a promise about every format the image will ever be viewed as. Record
+            // this one so the promise stays true.
+            m_viewRequestedFormats[storageIdentity].insert(viewFormat);
+        }
+        const TextureTarget viewTarget = viewTexture.GetTarget();
+        if (viewTarget == TextureTarget::TextureCubeMap || viewTarget == TextureTarget::TextureCubeMapArray) {
+            // Only when the storage could legally carry the bit. VK_IMAGE_CREATE_CUBE_COMPATIBLE
+            // demands a 2D image with square levels and at least six array layers
+            // (VUID-VkImageCreateInfo-flags-00954), and asking for it on a storage that has fewer
+            // would fail vkCreateImage - which, because SyncTextureResource has already released
+            // the old resource by then, would leave the PARENT texture with no image at all. A
+            // degenerate view must not be able to destroy the texture it views; let its own view
+            // creation fail instead.
+            const IntVec3 storageSize = storageTexture.GetBaseSize();
+            const Bool storageCanBeCube = storageSize.x() == storageSize.y() &&
+                                          storageTexture.GetViewNumLayers() >= 6 &&
+                                          storageTexture.GetTarget() != TextureTarget::Texture3D;
+            if (storageCanBeCube) {
+                required |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+            } else {
+                MGLOG_W_ONCE("Texture view %d wants a cube view of texture %d, whose storage is %dx%d with %u "
+                             "layers and cannot be cube-compatible; the view will have no image view.",
+                             viewTexture.GetExternalIndex(), storageTexture.GetExternalIndex(), storageSize.x(),
+                             storageSize.y(), storageTexture.GetViewNumLayers());
+            }
+        }
+        if (required == 0) {
+            return;
+        }
+        VkImageCreateFlags& stored = m_viewRequestedImageFlags[storageIdentity];
+        stored |= required;
+    }
+
+    VkImageCreateFlags VkTextureManager::GetViewRequestedImageFlags(
+        const MG_State::GLState::ITextureObject& storageTexture) const {
+        const auto it = m_viewRequestedImageFlags.find(
+            MakeTextureIdentity(const_cast<MG_State::GLState::ITextureObject*>(&storageTexture)));
+        return it == m_viewRequestedImageFlags.end() ? 0 : it->second;
+    }
+
+    void VkTextureManager::AppendViewRequestedFormats(const MG_State::GLState::ITextureObject& storageTexture,
+                                                      Vector<VkFormat>& outFormats) const {
+        const auto it = m_viewRequestedFormats.find(
+            MakeTextureIdentity(const_cast<MG_State::GLState::ITextureObject*>(&storageTexture)));
+        if (it == m_viewRequestedFormats.end()) {
+            return;
+        }
+        for (const VkFormat viewFormat : it->second) {
+            if (std::find(outFormats.begin(), outFormats.end(), viewFormat) == outFormats.end()) {
+                outFormats.push_back(viewFormat);
+            }
+        }
     }
 
     Bool VkTextureManager::SyncTextureViews(const MG_State::GLState::ITextureObject& texture, TextureResource& resource) {

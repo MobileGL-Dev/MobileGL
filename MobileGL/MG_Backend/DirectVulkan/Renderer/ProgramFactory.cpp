@@ -2302,6 +2302,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case GL_INT_IMAGE_2D_RECT:
         case GL_UNSIGNED_INT_IMAGE_2D_RECT:
             return TextureTarget::TextureRectangle;
+        case GL_SAMPLER_CUBE_MAP_ARRAY:
+        case GL_SAMPLER_CUBE_MAP_ARRAY_SHADOW:
+        case GL_INT_SAMPLER_CUBE_MAP_ARRAY:
+        case GL_UNSIGNED_INT_SAMPLER_CUBE_MAP_ARRAY:
+        case GL_IMAGE_CUBE_MAP_ARRAY:
+        case GL_INT_IMAGE_CUBE_MAP_ARRAY:
+        case GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY:
+            return TextureTarget::TextureCubeMapArray;
         case GL_SAMPLER_2D:
         case GL_SAMPLER_2D_SHADOW:
         case GL_INT_SAMPLER_2D:

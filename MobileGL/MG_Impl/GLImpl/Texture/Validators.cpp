@@ -623,4 +623,144 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         }
         return true;
     }
+
+    // GL 4.6 core table 8.21 ("Compatible internal formats for TextureView"), transcribed whole.
+    // Written against the raw GLenum rather than TextureInternalFormat on purpose: MobileGL's own
+    // enum collapses every compressed format onto uncompressed storage and drops formats it
+    // cannot carry, so classifying the converted value would silently widen the compatibility
+    // rule - GL_COMPRESSED_RG_RGTC2 and GL_RGBA8 would end up in the same class.
+    TextureViewClass GetTextureViewClass(GLenum internalformat) {
+        switch (internalformat) {
+        case GL_RGBA32F:
+        case GL_RGBA32UI:
+        case GL_RGBA32I:
+            return TextureViewClass::Bits128;
+        case GL_RGB32F:
+        case GL_RGB32UI:
+        case GL_RGB32I:
+            return TextureViewClass::Bits96;
+        case GL_RGBA16F:
+        case GL_RG32F:
+        case GL_RGBA16UI:
+        case GL_RG32UI:
+        case GL_RGBA16I:
+        case GL_RG32I:
+        case GL_RGBA16:
+        case GL_RGBA16_SNORM:
+            return TextureViewClass::Bits64;
+        case GL_RGB16:
+        case GL_RGB16_SNORM:
+        case GL_RGB16F:
+        case GL_RGB16UI:
+        case GL_RGB16I:
+            return TextureViewClass::Bits48;
+        case GL_RG16F:
+        case GL_R11F_G11F_B10F:
+        case GL_R32F:
+        case GL_RGB10_A2UI:
+        case GL_RGBA8UI:
+        case GL_RG16UI:
+        case GL_R32UI:
+        case GL_RGBA8I:
+        case GL_RG16I:
+        case GL_R32I:
+        case GL_RGB10_A2:
+        case GL_RGBA8:
+        case GL_RG16:
+        case GL_RGBA8_SNORM:
+        case GL_RG16_SNORM:
+        case GL_SRGB8_ALPHA8:
+        case GL_RGB9_E5:
+            return TextureViewClass::Bits32;
+        case GL_RGB8:
+        case GL_RGB8_SNORM:
+        case GL_SRGB8:
+        case GL_RGB8UI:
+        case GL_RGB8I:
+            return TextureViewClass::Bits24;
+        case GL_R16F:
+        case GL_RG8UI:
+        case GL_R16UI:
+        case GL_RG8I:
+        case GL_R16I:
+        case GL_RG8:
+        case GL_R16:
+        case GL_RG8_SNORM:
+        case GL_R16_SNORM:
+            return TextureViewClass::Bits16;
+        case GL_R8UI:
+        case GL_R8I:
+        case GL_R8:
+        case GL_R8_SNORM:
+            return TextureViewClass::Bits8;
+        case GL_COMPRESSED_RED_RGTC1:
+        case GL_COMPRESSED_SIGNED_RED_RGTC1:
+            return TextureViewClass::Rgtc1Red;
+        case GL_COMPRESSED_RG_RGTC2:
+        case GL_COMPRESSED_SIGNED_RG_RGTC2:
+            return TextureViewClass::Rgtc2Rg;
+        case GL_COMPRESSED_RGBA_BPTC_UNORM:
+        case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+            return TextureViewClass::BptcUnorm;
+        case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+        case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+            return TextureViewClass::BptcFloat;
+        default:
+            // Every depth/stencil format, every S3TC/ETC/ASTC format and every unsized format
+            // reaches here. The caller must then demand an EXACT format match.
+            return TextureViewClass::None;
+        }
+    }
+
+    // GL 4.6 core table 8.20 ("Legal texture targets for TextureView").
+    Bool IsLegalTextureViewTargetPair(TextureTarget origTarget, TextureTarget viewTarget) {
+        switch (origTarget) {
+        case TextureTarget::Texture1D:
+            return viewTarget == TextureTarget::Texture1D || viewTarget == TextureTarget::Texture1DArray;
+        case TextureTarget::Texture2D:
+            return viewTarget == TextureTarget::Texture2D || viewTarget == TextureTarget::Texture2DArray;
+        case TextureTarget::Texture3D:
+            return viewTarget == TextureTarget::Texture3D;
+        case TextureTarget::TextureCubeMap:
+            return viewTarget == TextureTarget::TextureCubeMap || viewTarget == TextureTarget::Texture2D ||
+                   viewTarget == TextureTarget::Texture2DArray || viewTarget == TextureTarget::TextureCubeMapArray;
+        case TextureTarget::TextureRectangle:
+            return viewTarget == TextureTarget::TextureRectangle;
+        case TextureTarget::Texture1DArray:
+            return viewTarget == TextureTarget::Texture1DArray || viewTarget == TextureTarget::Texture1D;
+        case TextureTarget::Texture2DArray:
+            return viewTarget == TextureTarget::Texture2DArray || viewTarget == TextureTarget::Texture2D ||
+                   viewTarget == TextureTarget::TextureCubeMap || viewTarget == TextureTarget::TextureCubeMapArray;
+        case TextureTarget::TextureCubeMapArray:
+            return viewTarget == TextureTarget::TextureCubeMapArray || viewTarget == TextureTarget::Texture2DArray ||
+                   viewTarget == TextureTarget::Texture2D || viewTarget == TextureTarget::TextureCubeMap;
+        case TextureTarget::Texture2DMultisample:
+        case TextureTarget::Texture2DMultisampleArray:
+            return viewTarget == TextureTarget::Texture2DMultisample ||
+                   viewTarget == TextureTarget::Texture2DMultisampleArray;
+        case TextureTarget::TextureBuffer:
+            // The table lists no legal target for a buffer texture: its storage is a buffer
+            // object, and there is nothing to make a view of.
+            return false;
+        default:
+            return false;
+        }
+    }
+
+    Uint RequiredTextureViewLayerCount(TextureTarget viewTarget) {
+        switch (viewTarget) {
+        case TextureTarget::TextureCubeMap:
+            return 6;
+        case TextureTarget::Texture1D:
+        case TextureTarget::Texture2D:
+        case TextureTarget::Texture3D:
+        case TextureTarget::TextureRectangle:
+        case TextureTarget::Texture2DMultisample:
+            return 1;
+        default:
+            // 1D/2D array, cube-map array, 2D multisample array: any count (the cube-map array's
+            // "multiple of 6" is checked by the caller).
+            return 0;
+        }
+    }
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl

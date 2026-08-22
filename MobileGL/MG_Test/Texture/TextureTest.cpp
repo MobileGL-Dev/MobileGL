@@ -1642,6 +1642,38 @@ TEST_F(TextureTest, TexStorage2DTrimsALongerPreExistingMipChain) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core 8.19: for GL_TEXTURE_1D_ARRAY the `height` argument of glTexStorage2D is the LAYER
+// COUNT, and an array texture's layer count "stays put all the way down the chain" (8.14.3) - only
+// the image's own axes halve. Shrinking it made level i report height >> i layers, which is also
+// what ComputeMipmapCompleteForFilter reads (it holds component 1 constant for this target), so
+// every mipmapped 1D array texture judged itself incomplete.
+TEST_F(TextureTest, TexStorage2DKeepsA1DArrayLayerCountConstantDownTheMipChain) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, texture);
+
+    constexpr GLsizei kLevels = 3;
+    constexpr GLsizei kWidth = 4;
+    constexpr GLsizei kLayers = 4;
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_1D_ARRAY, kLevels, GL_RGBA8, kWidth, kLayers);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    ASSERT_EQ(mipmapObject->GetMipmapLevelCount(), static_cast<Uint>(kLevels));
+
+    for (GLsizei level = 0; level < kLevels; ++level) {
+        const IntVec3 size =
+            mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture1DArray, static_cast<Uint>(level));
+        EXPECT_EQ(size.x(), std::max<GLsizei>(1, kWidth >> level)) << "level " << level << " width";
+        EXPECT_EQ(size.y(), kLayers) << "level " << level << " must keep every layer";
+    }
+
+    // The completeness walk is the reason this matters beyond the reported extent.
+    EXPECT_TRUE(textureObject->IsComplete());
+}
+
 // glTexImage2D used to reject every GL_COMPRESSED_* internal format with GL_INVALID_ENUM, because
 // none of them mapped to a TextureInternalFormat and the "unknown format" gate fired. They now
 // resolve to the uncompressed storage that backs them - what GL prescribes for the generic formats,
@@ -4033,6 +4065,8 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
     const Flags<PixelFormatNormalizeOptionBit> widenNoSnorm16 =
         PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget |
         PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+    const Flags<PixelFormatNormalizeOptionBit> widenNoNorm16 =
+        PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget | PixelFormatNormalizeOptionBit::NoNorm16;
 
     const Case cases[] = {
         // Complementary's colortex1 and colortex2. The transfer pair used to stay three-channel
@@ -4047,10 +4081,16 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
         // cannot render to the encoding gets the 32-bit float rather than the half.
         {GL_RGB16_SNORM, widen, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
         {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16.
-        {GL_RGB16, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        {GL_RGB10, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        {GL_RGB12, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16. The same-width sibling
+        // whenever the driver has EXT_texture_norm16 - which is what keeps the whole 48-bit
+        // ARB_texture_view class on one ES view class, so a GL_RGB16 texture can be viewed as
+        // GL_RGB16UI - and the 32-bit float only when it does not.
+        {GL_RGB16, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB10, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB12, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB16, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB10, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB12, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // sRGB and the integer formats: the base format has to move to the four-channel one of the
         // right class, GL_RGBA_INTEGER included.
         {GL_SRGB8, widen, GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},

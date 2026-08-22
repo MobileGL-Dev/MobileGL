@@ -79,4 +79,33 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
     // GL 4.6 SS 8.6 subset rule for glCopyTexImage*: the read buffer must supply every component
     // the requested internalformat asks for, but may supply more.
     Bool ValidateCopyTexImageBaseFormatSubset(TextureInternalFormat destFormat, TextureInternalFormat srcFormat);
+
+    // ---- glTextureView (ARB_texture_view / GL 4.6 core 8.18) ----
+    // Table 8.21's view classes. `None` is not a class - it means the format has NO entry in the
+    // table, which the spec turns into a much stricter rule than "same class": such a format can
+    // only ever be viewed as ITSELF. Every depth, stencil and depth/stencil format lands here,
+    // which is why the Better Clouds D24S8 view must name GL_DEPTH24_STENCIL8 exactly.
+    enum class TextureViewClass {
+        None = 0,
+        Bits128,
+        Bits96,
+        Bits64,
+        Bits48,
+        Bits32,
+        Bits24,
+        Bits16,
+        Bits8,
+        Rgtc1Red,
+        Rgtc2Rg,
+        BptcUnorm,
+        BptcFloat,
+    };
+    TextureViewClass GetTextureViewClass(GLenum internalformat);
+    // Table 8.20: which <target> values glTextureView accepts for a given origtexture target.
+    Bool IsLegalTextureViewTargetPair(TextureTarget origTarget, TextureTarget viewTarget);
+    // Table 8.20 again, read the other way: how many layers <target> requires. Returns 0 for the
+    // targets whose layer count is unconstrained (the array targets), 6 for GL_TEXTURE_CUBE_MAP,
+    // and 1 for every single-layer target. GL_TEXTURE_CUBE_MAP_ARRAY is special-cased by the
+    // caller because its constraint is "a multiple of 6", not an exact count.
+    Uint RequiredTextureViewLayerCount(TextureTarget viewTarget);
 } // namespace MobileGL::MG_Impl::GLImpl::TextureImpl

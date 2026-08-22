@@ -196,6 +196,17 @@ namespace MobileGL {
             m_storageBlocksWithoutBinding->insert(name.c_str());
         }
 
+        // A UNIFORM block that declared no binding. Same capture point and same union-across-
+        // stages reasoning as the storage-block set above, and the same reason it cannot be
+        // asked later: mapIO is about to write an auto-assigned binding into this very
+        // qualifier. MGL_GLOBAL_UBO is MobileGL's own synthesized block, not an application
+        // one - it never reaches the GL block space and must not be seeded here.
+        if (m_uniformBlocksWithoutBinding != nullptr && type.getBasicType() == glslang::EbtBlock &&
+            qualifier.storage == glslang::EvqUniform && !qualifier.hasBinding() &&
+            name.compare(MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME) != 0) {
+            m_uniformBlocksWithoutBinding->insert(name.c_str());
+        }
+
         TDefaultGlslIoResolver::reserverResourceSlot(ent, infoSink);
     }
 

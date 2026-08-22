@@ -749,11 +749,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {4, 0, 0},   // GL target version
+                        .TargetGLVersion = {4, 3, 0},   // GL target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no runtime capabilities yet); reconciled once
                         // the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
-                        .Extensions = BuildAdvertisedExtensions(false, false, false, false),
+                        .Extensions = BuildAdvertisedExtensions(false, false, false, false, false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -777,7 +777,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MutableRendererInfo().RendererGLInfo.Extensions = BuildAdvertisedExtensions(
                 AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
                 capabilities.SupportsDrawIndirect,
-                capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance);
+                capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
+                capabilities.SupportsTextureView);
         }
     } // namespace
 
@@ -990,9 +991,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported) {
+                                                  Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool textureViewSupported) {
         Vector<GLExtension> extensions = {
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
+            // The version tokens have to reach the version the backend actually claims:
+            // TargetGLVersion is {4,3,0}, and a list that stopped at OpenGL40 told an
+            // application feature-detecting off these tokens the opposite of what
+            // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
+            E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
             E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object,
             E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage, E_GL_ARB_texture_storage,
@@ -1017,6 +1024,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // has had the same texture parameter since ES 3.1, which every device MobileGL
             // runs on provides.
             E_GL_ARB_stencil_texturing,
+            // Core since 3.2 and implemented here on both backends - glDrawElementsBaseVertex,
+            // glDrawRangeElementsBaseVertex, glDrawElementsInstancedBaseVertex and
+            // glMultiDrawElementsBaseVertex all reach real per-draw vertex rebasing. The string
+            // was simply never emitted, which left KHR-GL4*.draw_elements_base_vertex_tests
+            // NotSupported on a feature that works.
+            E_GL_ARB_draw_elements_base_vertex,
+            // glVertexAttribDivisor, core since 3.3 and real on both backends. Applications
+            // (Better Clouds' GLCompat among them) accept the extension string as an
+            // ALTERNATIVE to a 3.3 context when deciding whether instanced rendering is
+            // available, so withholding it makes MobileGL look less capable than it is.
+            E_GL_ARB_instanced_arrays,
+            // The whole of KHR_debug lives in GLImpl - the message log, the group stack and the
+            // object-label table are MobileGL's own state, not the host driver's - so it is as
+            // available here as it is on DirectVulkan, which has advertised it all along.
+            E_GL_KHR_debug,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
@@ -1064,6 +1086,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
         if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
             extensions.push_back(E_GL_ARB_timer_query);
+        }
+        // Only advertised when the host ES driver has EXT/OES_texture_view. ES has no core
+        // texture views at any version and no honest emulation exists: a view is a SECOND NAME
+        // over the SAME storage, so that writes through either are visible through the other and
+        // the two carry independent per-texture parameters at the same time - which is exactly
+        // what applications use it for (Better Clouds samples one D24S8 through its own name with
+        // DEPTH_STENCIL_TEXTURE_MODE = STENCIL_INDEX and through a view with DEPTH_COMPONENT, in
+        // a single shading pass). A copy-based fallback satisfies neither half, and fails
+        // silently; withholding the string and answering glTextureView with INVALID_OPERATION is
+        // the only behaviour that cannot be mistaken for success.
+        //
+        // The host extension is necessary and NOT sufficient, which is why this second gate
+        // exists. Adreno 830 has EXT_texture_view, and on it the whole functional half of
+        // KHR-GL4{2,3}.texture_view fails: base_and_max_levels, reference_counting and
+        // view_sampling Fail and view_classes crashes, while only the two pure-API cases
+        // (errors, gettexparameter - neither of which touches the host view) pass. The cause is
+        // known and is MobileGL's, not the driver's: SyncTextureViewToBackend normalizes the
+        // VIEW's ES internalformat independently of the storage it aliases, so whenever the two
+        // land on different renderability carriers the host rejects the pair, the error is
+        // swallowed, and the view is left as a storage-less name that samples as zeros.
+        // DirectVulkan builds the view as a second VkImageView over one VkImage and has no such
+        // seam - it passes 5 of the 7 cases on the same device - so the string stays there.
+        //
+        // Until that reconciliation exists, advertising here would be the same lie the comment
+        // above refuses to tell, just with an extra prerequisite met. Set
+        // MOBILEGL_ENABLE_GLES_TEXTURE_VIEW=1 to re-enable it for that work.
+        if (textureViewSupported && MG_Config::Features.EnableGlesTextureView) {
+            extensions.push_back(E_GL_ARB_texture_view);
         }
         // Only advertised when the host ES driver actually filters anisotropically: the sampler
         // state is accepted regardless, but forwarding it would be a no-op without the extension,

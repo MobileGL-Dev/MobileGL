@@ -69,6 +69,13 @@ namespace MobileGL::MG_Config {
     struct FeaturesTable {
         // MOBILEGL_DISABLE_TIMERQUERY: do not advertise or use GPU timer queries.
         Bool DisableTimerQuery = false;
+        // MOBILEGL_ENABLE_GLES_TEXTURE_VIEW: advertise GL_ARB_texture_view on DirectGLES when
+        // the host ES driver has EXT/OES_texture_view. Off by default: the host extension is
+        // present on Adreno 830 and the functional half of KHR-GL4{2,3}.texture_view still fails
+        // there, because the view's ES internalformat is normalized independently of the storage
+        // it aliases (see BackendObject_DirectGLES::BuildAdvertisedExtensions). The flag exists
+        // so that work can be done without editing the gate.
+        Bool EnableGlesTextureView = false;
         // MOBILEGL_ENABLE_SPIRV_VALIDATION: validate generated and transformed SPIR-V.
         // Disabled by default because validation is a diagnostics-only cost.
         Bool EnableSpirvValidation = false;
