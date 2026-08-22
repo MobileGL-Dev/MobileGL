@@ -5875,6 +5875,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 spvcSession.DropDefaultFragmentOutputColorIndex();
             }
 
+            // `readonly writeonly` together says the buffer variable can only be asked its
+            // .length(), which the frontend has already enforced - so the pair is inert, and
+            // printing it is not. Mesa's ES compiler refuses a block spelled that way and the
+            // stage never reaches the program.
+            spvcSession.RelaxReadWriteExclusiveStorageBuffers();
+
             const char* result = nullptr;
             spvcSession.Compile(&result);
 

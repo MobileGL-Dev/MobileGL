@@ -139,6 +139,27 @@ namespace MobileGL {
                 // must keep reaching the driver (the frontend's own glBindFragDataLocationIndexed
                 // path already emits only non-zero indices for the same reason).
                 spvc_result DropDefaultFragmentOutputColorIndex();
+                // Drops `readonly` and `writeonly` from every shader storage block - and every
+                // block member - that carries BOTH of them.
+                //
+                // GL 4.6 core 4.10 lets a buffer variable be declared readonly AND writeonly at
+                // once: it then cannot be read or written at all, and the only thing left that
+                // it can be used for is `.length()`. The pair is therefore inert by
+                // construction - the frontend has already rejected any access to it - so
+                // dropping it cannot change what the shader does.
+                //
+                // Emitting it does change whether the shader EXISTS. SPIRV-Cross hoists the
+                // qualifiers every member shares onto the block, and Mesa's ES compiler rejects
+                // that spelling outright ("Interface block sets both readonly and writeonly",
+                // verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process, against the
+                // exact source this transpiler emitted). The stage then never compiles, the
+                // program links without it, and every dispatch or draw is a silent no-op -
+                // which is how KHR-GL43.shader_storage_buffer_object.basic-readonly-writeonly
+                // read back 0 instead of the array length.
+                //
+                // A block carrying only ONE of the two is left exactly as it is: those really do
+                // constrain the accesses the shader makes, and the driver is entitled to know.
+                spvc_result RelaxReadWriteExclusiveStorageBuffers();
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;
                 const char* GetLastErrorString() const;

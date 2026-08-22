@@ -459,6 +459,43 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            spvc_result SpvcSession::RelaxReadWriteExclusiveStorageBuffers() {
+                if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
+
+                SPVC_CHK_INIT
+                const spvc_reflected_resource* list = nullptr;
+                size_t count = 0;
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
+                    resources, SPVC_RESOURCE_TYPE_STORAGE_BUFFER, &list, &count));
+                for (size_t i = 0; i < count; ++i) {
+                    const spvc_reflected_resource& resource = list[i];
+                    // The variable itself, for a block the application qualified as a whole.
+                    if (spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationNonReadable) &&
+                        spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationNonWritable)) {
+                        spvc_compiler_unset_decoration(compiler, resource.id, SpvDecorationNonReadable);
+                        spvc_compiler_unset_decoration(compiler, resource.id, SpvDecorationNonWritable);
+                    }
+                    // ...and each member, which is where the qualifiers usually sit and where
+                    // SPIRV-Cross reads them from before hoisting the ones every member shares.
+                    const spvc_type blockType = spvc_compiler_get_type_handle(compiler, resource.base_type_id);
+                    if (blockType == nullptr) continue;
+                    const unsigned memberCount = spvc_type_get_num_member_types(blockType);
+                    for (unsigned member = 0; member < memberCount; ++member) {
+                        if (!spvc_compiler_has_member_decoration(compiler, resource.base_type_id, member,
+                                                                 SpvDecorationNonReadable) ||
+                            !spvc_compiler_has_member_decoration(compiler, resource.base_type_id, member,
+                                                                 SpvDecorationNonWritable)) {
+                            continue;
+                        }
+                        spvc_compiler_unset_member_decoration(compiler, resource.base_type_id, member,
+                                                              SpvDecorationNonReadable);
+                        spvc_compiler_unset_member_decoration(compiler, resource.base_type_id, member,
+                                                              SpvDecorationNonWritable);
+                    }
+                }
+                SPVC_CHK_RETURN
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

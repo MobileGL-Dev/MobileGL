@@ -66,6 +66,25 @@ void main() {
 }
 )";
 
+        // GL 4.6 core 4.10 lets a buffer variable be declared readonly AND writeonly at once:
+        // it can then be neither read nor written, and `.length()` is the only thing left that
+        // may be asked of it. The pair is inert - and printing it into ESSL is not, because
+        // SPIRV-Cross hoists the qualifiers every member shares onto the BLOCK and Mesa's ES
+        // compiler refuses that spelling ("Interface block sets both readonly and writeonly").
+        // Lifted from KHR-GL43.shader_storage_buffer_object.basic-readonly-writeonly.
+        constexpr const char* kReadonlyWriteonlyComputeSource = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Input {
+    readonly writeonly int g_in[];
+};
+layout(std430, binding = 4) buffer Output {
+    int g_length[];
+};
+void main() {
+    g_length[0] = g_in.length();
+}
+)";
+
         constexpr int kElementBytes = 16; // ivec4, std430
 
         class SsboArrayLengthScenario : public ScenarioTest {
@@ -211,5 +230,34 @@ void main() {
 
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, input0);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, input3);
+    }
+
+    // A buffer variable qualified readonly AND writeonly can only be asked its length, and that
+    // question still has to be answered. A stage the driver refused answers 0 - and refuses
+    // silently, because the program links without it and the dispatch is then a no-op.
+    TEST_F(SsboArrayLengthScenario, AReadonlyWriteonlyArrayStillReportsItsLength) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLuint program = CompileComputeProgram(kReadonlyWriteonlyComputeSource);
+        ASSERT_NE(program, 0u) << m_buildLog;
+
+        const GLuint input = MakeStorageBuffer(6);  // 6 ivec4 = 24 ints
+        const GLuint output = MakeStorageBuffer(1);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, input);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, output);
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        glUseProgram(program);
+        glDispatchCompute(1, 1, 1);
+        glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+        int length = -1;
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, output);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(length), &length);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_EQ(length, 24) << "a readonly+writeonly runtime array reported length " << length
+                              << "; 0 means the stage never reached the program";
+
+        glUseProgram(m_program);
+        glDeleteProgram(program);
     }
 } // namespace MGITest
