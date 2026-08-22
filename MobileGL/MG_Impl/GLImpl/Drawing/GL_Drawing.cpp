@@ -382,6 +382,31 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL 4.6 core 10.3.9: every DrawElements-family count is a sizei and "if count is negative, an
+    // INVALID_VALUE error is generated". The same sentence covers instancecount and the
+    // MultiDraw* drawcount, so one helper serves all of them; the parameter is named for the
+    // caller so the message says which argument the application actually got wrong.
+    static Bool ValidateNonNegativeDrawArgument(const char* functionName, const char* argumentName, GLsizei value) {
+        if (value >= 0) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                         String(argumentName) + " must be non-negative."));
+        return false;
+    }
+
+    // GL 4.6 core 10.3.9 for DrawRangeElements*: "if end < start, an INVALID_VALUE error is
+    // generated". Both are uints, so a caller that passes -1 for start arrives here as
+    // 0xFFFFFFFF and is caught by the same comparison - which is exactly what
+    // KHR-GL4x.draw_elements_base_vertex_tests.invalid_count_argument checks.
+    static Bool ValidateDrawElementsRange(const char* functionName, GLuint start, GLuint end) {
+        if (end >= start) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "end must not be less than start."));
+        return false;
+    }
+
     // GL 4.6 core 10.9: inside a conditional block whose predicate did not pass, the drawing
     // commands, Clear, ClearBuffer* and the compute dispatches are DISCARDED. The gate sits on the
     // wrappers that ISSUE the backend call rather than at the top of each entry point, so that
@@ -836,6 +861,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateDrawElementsIndexType(__func__, type)) return;
+        if (!ValidateNonNegativeDrawArgument(__func__, "count", count)) return;
+        if (!ValidateDrawElementsRange(__func__, start, end)) return;
         DrawRangeElementsBaseVertex_Backend(mode, start, end, count, type, indices, basevertex);
     }
 
@@ -860,6 +888,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateDrawElementsIndexType(__func__, type)) return;
+        if (!ValidateNonNegativeDrawArgument(__func__, "count", count)) return;
+        if (!ValidateNonNegativeDrawArgument(__func__, "instancecount", instancecount)) return;
         DrawElementsInstancedBaseVertex_Backend(mode, count, type, indices, instancecount, basevertex);
     }
 
@@ -914,6 +945,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateDrawElementsIndexType(__func__, type)) return;
+        if (!ValidateNonNegativeDrawArgument(__func__, "count", count)) return;
         AccountTransformFeedbackPrimitives(mode, count);
         DrawElementsBaseVertex_Backend(mode, count, type, indices, basevertex);
     }
@@ -952,6 +985,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidatePrimitiveModeEnum(__func__, mode)) return;
         if (!ValidateCurrentProgramForExecution(__func__)) return;
         if (!ValidatePrimitiveModeForBackend(__func__, mode)) return;
+        if (!ValidateDrawElementsIndexType(__func__, type)) return;
+        if (!ValidateNonNegativeDrawArgument(__func__, "drawcount", drawcount)) return;
+        // GL 4.6 core 10.5 defines MultiDrawElementsBaseVertex as drawcount separate
+        // DrawElementsBaseVertex calls, so each element of the count array carries the same
+        // non-negative requirement the single-draw entry point applies to its own count. The
+        // whole call is rejected before any sub-draw is issued, which is what makes the error
+        // observable at all - a driver that drew the valid prefix first would leave the
+        // framebuffer half-written.
+        if (count != nullptr) {
+            for (GLsizei draw = 0; draw < drawcount; ++draw) {
+                if (!ValidateNonNegativeDrawArgument(__func__, "every element of count", count[draw])) return;
+            }
+        }
         MultiDrawElementsBaseVertex_Backend(mode, count, type, indices, drawcount, basevertex);
     }
 
