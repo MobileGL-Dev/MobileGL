@@ -135,7 +135,7 @@ void main() {
         EsslTranslationKeyInputs inputs;
         inputs.spirv = &spirv;
         inputs.shaderType = GL_FRAGMENT_SHADER;
-        inputs.supportsViewportArray = false;
+        inputs.viewportIndexLoweringArmed = false;
         inputs.supportsNoperspectiveInterpolation = false;
         inputs.maxColorTextureSamples = 4;
         inputs.maxIntegerSamples = 1;
@@ -855,8 +855,8 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
     }
     {   // arms LowerViewportIndexForEssl
         EsslTranslationKeyInputs v = base;
-        v.supportsViewportArray = true;
-        variants.emplace_back("supportsViewportArray", BuildEsslTranslationKey(v));
+        v.viewportIndexLoweringArmed = true;
+        variants.emplace_back("viewportIndexLoweringArmed", BuildEsslTranslationKey(v));
     }
     {   // arms EmulateNoPerspectiveForEssl
         EsslTranslationKeyInputs v = base;
@@ -1008,7 +1008,7 @@ TEST_F(TranslationCacheTest, L2RunsTheEmitterOncePerDistinctKey) {
     // ... and a gate that only steers the SPIR-V pass chain still moves the key, so the
     // emitter runs again even though this stand-in ignores the bit.
     inputs = BaselineEsslInputs(spirv);
-    inputs.supportsViewportArray = true;
+    inputs.viewportIndexLoweringArmed = true;
     (void)translate(inputs);
     EXPECT_EQ(emitCount, 3);
 }
