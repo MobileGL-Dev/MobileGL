@@ -10,6 +10,7 @@
 #include <cmath>
 #include <Config.h>
 #include <MGGitHash.h>
+#include <MG_Impl/GLImpl/Debug/GL_Debug.h>
 #include <MG_Impl/GLImpl/VertexArray/Validators.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_State/GLState/Core.h>
@@ -1427,19 +1428,21 @@ namespace MobileGL::MG_Impl::GLImpl {
                           : 0;
             return;
         case GL_MAX_DEBUG_GROUP_STACK_DEPTH:
-            // KHR_debug floors this at 64 even when the group entry points are stubs: the
-            // limit describes how deep glPushDebugGroup may nest, and 0 is not a legal answer.
+            // KHR_debug floors this at 64. It must agree with what GL_Debug.cpp actually enforces,
+            // or an application that nests to the reported limit would take a STACK_OVERFLOW.
             *params = kFrontendMaxDebugGroupStackDepth;
             return;
         case GL_MAX_DEBUG_MESSAGE_LENGTH:
-            *params = 1024; // debug-message entrypoints are stubbed, but KHR_debug requires a valid limit
+            *params = 1024; // agrees with GL_Debug.cpp's kMaxDebugMessageLength
             return;
         case GL_MAX_DEBUG_LOGGED_MESSAGES:
             // Size of the message log ring; KHR_debug requires at least 1.
             *params = kFrontendMaxDebugLoggedMessages;
             return;
         case GL_DEBUG_GROUP_STACK_DEPTH:
-            *params = 0; // debug-group entrypoints are stubbed
+            // The live depth, which is never 0: GL 4.6 core 20.6 creates the context with one
+            // group already on the stack, and that is the one glPopDebugGroup may not pop.
+            *params = GetDebugGroupStackDepth();
             return;
         case GL_CONTEXT_FLAGS: {
             *params = MG_State::pEGLContext ? MG_State::pEGLContext->GetCurrentContextFlags() : 0;

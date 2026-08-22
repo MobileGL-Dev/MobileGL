@@ -1,6 +1,25 @@
 cmake_minimum_required(VERSION 3.14)
 
 add_executable(
+        DebugTest
+        DebugTest.cpp
+)
+
+target_include_directories(DebugTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        DebugTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+include(GoogleTest)
+gtest_discover_tests(DebugTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
         ObjectLifetimeIdTest
         ObjectLifetimeIdTest.cpp
 )

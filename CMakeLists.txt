@@ -335,6 +335,7 @@ set(SOURCE_FILES
     MobileGL/MG_Impl/GLImpl/Program/ProgramInterface.cpp
     MobileGL/MG_Impl/GLImpl/Program/GL_ProgramPipeline.cpp
     MobileGL/MG_Impl/GLImpl/Texture/GL_Texture.cpp
+    MobileGL/MG_Impl/GLImpl/Debug/GL_Debug.cpp
     MobileGL/MG_Impl/GLImpl/Texture/Validators.cpp
     MobileGL/MG_Impl/GLImpl/Texture/ProxyTexture.cpp
     MobileGL/MG_Impl/GLImpl/VertexArray/GL_VertexArray.cpp
