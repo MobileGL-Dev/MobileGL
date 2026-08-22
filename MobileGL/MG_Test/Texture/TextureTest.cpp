@@ -4033,6 +4033,8 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
     const Flags<PixelFormatNormalizeOptionBit> widenNoSnorm16 =
         PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget |
         PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget;
+    const Flags<PixelFormatNormalizeOptionBit> widenNoNorm16 =
+        PixelFormatNormalizeOptionBit::NoThreeChannelRenderTarget | PixelFormatNormalizeOptionBit::NoNorm16;
 
     const Case cases[] = {
         // Complementary's colortex1 and colortex2. The transfer pair used to stay three-channel
@@ -4047,10 +4049,16 @@ TEST_F(TextureTest, ThreeChannelWideningRetargetsInternalFormatAndTransferPairTo
         // cannot render to the encoding gets the 32-bit float rather than the half.
         {GL_RGB16_SNORM, widen, GL_RGBA16_SNORM, GL_RGBA, GL_SHORT},
         {GL_RGB16_SNORM, widenNoSnorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16.
-        {GL_RGB16, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        {GL_RGB10, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        {GL_RGB12, widen, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        // 16-bit UNORM and the legacy 10/12-bit formats stored as RGB16. The same-width sibling
+        // whenever the driver has EXT_texture_norm16 - which is what keeps the whole 48-bit
+        // ARB_texture_view class on one ES view class, so a GL_RGB16 texture can be viewed as
+        // GL_RGB16UI - and the 32-bit float only when it does not.
+        {GL_RGB16, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB10, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB12, widen, GL_RGBA16, GL_RGBA, GL_UNSIGNED_SHORT},
+        {GL_RGB16, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB10, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
+        {GL_RGB12, widenNoNorm16, GL_RGBA32F, GL_RGBA, GL_FLOAT},
         // sRGB and the integer formats: the base format has to move to the four-channel one of the
         // right class, GL_RGBA_INTEGER included.
         {GL_SRGB8, widen, GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},
