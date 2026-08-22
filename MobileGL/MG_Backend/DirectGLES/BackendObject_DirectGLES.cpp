@@ -1096,7 +1096,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // a single shading pass). A copy-based fallback satisfies neither half, and fails
         // silently; withholding the string and answering glTextureView with INVALID_OPERATION is
         // the only behaviour that cannot be mistaken for success.
-        if (textureViewSupported) {
+        //
+        // The host extension is necessary and NOT sufficient, which is why this second gate
+        // exists. Adreno 830 has EXT_texture_view, and on it the whole functional half of
+        // KHR-GL4{2,3}.texture_view fails: base_and_max_levels, reference_counting and
+        // view_sampling Fail and view_classes crashes, while only the two pure-API cases
+        // (errors, gettexparameter - neither of which touches the host view) pass. The cause is
+        // known and is MobileGL's, not the driver's: SyncTextureViewToBackend normalizes the
+        // VIEW's ES internalformat independently of the storage it aliases, so whenever the two
+        // land on different renderability carriers the host rejects the pair, the error is
+        // swallowed, and the view is left as a storage-less name that samples as zeros.
+        // DirectVulkan builds the view as a second VkImageView over one VkImage and has no such
+        // seam - it passes 5 of the 7 cases on the same device - so the string stays there.
+        //
+        // Until that reconciliation exists, advertising here would be the same lie the comment
+        // above refuses to tell, just with an extra prerequisite met. Set
+        // MOBILEGL_ENABLE_GLES_TEXTURE_VIEW=1 to re-enable it for that work.
+        if (textureViewSupported && MG_Config::Features.EnableGlesTextureView) {
             extensions.push_back(E_GL_ARB_texture_view);
         }
         // Only advertised when the host ES driver actually filters anisotropically: the sampler
