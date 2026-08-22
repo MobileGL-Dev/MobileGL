@@ -4911,7 +4911,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (const auto uploadTarget : textureObject->GetUploadTargets()) {
             for (GLsizei level = 0; level < levels; ++level) {
                 const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
-                const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
+                // GL 4.6 core 8.19: for GL_TEXTURE_1D_ARRAY the state-side HEIGHT is the LAYER
+                // COUNT, and layers do not halve down the mip chain - level i is
+                // (max(1, width >> i), height). Shrinking it made every mipmapped 1D array
+                // level report fewer layers than it has.
+                const Bool heightIsLayerCount = textureObject->GetTarget() == TextureTarget::Texture1DArray;
+                const GLsizei levelHeight =
+                    heightIsLayerCount ? height : std::max<GLsizei>(1, height >> level);
                 const SizeT byteSize =
                     static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
                 textureMipmapObject->AllocateStorage(uploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});

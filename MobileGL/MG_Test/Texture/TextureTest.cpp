@@ -1642,6 +1642,38 @@ TEST_F(TextureTest, TexStorage2DTrimsALongerPreExistingMipChain) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core 8.19: for GL_TEXTURE_1D_ARRAY the `height` argument of glTexStorage2D is the LAYER
+// COUNT, and an array texture's layer count "stays put all the way down the chain" (8.14.3) - only
+// the image's own axes halve. Shrinking it made level i report height >> i layers, which is also
+// what ComputeMipmapCompleteForFilter reads (it holds component 1 constant for this target), so
+// every mipmapped 1D array texture judged itself incomplete.
+TEST_F(TextureTest, TexStorage2DKeepsA1DArrayLayerCountConstantDownTheMipChain) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, texture);
+
+    constexpr GLsizei kLevels = 3;
+    constexpr GLsizei kWidth = 4;
+    constexpr GLsizei kLayers = 4;
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_1D_ARRAY, kLevels, GL_RGBA8, kWidth, kLayers);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+    ASSERT_NE(mipmapObject, nullptr);
+    ASSERT_EQ(mipmapObject->GetMipmapLevelCount(), static_cast<Uint>(kLevels));
+
+    for (GLsizei level = 0; level < kLevels; ++level) {
+        const IntVec3 size =
+            mipmapObject->GetMipmapTexelSize(TextureUploadTarget::Texture1DArray, static_cast<Uint>(level));
+        EXPECT_EQ(size.x(), std::max<GLsizei>(1, kWidth >> level)) << "level " << level << " width";
+        EXPECT_EQ(size.y(), kLayers) << "level " << level << " must keep every layer";
+    }
+
+    // The completeness walk is the reason this matters beyond the reported extent.
+    EXPECT_TRUE(textureObject->IsComplete());
+}
+
 // glTexImage2D used to reject every GL_COMPRESSED_* internal format with GL_INVALID_ENUM, because
 // none of them mapped to a TextureInternalFormat and the "unknown format" gate fired. They now
 // resolve to the uncompressed storage that backs them - what GL prescribes for the generic formats,

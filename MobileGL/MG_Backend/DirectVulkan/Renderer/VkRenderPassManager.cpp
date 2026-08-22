@@ -86,9 +86,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ToStorageArrayLayer(texture, face);
     }
 
+    // The attachment's size is GL geometry, and GL_TEXTURE_1D_ARRAY keeps its layer count in the
+    // state-side HEIGHT rather than in z (see ToVulkanLevelExtent, which exists for exactly this
+    // remap). Reading z directly gave every layered 1D-array attachment layerCount = 1, so a
+    // geometry shader writing gl_Layer = 1..n had its output silently dropped and the parent's
+    // upper layers were never written at all.
     static Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
         if (attachment.IsLayered()) {
-            return static_cast<Uint32>(std::max(attachment.GetSize().z(), 1));
+            const auto& texture = attachment.GetTexture();
+            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+            return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
         }
         return 1u;
     }
@@ -1060,8 +1067,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             .key = VkClearManager::MakePendingClearKey(att)
                         });
                     }
-                    const IntVec2 attachmentExtent =
-                        ResolveRenderPassFramebufferExtent(isDefaultFbo, att.GetSize(), swapchainExtent);
+                    // Same remap as ResolveAttachmentLayerCount, for the same reason: a
+                    // 1D-array attachment's GL height is its layer count, and using it as the
+                    // framebuffer height asks for a framebuffer taller than the VK_IMAGE_TYPE_1D
+                    // image it is built over.
+                    const IntVec2 attachmentExtent = ResolveRenderPassFramebufferExtent(
+                        isDefaultFbo, ToVulkanLevelExtent(texture->GetTarget(), att.GetSize()), swapchainExtent);
                     if (width == 0)
                         width = attachmentExtent.x();
                     if (height == 0)
@@ -1211,9 +1222,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 depthAttachmentDescription.format = depthTextureResource->format;
                 depthAttachmentSampleCount = depthTextureResource->sampleCount;
                 depthAttachmentId = static_cast<Int>(texture.GetExternalIndex());
-                attachmentExtent =
-                    ResolveRenderPassFramebufferExtent(isDefaultFbo, selectedDepthStencilAttachment->GetSize(),
-                                                       swapchainExtent);
+                attachmentExtent = ResolveRenderPassFramebufferExtent(
+                    isDefaultFbo,
+                    ToVulkanLevelExtent(texture.GetTarget(), selectedDepthStencilAttachment->GetSize()),
+                    swapchainExtent);
             } else {
                 const auto& renderbuffer = selectedDepthStencilAttachment->GetRenderbuffer();
                 depthRenderbufferResource = GetOrCreateRenderbufferResource(renderbuffer);
