@@ -263,6 +263,63 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
               extensions.end());
 }
 
+// A multisample texture is fetched, never filtered, so the mip-chain completeness rules never
+// apply to it (GL 4.6 core 8.17). It has exactly one level and MIN_FILTER's initial value is
+// NEAREST_MIPMAP_LINEAR, so asking those rules anyway calls EVERY multisample texture incomplete
+// - and both backends express "incomplete" as "leave the native target unbound", which makes the
+// shader's sampler2DMS read zero from a texture that was written correctly.
+//
+// That is KHR-GL43.compute_shader.resource-texture: it clears its 2DMS texture to 123.0 through
+// an FBO (which succeeds - the ES clear is issued on a COMPLETE 4-sample framebuffer with no
+// error) and then fails at the first sampler2DMS element because the texture was never bound.
+TEST(DirectGLESSanity, BindsAMultisampleTextureDespiteTheDefaultMipmapFilter) {
+    using namespace MobileGL;
+    namespace DirectGLES = MG_Backend::DirectGLES;
+
+    ScopedDirectGLESTextureBindings state;
+
+    GLuint frontendTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &frontendTexture);
+    ASSERT_NE(frontendTexture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, frontendTexture);
+    const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(0)
+                                    .GetBindingSlot(TextureTarget::Texture2DMultisample)
+                                    .GetBoundObject();
+    ASSERT_NE(textureObject, nullptr);
+
+    textureObject->SetInternalFormat(TextureInternalFormat::RGBA8);
+    textureObject->SetSamples(4);
+    textureObject->SetFixedSampleLocations(false);
+    // One level, 4x4 - the shape glTexImage2DMultisample produces, and a size whose mip chain
+    // would need three levels if the filter rules were (wrongly) applied.
+    MG_State::GLState::AsMipmapTexture(textureObject.get())
+        ->AllocateStorage(TextureUploadTarget::Texture2DMultisample, 0, {{4, 4, 1}, 4});
+
+    // The precondition that used to poison it, asserted rather than assumed: the texture's own
+    // sampler still reports a mipmapping filter, because GL's initial MIN_FILTER is
+    // NEAREST_MIPMAP_LINEAR and a multisample texture has no way (and no reason) to change it.
+    // If a future default made this None the test would pass without covering anything.
+    const auto& sampler = textureObject->GetSamplerObject();
+    ASSERT_NE(sampler, nullptr);
+    ASSERT_NE(sampler->GetMipmapMode(), SamplerMipmapMode::None)
+        << "fixture is stale: the default sampler no longer asks for mipmapping, so this test "
+           "would not exercise the multisample guard";
+
+    EXPECT_FALSE(MG_State::GLState::SamplesAsIncompleteTexture(textureObject.get(), sampler.get()))
+        << "a multisample texture is never filter-incomplete";
+
+    auto& backendTexture = DirectGLES::TextureImpl::g_backendTextureObjects.GetOrCreate(textureObject);
+    backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
+    const GLuint backendTextureId = backendTexture->GetBackendTextureId();
+
+    // The symptom itself: the per-unit walk has to actually bind it.
+    DirectGLES::BindCurrentTextures();
+    ASSERT_EQ(state.bindCalls.size(), 1u)
+        << "the multisample texture was not bound; every texelFetch against it reads zero";
+    EXPECT_EQ(state.bindCalls[0].target, GL_TEXTURE_2D_MULTISAMPLE);
+    EXPECT_EQ(state.bindCalls[0].texture, backendTextureId);
+}
+
 TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
     using namespace MobileGL;
     namespace DirectGLES = MG_Backend::DirectGLES;

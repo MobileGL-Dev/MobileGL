@@ -434,8 +434,28 @@ namespace MobileGL {
         }
 
         Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
-            const Bool mipmapped =
-                effectiveSampler != nullptr && effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
+            // A multisample texture is fetched, never filtered. GL 4.6 core 8.17 gives it exactly
+            // one level and says its sampler state is not used at all - texelFetch is the only way
+            // a shader can read it - so 8.14's filter-completeness rules, which is what the
+            // `mipmapped` branch below asks about, never apply to it.
+            //
+            // Deriving `mipmapped` from that unused sampler is what made EVERY multisample texture
+            // look incomplete: MIN_FILTER's initial value is NEAREST_MIPMAP_LINEAR, and a texture
+            // that can only ever have one level never satisfies the mip-chain check. Both backends
+            // treat "samples as incomplete" as "do not bind it" (DirectGLES's per-unit walk in
+            // ResolveAndBindUnitTextures, DirectVulkan's UniformManager), so the sampler2DMS the
+            // shader declared was left pointing at nothing and every texelFetch read zero. That is
+            // the sampler2DMS/sampler2DMSArray half of KHR-GL43.compute_shader.resource-texture,
+            // which fails at the first data7 element with the multisample texture correctly
+            // cleared and simply never bound.
+            //
+            // IsCopyImageEndpointComplete already spells the same guard as
+            // CopyImageTargetHasMipmapChain; this was the one place that asked without it.
+            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+            const Bool filtered = target != TextureTarget::Texture2DMultisample &&
+                                  target != TextureTarget::Texture2DMultisampleArray;
+            const Bool mipmapped = filtered && effectiveSampler != nullptr &&
+                                   effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
             return !IsMipmapCompleteForFilter(texture, mipmapped);
         }
 
