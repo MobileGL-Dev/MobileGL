@@ -1038,8 +1038,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         binding);
         const VkFormat reflectedFormat = programObj.storageImageFormatByBinding[binding];
         const Bool useBindingFormat = programObj.storageImageUsesBindingFormatByBinding[binding];
+        // The storage's own VkFormat is the wrong reference for a GL texture view: the view
+        // reinterprets it (GL 4.6 core table 8.21), and it is the VIEW's format the shader's
+        // image declaration was written against. Same correction the sampled path makes above.
+        const VkFormat storageImageSourceFormat =
+            imageBinding.Texture->IsTextureView()
+                ? m_textureManager->ResolveTextureViewWindow(*imageBinding.Texture, *resource).format
+                : resource->format;
         const VkFormat viewFormat = ResolveStorageImageViewFormat(
-            reflectedFormat, imageBinding.Format, resource->format, useBindingFormat);
+            reflectedFormat, imageBinding.Format, storageImageSourceFormat, useBindingFormat);
         if (viewFormat == VK_FORMAT_UNDEFINED) {
             MGLOG_E_ONCE("ResolveStorageImageDescriptor: unsupported glBindImageTexture format=0x%x "
                     "for binding=%u imageUnit=%d textureId=%d bindingPolicy=%s",

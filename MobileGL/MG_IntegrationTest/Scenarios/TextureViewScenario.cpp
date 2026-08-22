@@ -692,6 +692,115 @@ void main() {
         }
 
         // ------------------------------------------------------------------------------------
+        // Writing THROUGH a layer-sliced view. The read direction is covered above; this is the
+        // write direction, and it is the one that can corrupt the parent rather than merely
+        // return the wrong pixels - a view whose texel path forgot its layer origin writes over
+        // the parent's layer 0 while the application believes it addressed layer minLayer.
+        // ------------------------------------------------------------------------------------
+        TEST_F(TextureViewScenario, WritingThroughALayerSlicedViewLandsOnItsOwnLayers) {
+            if (!Ready() || IsSkipped()) return;
+
+            constexpr int kLayers = 4;
+            constexpr int kViewMinLayer = 2;
+            const GLuint storage = MakeTexture();
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, kSize, kSize, kLayers);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            const auto layerFill = [](int layer) {
+                return Rgba8{static_cast<std::uint8_t>(10 + layer * 20),
+                             static_cast<std::uint8_t>(200 - layer * 20), 30, 255};
+            };
+            // Seeded by CPU sub-image rather than by rendering, deliberately: this scenario is
+            // about the view's LAYER ORIGIN, and seeding through the GPU would additionally
+            // depend on a CPU sub-image reaching a layer whose content the GPU wrote - which
+            // DirectVulkan does not currently do even for a plain array texture (no view
+            // involved), and which would make a failure here unattributable.
+            const auto uploadLayer = [&](GLuint texture, int layer, Rgba8 colour) {
+                std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
+                for (std::size_t i = 0; i < texels.size(); i += 4) {
+                    texels[i + 0] = colour.r;
+                    texels[i + 1] = colour.g;
+                    texels[i + 2] = colour.b;
+                    texels[i + 3] = colour.a;
+                }
+                glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                texels.data());
+                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            };
+            for (int layer = 0; layer < kLayers; ++layer) {
+                uploadLayer(storage, layer, layerFill(layer));
+            }
+            const GLuint fbo = MakeFbo();
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_STENCIL_TEST);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the layers raised an error";
+
+            // A two-layer window starting at layer 2, so a lost offset lands on layer 0 - which
+            // the assertions below would see as an untouched layer that moved.
+            const GLuint view = MakeTexture();
+            glTextureView(view, GL_TEXTURE_2D_ARRAY, storage, GL_RGBA8, 0, 1, kViewMinLayer, 2);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            // Write the view's OWN layer 0, i.e. the storage's layer 2.
+            constexpr Rgba8 kPainted{255, 0, 255, 255};
+            std::vector<std::uint8_t> texels(static_cast<std::size_t>(kSize) * kSize * 4);
+            for (std::size_t i = 0; i < texels.size(); i += 4) {
+                texels[i + 0] = kPainted.r;
+                texels[i + 1] = kPainted.g;
+                texels[i + 2] = kPainted.b;
+                texels[i + 3] = kPainted.a;
+            }
+            glBindTexture(GL_TEXTURE_2D_ARRAY, view);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                            texels.data());
+            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "writing through the view raised an error";
+
+            // POSITIVE CONTROL, through the parent's own name and into a layer outside the view's
+            // window. It makes the assertions below able to tell "the view lost its layer origin"
+            // from "a CPU sub-image into this array does not reach the GPU at all", which is a
+            // different question and not one a texture view can answer.
+            constexpr Rgba8 kControl{0, 0, 255, 255};
+            std::vector<std::uint8_t> controlTexels(texels.size());
+            for (std::size_t i = 0; i < controlTexels.size(); i += 4) {
+                controlTexels[i + 0] = kControl.r;
+                controlTexels[i + 1] = kControl.g;
+                controlTexels[i + 2] = kControl.b;
+                controlTexels[i + 3] = kControl.a;
+            }
+            glBindTexture(GL_TEXTURE_2D_ARRAY, storage);
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, 1, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                            controlTexels.data());
+            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "the control write raised an error";
+
+            // Read every layer of the PARENT back: only the one the view's layer 0 maps to may
+            // have changed.
+            for (int layer = 0; layer < kLayers; ++layer) {
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, storage, 0, layer);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                const Image image = ReadPixels(kSize, kSize);
+                Rgba8 expected = layerFill(layer);
+                const char* what = "a layer outside the view's window must not have been written";
+                if (layer == kViewMinLayer) {
+                    expected = kPainted;
+                    what = "the view's layer 0 must be the storage layer it named";
+                } else if (layer == 1) {
+                    expected = kControl;
+                    what = "control: a sub-image written through the PARENT must reach its layer";
+                }
+                ExpectRegion(image, 0, kSize - 1, 0, kSize - 1, expected, 2, what);
+            }
+        }
+
+        // ------------------------------------------------------------------------------------
         // Views of views compose; the composed view still reaches the ROOT storage.
         // ------------------------------------------------------------------------------------
         TEST_F(TextureViewScenario, ViewOfAViewComposesTheLevelRanges) {

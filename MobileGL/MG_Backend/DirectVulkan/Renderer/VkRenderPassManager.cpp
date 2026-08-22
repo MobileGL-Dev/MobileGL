@@ -67,14 +67,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+        // Every branch has to go through ToStorageArrayLayer, including the two that name layer 0
+        // implicitly: a layered attachment of a texture VIEW starts at the view's first layer, not
+        // at the image's, and a cube FACE index is a layer index like any other. Leaving either
+        // unshifted made the render pass write layers [0, n) while the clear key, the blit, the
+        // copy and the readback for the same attachment all addressed [minLayer, minLayer + n) -
+        // they resolve the layer through their own copies of this helper, which do shift.
+        const auto* texture = attachment.GetTexture().get();
         if (attachment.IsLayered()) {
-            return 0;
+            return ToStorageArrayLayer(texture, 0);
         }
         const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
         if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
-            return ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
+            return ToStorageArrayLayer(texture, attachment.GetTextureLayer());
         }
-        return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+        const Int face =
+            static_cast<Int>(uploadTarget) - static_cast<Int>(TextureUploadTarget::CubeMapPositiveX);
+        return ToStorageArrayLayer(texture, face);
     }
 
     static Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {

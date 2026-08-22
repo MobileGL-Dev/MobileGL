@@ -9,6 +9,7 @@
 #include "TextureObjectView.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace MobileGL::MG_State::GLState {
     namespace {
@@ -149,6 +150,53 @@ namespace MobileGL::MG_State::GLState {
         return size;
     }
 
+    SizeT TextureObjectView::LayerByteOffset(TextureUploadTarget viewTarget, Uint mipmapLevel) const {
+        if (m_viewMinLayer == 0 || m_ownerMipmap == nullptr) return 0;
+        const LayerAxis ownerAxis = LayerAxisOf(m_storageOwner->GetTarget());
+        if (ownerAxis == LayerAxis::None) {
+            // A cube-map owner keeps each face in its OWN blob, and ToOwnerUploadTarget already
+            // picked the right one; a 3D or plain 2D owner has no layers to skip.
+            return 0;
+        }
+        const TextureUploadTarget ownerTarget = ToOwnerUploadTarget(viewTarget);
+        const Uint ownerLevel = ToOwnerLevel(mipmapLevel);
+        const IntVec3 ownerSize = m_ownerMipmap->GetMipmapTexelSize(ownerTarget, ownerLevel);
+        const SizeT ownerBytes = m_ownerMipmap->GetMipmapByteSize(ownerTarget, ownerLevel);
+        const SizeT ownerTexels = static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
+                                  static_cast<SizeT>(std::max(ownerSize.y(), 0)) *
+                                  static_cast<SizeT>(std::max(ownerSize.z(), 1));
+        if (ownerTexels == 0 || ownerBytes == 0) return 0;
+        const SizeT bytesPerTexel = ownerBytes / ownerTexels;
+        // One "layer" is a whole x*y slice for a 2D/cube array, and a single row of `width`
+        // texels for a 1D array (whose layer count lives in the state-side height).
+        const SizeT layerTexels = ownerAxis == LayerAxis::Y
+                                      ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
+                                      : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
+                                            static_cast<SizeT>(std::max(ownerSize.y(), 0));
+        const SizeT offset = static_cast<SizeT>(m_viewMinLayer) * layerTexels * bytesPerTexel;
+        return offset < ownerBytes ? offset : 0;
+    }
+
+    IntVec3 TextureObjectView::ToOwnerRegionOffset(const IntVec3& viewOffset) const {
+        if (m_viewMinLayer == 0) return viewOffset;
+        IntVec3 offset = viewOffset;
+        // The dirty region is recorded in the OWNER's blob coordinates - that is the space its
+        // upload path walks - so the view's layer origin has to be added here even though
+        // MapMipmapData hands back an already-shifted POINTER. The two are not double-counting:
+        // one moves the bytes, the other tells the owner which of its layers moved.
+        switch (LayerAxisOf(m_storageOwner->GetTarget())) {
+        case LayerAxis::Y:
+            offset.y() += static_cast<Int>(m_viewMinLayer);
+            break;
+        case LayerAxis::Z:
+            offset.z() += static_cast<Int>(m_viewMinLayer);
+            break;
+        case LayerAxis::None:
+            break;
+        }
+        return offset;
+    }
+
     Uint TextureObjectView::GetMipmapLevelCount() const {
         if (m_ownerMipmap == nullptr) return 0;
         const Uint ownerLevels = m_ownerMipmap->GetMipmapLevelCount();
@@ -180,7 +228,14 @@ namespace MobileGL::MG_State::GLState {
         const SizeT viewTexels = static_cast<SizeT>(std::max(viewSize.x(), 0)) *
                                  static_cast<SizeT>(std::max(viewSize.y(), 0)) *
                                  static_cast<SizeT>(std::max(viewSize.z(), 1));
-        return (ownerBytes / ownerTexels) * viewTexels;
+        const SizeT viewBytes = (ownerBytes / ownerTexels) * viewTexels;
+        // Clamped against what remains of the owner's blob past this view's layer origin. A view
+        // whose layer window the shadow cannot lay out contiguously - several faces of a cube-map
+        // owner, which are separate blobs - would otherwise advertise more bytes than
+        // MapMipmapData can hand back, and a caller sizing a copy off this would overrun.
+        const SizeT layerOffset = LayerByteOffset(target, mipmapLevel);
+        const SizeT available = layerOffset < ownerBytes ? ownerBytes - layerOffset : 0;
+        return std::min(viewBytes, available);
     }
 
     void TextureObjectView::AllocateStorage(TextureUploadTarget uploadTarget, Uint mipmapLevel, MipmapInput input) {
@@ -199,12 +254,36 @@ namespace MobileGL::MG_State::GLState {
 
     void TextureObjectView::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel, DataPtr input) {
         if (m_ownerMipmap == nullptr) return;
-        m_ownerMipmap->UpdateMipmapSubData(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel), input);
+        const TextureUploadTarget ownerTarget = ToOwnerUploadTarget(uploadTarget);
+        const Uint ownerLevel = ToOwnerLevel(mipmapLevel);
+        const SizeT layerOffset = LayerByteOffset(uploadTarget, mipmapLevel);
+        if (layerOffset == 0) {
+            m_ownerMipmap->UpdateMipmapSubData(ownerTarget, ownerLevel, input);
+            return;
+        }
+        // The owner's whole-level write starts at ITS level origin, which for a layer-sliced view
+        // is the wrong place: writing there would silently overwrite the parent's layers 0..n
+        // instead of the window this view opened. Write through the shifted pointer instead, and
+        // mark exactly the layers that moved.
+        auto* destination = static_cast<Uint8*>(m_ownerMipmap->MapMipmapData(ownerTarget, ownerLevel));
+        if (destination == nullptr || input.data == nullptr || input.size == 0) return;
+        const SizeT capacity = GetMipmapByteSize(uploadTarget, mipmapLevel);
+        std::memcpy(destination + layerOffset, input.data, std::min(input.size, capacity));
+        const IntVec3 viewSize = GetMipmapTexelSize(uploadTarget, mipmapLevel);
+        MarkStorageDirtyRegion(uploadTarget, mipmapLevel, IntVec3{0, 0, 0},
+                               IntVec3{viewSize.x(), viewSize.y(), std::max(viewSize.z(), 1)});
     }
 
     void* TextureObjectView::MapMipmapData(TextureUploadTarget uploadTarget, Uint mipmapLevel) {
         if (m_ownerMipmap == nullptr) return nullptr;
-        return m_ownerMipmap->MapMipmapData(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel));
+        auto* data = static_cast<Uint8*>(
+            m_ownerMipmap->MapMipmapData(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel)));
+        if (data == nullptr) return nullptr;
+        // Shifted to the view's first LAYER, so that a caller which maps this pointer and then
+        // offsets into it using the extents GetMipmapTexelSize reports - which is what every
+        // glTexSubImage*/glGetTexImage path does - lands on the layers this view addresses rather
+        // than on the parent's first ones.
+        return data + LayerByteOffset(uploadTarget, mipmapLevel);
     }
 
     void TextureObjectView::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty) {
@@ -220,8 +299,8 @@ namespace MobileGL::MG_State::GLState {
     void TextureObjectView::MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel, IntVec3 offset,
                                                    IntVec3 size) {
         if (m_ownerMipmap == nullptr) return;
-        m_ownerMipmap->MarkStorageDirtyRegion(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel), offset,
-                                              size);
+        m_ownerMipmap->MarkStorageDirtyRegion(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel),
+                                              ToOwnerRegionOffset(offset), size);
     }
 
     MipmapDirtyRegion TextureObjectView::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,

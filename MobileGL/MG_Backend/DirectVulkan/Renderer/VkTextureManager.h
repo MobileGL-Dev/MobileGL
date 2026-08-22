@@ -173,6 +173,12 @@ public:
             VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
             VkFormat format = VK_FORMAT_UNDEFINED;
             VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+            // GL_TEXTURE_SWIZZLE_* is per-texture state, so two views over one storage with the
+            // same window but different swizzles are different views. Baked into the key because
+            // a GL texture view's ONLY sampled view lives in this cache: unlike the storage
+            // texture's own sampledView, which SyncTextureViews rebuilds whenever the params
+            // version moves, nothing else would ever notice a swizzle change on a view.
+            Uint32 componentSwizzle = 0;
 
             Bool operator==(const SampledImageViewKey& other) const {
                 return baseMipLevel == other.baseMipLevel &&
@@ -181,7 +187,8 @@ public:
                        layerCount == other.layerCount &&
                        viewType == other.viewType &&
                        format == other.format &&
-                       aspect == other.aspect;
+                       aspect == other.aspect &&
+                       componentSwizzle == other.componentSwizzle;
             }
         };
 
@@ -197,6 +204,7 @@ public:
                         0x9e3779b9u + (hash << 6) + (hash >> 2);
                 hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.aspect)) +
                         0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(key.componentSwizzle) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
                 return hash;
             }
         };
@@ -418,8 +426,17 @@ public:
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
         VkImageAspectFlags sampledAspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        VkComponentMapping components{VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B,
+                                      VK_COMPONENT_SWIZZLE_A};
         Bool isTextureView = false;
     };
+
+    // The four component swizzles packed into one value, for the sampled-view cache key.
+    static Uint32 PackComponentSwizzle(const VkComponentMapping& components) {
+        return (static_cast<Uint32>(components.r) & 0xFFu) | ((static_cast<Uint32>(components.g) & 0xFFu) << 8) |
+               ((static_cast<Uint32>(components.b) & 0xFFu) << 16) |
+               ((static_cast<Uint32>(components.a) & 0xFFu) << 24);
+    }
     TextureViewWindow ResolveTextureViewWindow(MG_State::GLState::ITextureObject& texture,
                                                const TextureResource& resource) const;
     // Records what a GL texture view needs of the image it views, so the next sync of the
@@ -428,6 +445,10 @@ public:
     void NoteTextureViewImageRequirements(MG_State::GLState::ITextureObject& viewTexture,
                                           MG_State::GLState::ITextureObject& storageTexture);
     VkImageCreateFlags GetViewRequestedImageFlags(const MG_State::GLState::ITextureObject& storageTexture) const;
+    // Appends every format a GL texture view reinterprets this storage as, for the narrowed
+    // VkImageFormatListCreateInfo the image is created with.
+    void AppendViewRequestedFormats(const MG_State::GLState::ITextureObject& storageTexture,
+                                    Vector<VkFormat>& outFormats) const;
     // Builds (and caches, keyed by the whole window) one sampled VkImageView over a storage
     // image. Shared back end of every GL-texture-view sampled path.
     VkImageView GetOrCreateWindowedSampledView(MG_State::GLState::ITextureObject& texture,
@@ -655,6 +676,11 @@ private:
     // feature almost none of them use. A SAME-format view - which is the common case, and the
     // Better Clouds case - needs no flag at all and therefore costs nothing.
     std::unordered_map<TextureIdentity, VkImageCreateFlags, TextureIdentityHash> m_viewRequestedImageFlags;
+    // Every VkFormat a GL texture view has asked to reinterpret this storage as. The narrowed
+    // VkImageFormatListCreateInfo the image is created with must name them: the list is a promise
+    // that NO other format will ever be viewed, and building a view outside it is
+    // VUID-VkImageViewCreateInfo-pNext-01585. Keyed, like the flags above, by the STORAGE texture.
+    std::unordered_map<TextureIdentity, std::unordered_set<VkFormat>, TextureIdentityHash> m_viewRequestedFormats;
     // Supported multisample counts per format, so repeat texture syncs do not
     // re-query vkGetPhysicalDeviceImageFormatProperties.
     std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;

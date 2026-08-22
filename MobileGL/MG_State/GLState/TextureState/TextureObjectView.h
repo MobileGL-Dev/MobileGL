@@ -30,13 +30,17 @@ namespace MobileGL::MG_State::GLState {
     // "<minlevel> plus the value of TEXTURE_VIEW_MIN_LEVEL from the original texture" rule
     // means; one hop therefore always reaches real storage and no recursion is possible.
     //
-    // LAYER offsets are deliberately NOT applied here. The TextureObjectMipmap interface
-    // addresses storage as (upload target, level) and a layer lives INSIDE a level's blob, so a
-    // layer offset is not expressible at this boundary. The entry points that move texels for a
-    // view (glTexSubImage*, glGetTexImage) therefore redirect to the owner themselves and add
-    // GetViewMinLayer() to the z coordinate there, where it can be said. What this class does
-    // apply is the view's layer COUNT, because the level extents it reports are what both
-    // backends size their images and views from.
+    // LEVEL offsets are applied by shifting the level index; LAYER offsets cannot be, because the
+    // TextureObjectMipmap interface addresses storage as (upload target, level) and a layer lives
+    // INSIDE a level's blob. They are applied two other ways instead, and the pair is what keeps
+    // a layer-sliced view from corrupting its parent:
+    //   * MapMipmapData returns a pointer already advanced to the view's first layer, so a caller
+    //     that maps it and then offsets using the extents GetMipmapTexelSize reports - which is
+    //     what every glTexSubImage*/glGetTexImage path does - writes the layers it meant to; and
+    //   * MarkStorageDirtyRegion moves the region's origin into the OWNER's layer space, which is
+    //     the space its upload path walks.
+    // Those two are not double-counting: one moves the bytes, the other names which of the
+    // owner's layers moved.
     class TextureObjectView : public TextureObjectMipmap {
     public:
         TextureObjectView(Uint externalIndex, TextureTarget target, SharedPtr<ITextureObject> storageOwner,
@@ -44,6 +48,13 @@ namespace MobileGL::MG_State::GLState {
 
         const SharedPtr<ITextureObject>& GetViewStorageOwner() const override { return m_storageOwner; }
         const Vector<TextureUploadTarget>& GetUploadTargets() const override { return m_uploadTargets; }
+
+        // A view is immutable from birth (GL 4.6 core 8.18 sets its TEXTURE_IMMUTABLE_FORMAT), and
+        // unconditionally so: the base class infers immutability from a non-zero level count, and
+        // a degenerate view - one the spec's min() composition narrowed to zero levels - would
+        // otherwise report GL_FALSE, walk straight past ValidateTextureMutable and let
+        // glTexImage2D respecify the PARENT's immutable storage through AllocateStorage.
+        Bool IsImmutable() const override { return true; }
 
         // GL 4.6 core 8.18: "TEXTURE_IMMUTABLE_LEVELS is set to the value of
         // TEXTURE_IMMUTABLE_LEVELS from the original texture" - NOT to <numlevels>. Kept as a
@@ -98,6 +109,13 @@ namespace MobileGL::MG_State::GLState {
         // axis. A GL 1D array carries its layer count in the state-side HEIGHT while every other
         // layered target carries it in z, so the axis is target-dependent.
         IntVec3 ToViewLevelSize(const IntVec3& ownerLevelSize) const;
+        // Where this view's first LAYER starts inside the owner's level blob. The layer axis a
+        // level's bytes are laid out along is the OWNER's, so this is a slice for a 2D/cube array
+        // and a single row for a 1D array; a cube-map owner returns 0 because its faces are
+        // separate blobs that ToOwnerUploadTarget already selects between.
+        SizeT LayerByteOffset(TextureUploadTarget viewTarget, Uint mipmapLevel) const;
+        // A dirty-region origin moved from the view's layer space into the owner's.
+        IntVec3 ToOwnerRegionOffset(const IntVec3& viewOffset) const;
 
         SharedPtr<ITextureObject> m_storageOwner;
         // Non-owning; m_storageOwner keeps it alive and is never a view, so this is set once in
