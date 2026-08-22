@@ -22,9 +22,12 @@
 #include "source/opt/type_manager.h"
 #include "source/opt/types.h"
 #include "source/util/make_unique.h"
+#include "source/util/string_utils.h"
 
+#include <cstring>
 #include <map>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace MobileGL {
@@ -48,7 +51,9 @@ namespace MobileGL {
 
                 // OpImageRead in-operands: 0 image, 1 coordinate, 2.. optional image operands.
                 // OpImageWrite in-operands: 0 image, 1 coordinate, 2 texel, 3.. optional.
+                // OpImageQuerySize in-operands: 0 image.
                 constexpr uint32_t kImageAccessImageOperand = 0;
+                constexpr uint32_t kImageAccessCoordinateOperand = 1;
                 constexpr uint32_t kImageWriteTexelOperand = 2;
 
                 // The carrier of a non-core image format: a core GLSL ES format that represents
@@ -60,12 +65,20 @@ namespace MobileGL {
                 // per-channel width, more channels (rg32f -> rgba32f) - and for those the carrier
                 // is bit-exact: the storage holds the identical encoding, only wider.
                 //
-                // r11f_g11f_b10f is the one entry that is not. It has no same-width core carrier,
-                // so it takes rgba16f, and the two encodings differ. What matters is that the
-                // carrier is still LOSSLESS: an 11-bit float is e5m6 and a 10-bit float is e5m5,
-                // while a half is s1e5m10 - the SAME 5-bit exponent with a strictly longer
-                // mantissa - so every value the packed format can represent has an exact half.
-                // Nothing an application stores is rounded away.
+                // Two entries are not. r11f_g11f_b10f has no same-width core carrier, so it takes
+                // rgba16f, and the two encodings differ. What matters is that the carrier is still
+                // LOSSLESS: an 11-bit float is e5m6 and a 10-bit float is e5m5, while a half is
+                // s1e5m10 - the SAME 5-bit exponent with a strictly longer mantissa - so every
+                // value the packed format can represent has an exact half. Nothing an application
+                // stores is rounded away.
+                //
+                // rgb10_a2ui is the other. Its four channels are 10, 10, 10 and 2 bits of UNSIGNED
+                // INTEGER, and rgba16ui gives each of them sixteen - every value of every channel
+                // fits, with the same component type and the same channel COUNT, so nothing is
+                // masked and nothing is re-encoded on the shader side at all. Only the transfer
+                // differs: the frontend's shadow for it is one packed 32-bit word per texel
+                // (GL_UNSIGNED_INT_2_10_10_10_REV), so the upload has to split that word into four
+                // shorts the way r11f_g11f_b10f's has to be decoded into four floats.
                 //
                 // What DOES change is the reverse direction: the carrier can hold values the
                 // packed format could not - negatives (11f and 10f are unsigned), and mantissa
@@ -79,18 +92,46 @@ namespace MobileGL {
                 // this format alone, and multiple-uniforms, where one such declaration killed a
                 // program holding eight images).
                 //
-                // The remaining eight - rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm,
-                // rg16_snorm and r16_snorm - stay absent, and for a stronger reason than
-                // quantisation: core ESSL has no 16-bit normalized format at all and no 10-bit
-                // one, so every candidate carrier for them either loses range or changes the
-                // component TYPE the texture presents. They keep the honest "no GLSL ES spelling"
-                // diagnostic rather than a silent approximation.
+                // The remaining seven - rgb10_a2, rgba16, rg16, r16, rgba16_snorm, rg16_snorm and
+                // r16_snorm - are NORMALIZED, and core ESSL has no 16-bit normalized format at all
+                // and no 10-bit one. There is no carrier that keeps their component type, and no
+                // FLOAT carrier that is honest either: a half has eleven mantissa bits against a
+                // 16-bit normalized channel's sixteen, so rgba16f would quantise. What DOES hold
+                // every one of their values exactly is the format's own CODE: a normalized channel
+                // of b bits is an integer in [0, 2^b-1] (unsigned) or [-(2^(b-1)-1), 2^(b-1)-1]
+                // (signed), and rgba16ui gives every channel of all seven sixteen bits to hold
+                // that integer in - bit for bit, with the SAME quantisation grid the real format
+                // has, which is the one thing a float carrier could not reproduce.
+                //
+                // The price is that the carrier changes the SHADER-VISIBLE TYPE: an image2D
+                // becomes a uimage2D, so every imageLoad has to divide the code back out and every
+                // imageStore has to round a value onto it (GL 4.6 2.3.5). ChannelMax below is the
+                // denominator that conversion uses, per channel - the same number for all four of
+                // a 16-bit format and (1023, 1023, 1023, 3) for rgb10_a2, whose channels are not
+                // all the same width.
+                //
+                // What this carrier gives up, and it is real: the ES texture behind the image is
+                // now an INTEGER texture, so a `sampler2D` bound to it reads codes rather than the
+                // normalized value, and it can no longer be filtered. Measured against the
+                // alternative, which is not a truer sampler but no program at all - the stage that
+                // declares one of these seven has no legal ESSL, so before this it did not compile
+                // and nothing sampled anything.
                 struct ImageFormatWidening {
                     spv::ImageFormat Carrier = spv::ImageFormat::Unknown;
                     uint32_t Channels = 0;
+                    // Non-zero when the carrier holds the format's channels as the INTEGER CODES
+                    // of a NORMALIZED value rather than as the values themselves: the largest code
+                    // each channel can hold, i.e. 2^b - 1 for an unsigned normalized channel of b
+                    // bits and 2^(b-1) - 1 for a signed one.
+                    uint32_t ChannelMax[4] = {0u, 0u, 0u, 0u};
+                    bool SignedNormalized = false;
 
+                    bool CarriesNormalizedCodes() const { return ChannelMax[0] != 0u; }
                     explicit operator bool() const { return Carrier != spv::ImageFormat::Unknown; }
                 };
+
+                constexpr uint32_t kUnorm16Max = 65535u;
+                constexpr uint32_t kSnorm16Max = 32767u;
 
                 ImageFormatWidening WideningOfSpirvImageFormat(spv::ImageFormat format) {
                     switch (format) {
@@ -119,6 +160,35 @@ namespace MobileGL {
                     case spv::ImageFormat::R16ui: return {spv::ImageFormat::Rgba16ui, 1};
                     case spv::ImageFormat::Rg8ui: return {spv::ImageFormat::Rgba8ui, 2};
                     case spv::ImageFormat::R8ui: return {spv::ImageFormat::Rgba8ui, 1};
+                    // FOUR channels, so there is no surplus channel to mask and no access is
+                    // rewritten - 10, 10, 10 and 2 bits of unsigned integer all fit in sixteen.
+                    case spv::ImageFormat::Rgb10a2ui: return {spv::ImageFormat::Rgba16ui, 4};
+                    // Unsigned normalized, carried as codes in [0, 2^b - 1].
+                    case spv::ImageFormat::Rgba16:
+                        return {spv::ImageFormat::Rgba16ui, 4,
+                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                    case spv::ImageFormat::Rg16:
+                        return {spv::ImageFormat::Rgba16ui, 2,
+                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                    case spv::ImageFormat::R16:
+                        return {spv::ImageFormat::Rgba16ui, 1,
+                                {kUnorm16Max, kUnorm16Max, kUnorm16Max, kUnorm16Max}, false};
+                    // The one entry whose channels are not all the same width, which is the whole
+                    // reason ChannelMax is per channel rather than one number.
+                    case spv::ImageFormat::Rgb10A2:
+                        return {spv::ImageFormat::Rgba16ui, 4, {1023u, 1023u, 1023u, 3u}, false};
+                    // Signed normalized, carried as the two's-complement code in [-(2^(b-1) - 1),
+                    // 2^(b-1) - 1]. The carrier's channel is UNSIGNED, so the code's sixteen bits
+                    // are stored verbatim and sign-extended again on the way out.
+                    case spv::ImageFormat::Rgba16Snorm:
+                        return {spv::ImageFormat::Rgba16ui, 4,
+                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
+                    case spv::ImageFormat::Rg16Snorm:
+                        return {spv::ImageFormat::Rgba16ui, 2,
+                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
+                    case spv::ImageFormat::R16Snorm:
+                        return {spv::ImageFormat::Rgba16ui, 1,
+                                {kSnorm16Max, kSnorm16Max, kSnorm16Max, kSnorm16Max}, true};
                     default:
                         return {};
                     }
@@ -243,6 +313,58 @@ namespace MobileGL {
                     }
                 }
 
+                // A BUFFER image cannot be widened, but it CAN be SPLIT. Its texels are the
+                // application's linear buffer - no padding, no swizzle, no mip chain - so an
+                // rg32f view of N texels and an r32f view of 2N texels describe exactly the same
+                // bytes, and texel i's two components are components 2i and 2i+1 of the base
+                // format. That is not an approximation of anything: it is the same memory
+                // addressed one component at a time, which is why the split is exact where the
+                // widening (which reallocates) is impossible.
+                //
+                // ONLY the 32-bit component family, and for one reason: the base format has to be
+                // core ESSL, and of the single-channel formats only r32f, r32i and r32ui are.
+                // rg16f would want an r16f base and rg8i an r8i, and neither exists in core, so
+                // those buffer images keep the honest "no GLSL ES spelling" failure. Three- and
+                // four-channel buffer images need nothing: the only four-channel 32-bit formats
+                // are already core and GL has no three-channel image format at all.
+                struct BufferImageSplit {
+                    spv::ImageFormat Base = spv::ImageFormat::Unknown;
+                    uint32_t Components = 0;
+
+                    explicit operator bool() const { return Base != spv::ImageFormat::Unknown; }
+                };
+
+                BufferImageSplit SplitOfBufferImageFormat(spv::ImageFormat format) {
+                    switch (format) {
+                    case spv::ImageFormat::Rg32f: return {spv::ImageFormat::R32f, 2};
+                    case spv::ImageFormat::Rg32i: return {spv::ImageFormat::R32i, 2};
+                    case spv::ImageFormat::Rg32ui: return {spv::ImageFormat::R32ui, 2};
+                    default:
+                        return {};
+                    }
+                }
+
+                Bool IsSplittableBufferImageType(const Instruction* type,
+                                                 bool onlyFormatsSpirvCrossRefusesToPrint) {
+                    if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
+                    if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
+                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) !=
+                        spv::Dim::Buffer) {
+                        return false;
+                    }
+                    const auto format =
+                        static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
+                    if (!SplitOfBufferImageFormat(format)) return false;
+                    // The same narrowing the widening takes, and it has to be the same: a driver
+                    // that can spell rg32f for an imageBuffer needs no split, and splitting it
+                    // anyway would double every subscript for nothing.
+                    if (onlyFormatsSpirvCrossRefusesToPrint &&
+                        BakeImageFormatsPass::IsSpirvCrossEsslPrintableFormat(static_cast<Uint32>(format))) {
+                        return false;
+                    }
+                    return true;
+                }
+
                 Bool IsWidenableStorageImageType(const Instruction* type,
                                                  bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
@@ -259,8 +381,9 @@ namespace MobileGL {
                     // Measured on an Adreno 830 with a 32-byte GL_RG32F buffer and a shader storing
                     // (i+1, 100) at texel i: the readback came back [1,100] [0,1] [2,100] [0,1] -
                     // texels 0 and 1 landed on top of all four, texels 2 and 3 ran off the end of
-                    // the application's buffer. Declining leaves the honest "no GLSL ES spelling"
-                    // failure instead, which loses the same stage but corrupts nothing.
+                    // the application's buffer. It is SPLIT instead where its format allows
+                    // (IsSplittableBufferImageType), which addresses the same bytes rather than
+                    // restriding them, and left alone where it does not.
                     if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) ==
                         spv::Dim::Buffer) {
                         return false;
@@ -276,6 +399,180 @@ namespace MobileGL {
                     }
                     return true;
                 }
+
+                // GLSL.std.450 instruction numbers (see 3rdparty/glslang/SPIRV/GLSL.std.450.h).
+                constexpr uint32_t kGlslFSign = 6u;
+                constexpr uint32_t kGlslFMax = 40u;
+                constexpr uint32_t kGlslFClamp = 43u;
+
+                // The module's GLSL.std.450 import, creating it when the module has none. glslang
+                // emits one for all but the most trivial shaders, but a module that reached here
+                // without one still has to be carriable. 0 means no id was available and NOTHING
+                // was added, so the caller can still hand the module back untouched.
+                uint32_t EnsureGlslStd450Import(IRContext* context) {
+                    for (const Instruction& import : context->module()->ext_inst_imports()) {
+                        if (spvtools::utils::MakeString(import.GetInOperand(0).words) == "GLSL.std.450") {
+                            return import.result_id();
+                        }
+                    }
+                    const uint32_t importId = context->TakeNextId();
+                    if (importId == 0u) return 0u;
+                    context->AddExtInstImport(spvtools::MakeUnique<Instruction>(
+                        context, spv::Op::OpExtInstImport, 0, importId,
+                        Instruction::OperandList{
+                            {SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector("GLSL.std.450")}}));
+                    return importId;
+                }
+
+                // Every type and constant the normalized-code rewrite emits, resolved ONCE before
+                // any instruction is inserted. The type and constant managers append to the
+                // module's globals and keep their own def-use bookkeeping straight; the rewrite
+                // below does not (this pass drops every analysis at the end instead), so a manager
+                // consulted after the first insertion would be reading a def-use map that no
+                // longer describes the function bodies.
+                struct NormalizedCarrierMaterial {
+                    uint32_t Glsl450Id = 0;
+                    uint32_t FloatTypeId = 0;  // the component types, kept only so the declaration
+                    uint32_t IntTypeId = 0;    // order below can put each vector after its own
+                    uint32_t UintTypeId = 0;   // component - and the last is the image's new Sampled Type
+                    uint32_t UvecTypeId = 0;   // uvec4: what an OpImageRead of the carrier yields
+                    uint32_t IvecTypeId = 0;   // ivec4: the sign-extended snorm code
+                    uint32_t FvecTypeId = 0;   // vec4: what the shader asked for
+                    uint32_t ShiftWidthId = 0; // ivec4(16), the snorm sign extension
+                    uint32_t LowWordMaskId = 0; // uvec4(0xFFFF)
+                    uint32_t ZeroId = 0;       // vec4(0.0)
+                    uint32_t OneId = 0;        // vec4(1.0)
+                    uint32_t MinusOneId = 0;   // vec4(-1.0)
+                    uint32_t HalfId = 0;       // vec4(0.5)
+
+                    explicit operator bool() const { return UvecTypeId != 0u; }
+                };
+
+                // A four-component constant of `typeId` from four component ids.
+                uint32_t MakeVec4Constant(IRContext* context, uint32_t typeId, const uint32_t (&componentIds)[4]) {
+                    auto* constantMgr = context->get_constant_mgr();
+                    analysis::Type* vectorType = context->get_type_mgr()->GetType(typeId);
+                    if (vectorType == nullptr) return 0u;
+                    // A vector constant's "literal words" are the IDS of its components
+                    // (ConstantManager::CreateConstant -> GetConstantsFromIds).
+                    const analysis::Constant* constant = constantMgr->GetConstant(
+                        vectorType, {componentIds[0], componentIds[1], componentIds[2], componentIds[3]});
+                    if (constant == nullptr) return 0u;
+                    const Instruction* definition = constantMgr->GetDefiningInstruction(constant);
+                    return definition == nullptr ? 0u : definition->result_id();
+                }
+
+                uint32_t MakeScalarConstant(IRContext* context, analysis::Type* scalarType, uint32_t word) {
+                    const analysis::Constant* constant = context->get_constant_mgr()->GetConstant(scalarType, {word});
+                    if (constant == nullptr) return 0u;
+                    const Instruction* definition =
+                        context->get_constant_mgr()->GetDefiningInstruction(constant);
+                    return definition == nullptr ? 0u : definition->result_id();
+                }
+
+                uint32_t MakeSplatVec4Constant(IRContext* context, uint32_t vectorTypeId,
+                                               analysis::Type* scalarType, uint32_t word) {
+                    const uint32_t scalarId = MakeScalarConstant(context, scalarType, word);
+                    if (scalarId == 0u) return 0u;
+                    const uint32_t componentIds[4] = {scalarId, scalarId, scalarId, scalarId};
+                    return MakeVec4Constant(context, vectorTypeId, componentIds);
+                }
+
+                uint32_t FloatBits(float value) {
+                    uint32_t bits = 0;
+                    static_assert(sizeof(bits) == sizeof(value), "float is not 32 bits");
+                    std::memcpy(&bits, &value, sizeof(bits));
+                    return bits;
+                }
+
+                NormalizedCarrierMaterial ResolveNormalizedCarrierMaterial(IRContext* context) {
+                    NormalizedCarrierMaterial material;
+                    auto* typeMgr = context->get_type_mgr();
+
+                    analysis::Integer uintScalar(32, false);
+                    analysis::Integer intScalar(32, true);
+                    analysis::Float floatScalar(32);
+                    analysis::Type* uintReg = typeMgr->GetRegisteredType(&uintScalar);
+                    analysis::Type* intReg = typeMgr->GetRegisteredType(&intScalar);
+                    analysis::Type* floatReg = typeMgr->GetRegisteredType(&floatScalar);
+                    if (uintReg == nullptr || intReg == nullptr || floatReg == nullptr) return {};
+
+                    analysis::Vector uintVector(uintReg, 4);
+                    analysis::Vector intVector(intReg, 4);
+                    analysis::Vector floatVector(floatReg, 4);
+                    const uint32_t uintTypeId = typeMgr->GetTypeInstruction(&uintScalar);
+                    const uint32_t uvecTypeId = typeMgr->GetTypeInstruction(&uintVector);
+                    const uint32_t ivecTypeId = typeMgr->GetTypeInstruction(&intVector);
+                    const uint32_t fvecTypeId = typeMgr->GetTypeInstruction(&floatVector);
+                    if (uintTypeId == 0u || uvecTypeId == 0u || ivecTypeId == 0u || fvecTypeId == 0u) return {};
+
+                    const uint32_t glsl450Id = EnsureGlslStd450Import(context);
+                    if (glsl450Id == 0u) return {};
+
+                    material.Glsl450Id = glsl450Id;
+                    material.FloatTypeId = typeMgr->GetTypeInstruction(&floatScalar);
+                    material.IntTypeId = typeMgr->GetTypeInstruction(&intScalar);
+                    material.UintTypeId = uintTypeId;
+                    material.UvecTypeId = uvecTypeId;
+                    material.IvecTypeId = ivecTypeId;
+                    material.FvecTypeId = fvecTypeId;
+                    material.ShiftWidthId = MakeSplatVec4Constant(context, ivecTypeId, intReg, 16u);
+                    material.LowWordMaskId = MakeSplatVec4Constant(context, uvecTypeId, uintReg, 0xFFFFu);
+                    material.ZeroId = MakeSplatVec4Constant(context, fvecTypeId, floatReg, FloatBits(0.0f));
+                    material.OneId = MakeSplatVec4Constant(context, fvecTypeId, floatReg, FloatBits(1.0f));
+                    material.MinusOneId = MakeSplatVec4Constant(context, fvecTypeId, floatReg, FloatBits(-1.0f));
+                    material.HalfId = MakeSplatVec4Constant(context, fvecTypeId, floatReg, FloatBits(0.5f));
+                    if (material.ShiftWidthId == 0u || material.LowWordMaskId == 0u || material.ZeroId == 0u ||
+                        material.OneId == 0u || material.MinusOneId == 0u || material.HalfId == 0u) {
+                        return {};
+                    }
+                    return material;
+                }
+
+                // spirv-tools' type manager APPENDS a new type declaration to the END of the
+                // module's type section - which is fine for a type only function bodies name, and
+                // NOT fine for the uint32 an OpTypeImage further up is about to take as its
+                // Sampled Type. SPIR-V requires an id to be defined before it is used, and
+                // spirv-tools' own RemoveDuplicates - which the caller runs immediately after this
+                // pass - walks the section in order and dereferences each image type's sampled
+                // type as it goes, so an out-of-order declaration is a null dereference inside the
+                // type manager rather than a diagnostic.
+                //
+                // `typeIdsInDependencyOrder` must list a component type before any vector of it:
+                // each move lands immediately in front of `target`, so the order they are
+                // processed in is the order they end up in.
+                void HoistTypeDeclarationsBefore(IRContext* context, Instruction* target,
+                                                 const std::vector<uint32_t>& typeIdsInDependencyOrder) {
+                    std::set<uint32_t> definedBeforeTarget;
+                    for (Instruction& declaration : context->module()->types_values()) {
+                        if (&declaration == target) break;
+                        definedBeforeTarget.insert(declaration.result_id());
+                    }
+                    for (const uint32_t typeId : typeIdsInDependencyOrder) {
+                        if (typeId == 0u || definedBeforeTarget.count(typeId) != 0u) continue;
+                        Instruction* declaration = context->get_def_use_mgr()->GetDef(typeId);
+                        if (declaration == nullptr || declaration == target) continue;
+                        // IntrusiveNodeBase::InsertBefore MOVES the node it is called on - it
+                        // unlinks it from wherever it is first - which is the opposite convention
+                        // to Instruction::InsertBefore(unique_ptr), used everywhere else here.
+                        declaration->InsertBefore(target);
+                    }
+                }
+
+                // vec4(ChannelMax), the denominator of the format's own normalized conversion.
+                uint32_t ResolveDenominatorConstant(IRContext* context, const NormalizedCarrierMaterial& material,
+                                                    const uint32_t (&channelMax)[4]) {
+                    analysis::Float floatScalar(32);
+                    analysis::Type* floatReg = context->get_type_mgr()->GetRegisteredType(&floatScalar);
+                    if (floatReg == nullptr) return 0u;
+                    uint32_t componentIds[4] = {0u, 0u, 0u, 0u};
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        componentIds[i] = MakeScalarConstant(context, floatReg,
+                                                             FloatBits(static_cast<float>(channelMax[i])));
+                        if (componentIds[i] == 0u) return 0u;
+                    }
+                    return MakeVec4Constant(context, material.FvecTypeId, componentIds);
+                }
             } // namespace
 
             Uint WidenImageFormatsPass::WidenedCoreEsslImageFormat(Uint glInternalFormat) {
@@ -283,6 +580,30 @@ namespace MobileGL {
                     WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
                 if (!widening) return 0;
                 return GLInternalFormatOfSpirvImageFormat(widening.Carrier);
+            }
+
+            Uint WidenImageFormatsPass::SplitCoreEsslBufferImageFormat(Uint glInternalFormat) {
+                const BufferImageSplit split =
+                    SplitOfBufferImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                if (!split) return 0;
+                switch (split.Base) {
+                case spv::ImageFormat::R32f: return 0x822E;  // GL_R32F
+                case spv::ImageFormat::R32i: return 0x8235;  // GL_R32I
+                case spv::ImageFormat::R32ui: return 0x8236; // GL_R32UI
+                default:
+                    return 0;
+                }
+            }
+
+            bool WidenImageFormatsPass::NormalizedImageCarrierCodes(Uint glInternalFormat,
+                                                                    Uint32 (&outChannelMax)[4],
+                                                                    bool& outSignedNormalized) {
+                const ImageFormatWidening widening =
+                    WideningOfSpirvImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                if (!widening || !widening.CarriesNormalizedCodes()) return false;
+                for (Uint i = 0; i < 4; ++i) outChannelMax[i] = widening.ChannelMax[i];
+                outSignedNormalized = widening.SignedNormalized;
+                return true;
             }
 
             Uint WidenImageFormatsPass::ImageFormatChannelCount(Uint glInternalFormat) {
@@ -295,7 +616,8 @@ namespace MobileGL {
                     return false;
                 }
                 for (const Instruction& type : context->module()->types_values()) {
-                    if (IsWidenableStorageImageType(&type, onlyFormatsSpirvCrossRefusesToPrint)) {
+                    if (IsWidenableStorageImageType(&type, onlyFormatsSpirvCrossRefusesToPrint) ||
+                        IsSplittableBufferImageType(&type, onlyFormatsSpirvCrossRefusesToPrint)) {
                         return true;
                     }
                 }
@@ -317,12 +639,15 @@ namespace MobileGL {
                 // Cheap gate first: no widenable image type, and the module is handed back
                 // byte-identical - which is every shader but a handful.
                 std::vector<Instruction*> imageTypes;
+                std::vector<Instruction*> bufferSplitTypes;
                 for (Instruction& type : irContext->types_values()) {
                     if (IsWidenableStorageImageType(&type, m_onlyFormatsSpirvCrossRefusesToPrint)) {
                         imageTypes.push_back(&type);
+                    } else if (IsSplittableBufferImageType(&type, m_onlyFormatsSpirvCrossRefusesToPrint)) {
+                        bufferSplitTypes.push_back(&type);
                     }
                 }
-                if (imageTypes.empty()) {
+                if (imageTypes.empty() && bufferSplitTypes.empty()) {
                     return Status::SuccessWithoutChange;
                 }
 
@@ -333,15 +658,23 @@ namespace MobileGL {
                     spv::ImageFormat Carrier = spv::ImageFormat::Unknown;
                     uint32_t Channels = 0;
                     uint32_t SampledTypeId = 0;
+                    // 0 unless the carrier holds NORMALIZED CODES, in which case it is the vec4 of
+                    // per-channel denominators the conversion divides by and multiplies back up.
+                    uint32_t DenominatorId = 0;
+                    bool SignedNormalized = false;
                 };
                 std::map<uint32_t, WidenedImage> widenedByTypeId;
+                Bool anyNormalizedCarrier = false;
                 for (Instruction* type : imageTypes) {
                     const auto format =
                         static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
                     const ImageFormatWidening widening = WideningOfSpirvImageFormat(format);
-                    widenedByTypeId.emplace(type->result_id(),
-                                            WidenedImage{widening.Carrier, widening.Channels,
-                                                         type->GetSingleWordInOperand(kImageSampledTypeOperand)});
+                    anyNormalizedCarrier = anyNormalizedCarrier || widening.CarriesNormalizedCodes();
+                    widenedByTypeId.emplace(
+                        type->result_id(),
+                        WidenedImage{widening.Carrier, widening.Channels,
+                                     type->GetSingleWordInOperand(kImageSampledTypeOperand), 0u,
+                                     widening.SignedNormalized});
                 }
 
                 // Collect the accesses BEFORE anything is mutated, and refuse the whole rewrite if
@@ -350,8 +683,23 @@ namespace MobileGL {
                 // the shader runs and quietly reads the carrier's surplus channels, which GL says
                 // are 0 and 1. Refusing hands the stage back to the "no GLSL ES spelling"
                 // diagnostic instead, which at least names the failure.
+                // The same for the buffer images that SPLIT. Keyed the same way and collected in
+                // the same walk, because the decline below has to be all-or-nothing across both:
+                // a module with one of each that could only rewrite one of them would emit a
+                // stage that addresses one image right and the other wrong.
+                std::map<uint32_t, BufferImageSplit> splitByTypeId;
+                for (Instruction* type : bufferSplitTypes) {
+                    splitByTypeId.emplace(
+                        type->result_id(),
+                        SplitOfBufferImageFormat(
+                            static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand))));
+                }
+
                 std::vector<Instruction*> reads;
                 std::vector<Instruction*> writes;
+                std::vector<Instruction*> splitReads;
+                std::vector<Instruction*> splitWrites;
+                std::vector<Instruction*> splitSizeQueries;
                 Bool rewritable = true;
                 for (auto funcIt = irContext->module()->begin();
                      funcIt != irContext->module()->end() && rewritable; ++funcIt) {
@@ -362,13 +710,14 @@ namespace MobileGL {
                         case spv::Op::OpImageWrite:
                         case spv::Op::OpImageSparseRead:
                         case spv::Op::OpImageTexelPointer:
+                        case spv::Op::OpImageQuerySize:
                             break;
                         default:
                             return;
                         }
-                        // OpImageTexelPointer names the image VARIABLE (a pointer), the other
-                        // three an image VALUE; both reach the OpTypeImage through the def's
-                        // type, one hop further for the pointer.
+                        // OpImageTexelPointer names the image VARIABLE (a pointer), the others an
+                        // image VALUE; both reach the OpTypeImage through the def's type, one hop
+                        // further for the pointer.
                         const Instruction* imageDef =
                             defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
                         if (imageDef == nullptr) return;
@@ -376,6 +725,19 @@ namespace MobileGL {
                         if (const Instruction* imageType = defUseMgr->GetDef(imageTypeId);
                             imageType != nullptr && imageType->opcode() == spv::Op::OpTypePointer) {
                             imageTypeId = imageType->GetSingleWordInOperand(1);
+                        }
+                        if (splitByTypeId.count(imageTypeId) != 0) {
+                            switch (inst->opcode()) {
+                            case spv::Op::OpImageRead: splitReads.push_back(inst); return;
+                            case spv::Op::OpImageWrite: splitWrites.push_back(inst); return;
+                            // imageSize() has to be halved with everything else: the ES view has
+                            // twice the texels the application's format describes, and a shader
+                            // that walks the buffer by its own size would run off the end of it.
+                            case spv::Op::OpImageQuerySize: splitSizeQueries.push_back(inst); return;
+                            default:
+                                rewritable = false;
+                                return;
+                            }
                         }
                         const auto widenedIt = widenedByTypeId.find(imageTypeId);
                         if (widenedIt == widenedByTypeId.end()) return;
@@ -386,6 +748,11 @@ namespace MobileGL {
                         }
                         if (inst->opcode() == spv::Op::OpImageWrite) {
                             writes.push_back(inst);
+                            return;
+                        }
+                        // A widened image's size does not move - the carrier has the same texel
+                        // COUNT - so a query through one needs nothing.
+                        if (inst->opcode() == spv::Op::OpImageQuerySize) {
                             return;
                         }
                         // OpImageSparseRead yields a struct rather than a plain texel vector, and
@@ -492,6 +859,79 @@ namespace MobileGL {
                     return it == widenedByTypeId.end() ? nullptr : &it->second;
                 };
 
+                auto splitOf = [&](const Instruction* inst) -> const BufferImageSplit* {
+                    const Instruction* imageDef =
+                        defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
+                    if (imageDef == nullptr) return nullptr;
+                    const auto it = splitByTypeId.find(imageDef->type_id());
+                    return it == splitByTypeId.end() ? nullptr : &it->second;
+                };
+
+                auto splitSampledTypeOf = [&](const Instruction* inst) -> uint32_t {
+                    const Instruction* imageDef =
+                        defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
+                    if (imageDef == nullptr) return 0u;
+                    const Instruction* imageType = defUseMgr->GetDef(imageDef->type_id());
+                    if (imageType == nullptr || imageType->opcode() != spv::Op::OpTypeImage) return 0u;
+                    return imageType->GetSingleWordInOperand(kImageSampledTypeOperand);
+                };
+
+                // The 1 and the component COUNT the subscript arithmetic multiplies by, one pair
+                // per integer type a coordinate (or an imageSize result) is spelled in. Resolved
+                // before any instruction is inserted, for the reason the masks' material is.
+                std::map<uint32_t, std::pair<uint32_t, uint32_t>> splitConstantsByIntType;
+                auto resolveSplitCoordConstants = [&](uint32_t intTypeId, uint32_t& outOne,
+                                                      uint32_t& outComponents) -> Bool {
+                    if (const auto cached = splitConstantsByIntType.find(intTypeId);
+                        cached != splitConstantsByIntType.end()) {
+                        outOne = cached->second.first;
+                        outComponents = cached->second.second;
+                        return outOne != 0 && outComponents != 0;
+                    }
+                    const Instruction* intType = defUseMgr->GetDef(intTypeId);
+                    // A buffer image's coordinate is a 32-bit integer SCALAR in every dialect this
+                    // backend compiles; a vector one is a shape that has never been seen and is
+                    // refused rather than guessed at.
+                    if (intType == nullptr || intType->opcode() != spv::Op::OpTypeInt ||
+                        intType->GetSingleWordInOperand(0) != 32) {
+                        return false;
+                    }
+                    analysis::Integer component(32, intType->GetSingleWordInOperand(1) != 0);
+                    analysis::Type* componentReg = irContext->get_type_mgr()->GetRegisteredType(&component);
+                    if (componentReg == nullptr) return false;
+                    const uint32_t oneId = MakeScalarConstant(irContext, componentReg, 1u);
+                    const uint32_t componentsId = MakeScalarConstant(irContext, componentReg, 2u);
+                    if (oneId == 0u || componentsId == 0u) return false;
+                    splitConstantsByIntType.emplace(intTypeId, std::make_pair(oneId, componentsId));
+                    outOne = oneId;
+                    outComponents = componentsId;
+                    return true;
+                };
+
+                // 2i and 2i+1, inserted in front of `before`.
+                auto insertSplitCoordinates = [&](Instruction* before, uint32_t coordId, uint32_t& outFirst,
+                                                  uint32_t& outSecond) -> Bool {
+                    const Instruction* coord = defUseMgr->GetDef(coordId);
+                    if (coord == nullptr) return false;
+                    uint32_t oneId = 0;
+                    uint32_t componentsId = 0;
+                    if (!resolveSplitCoordConstants(coord->type_id(), oneId, componentsId)) return false;
+                    const uint32_t firstId = irContext->TakeNextId();
+                    const uint32_t secondId = irContext->TakeNextId();
+                    if (firstId == 0 || secondId == 0) return false;
+                    before->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpIMul, coord->type_id(), firstId,
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {coordId}},
+                                                 {SPV_OPERAND_TYPE_ID, {componentsId}}}));
+                    before->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpIAdd, coord->type_id(), secondId,
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {firstId}},
+                                                 {SPV_OPERAND_TYPE_ID, {oneId}}}));
+                    outFirst = firstId;
+                    outSecond = secondId;
+                    return true;
+                };
+
                 // Every constant and vector type the masks will need, declared BEFORE the first
                 // instruction is inserted. The constant and type managers append to the module's
                 // globals and keep their own def-use bookkeeping straight; the shuffles below do
@@ -505,6 +945,226 @@ namespace MobileGL {
                         return Status::SuccessWithoutChange;
                     }
                 }
+                // ...and everything the buffer-image SPLIT needs: the same (0, .., 0, 1) constant
+                // for its own sampled types, and the 1 and 2 its subscript arithmetic uses, one
+                // pair per integer type a coordinate or an imageSize result is spelled in.
+                for (Instruction* type : bufferSplitTypes) {
+                    uint32_t unusedConstantId = 0;
+                    uint32_t unusedVec4TypeId = 0;
+                    if (!resolveMaskMaterial(type->GetSingleWordInOperand(kImageSampledTypeOperand),
+                                             unusedConstantId, unusedVec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                }
+                for (const std::vector<Instruction*>* accesses : {&splitReads, &splitWrites}) {
+                    for (Instruction* access : *accesses) {
+                        const Instruction* coord =
+                            defUseMgr->GetDef(access->GetSingleWordInOperand(kImageAccessCoordinateOperand));
+                        uint32_t unusedOneId = 0;
+                        uint32_t unusedComponentsId = 0;
+                        if (coord == nullptr ||
+                            !resolveSplitCoordConstants(coord->type_id(), unusedOneId, unusedComponentsId)) {
+                            return Status::SuccessWithoutChange;
+                        }
+                    }
+                }
+                for (Instruction* query : splitSizeQueries) {
+                    uint32_t unusedOneId = 0;
+                    uint32_t unusedComponentsId = 0;
+                    if (!resolveSplitCoordConstants(query->type_id(), unusedOneId, unusedComponentsId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                }
+
+                // ...and the same for the normalized carriers, whose rewrite needs a good deal
+                // more of both: the uvec4 an OpImageRead of the carrier yields, the ivec4 the
+                // signed code is sign-extended in, the GLSL.std.450 import the clamp and the sign
+                // come from, and one vec4 of denominators per DISTINCT channel-width set (all
+                // 65535 for the unsigned 16-bit formats, all 32767 for the signed ones, and
+                // (1023, 1023, 1023, 3) for rgb10_a2, whose channels are not all the same width).
+                NormalizedCarrierMaterial normalizedMaterial;
+                if (anyNormalizedCarrier) {
+                    normalizedMaterial = ResolveNormalizedCarrierMaterial(irContext);
+                    if (!normalizedMaterial) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    Instruction* firstNormalizedImageType = nullptr;
+                    for (Instruction* type : imageTypes) {
+                        const auto widenedIt = widenedByTypeId.find(type->result_id());
+                        if (widenedIt == widenedByTypeId.end()) continue;
+                        const ImageFormatWidening widening = WideningOfSpirvImageFormat(
+                            static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand)));
+                        if (!widening.CarriesNormalizedCodes()) continue;
+                        // The shader asked for a gvec4 of the ORIGINAL sampled type, and for these
+                        // seven that type is float. An integer image declared with a normalized
+                        // format is not something glslang can produce, so a module that somehow
+                        // holds one is refused rather than converted through a type it never had.
+                        const Instruction* sampledType = defUseMgr->GetDef(widenedIt->second.SampledTypeId);
+                        if (sampledType == nullptr || sampledType->opcode() != spv::Op::OpTypeFloat ||
+                            sampledType->GetSingleWordInOperand(0) != 32) {
+                            return Status::SuccessWithoutChange;
+                        }
+                        const uint32_t denominatorId =
+                            ResolveDenominatorConstant(irContext, normalizedMaterial, widening.ChannelMax);
+                        if (denominatorId == 0u) {
+                            return Status::SuccessWithoutChange;
+                        }
+                        widenedIt->second.DenominatorId = denominatorId;
+                        if (firstNormalizedImageType == nullptr) firstNormalizedImageType = type;
+                    }
+                    // ...and the declarations have to reach the module in the right ORDER, not
+                    // just exist. See HoistTypeDeclarationsBefore: the type manager appends, and
+                    // the image type that names the new uint32 is already further up.
+                    if (firstNormalizedImageType != nullptr) {
+                        HoistTypeDeclarationsBefore(
+                            irContext, firstNormalizedImageType,
+                            {normalizedMaterial.FloatTypeId, normalizedMaterial.IntTypeId,
+                             normalizedMaterial.UintTypeId, normalizedMaterial.FvecTypeId,
+                             normalizedMaterial.IvecTypeId, normalizedMaterial.UvecTypeId});
+                    }
+                }
+
+                // The two halves of GL 4.6 2.3.5 for a normalized carrier, spelled as SPIR-V.
+                //
+                //   UNPACK (imageLoad), unsigned: f = c / (2^b - 1)
+                //   UNPACK (imageLoad), signed:   f = max(c / (2^(b-1) - 1), -1)
+                //   PACK   (imageStore), unsigned: c = round(clamp(f, 0, 1) * (2^b - 1))
+                //   PACK   (imageStore), signed:   c = round(clamp(f, -1, 1) * (2^(b-1) - 1))
+                //
+                // `round` is round-to-NEAREST, and GL leaves the tie direction to the
+                // implementation ("if two values are equally near, the implementation may choose
+                // either"). This one always rounds a tie AWAY FROM ZERO, which is a legal choice
+                // and, unlike GLSL's own round(), a deterministic one - so the boundary cases can
+                // be pinned by a test rather than described. It is spelled as a truncation of
+                // x + 0.5*sign(x), because OpConvertFToU/OpConvertFToS truncate toward zero.
+                //
+                // A signed code is stored in an UNSIGNED carrier channel, so pack masks it to the
+                // low sixteen bits (a negative uint32 is out of an rgba16ui channel's range, and
+                // what a store does with an out-of-range integer is not defined) and unpack
+                // sign-extends it back with a shift pair.
+                //
+                // Both operate on all FOUR channels at once, including the surplus ones a one- or
+                // two-channel format does not have: the mask shuffle runs on the float side either
+                // way, so whatever the surplus channels hold is discarded on the way out and
+                // written as the format's own 0 and 1 on the way in.
+                auto insertUnpack = [&](Instruction* before, const WidenedImage& widened,
+                                        uint32_t rawId) -> uint32_t {
+                    const auto emit = [&](spv::Op opcode, uint32_t typeId,
+                                          Instruction::OperandList operands) -> uint32_t {
+                        const uint32_t resultId = irContext->TakeNextId();
+                        if (resultId == 0u) return 0u;
+                        before->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId,
+                                                                               Move(operands)));
+                        return resultId;
+                    };
+                    // The raw texel through an OpCopyObject before anything reads it, which costs
+                    // nothing in SPIR-V and is load-bearing in the ESSL: SPIRV-Cross emits a copy
+                    // of a non-opaque value as a real `uvec4 _n = imageLoad(...);` statement,
+                    // where the read's own result is FORWARDED into whatever consumes it. Mesa's
+                    // llvmpipe compiler miscompiles the forwarded form - `vec4(imageLoad(img, c))`
+                    // written straight into an expression comes back as zeroes, and 0xFFFF comes
+                    // back as a NaN, while the identical arithmetic on a named uvec4 is correct.
+                    // Measured with hand-written core-format ESSL (an rgba16ui uimage2D read into
+                    // an rgba32f image2D), so it is the driver rather than anything this pass or
+                    // the emitter does; the copy is the cheapest way to stay out of it, and every
+                    // other driver folds it away.
+                    const uint32_t texelId =
+                        emit(spv::Op::OpCopyObject, normalizedMaterial.UvecTypeId,
+                             {{SPV_OPERAND_TYPE_ID, {rawId}}});
+                    if (texelId == 0u) return 0u;
+                    uint32_t codeId = 0;
+                    if (widened.SignedNormalized) {
+                        const uint32_t asIntId =
+                            emit(spv::Op::OpBitcast, normalizedMaterial.IvecTypeId,
+                                 {{SPV_OPERAND_TYPE_ID, {texelId}}});
+                        if (asIntId == 0u) return 0u;
+                        const uint32_t shiftedUpId =
+                            emit(spv::Op::OpShiftLeftLogical, normalizedMaterial.IvecTypeId,
+                                 {{SPV_OPERAND_TYPE_ID, {asIntId}},
+                                  {SPV_OPERAND_TYPE_ID, {normalizedMaterial.ShiftWidthId}}});
+                        if (shiftedUpId == 0u) return 0u;
+                        const uint32_t signExtendedId =
+                            emit(spv::Op::OpShiftRightArithmetic, normalizedMaterial.IvecTypeId,
+                                 {{SPV_OPERAND_TYPE_ID, {shiftedUpId}},
+                                  {SPV_OPERAND_TYPE_ID, {normalizedMaterial.ShiftWidthId}}});
+                        if (signExtendedId == 0u) return 0u;
+                        codeId = emit(spv::Op::OpConvertSToF, normalizedMaterial.FvecTypeId,
+                                      {{SPV_OPERAND_TYPE_ID, {signExtendedId}}});
+                    } else {
+                        codeId = emit(spv::Op::OpConvertUToF, normalizedMaterial.FvecTypeId,
+                                      {{SPV_OPERAND_TYPE_ID, {texelId}}});
+                    }
+                    if (codeId == 0u) return 0u;
+                    const uint32_t normalizedId =
+                        emit(spv::Op::OpFDiv, normalizedMaterial.FvecTypeId,
+                             {{SPV_OPERAND_TYPE_ID, {codeId}}, {SPV_OPERAND_TYPE_ID, {widened.DenominatorId}}});
+                    if (normalizedId == 0u || !widened.SignedNormalized) return normalizedId;
+                    // -2^(b-1) is representable in the code but GL clamps it to -1: the signed
+                    // decode is max(c / (2^(b-1) - 1), -1), not the bare division.
+                    return emit(spv::Op::OpExtInst, normalizedMaterial.FvecTypeId,
+                                {{SPV_OPERAND_TYPE_ID, {normalizedMaterial.Glsl450Id}},
+                                 {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFMax}},
+                                 {SPV_OPERAND_TYPE_ID, {normalizedId}},
+                                 {SPV_OPERAND_TYPE_ID, {normalizedMaterial.MinusOneId}}});
+                };
+
+                auto insertPack = [&](Instruction* before, const WidenedImage& widened,
+                                      uint32_t valueId) -> uint32_t {
+                    const auto emit = [&](spv::Op opcode, uint32_t typeId,
+                                          Instruction::OperandList operands) -> uint32_t {
+                        const uint32_t resultId = irContext->TakeNextId();
+                        if (resultId == 0u) return 0u;
+                        before->InsertBefore(spvtools::MakeUnique<Instruction>(irContext, opcode, typeId, resultId,
+                                                                               Move(operands)));
+                        return resultId;
+                    };
+                    const uint32_t lowBoundId =
+                        widened.SignedNormalized ? normalizedMaterial.MinusOneId : normalizedMaterial.ZeroId;
+                    const uint32_t clampedId =
+                        emit(spv::Op::OpExtInst, normalizedMaterial.FvecTypeId,
+                             {{SPV_OPERAND_TYPE_ID, {normalizedMaterial.Glsl450Id}},
+                              {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFClamp}},
+                              {SPV_OPERAND_TYPE_ID, {valueId}},
+                              {SPV_OPERAND_TYPE_ID, {lowBoundId}},
+                              {SPV_OPERAND_TYPE_ID, {normalizedMaterial.OneId}}});
+                    if (clampedId == 0u) return 0u;
+                    const uint32_t scaledId =
+                        emit(spv::Op::OpFMul, normalizedMaterial.FvecTypeId,
+                             {{SPV_OPERAND_TYPE_ID, {clampedId}},
+                              {SPV_OPERAND_TYPE_ID, {widened.DenominatorId}}});
+                    if (scaledId == 0u) return 0u;
+                    uint32_t biasId = normalizedMaterial.HalfId;
+                    if (widened.SignedNormalized) {
+                        // 0.5 * sign(x), so the truncation below rounds a tie away from zero on
+                        // both sides. sign(0) is 0, which leaves an exact zero exactly zero.
+                        const uint32_t signId = emit(spv::Op::OpExtInst, normalizedMaterial.FvecTypeId,
+                                                     {{SPV_OPERAND_TYPE_ID, {normalizedMaterial.Glsl450Id}},
+                                                      {SPV_OPERAND_TYPE_EXTENSION_INSTRUCTION_NUMBER, {kGlslFSign}},
+                                                      {SPV_OPERAND_TYPE_ID, {scaledId}}});
+                        if (signId == 0u) return 0u;
+                        biasId = emit(spv::Op::OpFMul, normalizedMaterial.FvecTypeId,
+                                      {{SPV_OPERAND_TYPE_ID, {signId}},
+                                       {SPV_OPERAND_TYPE_ID, {normalizedMaterial.HalfId}}});
+                        if (biasId == 0u) return 0u;
+                    }
+                    const uint32_t roundedId =
+                        emit(spv::Op::OpFAdd, normalizedMaterial.FvecTypeId,
+                             {{SPV_OPERAND_TYPE_ID, {scaledId}}, {SPV_OPERAND_TYPE_ID, {biasId}}});
+                    if (roundedId == 0u) return 0u;
+                    if (!widened.SignedNormalized) {
+                        return emit(spv::Op::OpConvertFToU, normalizedMaterial.UvecTypeId,
+                                    {{SPV_OPERAND_TYPE_ID, {roundedId}}});
+                    }
+                    const uint32_t signedCodeId = emit(spv::Op::OpConvertFToS, normalizedMaterial.IvecTypeId,
+                                                       {{SPV_OPERAND_TYPE_ID, {roundedId}}});
+                    if (signedCodeId == 0u) return 0u;
+                    const uint32_t asUintId = emit(spv::Op::OpBitcast, normalizedMaterial.UvecTypeId,
+                                                   {{SPV_OPERAND_TYPE_ID, {signedCodeId}}});
+                    if (asUintId == 0u) return 0u;
+                    return emit(spv::Op::OpBitwiseAnd, normalizedMaterial.UvecTypeId,
+                                {{SPV_OPERAND_TYPE_ID, {asUintId}},
+                                 {SPV_OPERAND_TYPE_ID, {normalizedMaterial.LowWordMaskId}}});
+                };
 
                 // Masks first, while every image type still carries its ORIGINAL format: the
                 // rewrite below only touches the format operand, so the accesses' types do not
@@ -513,6 +1173,13 @@ namespace MobileGL {
                 for (Instruction* write : writes) {
                     const WidenedImage* widened = widenedOf(write);
                     if (widened == nullptr) continue;
+                    const Bool normalized = widened->DenominatorId != 0u;
+                    // A carrier with as many channels as the original (rgb10_a2ui in rgba16ui) has
+                    // no surplus channel to pin, and the shuffle would select (0, 1, 2, 3) from the
+                    // texel - an identity the emitter would still print. Left out entirely, unless
+                    // the texel still has to be PACKED, in which case the store is rewritten
+                    // anyway and only the shuffle is skipped.
+                    if (widened->Channels >= 4 && !normalized) continue;
                     uint32_t zeroOneId = 0;
                     uint32_t vec4TypeId = 0;
                     if (!resolveMaskMaterial(widened->SampledTypeId, zeroOneId, vec4TypeId)) {
@@ -525,21 +1192,35 @@ namespace MobileGL {
                     if (texel == nullptr || texel->type_id() != vec4TypeId) {
                         return Status::SuccessWithoutChange;
                     }
-                    const uint32_t maskedId = irContext->TakeNextId();
-                    if (maskedId == 0) return Status::Failure;
-                    Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {texelId}},
-                                                             {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
-                    for (const Operand& component : maskComponents(widened->Channels)) {
-                        shuffleOperands.push_back(component);
+                    uint32_t storedId = texelId;
+                    if (widened->Channels < 4) {
+                        const uint32_t maskedId = irContext->TakeNextId();
+                        if (maskedId == 0) return Status::Failure;
+                        Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {texelId}},
+                                                                 {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
+                        for (const Operand& component : maskComponents(widened->Channels)) {
+                            shuffleOperands.push_back(component);
+                        }
+                        write->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
+                        storedId = maskedId;
                     }
-                    write->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
-                    write->SetInOperand(kImageWriteTexelOperand, {maskedId});
+                    // The pack goes AFTER the mask, so the carrier's surplus channels are written
+                    // as the codes GL's own 0 and 1 quantise to (0 and the channel maximum) rather
+                    // than as raw zeroes and ones - which is what a later imageLoad, and the
+                    // upload that seeds an untouched level, both have to agree with.
+                    if (normalized) {
+                        storedId = insertPack(write, *widened, storedId);
+                        if (storedId == 0u) return Status::Failure;
+                    }
+                    write->SetInOperand(kImageWriteTexelOperand, {storedId});
                 }
 
                 for (Instruction* read : reads) {
                     const WidenedImage* widened = widenedOf(read);
                     if (widened == nullptr) continue;
+                    const Bool normalized = widened->DenominatorId != 0u;
+                    if (widened->Channels >= 4 && !normalized) continue; // see the store loop
                     uint32_t zeroOneId = 0;
                     uint32_t vec4TypeId = 0;
                     if (!resolveMaskMaterial(widened->SampledTypeId, zeroOneId, vec4TypeId)) {
@@ -553,6 +1234,11 @@ namespace MobileGL {
                     // existing use of the read stays intact without a ReplaceAllUsesWith that
                     // would also rewrite the shuffle's own operand (the idiom
                     // EmulateNoPerspectivePass uses for the same reason).
+                    //
+                    // Under a normalized carrier the copy reads a uvec4 rather than the vec4 the
+                    // shader asked for - that is the whole point of the carrier - and the unpack
+                    // in between brings it back. Every extra instruction is inserted in front of
+                    // the original too, so the chain stays in order.
                     const uint32_t rawReadId = irContext->TakeNextId();
                     if (rawReadId == 0) return Status::Failure;
                     Instruction::OperandList readOperands;
@@ -560,9 +1246,18 @@ namespace MobileGL {
                         readOperands.push_back(read->GetInOperand(i));
                     }
                     read->InsertBefore(spvtools::MakeUnique<Instruction>(
-                        irContext, spv::Op::OpImageRead, vec4TypeId, rawReadId, readOperands));
+                        irContext, spv::Op::OpImageRead,
+                        normalized ? normalizedMaterial.UvecTypeId : vec4TypeId, rawReadId, readOperands));
+                    uint32_t loadedId = rawReadId;
+                    if (normalized) {
+                        loadedId = insertUnpack(read, *widened, rawReadId);
+                        if (loadedId == 0u) return Status::Failure;
+                    }
+                    // Always a shuffle, even at four channels: it is what carries the ORIGINAL
+                    // result id, which every existing use still names. At four channels the
+                    // selectors are the identity (0, 1, 2, 3), so nothing is substituted.
                     read->SetOpcode(spv::Op::OpVectorShuffle);
-                    Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {rawReadId}},
+                    Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {loadedId}},
                                                              {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
                     for (const Operand& component : maskComponents(widened->Channels)) {
                         shuffleOperands.push_back(component);
@@ -570,13 +1265,169 @@ namespace MobileGL {
                     read->SetInOperands(Move(shuffleOperands));
                 }
 
-                // The declaration itself, last. Only the format operand moves: the carrier has the
-                // same component type as the original by construction, so the OpTypeImage's
-                // Sampled Type still agrees with it (which is what spirv-val checks) and no
-                // pointer, array or access-chain type has to be rebuilt.
+                // THE BUFFER-IMAGE SPLIT. Same three parts as the widening - accesses first, the
+                // declaration last - but the arithmetic is on the SUBSCRIPT rather than on the
+                // texel: what was texel i of an rg32f is components 2i and 2i+1 of an r32f over
+                // the same bytes. A read gathers the pair and fills the two channels the format
+                // does not have with GL's own 0 and 1; a store writes each component on its own.
+                //
+                // TWO OpImageWrites where the application wrote one, and they are not atomic
+                // together. That is not a coherence hole this introduces: GL already gives an
+                // imageStore no atomicity ACROSS components, and both writes are issued by the
+                // same invocation to two texels no other invocation of a well-formed program is
+                // writing (each invocation owns its own texel i). A program that DID have two
+                // invocations racing for one texel had undefined results before the split too.
+                for (Instruction* write : splitWrites) {
+                    const BufferImageSplit* split = splitOf(write);
+                    if (split == nullptr) continue;
+                    uint32_t zeroOneId = 0;
+                    uint32_t vec4TypeId = 0;
+                    if (!resolveMaskMaterial(splitSampledTypeOf(write), zeroOneId, vec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t texelId = write->GetSingleWordInOperand(kImageWriteTexelOperand);
+                    const Instruction* texel = defUseMgr->GetDef(texelId);
+                    if (texel == nullptr || texel->type_id() != vec4TypeId) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t coordId = write->GetSingleWordInOperand(kImageAccessCoordinateOperand);
+                    uint32_t firstCoordId = 0;
+                    uint32_t secondCoordId = 0;
+                    if (!insertSplitCoordinates(write, coordId, firstCoordId, secondCoordId)) {
+                        return Status::Failure;
+                    }
+                    uint32_t componentTexelIds[2] = {0u, 0u};
+                    for (uint32_t component = 0; component < split->Components; ++component) {
+                        const uint32_t maskedId = irContext->TakeNextId();
+                        if (maskedId == 0) return Status::Failure;
+                        // (texel[component], 0, 0, 1) - a one-channel base format keeps only red,
+                        // and GL's own values for the rest.
+                        Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {texelId}},
+                                                                 {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {component}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {7u}});
+                        write->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
+                        componentTexelIds[component] = maskedId;
+                    }
+                    // The FIRST component's write is the inserted one and the second is the
+                    // original, so the original instruction (and anything that ordered against
+                    // it) stays where it was.
+                    Instruction::OperandList firstWriteOperands;
+                    for (uint32_t i = 0; i < write->NumInOperands(); ++i) {
+                        firstWriteOperands.push_back(write->GetInOperand(i));
+                    }
+                    firstWriteOperands[kImageAccessCoordinateOperand] = {SPV_OPERAND_TYPE_ID, {firstCoordId}};
+                    firstWriteOperands[kImageWriteTexelOperand] = {SPV_OPERAND_TYPE_ID, {componentTexelIds[0]}};
+                    write->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpImageWrite, 0, 0, firstWriteOperands));
+                    write->SetInOperand(kImageAccessCoordinateOperand, {secondCoordId});
+                    write->SetInOperand(kImageWriteTexelOperand, {componentTexelIds[1]});
+                }
+
+                for (Instruction* read : splitReads) {
+                    const BufferImageSplit* split = splitOf(read);
+                    if (split == nullptr) continue;
+                    uint32_t zeroOneId = 0;
+                    uint32_t vec4TypeId = 0;
+                    if (!resolveMaskMaterial(splitSampledTypeOf(read), zeroOneId, vec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    if (read->type_id() != vec4TypeId) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t coordId = read->GetSingleWordInOperand(kImageAccessCoordinateOperand);
+                    uint32_t firstCoordId = 0;
+                    uint32_t secondCoordId = 0;
+                    if (!insertSplitCoordinates(read, coordId, firstCoordId, secondCoordId)) {
+                        return Status::Failure;
+                    }
+                    uint32_t componentReadIds[2] = {0u, 0u};
+                    const uint32_t coordIds[2] = {firstCoordId, secondCoordId};
+                    for (uint32_t component = 0; component < split->Components; ++component) {
+                        const uint32_t componentReadId = irContext->TakeNextId();
+                        if (componentReadId == 0) return Status::Failure;
+                        Instruction::OperandList readOperands;
+                        for (uint32_t i = 0; i < read->NumInOperands(); ++i) {
+                            readOperands.push_back(read->GetInOperand(i));
+                        }
+                        readOperands[kImageAccessCoordinateOperand] = {SPV_OPERAND_TYPE_ID, {coordIds[component]}};
+                        read->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            irContext, spv::Op::OpImageRead, vec4TypeId, componentReadId, readOperands));
+                        componentReadIds[component] = componentReadId;
+                    }
+                    // (first.x, second.x, ., .) - the last two selectors are anything in range;
+                    // the mask below replaces them with GL's 0 and 1.
+                    const uint32_t gatheredId = irContext->TakeNextId();
+                    if (gatheredId == 0) return Status::Failure;
+                    Instruction::OperandList gatherOperands{{SPV_OPERAND_TYPE_ID, {componentReadIds[0]}},
+                                                            {SPV_OPERAND_TYPE_ID, {componentReadIds[1]}}};
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    read->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpVectorShuffle, vec4TypeId, gatheredId, gatherOperands));
+
+                    read->SetOpcode(spv::Op::OpVectorShuffle);
+                    Instruction::OperandList maskOperands{{SPV_OPERAND_TYPE_ID, {gatheredId}},
+                                                          {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
+                    for (const Operand& component : maskComponents(split->Components)) {
+                        maskOperands.push_back(component);
+                    }
+                    read->SetInOperands(Move(maskOperands));
+                }
+
+                for (Instruction* query : splitSizeQueries) {
+                    const BufferImageSplit* split = splitOf(query);
+                    if (split == nullptr) continue;
+                    uint32_t oneId = 0;
+                    uint32_t componentsId = 0;
+                    if (!resolveSplitCoordConstants(query->type_id(), oneId, componentsId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const Instruction* resultType = defUseMgr->GetDef(query->type_id());
+                    if (resultType == nullptr || resultType->opcode() != spv::Op::OpTypeInt) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t rawSizeId = irContext->TakeNextId();
+                    if (rawSizeId == 0) return Status::Failure;
+                    Instruction::OperandList queryOperands;
+                    for (uint32_t i = 0; i < query->NumInOperands(); ++i) {
+                        queryOperands.push_back(query->GetInOperand(i));
+                    }
+                    query->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpImageQuerySize, query->type_id(), rawSizeId, queryOperands));
+                    query->SetOpcode(resultType->GetSingleWordInOperand(1) != 0 ? spv::Op::OpSDiv
+                                                                                : spv::Op::OpUDiv);
+                    query->SetInOperands({{SPV_OPERAND_TYPE_ID, {rawSizeId}},
+                                          {SPV_OPERAND_TYPE_ID, {componentsId}}});
+                }
+
+                for (Instruction* type : bufferSplitTypes) {
+                    const auto splitIt = splitByTypeId.find(type->result_id());
+                    if (splitIt == splitByTypeId.end()) continue;
+                    // Only the format: the base format's component type is the original's by
+                    // construction, so the Sampled Type still agrees with it.
+                    type->SetInOperand(kImageFormatOperand, {static_cast<uint32_t>(splitIt->second.Base)});
+                }
+
+                // The declaration itself, last. For most carriers only the format operand moves:
+                // the carrier has the same component type as the original by construction, so the
+                // OpTypeImage's Sampled Type still agrees with it (which is what spirv-val checks)
+                // and no pointer, array or access-chain type has to be rebuilt.
+                //
+                // A NORMALIZED carrier moves the Sampled Type too - float32 to uint32, which is
+                // what turns an image2D into a uimage2D - and it has to, because spirv-val
+                // requires the Sampled Type to match the format's component class. Nothing above
+                // the OpTypeImage has to change with it: the pointer, the variable and every
+                // OpLoad name the image type by ID, and the id is being mutated in place.
                 //
                 // Two image types can COLLIDE here - `layout(rg32f)` and `layout(rgba32f)` in one
-                // module both become Rgba32f - and duplicate non-aggregate type declarations are
+                // module both become Rgba32f, and so do `layout(rgba16)` image2D and
+                // `layout(rgba16ui)` uimage2D - and duplicate non-aggregate type declarations are
                 // invalid SPIR-V. The caller runs spirv-tools' RemoveDuplicates pass immediately
                 // after this one, which joins them (and cascades to the pointer and array types
                 // that named them) rather than this pass carrying its own join.
@@ -588,6 +1439,9 @@ namespace MobileGL {
                     // module that has since grown instructions it was never told about. Every
                     // analysis is dropped below instead.
                     type->SetInOperand(kImageFormatOperand, {static_cast<uint32_t>(widenedIt->second.Carrier)});
+                    if (widenedIt->second.DenominatorId != 0u) {
+                        type->SetInOperand(kImageSampledTypeOperand, {normalizedMaterial.UintTypeId});
+                    }
                 }
 
                 // StorageImageExtendedFormats is deliberately left declared even though every

@@ -277,20 +277,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // its own; this call is only here to spell the transfer pair that describes it.
             MG_Util::TextureFormatProcessor::NormalizePixelFormat(carrier, Flags<PixelFormatNormalizeOptionBit>{},
                                                                   nullptr, &widening.Format, &widening.Type);
-            // r11f_g11f_b10f is the one carrier that is not a channel widening, and the transfer
-            // pair has to say so. Every other entry keeps the frontend format's own component
-            // type - a GL_RG16F shadow is halves and so is its GL_RGBA16F carrier, so padding the
-            // channels is the whole conversion. This shadow is a PACKED 32-bit word (GL_RGB with
-            // GL_UNSIGNED_INT_10F_11F_11F_REV, TextureFormatProcessor::NormalizePixelFormat), and
-            // no ES driver accepts that type for a GL_RGBA16F level. GL_FLOAT is asked for
-            // instead - legal for GL_RGBA16F, and the type the unpack in
-            // PrepareImageWidenedUpload writes - so the two sides name the same layout.
-            if (internalFormat == TextureInternalFormat::R11FG11FB10F) {
+            // The two carriers that are not channel widenings, whose transfer pair has to say so.
+            // Every other entry keeps the frontend format's own component type - a GL_RG16F shadow
+            // is halves and so is its GL_RGBA16F carrier, so padding the channels is the whole
+            // conversion. These two shadows are a PACKED 32-bit word per texel
+            // (TextureFormatProcessor::NormalizePixelFormat), and no ES driver accepts either
+            // packed type for the carrier's level, so the transfer names the carrier's own layout
+            // and PrepareImageWidenedUpload splits the word into it.
+            switch (internalFormat) {
+            case TextureInternalFormat::R11FG11FB10F:
+                // GL_UNSIGNED_INT_10F_11F_11F_REV -> GL_RGBA / GL_FLOAT, legal for GL_RGBA16F.
                 widening.Format = GL_RGBA;
                 widening.Type = GL_FLOAT;
-                widening.PackedFloatSource = true;
+                widening.SourceEncoding = ImageWidenSourceEncoding::PackedFloat11f11f10f;
+                break;
+            case TextureInternalFormat::RGB10A2UI:
+            case TextureInternalFormat::RGB10A2:
+                // GL_UNSIGNED_INT_2_10_10_10_REV -> the GL_RGBA_INTEGER / GL_UNSIGNED_SHORT the
+                // GL_RGBA16UI carrier already asked for above; only the split is new. The two
+                // formats share it: rgb10_a2's channel codes are the same fields rgb10_a2ui's are,
+                // and what the shader divides them by is not the transfer's business.
+                widening.SourceEncoding = ImageWidenSourceEncoding::PackedInt2101010Rev;
+                break;
+            default:
+                break;
+            }
+            // The seven normalized formats whose carrier holds CODES rather than values. Both
+            // halves of the transfer need to know: a missing alpha is padded with the saturated
+            // code rather than the integer 1, and glGetTexImage has to divide the codes back out.
+            bool signedNormalized = false;
+            Uint32 channelMax[4] = {0u, 0u, 0u, 0u};
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::NormalizedImageCarrierCodes(requested, channelMax,
+                                                                                       signedNormalized)) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    widening.ChannelMax[channel] = channelMax[channel];
+                }
+                widening.SignedNormalized = signedNormalized;
             }
             return widening;
+        }
+
+        GLenum GetImageBindableBufferSplitFormat(TextureInternalFormat internalFormat) {
+            const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            const auto base = static_cast<GLenum>(
+                MG_Util::ShaderTranspiler::ShaderCompiler::SplitCoreEsslBufferImageFormat(requested));
+            if (base == 0) {
+                return GL_UNKNOWN_MGL;
+            }
+            // EXACTLY the arming WidenImageFormatsForEssl uses, for the reason the widening's is:
+            // the shader, the glTexBuffer view and the glBindImageTexture argument must all split
+            // or none of them may, or the shader subscripts a view the buffer is not described as.
+            if (g_GLESCapabilities.SupportsExtendedImageFormats &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
+                return GL_UNKNOWN_MGL;
+            }
+            return base;
         }
     } // namespace TextureImpl
     namespace PrgramImpl {

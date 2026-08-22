@@ -1024,6 +1024,16 @@ namespace MobileGL {
                 return WidenImageFormatsPass::ImageFormatChannelCount(glInternalFormat);
             }
 
+            bool ShaderCompiler::NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
+                                                             bool& outSignedNormalized) {
+                return WidenImageFormatsPass::NormalizedImageCarrierCodes(glInternalFormat, outChannelMax,
+                                                                          outSignedNormalized);
+            }
+
+            Uint ShaderCompiler::SplitCoreEsslBufferImageFormat(Uint glInternalFormat) {
+                return WidenImageFormatsPass::SplitCoreEsslBufferImageFormat(glInternalFormat);
+            }
+
             bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
                                                                   const std::set<String>& blockNames,
                                                                   std::set<String>& flattenedBlockNames,

@@ -2408,12 +2408,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_backendTextureId;
         }
 
-        void BackendTextureObject::RequireImageBindableStorage() {
+        void BackendTextureObject::RequireImageBindableStorage(
+            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (m_imageBindableStorageRequired) {
                 return;
             }
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
+            // Every level this object has ALREADY uploaded has to be replayed, because the
+            // regeneration this transition schedules re-mints the storage in the image carrier and
+            // only uploads levels the shadow still calls dirty - which, for a texture that was
+            // synced before its first glBindImageTexture, is none of them. The new storage would
+            // come out ALLOCATED AND EMPTY, and every texel the application defined before that
+            // bind would be gone: the shader reads zeroes and the shadow still holds the data, so
+            // glGetTexImage (which falls back to the shadow) keeps answering correctly and only
+            // the image loads are wrong. Reached whenever anything syncs the texture first - a
+            // glGetTexImage, a draw that samples it, an FBO attach - which is why it survived so
+            // long: the scenario that binds the image immediately after uploading never sees it.
+            if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
+                const auto levelCount = mipmapObject->GetMipmapLevelCount();
+                for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
+                    for (Uint level = 0; level < levelCount; ++level) {
+                        const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                        if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
+                        if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
+                        mipmapObject->MarkStorageDirty(uploadTarget, level, true);
+                    }
+                }
+            }
             // The storage this re-mints may also be CHANNEL WIDENED (a GL_RG32F image is not
             // bindable on this driver at all, so it becomes a GL_RGBA32F carrying two channels),
             // and a widened texture's sampled view has to answer the channels the logical format
@@ -2716,7 +2738,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // runs after any type conversion (which keeps the component count) has already happened.
         const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize,
                                                 const void* data, SizeT byteSize, GLenum uploadType,
-                                                Vector<Uint8>& widenedData, Bool integerData) {
+                                                Vector<Uint8>& widenedData, Bool integerData,
+                                                Uint32 alphaOneCodeOverride) {
             Uint8 oneBits[8] = {};
             SizeT componentSize = 0;
             // One and two source components as well as three: the image-format widening carries
@@ -2727,6 +2750,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (componentCount == 0 || componentCount > 3 || data == nullptr || byteSize == 0 ||
                 !GetUploadComponentOneBits(uploadType, integerData, oneBits, &componentSize)) {
                 return data;
+            }
+            // ...except where the carrier holds CODES of a normalized value (GL_R16 in a
+            // GL_RGBA16UI), where the transfer type says GL_UNSIGNED_SHORT and neither of that
+            // type's two "ones" is right: the integer 1 is a code for 1/65535 and the saturated
+            // 0xFFFF is only right for the UNSIGNED 16-bit formats, not the signed ones, whose
+            // saturated code is 0x7FFF. The caller passes the channel's own maximum instead.
+            // Written through a value of the component's own width rather than as the low
+            // `componentSize` bytes of the Uint32, so the encoding does not turn on the host's
+            // byte order.
+            if (alphaOneCodeOverride != 0u) {
+                if (componentSize == sizeof(Uint16)) {
+                    const auto one = static_cast<Uint16>(alphaOneCodeOverride);
+                    Memcpy(oneBits, &one, sizeof(one));
+                } else if (componentSize == sizeof(Uint32)) {
+                    Memcpy(oneBits, &alphaOneCodeOverride, sizeof(alphaOneCodeOverride));
+                } else if (componentSize == sizeof(Uint8)) {
+                    const auto one = static_cast<Uint8>(alphaOneCodeOverride);
+                    Memcpy(oneBits, &one, sizeof(one));
+                }
             }
 
             const SizeT srcTexelBytes = componentSize * componentCount;
@@ -2901,19 +2943,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return widenedData.data();
         }
 
+        // The rgb10_a2 / rgb10_a2ui shadow split into the four GL_UNSIGNED_SHORT channel CODES its
+        // GL_RGBA16UI carrier is uploaded as. GL_UNSIGNED_INT_2_10_10_10_REV puts the FIRST
+        // component in the LOW bits (that is what REV means), so red is bits 0-9, green 10-19,
+        // blue 20-29 and alpha 30-31.
+        //
+        // The same split serves both formats: an rgb10_a2ui channel's code IS its value, and an
+        // rgb10_a2 channel's code is the numerator of value = code / (2^b - 1) that the shader-side
+        // unpack divides out. Neither is scaled here - the carrier holds the format's own bits.
+        //
+        // Sized from the LEVEL, not the source, for the reason PrepareChannelWidenedUpload is: the
+        // driver reads a full width*height*depth*4 shorts for the transfer it was handed.
+        const void* PreparePackedIntWidenedUpload(const IntVec3& texelSize, const void* data,
+                                                  SizeT byteSize, Vector<Uint8>& widenedData) {
+            constexpr SizeT kSourceTexelBytes = sizeof(Uint32);
+            if (data == nullptr || byteSize < kSourceTexelBytes) {
+                return data;
+            }
+            const SizeT texelCount = static_cast<SizeT>(std::max(texelSize.x(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.y(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.z(), 1));
+            if (texelCount == 0) {
+                return data;
+            }
+            const SizeT copyTexelCount = std::min(texelCount, byteSize / kSourceTexelBytes);
+
+            widenedData.assign(texelCount * 4u * sizeof(Uint16), 0);
+            const auto* src = static_cast<const Uint8*>(data);
+            auto* dst = reinterpret_cast<Uint16*>(widenedData.data());
+            for (SizeT i = 0; i < texelCount; ++i, dst += 4) {
+                Uint32 packed = 0;
+                if (i < copyTexelCount) {
+                    // Through a memcpy rather than a Uint32 read of `src`: the shadow is a byte
+                    // buffer with no alignment promise of its own.
+                    Memcpy(&packed, src + i * kSourceTexelBytes, sizeof(packed));
+                }
+                dst[0] = static_cast<Uint16>(packed & 0x3FFu);
+                dst[1] = static_cast<Uint16>((packed >> 10u) & 0x3FFu);
+                dst[2] = static_cast<Uint16>((packed >> 20u) & 0x3FFu);
+                dst[3] = static_cast<Uint16>((packed >> 30u) & 0x3u);
+            }
+            return widenedData.data();
+        }
+
         // The transfer half of the image-format widening: an image-bindable texture whose ES
         // storage was widened to a core carrier is described to the driver as a four-component
         // transfer, so its narrower client data has to be repacked the same way the three-channel
         // colour-renderable widening repacks its own.
         //
-        // Two shapes, because the carriers come in two kinds. Seventeen of the eighteen keep the
-        // frontend format's component TYPE and only add channels, so padding the shadow out to
-        // four components is the whole conversion. r11f_g11f_b10f does not: its shadow is one
-        // PACKED 32-bit word per texel and its carrier is GL_RGBA16F, so the word has to be
-        // DECODED into four floats. Reading it as three components of the carrier's type - what
-        // the repack below would do - would take twelve bytes from a four-byte texel and shear
-        // the level, which is what the allFormats LOAD walkers see and the STORE ones do not (a
-        // store overwrites every texel the upload got wrong).
+        // Three shapes, because the carriers come in three kinds. Most of them keep the frontend
+        // format's component TYPE and only add channels, so padding the shadow out to four
+        // components is the whole conversion. The two PACKED formats do not: their shadow is one
+        // 32-bit word per texel, so the word has to be split - into four floats for
+        // r11f_g11f_b10f's GL_RGBA16F, into four shorts for rgb10_a2ui's GL_RGBA16UI. Reading such
+        // a word as components of the carrier's type - what the repack below would do - takes
+        // twelve or sixteen bytes from a four-byte texel and shears the level, which is what the
+        // allFormats LOAD walkers see and the STORE ones do not (a store overwrites every texel
+        // the upload got wrong).
         //
         // Composes with PrepareFallbackUpload rather than replacing it, and the composition is a
         // no-op by construction: none of the widened formats is one GetWidenableClientComponentCount
@@ -2926,14 +3012,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!widening || widening.SourceChannels == 0 || widening.SourceChannels > 4) {
                 return data;
             }
-            if (widening.PackedFloatSource) {
+            switch (widening.SourceEncoding) {
+            case TextureImpl::ImageWidenSourceEncoding::PackedFloat11f11f10f:
                 return PreparePackedFloatWidenedUpload(texelSize, data, byteSize, widenedData);
+            case TextureImpl::ImageWidenSourceEncoding::PackedInt2101010Rev:
+                return PreparePackedIntWidenedUpload(texelSize, data, byteSize, widenedData);
+            case TextureImpl::ImageWidenSourceEncoding::Components:
+                break;
             }
             if (widening.SourceChannels == 4) {
                 return data;
             }
             return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
-                                               widenedData, widening.IntegerData);
+                                               widenedData, widening.IntegerData,
+                                               widening.CarriesNormalizedCodes() ? widening.ChannelMax[3] : 0u);
         }
 
         // Overwrites the (internal format, format, type) triple GenerateTextureFormatInfo chose
@@ -3730,6 +3822,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GLenum glInternalFormat, glType, glFormat;
                 TextureImpl::GenerateTextureFormatInfo(textureBufferObject->GetFormat(), &glInternalFormat, &glFormat,
                                                        &glType, TextureTarget::TextureBuffer);
+                // The view half of the buffer-image SPLIT. A buffer texture has no storage of its
+                // own to widen, but the VIEW its format describes can be re-described one
+                // component at a time over the same bytes - rg32f over N texels is r32f over 2N -
+                // and WidenImageFormatsPass rewrites every access to subscript it that way. Only
+                // for a texture that is actually image-bound: a sampled-only buffer texture keeps
+                // the format the application asked for (see GetImageBindableBufferSplitFormat).
+                if (m_imageBindableStorageRequired) {
+                    if (const GLenum splitFormat =
+                            TextureImpl::GetImageBindableBufferSplitFormat(textureBufferObject->GetFormat());
+                        splitFormat != GL_UNKNOWN_MGL) {
+                        glInternalFormat = splitFormat;
+                    }
+                }
 
                 if (needsRegeneration) {
                     // Desktop GL has had buffer textures core since 3.1 and MobileGL advertises a
@@ -5395,6 +5500,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // here whose carrier has a different per-channel layout. See
                 // WidenImageFormatsPass.h.
                 case glslang::ElfR11fG11fB10f: return 0x8C3A; // GL_R11F_G11F_B10F
+                // 10/10/10/2 unsigned INTEGER channels in an rgba16ui: same component type, same
+                // channel count, every value representable. Only the transfer is re-encoded.
+                case glslang::ElfRgb10a2ui: return 0x906F; // GL_RGB10_A2UI
+                // The seven NORMALIZED formats, carried in an rgba16ui as their own channel CODES.
+                // These are the entries whose carrier changes the shader-visible type as well as
+                // the qualifier (image2D becomes uimage2D), so every access through them is
+                // wrapped in the GL 4.6 2.3.5 conversion - see WidenImageFormatsPass.h.
+                case glslang::ElfRgba16: return 0x805B;      // GL_RGBA16
+                case glslang::ElfRg16: return 0x822C;        // GL_RG16
+                case glslang::ElfR16: return 0x822A;         // GL_R16
+                case glslang::ElfRgb10A2: return 0x8059;     // GL_RGB10_A2
+                case glslang::ElfRgba16Snorm: return 0x8F9B; // GL_RGBA16_SNORM
+                case glslang::ElfRg16Snorm: return 0x8F99;   // GL_RG16_SNORM
+                case glslang::ElfR16Snorm: return 0x8F98;    // GL_R16_SNORM
                 default:
                     return 0;
                 }

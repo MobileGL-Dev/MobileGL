@@ -65,12 +65,18 @@ namespace MobileGL {
             // the SPIRV-Cross throw takes the whole stage, every image uniform declared beside it
             // included.
             //
-            // The other EIGHT (rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm, rg16_snorm,
-            // r16_snorm) are deliberately NOT widened here: core ESSL has no 16-bit normalized
-            // format at all and no 10-bit one, so every carrier for them either loses range or
-            // changes the component TYPE the texture a `sampler2D` would read presents. They keep
-            // the honest "no GLSL ES spelling" diagnostic instead of silently changing an
-            // application's numeric domain.
+            // rgb10_a2ui takes rgba16ui for a simpler reason still: its channels are 10, 10, 10 and
+            // 2 bits of UNSIGNED INTEGER, and rgba16ui gives each of them sixteen. Same component
+            // type, same channel COUNT, every value representable - so no access is rewritten at
+            // all, and only the TRANSFER differs (its shadow is one packed 32-bit word per texel,
+            // which the upload splits into four shorts).
+            //
+            // The other SEVEN (rgb10_a2, rgba16, rg16, r16, rgba16_snorm, rg16_snorm, r16_snorm)
+            // are deliberately NOT widened here: core ESSL has no 16-bit normalized format at all
+            // and no 10-bit one, so every carrier for them either loses range or changes the
+            // component TYPE the texture a `sampler2D` would read presents. They keep the honest
+            // "no GLSL ES spelling" diagnostic instead of silently changing an application's
+            // numeric domain.
             //
             // MUST MOVE WITH THE OTHER TWO LAYERS. The widening is not a shader-local rewrite: the
             // ES texture behind the image has to be allocated in the carrier format too, and
@@ -129,6 +135,31 @@ namespace MobileGL {
                 // Channels the GL internal format really has (1-4), or 0 when it is not one of the
                 // forty image formats. The count the widened accesses are masked back to.
                 static Uint ImageFormatChannelCount(Uint glInternalFormat);
+
+                // Whether the carrier holds this format's channels as the INTEGER CODES of a
+                // NORMALIZED value rather than as the values themselves - true for the seven
+                // 16-bit and 10-bit normalized formats and nothing else. `outChannelMax` takes the
+                // largest code each channel can hold (2^b - 1 unsigned, 2^(b-1) - 1 signed), which
+                // is the denominator of GL 4.6 2.3.5 for that channel; `outSignedNormalized` says
+                // which of the two conversions applies.
+                //
+                // DirectGLES asks this on both sides of the transfer: the upload pads a missing
+                // alpha with outChannelMax[3] rather than the transfer type's own 1 (through a
+                // uint carrier "one" is the saturated CODE, not the integer one), and
+                // glGetTexImage divides the codes back out, because the ES storage is an integer
+                // texture the client still expects to read as floats.
+                static bool NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
+                                                        bool& outSignedNormalized);
+
+                // The core-ESSL single-channel format a non-core BUFFER image is SPLIT into, or 0
+                // when the format needs no split or has no core single-channel base. A buffer
+                // image cannot be WIDENED - its texels are the application's buffer object, which
+                // has no room to restride - but rg32f over N texels and r32f over 2N texels
+                // describe exactly the same bytes, so the shader reads and writes each component
+                // by itself at 2i and 2i+1 instead. DirectGLES asks this for glTexBuffer's
+                // internal format and for glBindImageTexture's, which have to name the same view
+                // the shader addresses.
+                static Uint SplitCoreEsslBufferImageFormat(Uint glInternalFormat);
 
                 static spvtools::Optimizer::PassToken CreateWidenImageFormatsPass(
                     bool onlyFormatsSpirvCrossRefusesToPrint = false);

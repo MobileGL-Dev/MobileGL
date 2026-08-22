@@ -89,6 +89,7 @@ namespace {
     struct StorageImageType {
         Uint32 resultId = 0u;
         Uint32 format = 0u;
+        Uint32 sampledTypeId = 0u;
     };
 
     Vector<StorageImageType> CollectStorageImageTypes(const Vector<Uint32>& spirv) {
@@ -96,9 +97,25 @@ namespace {
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             if (opcode != spv::Op::OpTypeImage || wordCount < 9u) return;
             if (words[7] != 2u) return;
-            types.push_back(StorageImageType{words[1], words[8]});
+            types.push_back(StorageImageType{words[1], words[8], words[2]});
         });
         return types;
+    }
+
+    // "float" / "uint" / "int" / "" for a scalar numeric type id, which is the one thing that says
+    // whether a declaration is still an image2D or has become a uimage2D.
+    String ScalarTypeSpellingOf(const Vector<Uint32>& spirv, Uint32 typeId) {
+        String spelling;
+        ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
+            if (words[1] != typeId) return;
+            // OpTypeFloat words: 1 result id, 2 width. OpTypeInt adds 3 signedness.
+            if (opcode == spv::Op::OpTypeFloat && wordCount >= 3u) {
+                spelling = "float";
+            } else if (opcode == spv::Op::OpTypeInt && wordCount >= 4u) {
+                spelling = words[3] != 0u ? "int" : "uint";
+            }
+        });
+        return spelling;
     }
 
     // OpVectorShuffle words: 0 opcode/count, 1 result type, 2 result id, 3 vector 1, 4 vector 2,
@@ -243,8 +260,9 @@ void main() {
 }
 )";
 
-    // rg32f again, but as a BUFFER image. Same format, same carrier on paper - and it must be
-    // left alone anyway, because a buffer image's texels are the application's buffer object.
+    // rg32f again, but as a BUFFER image. Same format, and NOT the same emulation: a buffer
+    // image's texels are the application's buffer object, so there is nothing to reallocate a
+    // carrier in - but the same bytes can be VIEWED as twice as many r32f texels, which is exact.
     const char* const kRg32fBufferLoadStore = R"(#version 430 core
 layout(rg32f, binding = 0) uniform imageBuffer img;
 out vec4 fragColor;
@@ -255,15 +273,76 @@ void main() {
 }
 )";
 
-    // rg16 is one of the EIGHT with no core carrier at all - core ESSL has no 16-bit normalized
-    // format, so every candidate loses range or changes the component type the texture presents.
-    // It must be left alone and keep the honest "no GLSL ES spelling" diagnostic instead.
+    // ...and one that asks the image how big it is, which the split has to halve: the ES view has
+    // twice the texels the application's format describes.
+    const char* const kRg32fBufferSize = R"(#version 430 core
+layout(rg32f, binding = 0) uniform imageBuffer img;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(float(imageSize(img)));
+}
+)";
+
+    // rg16f as a buffer image: two channels of 16-bit float, whose single-channel base r16f core
+    // ESSL does not have. Nothing to split it into, so it keeps the honest failure.
+    const char* const kRg16fBufferLoadStore = R"(#version 430 core
+layout(rg16f, binding = 0) uniform imageBuffer img;
+out vec4 fragColor;
+void main() {
+    vec4 texel = imageLoad(img, int(gl_FragCoord.x));
+    imageStore(img, int(gl_FragCoord.x), vec4(1.0, 2.0, 3.0, 4.0));
+    fragColor = texel;
+}
+)";
+
+    // rgb10_a2ui: FOUR unsigned-integer channels of 10, 10, 10 and 2 bits, carried in an rgba16ui
+    // that gives each of them sixteen. The only widening whose carrier has as many channels as the
+    // original, so it is the only one where GL leaves NOTHING to pin and both accesses must come
+    // out exactly as glslang emitted them.
+    const char* const kRgb10A2uiLoadStore = R"(#version 430 core
+layout(rgb10_a2ui, binding = 0) uniform uimage2D img;
+out vec4 fragColor;
+void main() {
+    uvec4 texel = imageLoad(img, ivec2(gl_FragCoord.xy));
+    imageStore(img, ivec2(gl_FragCoord.xy), uvec4(7u, 8u, 9u, 3u));
+    fragColor = vec4(texel);
+}
+)";
+
+    // rg16: TWO unsigned-normalized 16-bit channels, which core ESSL has no image format of any
+    // width for. Carried as its own CODES in an rgba16ui, so the declaration comes out a
+    // uimage2D and every access is wrapped in GL 4.6 2.3.5 as well as masked.
     const char* const kRg16LoadStore = R"(#version 430 core
 layout(rg16, binding = 0) uniform image2D img;
 out vec4 fragColor;
 void main() {
     vec4 texel = imageLoad(img, ivec2(gl_FragCoord.xy));
-    imageStore(img, ivec2(gl_FragCoord.xy), vec4(1.0, 2.0, 3.0, 4.0));
+    imageStore(img, ivec2(gl_FragCoord.xy), vec4(0.25, 0.5, 0.75, 1.0));
+    fragColor = texel;
+}
+)";
+
+    // rgba16_snorm: the signed twin, whose code is a two's-complement 16-bit integer sitting in an
+    // UNSIGNED carrier channel - so the load has to sign-extend it back and the store has to mask
+    // it down, neither of which the unsigned conversion does.
+    const char* const kRgba16SnormLoadStore = R"(#version 430 core
+layout(rgba16_snorm, binding = 0) uniform image2D img;
+out vec4 fragColor;
+void main() {
+    vec4 texel = imageLoad(img, ivec2(gl_FragCoord.xy));
+    imageStore(img, ivec2(gl_FragCoord.xy), vec4(1.0, -1.0, 0.5, -0.5));
+    fragColor = texel;
+}
+)";
+
+    // rgb10_a2: FOUR normalized channels that are not all the same width, so its denominator is
+    // (1023, 1023, 1023, 3) and one number would be wrong for a quarter of every texel.
+    const char* const kRgb10A2LoadStore = R"(#version 430 core
+layout(rgb10_a2, binding = 0) uniform image2D img;
+out vec4 fragColor;
+void main() {
+    vec4 texel = imageLoad(img, ivec2(gl_FragCoord.xy));
+    imageStore(img, ivec2(gl_FragCoord.xy), vec4(0.25, 0.5, 0.75, 1.0));
     fragColor = texel;
 }
 )";
@@ -273,7 +352,7 @@ void main() {
 // the shader rewrite, the ES texture storage and the glBindImageTexture argument. If it drifts
 // the three stop agreeing, and a narrow texture read through a wide image goes out of bounds
 // silently on every driver tested.
-TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
+TEST(WidenImageFormats, TwentySixNonCoreFormatsHaveALosslessCoreCarrier) {
     struct Case {
         Uint requested;
         Uint carrier;
@@ -302,6 +381,19 @@ TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
         // is e5m5 against a half's s1e5m10, so the carrier is still lossless - and three channels,
         // so the mask has to pin only alpha.
         {0x8C3A, 0x881A, 3, "GL_R11F_G11F_B10F -> GL_RGBA16F"},
+        // FOUR channels: 10, 10, 10 and 2 bits of unsigned integer all fit in sixteen, so nothing
+        // is masked at all and only the packed TRANSFER is re-encoded.
+        {0x906F, 0x8D76, 4, "GL_RGB10_A2UI -> GL_RGBA16UI"},
+        // The seven NORMALIZED formats, carried as their own channel CODES in the same rgba16ui.
+        // These are the entries whose carrier changes the shader-visible TYPE as well, which is
+        // why every access through them is wrapped in GL 4.6 2.3.5 rather than only masked.
+        {0x805B, 0x8D76, 4, "GL_RGBA16 -> GL_RGBA16UI"},
+        {0x822C, 0x8D76, 2, "GL_RG16 -> GL_RGBA16UI"},
+        {0x822A, 0x8D76, 1, "GL_R16 -> GL_RGBA16UI"},
+        {0x8059, 0x8D76, 4, "GL_RGB10_A2 -> GL_RGBA16UI"},
+        {0x8F9B, 0x8D76, 4, "GL_RGBA16_SNORM -> GL_RGBA16UI"},
+        {0x8F99, 0x8D76, 2, "GL_RG16_SNORM -> GL_RGBA16UI"},
+        {0x8F98, 0x8D76, 1, "GL_R16_SNORM -> GL_RGBA16UI"},
     };
     for (const Case& testCase : cases) {
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(testCase.requested), testCase.carrier)
@@ -317,7 +409,7 @@ TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
     }
 }
 
-TEST(WidenImageFormats, CoreFormatsAndTheEightWithoutALosslessCarrierAreRefused) {
+TEST(WidenImageFormats, CoreFormatsAreRefused) {
     // The thirteen GLSL ES already has: nothing to carry.
     for (const Uint coreFormat : {0x8814u /*RGBA32F*/, 0x881Au /*RGBA16F*/, 0x822Eu /*R32F*/,
                                   0x8058u /*RGBA8*/, 0x8F97u /*RGBA8_SNORM*/, 0x8D82u /*RGBA32I*/,
@@ -327,22 +419,61 @@ TEST(WidenImageFormats, CoreFormatsAndTheEightWithoutALosslessCarrierAreRefused)
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(coreFormat), 0u)
             << "core format 0x" << std::hex << coreFormat;
     }
-    // The eight with no LOSSLESS core carrier: core ESSL has no 16-bit normalized format and no
-    // 10-bit one, so every candidate for these either loses range or changes the component type
-    // the texture presents to anything that samples it. Deliberately left to the honest
-    // diagnostic. r11f_g11f_b10f is NOT among them - rgba16f holds every value it can, so it is
-    // carried above.
-    for (const Uint hardFormat : {0x8059u /*RGB10_A2*/,
-                                  0x906Fu /*RGB10_A2UI*/, 0x805Bu /*RGBA16*/, 0x822Cu /*RG16*/,
-                                  0x822Au /*R16*/, 0x8F9Bu /*RGBA16_SNORM*/, 0x8F99u /*RG16_SNORM*/,
-                                  0x8F98u /*R16_SNORM*/}) {
-        EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(hardFormat), 0u)
-            << "format without an exact carrier 0x" << std::hex << hardFormat;
-    }
     // Not an image format at all.
     EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(0x8051 /*GL_RGB8*/), 0u);
     EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(0x8051 /*GL_RGB8*/), 0u);
     EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(0), 0u);
+}
+
+// The denominators of GL 4.6 2.3.5, which is the whole difference between a carrier that holds a
+// format's VALUES and one that holds its CODES. Both halves of DirectGLES's transfer read them
+// (the upload's synthetic alpha and glGetTexImage's divide), and so does the shader rewrite, so a
+// wrong entry here is wrong in three places at once and consistently - which is exactly the kind
+// of error a round-trip test cannot see.
+TEST(WidenImageFormats, OnlyTheNormalizedFormatsCarryCodesAndTheirDenominatorsAreTheFormatsOwn) {
+    struct Case {
+        Uint format;
+        Uint32 channelMax[4];
+        bool isSigned;
+        const char* name;
+    };
+    const Case cases[] = {
+        {0x805B, {65535u, 65535u, 65535u, 65535u}, false, "GL_RGBA16"},
+        {0x822C, {65535u, 65535u, 65535u, 65535u}, false, "GL_RG16"},
+        {0x822A, {65535u, 65535u, 65535u, 65535u}, false, "GL_R16"},
+        // The one format whose channels are not all the same width, and the reason the answer is
+        // four numbers rather than one: a two-bit alpha saturates at 3, not at 1023.
+        {0x8059, {1023u, 1023u, 1023u, 3u}, false, "GL_RGB10_A2"},
+        {0x8F9B, {32767u, 32767u, 32767u, 32767u}, true, "GL_RGBA16_SNORM"},
+        {0x8F99, {32767u, 32767u, 32767u, 32767u}, true, "GL_RG16_SNORM"},
+        {0x8F98, {32767u, 32767u, 32767u, 32767u}, true, "GL_R16_SNORM"},
+    };
+    for (const Case& testCase : cases) {
+        Uint32 channelMax[4] = {0u, 0u, 0u, 0u};
+        bool isSigned = !testCase.isSigned;
+        EXPECT_TRUE(ShaderCompiler::NormalizedImageCarrierCodes(testCase.format, channelMax, isSigned))
+            << testCase.name;
+        for (Uint channel = 0; channel < 4; ++channel) {
+            EXPECT_EQ(channelMax[channel], testCase.channelMax[channel])
+                << testCase.name << " channel " << channel;
+        }
+        EXPECT_EQ(isSigned, testCase.isSigned) << testCase.name;
+    }
+
+    // Everything else keeps its own component type in the carrier, so nothing is converted: an
+    // rg8's carrier channel really is an 8-bit unsigned normalized one, and an rgb10_a2ui's
+    // channel really does hold the integer the shader stored.
+    for (const Uint direct : {0x8230u /*RG32F*/, 0x8229u /*R8*/, 0x8F94u /*R8_SNORM*/,
+                              0x8232u /*R8UI*/, 0x8C3Au /*R11F_G11F_B10F*/, 0x906Fu /*RGB10_A2UI*/,
+                              0x8814u /*RGBA32F*/, 0x8051u /*RGB8, not an image format*/}) {
+        Uint32 channelMax[4] = {7u, 7u, 7u, 7u};
+        bool isSigned = true;
+        EXPECT_FALSE(ShaderCompiler::NormalizedImageCarrierCodes(direct, channelMax, isSigned))
+            << "format 0x" << std::hex << direct;
+        for (Uint channel = 0; channel < 4; ++channel) {
+            EXPECT_EQ(channelMax[channel], 7u) << "a refused format must leave the output alone";
+        }
+    }
 }
 
 TEST(WidenImageFormats, TwoChannelFloatImageBecomesRgba32fWithBothAccessesMasked) {
@@ -429,6 +560,38 @@ TEST(WidenImageFormats, ThreeChannelPackedFloatImageBecomesRgba16fWithOnlyAlphaP
     EXPECT_TRUE(HasComponents(*loadMask, {0u, 1u, 2u, 7u}));
 }
 
+// The four-channel case, which is the whole of rgb10_a2ui's shader-side emulation: the carrier has
+// as many channels as the original, every value of every channel fits, and GL therefore defines
+// NOTHING about a surplus channel because there is none. So both accesses have to come out
+// untouched - a pass that masked here would replace the alpha the application stored (0..3 of a
+// two-bit channel, which the CTS walker writes as 3) with the constant 1 and drop blue outright.
+TEST(WidenImageFormats, FourChannelIntegerImageBecomesRgba16uiWithNeitherAccessMasked) {
+    const Vector<Uint32> spirv = CompileFragment(kRgb10A2uiLoadStore);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    const auto beforeTypes = CollectStorageImageTypes(spirv);
+    ASSERT_EQ(beforeTypes.size(), 1u);
+    EXPECT_EQ(beforeTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgb10a2ui));
+
+    Vector<Uint32> widened;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
+    ASSERT_FALSE(widened.empty());
+    EXPECT_TRUE(Validates(widened));
+    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(widened));
+
+    const auto afterTypes = CollectStorageImageTypes(widened);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba16ui));
+
+    // The declaration moved and nothing else did.
+    EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size())
+        << "a carrier with as many channels as the original must add no mask";
+    EXPECT_EQ(CollectImageReadResultIds(widened).size(), CollectImageReadResultIds(spirv).size())
+        << "the imageLoad was duplicated for a rewrite that has nothing to rewrite";
+}
+
 // ...and the same module through the emitter, which is where the failure actually showed: ESSL has
 // no `r11f_g11f_b10f` token, SPIRV-Cross throws for it, and the throw took every image uniform
 // declared in the same stage with it.
@@ -451,37 +614,157 @@ TEST(WidenImageFormats, PackedFloatImageOnlyReachesEsslThroughTheCarrier) {
     EXPECT_EQ(after.text.find("r11f_g11f_b10f"), String::npos) << after.text;
 }
 
-// A BUFFER image is declined whatever its format, and the format alone cannot say so - rg32f is
-// carried exactly when it is an image2D. What makes the difference is that widening REALLOCATES
-// the texture behind the image in the carrier, and a buffer image has no texture storage to
-// reallocate: its texels are the application's buffer object, usually also a vertex, index or
-// storage buffer. Widening one leaves the shader striding 16 bytes through 8-byte texels - the
-// measured symptom on an Adreno 830 was a 32-byte GL_RG32F buffer reading back
+// A BUFFER image is never WIDENED, whatever its format, and the format alone cannot say so -
+// rg32f is carried in an rgba32f when it is an image2D. What makes the difference is that widening
+// REALLOCATES the texture behind the image in the carrier, and a buffer image has no texture
+// storage to reallocate: its texels are the application's buffer object, usually also a vertex,
+// index or storage buffer. Widening one leaves the shader striding 16 bytes through 8-byte texels
+// - the measured symptom on an Adreno 830 was a 32-byte GL_RG32F buffer reading back
 // [1,100] [0,1] [2,100] [0,1] instead of [1,100] [2,100] [3,100] [4,100], with the last two texels
 // written past the end of the application's buffer.
-TEST(WidenImageFormats, BufferImagesAreDeclinedEvenWhenTheirFormatHasACarrier) {
+//
+// It is SPLIT instead, which is the opposite move: the bytes stay exactly where they are and the
+// SUBSCRIPT changes. rg32f over N texels and r32f over 2N texels describe the same memory, so
+// component j of texel i is texel 2i + j, and the base format is one of the thirteen ES has.
+TEST(WidenImageFormats, BufferImagesAreSplitByTheSubscriptRatherThanWidened) {
     const Vector<Uint32> spirv = CompileFragment(kRg32fBufferLoadStore);
+    ASSERT_FALSE(spirv.empty());
+
+    const auto beforeTypes = CollectStorageImageTypes(spirv);
+    ASSERT_EQ(beforeTypes.size(), 1u);
+    EXPECT_EQ(beforeTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rg32f))
+        << "the fixture stopped declaring the format this test is about";
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    Vector<Uint32> split;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, split, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
+    ASSERT_FALSE(split.empty());
+    EXPECT_TRUE(Validates(split));
+    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(split));
+
+    const auto afterTypes = CollectStorageImageTypes(split);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::R32f))
+        << "the base format is the SINGLE-channel one, not the four-channel carrier a 2D image "
+           "would take - a buffer image that gained texel width would run off the end of the "
+           "application's buffer";
+
+    // ONE imageLoad became TWO, and ONE imageStore became two as well: each component of the
+    // original texel is its own texel of the base view.
+    EXPECT_EQ(CollectImageReadResultIds(split).size(), 2u * CollectImageReadResultIds(spirv).size());
+    EXPECT_EQ(CollectImageWriteTexelIds(split).size(), 2u * CollectImageWriteTexelIds(spirv).size());
+
+    // ...and the store's two texels are the two components, not the same one twice.
+    const auto shuffles = CollectVectorShuffles(split);
+    const auto texelIds = CollectImageWriteTexelIds(split);
+    ASSERT_EQ(texelIds.size(), 2u);
+    const VectorShuffle* firstTexel = FindShuffleWithResult(shuffles, texelIds[0]);
+    const VectorShuffle* secondTexel = FindShuffleWithResult(shuffles, texelIds[1]);
+    ASSERT_NE(firstTexel, nullptr);
+    ASSERT_NE(secondTexel, nullptr);
+    EXPECT_TRUE(HasComponents(*firstTexel, {0u, 4u, 4u, 7u}))
+        << "expected (r, 0, 0, 1) - component 0 of the texel into a one-channel base format";
+    EXPECT_TRUE(HasComponents(*secondTexel, {1u, 4u, 4u, 7u}))
+        << "expected (g, 0, 0, 1) - component 1 into the NEXT base texel";
+
+    // The subscript arithmetic itself: one multiply and one add per access.
+    Uint32 multiplies = 0;
+    Uint32 adds = 0;
+    ForEachInstruction(split, [&](spv::Op opcode, const Uint32*, Uint32) {
+        if (opcode == spv::Op::OpIMul) ++multiplies;
+        if (opcode == spv::Op::OpIAdd) ++adds;
+    });
+    EXPECT_GE(multiplies, 2u) << "2i, once for the load and once for the store";
+    EXPECT_GE(adds, 2u) << "2i + 1, once for the load and once for the store";
+
+    // And what reaches the driver names a format ES has.
+    const EsslAttempt after = EmitEssl(split);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    EXPECT_NE(after.text.find("r32f"), String::npos) << after.text;
+    EXPECT_EQ(after.text.find("rg32f"), String::npos)
+        << "the token no ES driver accepts is still in the emitted source:\n"
+        << after.text;
+}
+
+// imageSize() has to be halved with everything else: the ES view really does have twice the texels
+// the application's format describes, so a shader that walks the buffer by its own size would run
+// off the end of it - or, on a well-behaved driver, spend half its invocations past the data.
+TEST(WidenImageFormats, ASplitBufferImageReportsTheSizeItsOwnFormatDescribes) {
+    const Vector<Uint32> spirv = CompileFragment(kRg32fBufferSize);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    Vector<Uint32> split;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, split, false, true));
+    ASSERT_FALSE(split.empty());
+    EXPECT_TRUE(Validates(split));
+
+    Uint32 sizeQueries = 0;
+    Uint32 divisions = 0;
+    ForEachInstruction(split, [&](spv::Op opcode, const Uint32*, Uint32) {
+        if (opcode == spv::Op::OpImageQuerySize) ++sizeQueries;
+        if (opcode == spv::Op::OpSDiv || opcode == spv::Op::OpUDiv) ++divisions;
+    });
+    EXPECT_EQ(sizeQueries, 1u) << "the query itself is not duplicated, only divided";
+    EXPECT_EQ(divisions, 1u);
+
+    const EsslAttempt after = EmitEssl(split);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    EXPECT_NE(after.text.find("imageSize"), String::npos) << after.text;
+    EXPECT_NE(after.text.find("/ 2"), String::npos)
+        << "the reported size must be the application's, not the base view's:\n"
+        << after.text;
+}
+
+// A buffer image whose base format is NOT core ESSL has nothing to split into, and must keep the
+// honest "no GLSL ES spelling" failure rather than take a wider one: rg16f's components are 16-bit
+// floats and core ESSL has no r16f, so a split would have to change the component type.
+TEST(WidenImageFormats, ABufferImageWithNoCoreBaseFormatIsLeftAlone) {
+    const Vector<Uint32> spirv = CompileFragment(kRg16fBufferLoadStore);
     ASSERT_FALSE(spirv.empty());
 
     const auto types = CollectStorageImageTypes(spirv);
     ASSERT_EQ(types.size(), 1u);
-    EXPECT_EQ(types.front().format, static_cast<Uint32>(spv::ImageFormat::Rg32f))
-        << "the fixture stopped declaring the format this test is about";
+    EXPECT_EQ(types.front().format, static_cast<Uint32>(spv::ImageFormat::Rg16f));
 
-    // The gate says no, so the optimizer is never even run for it...
     EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
-    // ...and running it anyway changes nothing, which is what keeps the gate and the pass from
-    // disagreeing about a module.
-    Vector<Uint32> widened;
-    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
-                                             /*enableSpirvValidation=*/true);
-    EXPECT_TRUE(widened.empty() || widened == spirv) << "a buffer image was rewritten";
+    Vector<Uint32> split;
+    ShaderCompiler::WidenImageFormatsForEssl(spirv, split, false, true);
+    if (!split.empty()) {
+        const auto afterTypes = CollectStorageImageTypes(split);
+        ASSERT_EQ(afterTypes.size(), 1u);
+        EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rg16f));
+    }
+}
 
-    // The same format in a NON-buffer image still widens, or this test would pass for the wrong
-    // reason - a widening that had simply stopped working.
-    const Vector<Uint32> planar = CompileFragment(kRg32fLoadStore);
-    ASSERT_FALSE(planar.empty());
-    EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(planar));
+// The table the three layers share, from the other side: only the 32-bit component family has a
+// core single-channel base, and a two-dimensional image never takes this route.
+TEST(WidenImageFormats, OnlyTheThirtyTwoBitTwoChannelFormatsSplitAsBufferImages) {
+    struct Case {
+        Uint format;
+        Uint base;
+        const char* name;
+    };
+    const Case cases[] = {
+        {0x8230, 0x822E, "GL_RG32F -> GL_R32F"},
+        {0x823B, 0x8235, "GL_RG32I -> GL_R32I"},
+        {0x823C, 0x8236, "GL_RG32UI -> GL_R32UI"},
+    };
+    for (const Case& testCase : cases) {
+        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(testCase.format), testCase.base)
+            << testCase.name;
+        EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(testCase.base)) << testCase.name;
+        EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(testCase.base), 1u) << testCase.name;
+    }
+    // No core single-channel base of the right component type, so no split.
+    for (const Uint refused : {0x822Fu /*RG16F*/, 0x8239u /*RG16I*/, 0x823Au /*RG16UI*/, 0x822Bu /*RG8*/,
+                               0x8F95u /*RG8_SNORM*/, 0x822Cu /*RG16*/, 0x8237u /*RG8I*/, 0x8238u /*RG8UI*/,
+                               // Already core, or four-channel, or not an image format at all.
+                               0x8814u /*RGBA32F*/, 0x822Eu /*R32F*/, 0x8051u /*RGB8*/, 0u}) {
+        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(refused), 0u)
+            << "format 0x" << std::hex << refused;
+    }
 }
 
 TEST(WidenImageFormats, SingleChannelUnsignedImageBecomesRgba8uiWithBothAccessesMasked) {
@@ -631,25 +914,132 @@ TEST(WidenImageFormats, CoreFormatModuleIsHandedBackUntouched) {
     }
 }
 
-TEST(WidenImageFormats, FormatWithoutAnExactCarrierIsLeftAlone) {
+// The normalized carrier, which is the one that does not merely re-DECLARE the image: a 16-bit
+// normalized channel has no core ESSL format of any width behind it, and no FLOAT carrier is
+// honest either (a half has eleven mantissa bits against its sixteen), so what the rgba16ui holds
+// is the format's own CODE. That changes the shader-visible TYPE, which is the thing to check -
+// an image2D whose format moved to rgba16ui but whose sampled type stayed float is not merely
+// wrong, it is invalid SPIR-V, and a module that kept the float type while the STORAGE became an
+// integer texture would read whole texels as garbage.
+TEST(WidenImageFormats, NormalizedImageBecomesAUimageWhoseAccessesConvertItsCodes) {
     const Vector<Uint32> spirv = CompileFragment(kRg16LoadStore);
     ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
 
     const auto beforeTypes = CollectStorageImageTypes(spirv);
     ASSERT_EQ(beforeTypes.size(), 1u);
     EXPECT_EQ(beforeTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rg16));
-
-    // rg16 has no core format with 16-bit unsigned-normalized channels behind it. Anything wider
-    // would requantize differently from what the application asked for, so the pass declines and
-    // CollectImageFormatBakeInputs reports the format as unspellable instead.
-    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+    EXPECT_EQ(ScalarTypeSpellingOf(spirv, beforeTypes.front().sampledTypeId), "float");
 
     Vector<Uint32> widened;
-    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
-                                                         /*enableSpirvValidation=*/true);
-    if (!widened.empty()) {
-        const auto afterTypes = CollectStorageImageTypes(widened);
-        ASSERT_EQ(afterTypes.size(), 1u);
-        EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rg16));
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
+    ASSERT_FALSE(widened.empty());
+    EXPECT_TRUE(Validates(widened));
+    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(widened));
+
+    const auto afterTypes = CollectStorageImageTypes(widened);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba16ui));
+    EXPECT_EQ(ScalarTypeSpellingOf(widened, afterTypes.front().sampledTypeId), "uint")
+        << "the carrier's component type is unsigned integer, and spirv-val requires the image's "
+           "Sampled Type to say so";
+
+    // The masks are still there and still say what a two-channel format's surplus channels are -
+    // the conversion wraps them, it does not replace them.
+    const auto shuffles = CollectVectorShuffles(widened);
+    const auto texelIds = CollectImageWriteTexelIds(widened);
+    ASSERT_EQ(texelIds.size(), 1u);
+    // The texel is now the PACKED value, so the mask is one step further back: find the shuffle
+    // by its component selectors instead.
+    Bool sawTwoChannelMask = false;
+    for (const VectorShuffle& shuffle : shuffles) {
+        sawTwoChannelMask = sawTwoChannelMask || HasComponents(shuffle, {0u, 1u, 6u, 7u});
     }
+    EXPECT_TRUE(sawTwoChannelMask) << "expected the (r, g, 0, 1) mask a two-channel format needs";
+
+    // ...and the ESSL says the whole story: a uimage2D holding rgba16ui, divided and multiplied
+    // by the format's own 65535.
+    const EsslAttempt after = EmitEssl(widened);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    EXPECT_NE(after.text.find("uimage2D"), String::npos) << after.text;
+    EXPECT_NE(after.text.find("rgba16ui"), String::npos) << after.text;
+    EXPECT_EQ(after.text.find("rg16"), String::npos)
+        << "the token no ES driver accepts is still in the emitted source:\n"
+        << after.text;
+    EXPECT_NE(after.text.find("65535.0"), String::npos)
+        << "the unsigned-normalized denominator is 2^16 - 1:\n"
+        << after.text;
+    EXPECT_EQ(after.text.find("32767.0"), String::npos)
+        << "an unsigned format must not take the SIGNED denominator:\n"
+        << after.text;
+}
+
+// The signed half, which needs two things the unsigned one does not: the code is sign-extended
+// out of the unsigned carrier channel on the way in, and the decode is max(c / 32767, -1) rather
+// than the bare division - GL clamps -2^15/32767 up to exactly -1.
+TEST(WidenImageFormats, SignedNormalizedImageSignExtendsItsCodeAndClampsAtMinusOne) {
+    const Vector<Uint32> spirv = CompileFragment(kRgba16SnormLoadStore);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    Vector<Uint32> widened;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, false, true));
+    ASSERT_FALSE(widened.empty());
+    EXPECT_TRUE(Validates(widened));
+
+    const auto afterTypes = CollectStorageImageTypes(widened);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba16ui));
+    EXPECT_EQ(ScalarTypeSpellingOf(widened, afterTypes.front().sampledTypeId), "uint");
+
+    // The sign extension is a shift PAIR, and the arithmetic one is what makes it a sign
+    // extension rather than a zero extension.
+    Bool sawShiftLeft = false;
+    Bool sawArithmeticShiftRight = false;
+    ForEachInstruction(widened, [&](spv::Op opcode, const Uint32*, Uint32) {
+        sawShiftLeft = sawShiftLeft || opcode == spv::Op::OpShiftLeftLogical;
+        sawArithmeticShiftRight = sawArithmeticShiftRight || opcode == spv::Op::OpShiftRightArithmetic;
+    });
+    EXPECT_TRUE(sawShiftLeft);
+    EXPECT_TRUE(sawArithmeticShiftRight)
+        << "a logical shift right would read every negative code as a large positive one";
+
+    const EsslAttempt after = EmitEssl(widened);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    EXPECT_NE(after.text.find("uimage2D"), String::npos) << after.text;
+    EXPECT_NE(after.text.find("rgba16ui"), String::npos) << after.text;
+    EXPECT_EQ(after.text.find("rgba16_snorm"), String::npos) << after.text;
+    EXPECT_NE(after.text.find("32767.0"), String::npos)
+        << "the signed-normalized denominator is 2^15 - 1:\n"
+        << after.text;
+    EXPECT_NE(after.text.find("-1.0"), String::npos)
+        << "GL clamps the signed decode at -1:\n"
+        << after.text;
+}
+
+// rgb10_a2, whose four channels are 10, 10, 10 and 2 bits: the only entry where one denominator
+// would be wrong for a channel that IS present, rather than for one the mask discards anyway.
+TEST(WidenImageFormats, TenTenTenTwoImageTakesAPerChannelDenominator) {
+    const Vector<Uint32> spirv = CompileFragment(kRgb10A2LoadStore);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    Vector<Uint32> widened;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, false, true));
+    ASSERT_FALSE(widened.empty());
+    EXPECT_TRUE(Validates(widened));
+
+    const auto afterTypes = CollectStorageImageTypes(widened);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba16ui));
+    EXPECT_EQ(ScalarTypeSpellingOf(widened, afterTypes.front().sampledTypeId), "uint");
+
+    const EsslAttempt after = EmitEssl(widened);
+    ASSERT_TRUE(after.succeeded) << after.error;
+    EXPECT_NE(after.text.find("1023.0"), String::npos) << after.text;
+    EXPECT_NE(after.text.find("3.0"), String::npos)
+        << "the two-bit alpha saturates at 3, not at 1023:\n"
+        << after.text;
+    EXPECT_EQ(after.text.find("rgb10_a2)"), String::npos) << after.text;
 }

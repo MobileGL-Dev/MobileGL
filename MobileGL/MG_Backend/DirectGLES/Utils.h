@@ -102,6 +102,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // would see them. Closing it needs the per-draw-buffer colour mask the three-channel
         // widening already carries (FramebufferImpl::g_alphaWidenedDrawBufferMask) generalized
         // from "alpha" to a channel count, which is its own change.
+        // How the FRONTEND's CPU shadow for a widened format is laid out relative to the carrier's
+        // transfer, i.e. what the upload has to do to it. Almost every entry is `Components`: the
+        // shadow already holds SourceChannels components of exactly the carrier's own type, so
+        // padding it out to four is the whole conversion. The packed entries do not - their shadow
+        // is ONE 32-bit word per texel - and reading such a word as components of the carrier's
+        // type takes twelve or sixteen bytes out of four and shears the level.
+        enum class ImageWidenSourceEncoding : Uint8 {
+            Components = 0,
+            // r11f_g11f_b10f: GL_UNSIGNED_INT_10F_11F_11F_REV -> four GL_FLOATs of an rgba16f.
+            PackedFloat11f11f10f,
+            // rgb10_a2 and rgb10_a2ui: GL_UNSIGNED_INT_2_10_10_10_REV -> four GL_UNSIGNED_SHORT
+            // channel CODES of an rgba16ui. The same split serves both: the two formats differ
+            // only in what the codes MEAN, which is the shader's business and not the transfer's.
+            PackedInt2101010Rev,
+        };
+
         struct ImageBindableStorageWidening {
             GLenum InternalFormat = GL_UNKNOWN_MGL;
             GLenum Format = GL_UNKNOWN_MGL;
@@ -113,17 +129,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // transfer type cannot tell the two apart (GL_UNSIGNED_BYTE serves both RG8 and
             // RG8UI), so the carrier decides.
             Bool IntegerData = false;
-            // The frontend shadow is a PACKED word rather than SourceChannels separate components
-            // of the carrier's own type, so the upload has to DECODE it instead of padding it out
-            // (PrepareImageWidenedUpload). True only for r11f_g11f_b10f, whose shadow is one
-            // GL_UNSIGNED_INT_10F_11F_11F_REV per texel and whose carrier is GL_RGBA16F: the
-            // channel repack every other entry uses would read three floats out of a four-byte
-            // texel and shear the level.
-            Bool PackedFloatSource = false;
+            // What the upload has to do to the frontend shadow before it describes the level to
+            // the driver (PrepareImageWidenedUpload).
+            ImageWidenSourceEncoding SourceEncoding = ImageWidenSourceEncoding::Components;
+            // Non-zero when the carrier holds this format's channels as the INTEGER CODES of a
+            // NORMALIZED value - the seven 16-bit and 10-bit normalized formats, which core ESSL
+            // has no image format of any width for and which a float carrier would requantise.
+            // Each entry is the largest code that channel can hold, i.e. the denominator of GL 4.6
+            // 2.3.5; SignedNormalized picks which of the two conversions it is the denominator of.
+            //
+            // Two things depend on it, both because the ES storage no longer shares the frontend
+            // format's component class: the upload pads a missing alpha with ChannelMax[3] instead
+            // of the transfer type's own "one" (through a uint carrier the saturated field IS the
+            // one), and glGetTexImage divides the codes back out into the floats the application
+            // is still owed.
+            Uint ChannelMax[4] = {0u, 0u, 0u, 0u};
+            Bool SignedNormalized = false;
 
+            Bool CarriesNormalizedCodes() const { return ChannelMax[0] != 0u; }
             explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
         };
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat);
+
+        // The single-channel core format an image-bindable BUFFER texture's view is SPLIT into, or
+        // GL_UNKNOWN_MGL for a format that needs no split (or has no core base).
+        //
+        // A buffer texture cannot be widened: its texels are the application's buffer object, at
+        // the size and layout the application gave it, and it is usually also a vertex, index or
+        // storage buffer whose bytes are not ours to restride. But an rg32f view of N texels and
+        // an r32f view of 2N texels describe exactly the SAME bytes, so the split changes only
+        // how the shader subscripts them - component j of texel i is texel 2i + j of the base
+        // view - which WidenImageFormatsPass rewrites every access to do. The same rule as the
+        // widening decides WHETHER: a driver that can spell rg32f for an imageBuffer needs
+        // nothing.
+        //
+        // KNOWN GAP, and the reason this is not applied to a texture that is merely sampled: a
+        // buffer texture that is BOTH image-bound and read through a samplerBuffer would have its
+        // sampled view split too, and the sampler side is not rewritten. Accepted for the same
+        // reason the storage widening's gaps are - on a driver where the split applies at all
+        // there is no legal ESSL for the image declaration, so such a program did not compile.
+        GLenum GetImageBindableBufferSplitFormat(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 
     namespace FramebufferImpl {} // namespace FramebufferImpl

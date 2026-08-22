@@ -1088,7 +1088,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 backendObj = MakeShared<BackendTextureObject>();
             }
             if (imageBindableStorageRequired) {
-                backendObj->RequireImageBindableStorage();
+                backendObj->RequireImageBindableStorage(textureObject);
             }
             backendObj->SyncTextureParamsToBackend(textureObject);
             backendObj->SyncBuiltinSamplerToBackend(textureObject);
@@ -1483,14 +1483,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // already calls that undefined, and inventing a carrier for it would only make the
             // out-of-class read wider.
             //
-            // A BUFFER texture is excluded on both sides: it has no storage of its own to widen
-            // (its texels are the application's buffer object), so WidenImageFormatsPass declines
-            // every buffer image and the bind must decline with it, or the driver would be handed
-            // a carrier the shader never addressed. See the Dim::Buffer guard there for the
-            // 32-byte GL_RG32F measurement that pinned it.
+            // A BUFFER texture is excluded from the WIDENING on both sides: it has no storage of
+            // its own to widen (its texels are the application's buffer object), so
+            // WidenImageFormatsPass declines to widen every buffer image and the bind must decline
+            // with it, or the driver would be handed a carrier the shader never addressed. See the
+            // Dim::Buffer guard there for the 32-byte GL_RG32F measurement that pinned it.
+            //
+            // What a buffer image takes instead is the SPLIT, which is the same three-layer move
+            // through a different door: the glTexBuffer view above and the bind below both name
+            // the single-channel base format, and the shader subscripts it two components per
+            // original texel. Same gate on both sides, so the two cannot disagree.
             GLenum bindFormat = imageBinding.Format;
-            if (imageBinding.Texture->GetTarget() != TextureTarget::TextureBuffer &&
-                TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
+            if (imageBinding.Texture->GetTarget() == TextureTarget::TextureBuffer) {
+                if (TextureImpl::GetImageBindableBufferSplitFormat(imageBinding.Texture->GetFormat()) !=
+                    GL_UNKNOWN_MGL) {
+                    if (const GLenum boundFormatSplit = TextureImpl::GetImageBindableBufferSplitFormat(
+                            MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+                        boundFormatSplit != GL_UNKNOWN_MGL) {
+                        bindFormat = boundFormatSplit;
+                    }
+                }
+            } else if (TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
                 const auto boundFormatWidening = TextureImpl::GetImageBindableStorageWidening(
                     MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
                 if (boundFormatWidening) {
@@ -7687,9 +7700,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // scratch framebuffer, so the frontend's READ binding describes a different image entirely -
     // consulting it there would both miss real widenings and corrupt readbacks of ordinary
     // textures taken while some unrelated widened attachment happened to be bound.
+    // The image-format widening's READ half, for the seven normalized formats whose carrier holds
+    // their channels as INTEGER CODES (GL_RGBA16 stored as a GL_RGBA16UI - see
+    // TextureImpl::GetImageBindableStorageWidening). Nothing else in the readback would get those
+    // right: the attachment is an integer one while the application's format is normalized, so the
+    // class check below would refuse the read outright, and a repack that got past it would hand
+    // back 65535.0 where GL owes 1.0.
+    //
+    // Inactive (ChannelMax all zero) for every other read, which is all but a handful.
+    struct NormalizedImageCarrierRead {
+        Uint ChannelMax[4] = {0u, 0u, 0u, 0u};
+        Bool SignedNormalized = false;
+
+        Bool Active() const { return ChannelMax[0] != 0u; }
+    };
+
     static Bool ReadPixelsViaFormatConversion(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                                               GLenum type, void* pixels, Bool honorPackImageParams,
-                                              Bool applyFixedPointReadClamp, Bool forceOpaqueAlpha) {
+                                              Bool applyFixedPointReadClamp, Bool forceOpaqueAlpha,
+                                              const NormalizedImageCarrierRead& normalizedCarrier = {}) {
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) {
             return false;
@@ -7712,7 +7741,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const GLenum attachmentComponentType = QueryReadAttachmentComponentType();
         const Bool integerAttachment =
             attachmentComponentType == GL_INT || attachmentComponentType == GL_UNSIGNED_INT;
-        if (mapping.isInteger != integerAttachment) {
+        // A normalized image carrier is EXACTLY the case where the two disagree on purpose, and
+        // it is the caller - which knows the TEXTURE being read, not just the attachment - that
+        // says so. An integer client format through such a carrier is not a shape GL can ask for
+        // (the frontend format is normalized), so it is refused here rather than converted.
+        if (normalizedCarrier.Active() && (mapping.isInteger || !integerAttachment)) {
+            MGLOG_E_ONCE("Readback conversion: a normalized image carrier was read as %s, which is not a "
+                    "normalized client format; skipping",
+                    MG_Util::ConvertGLEnumToString(format).c_str());
+            return true;
+        }
+        if (!normalizedCarrier.Active() && mapping.isInteger != integerAttachment) {
             MGLOG_E_ONCE("Readback conversion: integer-ness of format %s does not match the read buffer, skipping",
                     MG_Util::ConvertGLEnumToString(format).c_str());
             return true;
@@ -7732,7 +7771,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
         WideReadCandidate candidates[4];
         Int candidateCount = 0;
-        if (mapping.isInteger) {
+        if (normalizedCarrier.Active()) {
+            // The storage IS an integer texture, whatever the application's format says, so the
+            // only read that can answer is the integer one. The codes it hands back are turned
+            // into the floats the client asked for below.
+            candidates[candidateCount++] = {GL_RGBA_INTEGER, GL_UNSIGNED_INT};
+        } else if (mapping.isInteger) {
             if (GetWideReadChannelCount(static_cast<GLenum>(implFormat)) > 0 && IsIntegerReadFormat(implFormat) &&
                 (implType == GL_INT || implType == GL_UNSIGNED_INT)) {
                 candidates[candidateCount++] = {static_cast<GLenum>(implFormat), static_cast<GLenum>(implType)};
@@ -7794,6 +7838,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+        if (normalizedCarrier.Active()) {
+            // GL 4.6 2.3.5, the same conversion the shader-side unpack does and with the same
+            // denominators, so a texel an imageStore wrote and a texel the upload seeded read back
+            // identically: f = c / (2^b - 1) unsigned, f = max(c / (2^(b-1) - 1), -1) signed, with
+            // the signed code recovered from the low sixteen bits of the unsigned channel.
+            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+            Vector<Uint8> floatWide(pixelCount * 4 * sizeof(Float));
+            auto* dst = reinterpret_cast<Float*>(floatWide.data());
+            const auto* src = reinterpret_cast<const Uint32*>(wide.data());
+            for (SizeT i = 0; i < pixelCount; ++i) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    const Uint32 code = src[i * 4 + channel];
+                    const auto denominator = static_cast<Float>(normalizedCarrier.ChannelMax[channel]);
+                    if (normalizedCarrier.SignedNormalized) {
+                        const auto signedCode = static_cast<Int16>(static_cast<Uint16>(code));
+                        dst[i * 4 + channel] =
+                            std::max(static_cast<Float>(signedCode) / denominator, -1.0f);
+                    } else {
+                        dst[i * 4 + channel] = static_cast<Float>(code) / denominator;
+                    }
+                }
+            }
+            wide = Move(floatWide);
+            wideType = GL_FLOAT;
+            readChannels = 4;
+        }
         if (wideType == GL_UNSIGNED_INT_2_10_10_10_REV) {
             // Unpack the packed words into a float wide buffer (full 10-bit precision on e.g.
             // GL_RGB10_A2 attachments, whose implementation read pair is RGBA/2_10_10_10_REV).
@@ -8441,6 +8511,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // GL_READ_FRAMEBUFFER, so the widening question has to be asked of the texture.
             const Bool forceOpaqueAlpha =
                 TextureImpl::BackendTextureFormatAddsAlpha(textureObject->GetFormat(), textureObject->GetTarget());
+            // An image-bindable texture in one of the seven normalized formats has its ES storage
+            // in a GL_RGBA16UI, holding the format's own channel CODES. glGetTexImage still owes
+            // the application the NORMALIZED value, so the conversion has to be undone here - and
+            // it can only be asked of the TEXTURE, which is why it is not derived from the
+            // attachment the scratch framebuffer happens to hold.
+            NormalizedImageCarrierRead normalizedCarrier;
+            if (const auto imageWidening =
+                    TextureImpl::GetImageBindableStorageWidening(textureObject->GetFormat());
+                imageWidening && imageWidening.CarriesNormalizedCodes() &&
+                (*backendTextureSlot)->RequiresImageBindableStorage()) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    normalizedCarrier.ChannelMax[channel] = imageWidening.ChannelMax[channel];
+                }
+                normalizedCarrier.SignedNormalized = imageWidening.SignedNormalized;
+            }
             // GL_PACK_IMAGE_HEIGHT/GL_PACK_SKIP_IMAGES only apply to 3D/array image
             // readbacks (cube-map arrays address as arrays); 2D targets must ignore
             // them (GL 3.3 section 6.1.4). A 1D ARRAY is one of those 2D targets: GL hands it back
@@ -8550,7 +8635,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     void* sliceDst = static_cast<Uint8*>(pixels) + sliceOffset;
                     if (!ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, sliceDst,
                                                        /*honorPackImageParams=*/false,
-                                                       /*applyFixedPointReadClamp=*/false, forceOpaqueAlpha)) {
+                                                       /*applyFixedPointReadClamp=*/false, forceOpaqueAlpha,
+                                                       normalizedCarrier)) {
                         allSlicesRead = false;
                         break;
                     }
@@ -8573,7 +8659,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (tempFBOComplete && ReadPixelsViaFormatConversion(0, 0, size.x(), size.y(), format, type, pixels,
                                                                  applyPackImageParams,
                                                                  /*applyFixedPointReadClamp=*/false,
-                                                                 forceOpaqueAlpha)) {
+                                                                 forceOpaqueAlpha, normalizedCarrier)) {
                 MGLOG_D("GetTexImage: finished via client-format conversion");
                 return;
             }
