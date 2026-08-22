@@ -29,7 +29,9 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <cstring>
@@ -46,6 +48,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     constexpr const char* BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME = "mg_BaseInstanceWordIndex";
     constexpr const char* INDIRECT_PARAMS_BLOCK_NAME = "mg_IndirectParams";
     constexpr const char* ZERO_BASED_INSTANCE_ID_NAME = "mg_ZeroBasedInstanceID";
+
+    // See the block comment on ForEachViewportRoutingPass in Managers.h. Auto is ON, including on
+    // a driver that advertises GL_OES_viewport_array: that extension gives the shader a name, not
+    // the driver fifteen more rectangles to rasterize against, and nothing in MobileGL has ever
+    // programmed the indexed state it would need.
+    Bool ViewportArrayEmulationEnabled() {
+        return MG_Config::Features.ViewportArrayEmulation != MG_Config::QuirkOverride::ForceOff;
+    }
+
+    Bool g_anyProgramRoutesViewportIndex = false;
 
     // ES has no atomic-counter buffers: glslang lowers every atomic_uint onto a synthesized
     // storage block, so one GL counter BUFFER costs one of the driver's shader-storage binding
@@ -298,6 +310,126 @@ namespace MobileGL::MG_Backend::DirectGLES {
             break;
         }
         return source;
+    }
+
+    // ---- gl_ViewportIndex routing emulation, ESSL half ---------------------------------------
+    //
+    // LowerViewportIndexPass has already turned the BuiltIn ViewportIndex OUTPUT into a plain
+    // Private global, so SPIRV-Cross printed `int mg_ViewportIndex;` at file scope and the stage
+    // still stores the index the application asked for - it just goes nowhere. The two passes
+    // below give it somewhere to go WITHOUT naming a builtin the language does not have: the
+    // producing stage's global becomes an ordinary flat varying, and the fragment stage gets a
+    // gate that discards every fragment whose primitive routed to a viewport the current replay
+    // pass is not drawing. DirectGLES.cpp's ForEachViewportRoutingPass is the other half - it
+    // re-issues the draw once per distinct viewport state with the real
+    // glViewport/glScissor/glDepthRangef pushed for it and this uniform set to the set of
+    // indices that state serves.
+    //
+    // FLAT is semantics, not performance: GL takes a primitive's viewport index from its
+    // PROVOKING VERTEX, which is exactly what flat interpolation delivers, so a primitive whose
+    // vertices carry different indices routes the way the spec says with no extra machinery.
+    //
+    // NO layout(location = N) on either side, deliberately. The two stages are transpiled
+    // independently and neither can see the other's location assignment: the producing stage
+    // knows its own outputs, the fragment stage only the subset it consumes, and a number derived
+    // from either can disagree with the other. Leaving both unqualified hands the assignment to
+    // the driver's linker, which then matches them BY NAME - the ordinary GLSL rule, and the only
+    // one that needs no cross-stage channel. The cost is one varying slot, which a program
+    // already at GL_MAX_VARYING_VECTORS cannot spare.
+    constexpr const char* VIEWPORT_INDEX_VARYING_NAME = "mg_ViewportIndex";
+    constexpr const char* VIEWPORT_PASS_MASK_UNIFORM_NAME = "mg_ViewportPassMask";
+    constexpr const char* VIEWPORT_GATED_ENTRY_POINT_NAME = "mg_ViewportGatedMain";
+    constexpr const char* ESSL_ENTRY_POINT_SIGNATURE = "void main()";
+    static_assert(RenderStateParameters::MAX_VIEWPORTS == 16,
+                  "the fragment gate below spells the index clamp as `& 15` and the pass mask as a "
+                  "16-bit int; both follow MAX_VIEWPORTS and have to be respelled with it");
+
+    // Producing stage (vertex / tessellation evaluation / geometry - the three GL lets write the
+    // builtin). Returns whether the demoted global was found and promoted, which is also the
+    // answer to "does this program route viewports at all".
+    Bool PromoteViewportIndexGlobalToVarying(String& source) {
+        // The same shape PromoteDrawParameterGlobalsToUniforms matches, and for the same reason:
+        // SPIRV-Cross prints the demoted global with or without a precision qualifier depending
+        // on what the module carried. Only a declaration that starts its own line may be
+        // rewritten - `mg_ViewportIndex = gl_InvocationID;` in the body contains the name too and
+        // has to be left exactly as it is.
+        const String declared = String(VIEWPORT_INDEX_VARYING_NAME) + ";";
+        for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int "}) {
+            const String declaration = String(declPrefix) + declared;
+            const SizeT pos = source.find(declaration);
+            if (pos == String::npos) {
+                continue;
+            }
+            // Column 0 of its own line is what separates the declaration from the tail of any
+            // other declaration or expression that ends in the same name.
+            if (pos != 0 && source[pos - 1] != '\n') {
+                continue;
+            }
+            source.replace(pos, declaration.size(),
+                           String("flat out highp int ") + VIEWPORT_INDEX_VARYING_NAME + ";");
+            return true;
+        }
+        return false;
+    }
+
+    // Fragment stage. Returns false when the stage has no entry point to gate onto, which the
+    // caller reports: the program still links and still renders, it just renders every index
+    // with the first replay pass's state - i.e. it degrades to the pre-emulation behaviour
+    // rather than to a black screen.
+    Bool InjectViewportIndexPassGate(String& source) {
+        // Built beside the input and swapped in only on success, so a stage this pass declines
+        // reaches the driver exactly as it arrived rather than half-rewritten.
+        // A fragment stage that READS gl_ViewportIndex has no ESSL spelling for it either -
+        // LowerViewportIndexPass deliberately demotes only OUTPUTS, because a demoted INPUT would
+        // answer from an undefined Private global. Now that the routing varying exists and
+        // carries the real per-primitive value, that read has somewhere honest to go.
+        String gated = ReplaceIdentifier(source, "gl_ViewportIndex", VIEWPORT_INDEX_VARYING_NAME);
+
+        const SizeT entryPos = gated.find(ESSL_ENTRY_POINT_SIGNATURE);
+        if (entryPos == String::npos) {
+            return false;
+        }
+
+        // Declarations go immediately before the entry point rather than after #version: that
+        // position is already past every #extension directive (which must precede any other
+        // token) and past everything the body can name, so it can invalidate neither.
+        //
+        // Renaming the entry point rather than splicing a prologue into its body keeps the
+        // application's code byte-identical, including an early `return`.
+        String preamble = String("flat in highp int ") + VIEWPORT_INDEX_VARYING_NAME + ";\n";
+        preamble += String("uniform highp int ") + VIEWPORT_PASS_MASK_UNIFORM_NAME + ";\n";
+        preamble += String("void ") + VIEWPORT_GATED_ENTRY_POINT_NAME + "()";
+        gated.replace(entryPos, std::strlen(ESSL_ENTRY_POINT_SIGNATURE), preamble);
+
+        // `& 15` clamps the shift operand into range for MAX_VIEWPORTS = 16. GL leaves an index
+        // outside [0, MAX_VIEWPORTS) undefined, but an ESSL shift by >= 32 is undefined in a way
+        // that can take the whole draw with it, so the emulation picks a defined answer instead.
+        //
+        // The mask, not an equality test against a pass number: viewport indices whose whole
+        // state tuple is identical share ONE replay pass (see BeginViewportRoutingPasses), and
+        // the overwhelmingly common case - every index still holding what glViewport broadcast -
+        // is then a single pass with every bit set, i.e. a gate that discards nothing and a draw
+        // that is issued exactly once.
+        //
+        // PERFORMANCE NOTE: a fragment shader containing `discard` cannot take the early-Z fast
+        // path on a tiler, so a routed draw pays late-Z on top of its N replay passes. Accepted
+        // deliberately: this runs only for a program that writes gl_ViewportIndex, and that is
+        // why the gate is injected per program rather than into every fragment shader.
+        gated += "\n";
+        gated += String(ESSL_ENTRY_POINT_SIGNATURE) + "\n";
+        gated += "{\n";
+        gated += String("    if (((") + VIEWPORT_PASS_MASK_UNIFORM_NAME + " >> (" +
+                 VIEWPORT_INDEX_VARYING_NAME + " & 15)) & 1) == 0)\n";
+        gated += "    {\n";
+        gated += "        discard;\n";
+        gated += "    }\n";
+        gated += "    else\n";
+        gated += "    {\n";
+        gated += String("        ") + VIEWPORT_GATED_ENTRY_POINT_NAME + "();\n";
+        gated += "    }\n";
+        gated += "}\n";
+        source = std::move(gated);
+        return true;
     }
 
     // The transpile pipeline invents image binding numbers: when the GL source declares
@@ -2706,21 +2838,98 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                widenedData, IsIntegerWidenableFormat(format));
         }
 
+        // One channel of a packed r11f_g11f_b10f word as a float. The two 11-bit channels are
+        // e5m6 and the 10-bit one e5m5 - IEEE-shaped but UNSIGNED, so there is no sign bit to
+        // read and the exponent bias is the 15 a 5-bit exponent always carries.
+        static Float DecodePackedUnsignedFloat(Uint32 bits, Uint mantissaBits) {
+            const Uint32 mantissaScale = 1u << mantissaBits;
+            const Uint32 mantissa = bits & (mantissaScale - 1u);
+            const Uint32 exponent = bits >> mantissaBits;
+            if (exponent == 0u) {
+                // Subnormal, and zero with it: no implied leading 1, and the exponent is the
+                // smallest NORMAL one rather than the encoded 0.
+                return std::ldexp(static_cast<Float>(mantissa) / static_cast<Float>(mantissaScale), -14);
+            }
+            if (exponent == 31u) {
+                return mantissa == 0u ? std::numeric_limits<Float>::infinity()
+                                      : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return std::ldexp(1.0f + static_cast<Float>(mantissa) / static_cast<Float>(mantissaScale),
+                              static_cast<Int>(exponent) - 15);
+        }
+
+        // The r11f_g11f_b10f shadow decoded into the GL_RGBA / GL_FLOAT level its GL_RGBA16F
+        // carrier is uploaded as. Alpha is the 1 GL defines for a format that has no alpha
+        // channel, which is the same constant the shader-side mask writes, so a texel this
+        // function produced and a texel an imageStore produced are indistinguishable.
+        //
+        // Sized from the LEVEL, not the source, for the reason PrepareChannelWidenedUpload is:
+        // the driver reads a full width*height*depth*4 floats for the transfer it was handed.
+        static const void* PreparePackedFloatWidenedUpload(const IntVec3& texelSize, const void* data,
+                                                           SizeT byteSize, Vector<Uint8>& widenedData) {
+            constexpr SizeT kSourceTexelBytes = sizeof(Uint32);
+            if (data == nullptr || byteSize < kSourceTexelBytes) {
+                return data;
+            }
+            const SizeT texelCount = static_cast<SizeT>(std::max(texelSize.x(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.y(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.z(), 1));
+            if (texelCount == 0) {
+                return data;
+            }
+            const SizeT copyTexelCount = std::min(texelCount, byteSize / kSourceTexelBytes);
+
+            widenedData.assign(texelCount * 4u * sizeof(Float), 0);
+            const auto* src = static_cast<const Uint8*>(data);
+            auto* dst = reinterpret_cast<Float*>(widenedData.data());
+            for (SizeT i = 0; i < texelCount; ++i, dst += 4) {
+                Float rgb[3] = {0.0f, 0.0f, 0.0f};
+                if (i < copyTexelCount) {
+                    Uint32 packed = 0;
+                    // Through a memcpy rather than a Uint32 read of `src`: the shadow is a byte
+                    // buffer with no alignment promise of its own.
+                    Memcpy(&packed, src + i * kSourceTexelBytes, sizeof(packed));
+                    rgb[0] = DecodePackedUnsignedFloat(packed & 0x7FFu, 6u);
+                    rgb[1] = DecodePackedUnsignedFloat((packed >> 11u) & 0x7FFu, 6u);
+                    rgb[2] = DecodePackedUnsignedFloat((packed >> 22u) & 0x3FFu, 5u);
+                }
+                dst[0] = rgb[0];
+                dst[1] = rgb[1];
+                dst[2] = rgb[2];
+                dst[3] = 1.0f;
+            }
+            return widenedData.data();
+        }
+
         // The transfer half of the image-format widening: an image-bindable texture whose ES
         // storage was widened to a core carrier is described to the driver as a four-component
-        // transfer, so its one- or two-component client data has to be repacked the same way the
-        // three-channel colour-renderable widening repacks its own.
+        // transfer, so its narrower client data has to be repacked the same way the three-channel
+        // colour-renderable widening repacks its own.
+        //
+        // Two shapes, because the carriers come in two kinds. Seventeen of the eighteen keep the
+        // frontend format's component TYPE and only add channels, so padding the shadow out to
+        // four components is the whole conversion. r11f_g11f_b10f does not: its shadow is one
+        // PACKED 32-bit word per texel and its carrier is GL_RGBA16F, so the word has to be
+        // DECODED into four floats. Reading it as three components of the carrier's type - what
+        // the repack below would do - would take twelve bytes from a four-byte texel and shear
+        // the level, which is what the allFormats LOAD walkers see and the STORE ones do not (a
+        // store overwrites every texel the upload got wrong).
         //
         // Composes with PrepareFallbackUpload rather than replacing it, and the composition is a
-        // no-op by construction: none of the seventeen widened formats is a three-channel one
-        // (GetWidenableClientComponentCount reports 0 for every one of them), and the SNORM
-        // shadow-to-float conversion only fires for a GL_FLOAT transfer type, which the widened
-        // triple never picks for the two SNORM8 formats. So the shadow reaches this untouched and
-        // one repack is all that runs.
+        // no-op by construction: none of the widened formats is one GetWidenableClientComponentCount
+        // reports a count for, and the SNORM shadow-to-float conversion only fires for a GL_FLOAT
+        // transfer type, which the widened triple never picks for the two SNORM8 formats. So the
+        // shadow reaches this untouched and one conversion is all that runs.
         static const void* PrepareImageWidenedUpload(const TextureImpl::ImageBindableStorageWidening& widening,
                                                      const IntVec3& texelSize, const void* data, SizeT byteSize,
                                                      Vector<Uint8>& widenedData) {
-            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels >= 4) {
+            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels > 4) {
+                return data;
+            }
+            if (widening.PackedFloatSource) {
+                return PreparePackedFloatWidenedUpload(texelSize, data, byteSize, widenedData);
+            }
+            if (widening.SourceChannels == 4) {
                 return data;
             }
             return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
@@ -5150,12 +5359,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // The GL internal format a glslang layout format names, for the seventeen non-core
-            // formats WidenImageFormatsForEssl carries exactly plus nothing else: the only
+            // The GL internal format a glslang layout format names, for the eighteen non-core
+            // formats WidenImageFormatsForEssl carries losslessly plus nothing else: the only
             // question asked of it is "does this DECLARED format widen", and answering 0 for
             // everything else is the same "no" a non-widenable format gets. Kept as its own
             // switch rather than routed through the frontend's enum converters because a
             // TLayoutFormat is a glslang value and the reflection snapshot stores it raw.
+            //
+            // IT MUST LIST EXACTLY WHAT WideningOfSpirvImageFormat DOES. This table is what arms
+            // the pass (ImageFormatWillBeWidened -> declaresWidenableImageFormat), so a format the
+            // pass would carry but this switch answers 0 for never gets the chance: the module
+            // reaches SPIRV-Cross with its original qualifier, the throw takes the stage, and the
+            // only visible symptom is the "no GLSL ES spelling" diagnostic for a format that has
+            // one. That is exactly what r11f_g11f_b10f did until it was added here.
             Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
                 switch (format) {
                 case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
@@ -5175,6 +5391,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
                 case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
                 case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                // Not a channel widening but a lossless re-encoding into rgba16f - the one entry
+                // here whose carrier has a different per-channel layout. See
+                // WidenImageFormatsPass.h.
+                case glslang::ElfR11fG11fB10f: return 0x8C3A; // GL_R11F_G11F_B10F
                 default:
                     return 0;
                 }
@@ -5235,11 +5455,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // spelling still has to become legal ESSL somehow.
                     const auto declaredFormat = static_cast<glslang::TLayoutFormat>(type.layoutFormat);
                     if (!IsCoreEsslLayoutFormat(declaredFormat)) {
-                        // Seventeen of the twenty-six non-core formats are re-declared in the core
-                        // format that carries them exactly, with every access masked back to the
-                        // channels GL says they have (WidenImageFormatsForEssl, and the matching
-                        // storage/bind widening in TextureImpl). Those need neither the extension
-                        // nor the diagnostic: there IS a legal spelling for them now.
+                        // Eighteen of the twenty-six non-core formats are re-declared in a core
+                        // format that carries them losslessly, with every access masked back to
+                        // the channels GL says they have (WidenImageFormatsForEssl, and the
+                        // matching storage/bind widening in TextureImpl). Those need neither the
+                        // extension nor the diagnostic: there IS a legal spelling for them now.
                         if (ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
                             inputs.declaresWidenableImageFormat = true;
                         } else {
@@ -5493,7 +5713,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // keep the two in step.
             const Int advertisedMaxSamples =
                 std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
-            const Bool viewportLoweringArmed = !g_GLESCapabilities.SupportsViewportArray;
+            // Armed by the EMULATION as well as by the missing extension, and the emulation is on
+            // by default (MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION). Having the extension is not a
+            // reason to keep the builtin: it only ever gave the SHADER a compilable name, while
+            // the driver's INDEXED viewport state was never programmed by anything in MobileGL
+            // (SyncRenderState pushes index 0 and stops), so an extension-capable driver
+            // rasterized every index as index 0 exactly like a driver without it. Lowering here
+            // is what lets the ESSL passes downstream turn the builtin into the flat varying the
+            // replay gates on.
+            //
+            // Restricted to the three stages GL lets WRITE the builtin (4.1 core gives it to the
+            // geometry stage, ARB_shader_viewport_layer_array adds vertex and tessellation
+            // evaluation). A fragment stage's gl_ViewportIndex is an INPUT, which the pass
+            // declines anyway, and a compute stage has none - so arming those two only ever
+            // bought them the shared probe's BuildModule for nothing.
+            const Bool stageCanWriteViewportIndex = glShaderType == GL_VERTEX_SHADER ||
+                                                    glShaderType == GL_TESS_EVALUATION_SHADER ||
+                                                    glShaderType == GL_GEOMETRY_SHADER;
+            const Bool viewportLoweringArmed =
+                stageCanWriteViewportIndex &&
+                (ViewportArrayEmulationEnabled() || !g_GLESCapabilities.SupportsViewportArray);
             const Bool sampleClampArmed =
                 g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
                 g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
@@ -5517,11 +5756,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     *effectiveSpirv, loweredViewportSpirv, enableSpirvValidation) &&
                 !loweredViewportSpirv.empty()) {
                 effectiveSpirv = &loweredViewportSpirv;
-                MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which this ES driver has "
-                        "no GL_OES_viewport_array for. The builtin was demoted to a plain "
-                        "global; every invocation renders into viewport 0.",
+                MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which ESSL has no core "
+                        "spelling for. The builtin was demoted to a plain global; %s.",
                         m_backendProgramId,
-                        MG_Util::ConvertGLEnumToString(glShaderType).c_str());
+                        MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                        ViewportArrayEmulationEnabled()
+                            ? "the ESSL passes below promote it to a routing varying"
+                            : "every invocation renders into viewport 0");
             }
 
             // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
@@ -6249,7 +6490,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const Bool needsPassthroughTessControl = hasTessEvalStage && !hasTessControlStage;
 
+            // The stage order the loop below walks, with every FRAGMENT stage moved to the end.
+            // The viewport-routing gate is the reason: whether a fragment stage needs one is a
+            // question about the OTHER stages ("does any of them still write gl_ViewportIndex?"),
+            // and the honest, free answer to it is the promotion the producing stage's own text
+            // pass just performed. Answering it any other way costs a BuildModule per
+            // pre-rasterization stage of every program - the parse the shared SpirvGateFeatures
+            // probe exists to avoid. Nothing else in the loop is order-sensitive: the two
+            // passthrough-tessellation sources it captures are a vertex and an evaluation stage,
+            // and the three sets it accumulates are unions.
+            Vector<SizeT> stageOrder;
+            stageOrder.reserve(linkedStages.size());
             for (SizeT index = 0; index < linkedStages.size(); ++index) {
+                if (linkedStages[index] != ShaderStage::Fragment) stageOrder.push_back(index);
+            }
+            for (SizeT index = 0; index < linkedStages.size(); ++index) {
+                if (linkedStages[index] == ShaderStage::Fragment) stageOrder.push_back(index);
+            }
+            // Set by whichever pre-rasterization stage's demoted mg_ViewportIndex global the text
+            // pass turned into a varying; read by the fragment stage to decide whether to inject
+            // the gate that consumes it.
+            Bool programRoutesViewportIndex = false;
+            // No fragment stage, no gate - and without a gate the promotion below would only add
+            // an output nothing can read. That is not merely useless: in a separable program
+            // pipeline the fragment stage lives in a DIFFERENT program, which never saw this
+            // build and cannot be given a gate, so promoting there would hang an unmatched
+            // varying off a program to buy nothing. Both cases keep the pre-emulation behaviour,
+            // which is what a program with no fragment stage had anyway.
+            const Bool programHasFragmentStage =
+                std::find(linkedStages.begin(), linkedStages.end(), ShaderStage::Fragment) !=
+                linkedStages.end();
+            const Bool viewportEmulationForThisProgram =
+                ViewportArrayEmulationEnabled() && programHasFragmentStage;
+
+            for (const SizeT index : stageOrder) {
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(linkedStages[index]);
                 GLuint backendShaderId = g_GLESFuncs.glCreateShader(glShaderType);
 
@@ -6288,7 +6562,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::ShaderTranspiler::EsslTranslationKeyInputs esslKeyInputs;
                 esslKeyInputs.spirv = &spirvCode;
                 esslKeyInputs.shaderType = glShaderType;
-                esslKeyInputs.supportsViewportArray = g_GLESCapabilities.SupportsViewportArray;
+                // The EFFECTIVE arming, computed the same way TranspileSpirvToEssl computes it.
+                // Duplicated rather than shared because the two live on opposite sides of the
+                // memo boundary - and a key that disagrees with the pass it is keying is the one
+                // failure mode of this cache that renders wrong pixels instead of being slow.
+                esslKeyInputs.viewportIndexLoweringArmed =
+                    (glShaderType == GL_VERTEX_SHADER || glShaderType == GL_TESS_EVALUATION_SHADER ||
+                     glShaderType == GL_GEOMETRY_SHADER) &&
+                    (ViewportArrayEmulationEnabled() || !g_GLESCapabilities.SupportsViewportArray);
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
                 esslKeyInputs.supportsExtendedImageFormats =
@@ -6443,8 +6724,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // name; a driver without the extension took the LowerViewportIndexPass fallback
                 // above and its source no longer names the builtin at all, so the two are mutually
                 // exclusive by construction. Read `source` BEFORE it is moved from.
-                const Bool needsViewportArrayExtension = g_GLESCapabilities.SupportsViewportArray &&
-                                                         source.find("gl_ViewportIndex") != String::npos;
+                // The routing emulation is the third way this can be reached and the only one
+                // that needs no directive: it renames the fragment stage's read onto the varying
+                // the producing stage now writes, a few passes below.
+                const Bool needsViewportArrayExtension =
+                    g_GLESCapabilities.SupportsViewportArray &&
+                    !(ViewportArrayEmulationEnabled() && programRoutesViewportIndex) &&
+                    source.find("gl_ViewportIndex") != String::npos;
                 source = RequestViewportArrayExtension(std::move(source), needsViewportArrayExtension);
 
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
@@ -6505,6 +6791,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = EmulateTextureLodBias(source, ShouldAvoidExplicitLodBiasOnAngleLlvmpipe());
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
+                // The two halves of the gl_ViewportIndex routing emulation, next to the draw-
+                // parameter promotion because they are the same shape: a builtin ESSL cannot
+                // spell, demoted to a plain global by a SPIR-V pass, given a real interface here.
+                // BEFORE ForceSupporterOutput, so the `precision highp` statements it hoists to
+                // the top land above the declarations these inject; AFTER
+                // ForceFlatIntegerVaryings, which matches only declarations carrying a
+                // layout(...) qualifier and so cannot touch either of them.
+                if (viewportEmulationForThisProgram) {
+                    if (glShaderType == GL_FRAGMENT_SHADER) {
+                        if (programRoutesViewportIndex && !InjectViewportIndexPassGate(source)) {
+                            // MGLOG_E, unlatched, like the transpile- and compile-failure
+                            // diagnostics around it: the program still links and still draws, so
+                            // nothing else in the process will ever say that its viewport routing
+                            // silently collapsed back to one rectangle.
+                            MGLOG_E("Program %u routes gl_ViewportIndex but its fragment stage has no "
+                                    "entry point to gate, so the routing cannot be emulated: every "
+                                    "index will rasterize against viewport 0. State program ID: %u.",
+                                    m_backendProgramId, stateProgramObject->GetExternalIndex());
+                        }
+                    } else if (PromoteViewportIndexGlobalToVarying(source)) {
+                        programRoutesViewportIndex = true;
+                    }
+                }
                 source = ForceSupporterOutput(source);
                 source = ClampNormFallbackOutputs(std::move(source), glShaderType,
                                                   m_snormFallbackClampOutputMask,
@@ -6707,6 +7016,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                            BASE_VERTEX_UNIFORM_NAME);
             m_baseInstanceWordIndexUniformLocation =
                 g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME);
+            // Asked of the DRIVER rather than remembered from the injection, deliberately: the
+            // gate is only real if the uniform survived compilation and linking, and this is the
+            // one question whose answer covers both. A gate the driver optimized away would
+            // otherwise leave the draw path replaying passes whose mask reaches nothing, which
+            // renders every index's primitives in every pass.
+            m_viewportPassMaskUniformLocation =
+                g_GLESFuncs.glGetUniformLocation(m_backendProgramId, VIEWPORT_PASS_MASK_UNIFORM_NAME);
+            if (m_viewportPassMaskUniformLocation >= 0) {
+                // Sticky, and never cleared on a relink: it only ever short-circuits a per-draw
+                // check, so being late to go false costs a pointer compare and being late to go
+                // true would cost correctness.
+                g_anyProgramRoutesViewportIndex = true;
+            }
             // The mg_IndirectParams block binding is baked into the ESSL (ES cannot rebind
             // SSBO blocks after compile); record it so draws bind the indirect buffer there.
             m_indirectParamsBinding = -1;
@@ -6908,6 +7230,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             g_GLESFuncs.glUniform1i(m_drawIdUniformLocation, static_cast<GLint>(drawId));
+        }
+
+        void BackendProgramObjectImpl::SetViewportPassMask(Uint32 indexMask) const {
+            if (m_viewportPassMaskUniformLocation < 0) {
+                return;
+            }
+            g_GLESFuncs.glUniform1i(m_viewportPassMaskUniformLocation, static_cast<GLint>(indexMask));
         }
     } // namespace PrgramImpl
 

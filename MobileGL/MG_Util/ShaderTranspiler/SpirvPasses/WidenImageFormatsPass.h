@@ -54,12 +54,23 @@ namespace MobileGL {
             // alone survives storage this shader never wrote (glTexStorage with no upload, whose
             // surplus channels are undefined).
             //
-            // The other NINE (r11f_g11f_b10f, rgb10_a2, rgb10_a2ui, rgba16, rg16, r16,
-            // rgba16_snorm, rg16_snorm, r16_snorm) have NO same-width core carrier and are
-            // deliberately NOT widened here: every carrier for them is either lossy or changes the
-            // numeric domain of the texture a `sampler2D` would read from it. They keep the honest
-            // "no GLSL ES spelling" diagnostic instead of silently changing an application's
-            // quantisation behaviour.
+            // r11f_g11f_b10f has no same-width core carrier either, and takes rgba16f anyway,
+            // because that carrier is still LOSSLESS: 11f is e5m6 and 10f is e5m5 against a half's
+            // s1e5m10 - the SAME 5-bit exponent with a strictly longer mantissa - so every value
+            // the packed format can hold has an exact half. Only the reverse direction differs
+            // (the carrier also holds negatives, which 11f and 10f cannot sign, and mantissa bits
+            // finer than the 6 and 5 they quantise to, so a value written through the image and
+            // then SAMPLED lands on half's grid rather than the packed format's). That is measured
+            // against the alternative, which is not a truer quantisation but no program at all:
+            // the SPIRV-Cross throw takes the whole stage, every image uniform declared beside it
+            // included.
+            //
+            // The other EIGHT (rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm, rg16_snorm,
+            // r16_snorm) are deliberately NOT widened here: core ESSL has no 16-bit normalized
+            // format at all and no 10-bit one, so every carrier for them either loses range or
+            // changes the component TYPE the texture a `sampler2D` would read presents. They keep
+            // the honest "no GLSL ES spelling" diagnostic instead of silently changing an
+            // application's numeric domain.
             //
             // MUST MOVE WITH THE OTHER TWO LAYERS. The widening is not a shader-local rewrite: the
             // ES texture behind the image has to be allocated in the carrier format too, and

@@ -556,7 +556,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     //   * the GL stage enum - three passes are stage-gated (draw parameters and
     //     array vertex inputs on vertex, fragment-output index legalization on
     //     fragment);
-    //   * SupportsViewportArray - arms LowerViewportIndexForEssl;
+    //   * the viewport-index lowering arming bit - GL_OES_viewport_array's absence OR the
+    //     routing emulation being on - which arms LowerViewportIndexForEssl;
     //   * the four sample ceilings (color / integer / depth / advertised) - both
     //     ARM ClampMultisampleFetchesForEssl and PARAMETERIZE it;
     //   * SupportsNoperspectiveInterpolation - arms EmulateNoPerspectiveForEssl;
@@ -583,7 +584,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
     // armed by nothing, so the SPIR-V already in this key covers them completely.
     //
     // THE TEST FOR THAT CLAIM IS NOT THE SIGNATURE. LowerViewportIndexForEssl is equally
-    // module-only to look at, yet SupportsViewportArray is in this key because that bit ARMS
+    // module-only to look at, yet the arming bit is in this key because it ARMS
     // it at the call site. So a new pass needs BOTH checks - what it takes, and what decides
     // whether it runs - before "no key material" is a conclusion rather than an assumption.
     // Note also where an application-authored value can hide: the atomic-counter
@@ -612,7 +613,12 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         GLenum shaderType = 0;
 
         // --- driver capability bits that arm or steer a pass ---
-        Bool supportsViewportArray = false;
+        // Whether LowerViewportIndexForEssl runs on this module. NOT the raw
+        // GL_OES_viewport_array bit any more: the routing emulation arms the pass even where the
+        // extension exists (Config.h, ViewportArrayEmulation), so the extension alone no longer
+        // decides, and a key carrying only it would serve a module lowered under one setting to a
+        // link made under the other.
+        Bool viewportIndexLoweringArmed = false;
         Bool supportsNoperspectiveInterpolation = false;
         // GL_NV_image_formats. Arms WidenImageFormatsForEssl, which re-declares every storage
         // image whose format GLSL ES core cannot spell in the core format that carries it and

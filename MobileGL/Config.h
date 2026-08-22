@@ -212,6 +212,19 @@ namespace MobileGL::MG_Config {
         // miscompiled shader: if a device ever renders differently with the cache
         // on, one run with this falsy says so.
         QuirkOverride ShaderTranslationCache = QuirkOverride::Auto;
+        // MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION: DirectGLES' gl_ViewportIndex routing
+        // emulation - the builtin becomes a flat varying, the fragment stage gets a
+        // per-pass gate, and a routed draw is REPLAYED once per distinct viewport state
+        // with the real glViewport/glScissor/glDepthRangef set for it. Auto is ON, and
+        // it is ON even where the driver advertises GL_OES_viewport_array, because that
+        // extension only ever gave the SHADER a compilable name: MobileGL has never
+        // programmed a driver's INDEXED viewport state (SyncRenderState pushes index 0
+        // and nothing else), so on an extension-capable driver every index rasterized as
+        // index 0 exactly as it did without one. ForceOff returns to that behaviour -
+        // the pre-emulation path, extension passthrough where it exists and
+        // LowerViewportIndexPass' demote-to-a-plain-global where it does not - and is
+        // the negative control the emulation is measured against.
+        QuirkOverride ViewportArrayEmulation = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

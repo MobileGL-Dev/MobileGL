@@ -30,15 +30,23 @@
 // applies the flip to viewport 0 and forgets the other fifteen renders a correct-looking FBO and
 // an upside-down window - the classic multi-viewport bug, and invisible to every FBO-only case.
 //
-// HONEST LIMIT OF THIS FILE. DirectGLES SKIPS every case: GLES has one viewport, one scissor
-// rectangle and no gl_ViewportIndex, so routing to index > 0 is an emulation feature that has
-// not been built (the Espryt half of KHR-GL43.viewport_array's rendering group is deliberately
-// still red). The skip is explicit rather than silent so a future emulation lands here as a
-// failing test and not as a test that was quietly never running. DirectVulkan additionally
-// skips when the device lacks the multiViewport feature - Vulkan then forbids a pipeline from
-// declaring more than one viewport at all, which is a device limit and not a MobileGL bug;
-// lavapipe (every CI lane) and both Mali/Adreno devices support it, so the cases do run where
-// it matters.
+// BOTH BACKENDS RUN EVERY CASE, by two completely different routes, which is the point of
+// keeping them in one file. DirectVulkan declares sixteen viewports on the pipeline and lets the
+// hardware route. DirectGLES has one viewport, one scissor rectangle and one depth range and no
+// gl_ViewportIndex at all, so it EMULATES: the builtin becomes a flat varying, the fragment stage
+// gets a gate, and the draw is replayed once per distinct viewport state (Managers.h,
+// ForEachViewportRoutingPass). Every assertion below is about pixels, so it cannot tell the two
+// apart - which is exactly what has to be true.
+//
+// DirectVulkan skips when the device lacks the multiViewport feature - Vulkan then forbids a
+// pipeline from declaring more than one viewport at all, which is a device limit and not a
+// MobileGL bug; lavapipe (every CI lane) and both Mali/Adreno devices support it, so the cases do
+// run where it matters.
+//
+// The last case is the negative control for the emulation and runs on DirectGLES only: it builds
+// the SAME program with the emulation switched off and requires the routing to collapse onto
+// viewport 0. Without it every assertion above could be satisfied by a backend that happened to
+// be right for some other reason, and the emulation's own switch would be untested.
 
 #include <cmath>
 #include <string>
@@ -46,6 +54,10 @@
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
+
+// For the emulation switch the negative-control case below flips. Nothing else in this file needs
+// to know which backend it is running on.
+#include <Config.h>
 
 #ifdef GLAPI
 #undef GLAPI
@@ -141,13 +153,6 @@ void main() { fragColor = gl_FragCoord.z; }
             void SetUp() override {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
-
-                if (Gl().BackendName() == "DirectGLES") {
-                    GTEST_SKIP() << "gl_ViewportIndex routing is not emulated on DirectGLES: GLES has one viewport "
-                                    "and one scissor rectangle, so every index rasterizes as index 0. The indexed "
-                                    "STATE is still asserted (MG_Test RenderStateTest); this is the deferred "
-                                    "rendering half of KHR-GL43.viewport_array.";
-                }
 
                 GLint maxViewports = 0;
                 glGetIntegerv(GL_MAX_VIEWPORTS, &maxViewports);
@@ -520,11 +525,78 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             DestroyIntTarget(target);
         }
 
-        // --- 4. an explicitly EMPTY scissor box clips, it does not mean "never written" --------
+        // --- 4. the negative control for the DirectGLES emulation -----------------------------
         //
-        // Deliberately NOT a ViewportArrayScenario case, because it must run on DirectGLES - the
-        // backend that got it wrong - and that fixture skips there. It needs none of the routing:
-        // one viewport, one scissor rectangle, no geometry stage.
+        // Everything above is a claim about pixels, and a claim about pixels cannot tell an
+        // emulation that works from a backend that was going to be right anyway. This case builds
+        // the SAME program with MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION off and requires case 1's
+        // result to COLLAPSE: with no routing, every geometry invocation rasterizes against
+        // viewport 0's rectangle, so the last invocation paints the whole surface and every cell
+        // reads 15 instead of its own index. That is the pre-emulation behaviour this backend had
+        // (and the failure signature KHR-GL43.viewport_array reported on it), pinned here so that
+        // (a) the three cases above are known to be testing the emulation and not the weather,
+        // and (b) the switch itself has a test.
+        //
+        // DirectGLES only: the flag steers nothing on DirectVulkan, which routes natively.
+        TEST_F(ViewportArrayScenario, WithoutTheEmulationEveryIndexCollapsesOntoViewportZero) {
+            if (Gl().BackendName() != "DirectGLES") {
+                GTEST_SKIP() << "the emulation switch is a DirectGLES concern; DirectVulkan routes "
+                                "gl_ViewportIndex natively and ignores it";
+            }
+
+            // The feature table is a process-global and this fixture shares its context with every
+            // other scenario in the process, so the restore is not optional.
+            struct ScopedEmulationOff {
+                ScopedEmulationOff(): saved(MobileGL::MG_Config::Features.ViewportArrayEmulation) {
+                    MobileGL::MG_Config::Features.ViewportArrayEmulation =
+                        MobileGL::MG_Config::QuirkOverride::ForceOff;
+                }
+                ~ScopedEmulationOff() { MobileGL::MG_Config::Features.ViewportArrayEmulation = saved; }
+                MobileGL::MG_Config::QuirkOverride saved;
+            };
+
+            IntTarget target = MakeIntTarget(kSurfaceSide, kSurfaceSide);
+            SetupGridViewports(kCellSize, kCellSize);
+
+            GLuint unroutedProgram = 0;
+            {
+                const ScopedEmulationOff scopedEmulationOff;
+                // A FRESH program: the emitted ESSL is decided at link time and memoized on a key
+                // that carries this flag, so reusing m_program would just replay the routed build.
+                unroutedProgram = BuildProgram(kGridGeometrySource, kIntFragmentSource);
+                ASSERT_NE(unroutedProgram, 0u) << "unrouted program failed to build: " << m_buildLog;
+                glUseProgram(unroutedProgram);
+                glBindVertexArray(m_vao);
+                glDrawArrays(GL_POINTS, 0, 1);
+                ASSERT_EQ(glGetError(), GL_NO_ERROR);
+            }
+
+            const std::vector<GLint> pixels = ReadInts(kSurfaceSide, kSurfaceSide);
+            // Cell (0, 0) IS viewport 0's rectangle, so it is the one cell an unrouted draw paints
+            // with something. Everything it holds comes from the last geometry invocation.
+            EXPECT_EQ(CellCentre(pixels, kSurfaceSide, 0, 0), kViewportCount - 1)
+                << "with the emulation off, viewport 0's rectangle must hold the LAST invocation's "
+                   "index - if it holds 0 the routing is still happening and this control proves "
+                   "nothing";
+            for (int y = 0; y < kGridSide; ++y) {
+                for (int x = 0; x < kGridSide; ++x) {
+                    if (x == 0 && y == 0) continue;
+                    EXPECT_EQ(CellCentre(pixels, kSurfaceSide, x, y), kUnwritten)
+                        << "cell (" << x << ", " << y << ") is outside viewport 0's rectangle and an "
+                        << "unrouted draw cannot reach it";
+                }
+            }
+
+            glUseProgram(0);
+            glDeleteProgram(unroutedProgram);
+            DestroyIntTarget(target);
+        }
+
+        // --- 5. an explicitly EMPTY scissor box clips, it does not mean "never written" --------
+        //
+        // Deliberately NOT a ViewportArrayScenario case, because that fixture's geometry stage
+        // routes and this claim needs none of it: one viewport, one scissor rectangle, no
+        // geometry stage - and it has to hold identically whether or not anything routes.
         //
         // glScissor(0, 0, 0, 0) is legal GL meaning "the scissor test rejects every fragment",
         // but it is byte-identical to the all-zero rectangle a context starts with, whose meaning
