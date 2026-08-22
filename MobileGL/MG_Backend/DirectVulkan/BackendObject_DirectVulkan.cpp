@@ -500,7 +500,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .RendererName = "Magma",
             .BackendName = "Direct (Vulkan)",
             .ExtraVendor = Nullopt,
-            .RendererGLInfo = {.TargetGLVersion = {4, 0, 0},
+            .RendererGLInfo = {.TargetGLVersion = {4, 3, 0},
                                .TargetGLSLVersion = {4, 6, 0},
                                // Baseline advertisement (no runtime-gated capabilities); a live
                                // backend reconciles its copy in UpdateAdvertisedExtensions.
