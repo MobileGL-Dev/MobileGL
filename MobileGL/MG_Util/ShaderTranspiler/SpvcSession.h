@@ -120,6 +120,25 @@ namespace MobileGL {
                 // `outGlBindings` is appended to, so one vector can collect a whole program's
                 // stages; it may repeat a binding declared by several of them.
                 spvc_result SetAtomicCounterBlockBindings(Int topBinding, Vector<Int>& outGlBindings);
+                // Drops the Index decoration from every fragment output that carries the DEFAULT
+                // colour index 0, so the emitted ESSL does not print `index = 0`.
+                //
+                // Index 0 is what every single-source fragment output already is, in GL and in
+                // ESSL alike, and SPIR-V carries the decoration only because the application
+                // spelled the qualifier out - `layout(location = 0, index = 0) out vec4 c;` is
+                // legal desktop GLSL and says nothing. Printing it back into ESSL is NOT
+                // harmless: GLSL ES has no `index` layout qualifier in core, so the driver
+                // answers "index layout qualifier requires EXT_blend_func_extended" and refuses
+                // the stage. The program then links nothing and every draw with it renders
+                // NOTHING - verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process,
+                // and it is why KHR-GL43.shader_atomic_counters.basic-program-query read back a
+                // black render target.
+                //
+                // A NON-zero index is left exactly as it is: that one really does select the
+                // second dual-source input and cannot be expressed without the extension, so it
+                // must keep reaching the driver (the frontend's own glBindFragDataLocationIndexed
+                // path already emits only non-zero indices for the same reason).
+                spvc_result DropDefaultFragmentOutputColorIndex();
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;
                 const char* GetLastErrorString() const;

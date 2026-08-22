@@ -5865,6 +5865,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             spvcSession.SetAtomicCounterBlockBindings(atomicCounterEsslBindingTop,
                                                       outAtomicCounterGlBindings);
 
+            // `layout(index = 0)` is the GL default spelled out loud, and GLSL ES has no such
+            // qualifier in core - a stage that prints it is refused with "index layout
+            // qualifier requires EXT_blend_func_extended" and the whole program then draws
+            // nothing. Drop the decoration when it carries the default; a REAL dual-source
+            // index (1) is left alone, because that one genuinely needs the extension and the
+            // driver has to see it. Fragment stage only: no other stage can carry it.
+            if (glShaderType == GL_FRAGMENT_SHADER) {
+                spvcSession.DropDefaultFragmentOutputColorIndex();
+            }
+
             const char* result = nullptr;
             spvcSession.Compile(&result);
 

@@ -442,6 +442,23 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            spvc_result SpvcSession::DropDefaultFragmentOutputColorIndex() {
+                if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
+
+                SPVC_CHK_INIT
+                const spvc_reflected_resource* list = nullptr;
+                size_t count = 0;
+                SPVC_CHK_RESULT(spvc_resources_get_resource_list_for_type(
+                    resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &list, &count));
+                for (size_t i = 0; i < count; ++i) {
+                    const spvc_reflected_resource& resource = list[i];
+                    if (!spvc_compiler_has_decoration(compiler, resource.id, SpvDecorationIndex)) continue;
+                    if (spvc_compiler_get_decoration(compiler, resource.id, SpvDecorationIndex) != 0u) continue;
+                    spvc_compiler_unset_decoration(compiler, resource.id, SpvDecorationIndex);
+                }
+                SPVC_CHK_RETURN
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

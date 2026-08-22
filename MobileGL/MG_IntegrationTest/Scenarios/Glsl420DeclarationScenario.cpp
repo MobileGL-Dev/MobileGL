@@ -181,6 +181,13 @@ out vec4 o_color;
 void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
 )";
 
+        // The colour index spelled out at its default value. Says nothing that
+        // `layout(location = 0)` alone does not, and must therefore cost nothing.
+        constexpr const char* kExplicitColorIndexFS = R"(#version 420 core
+layout(location = 0, index = 0) out vec4 o_color;
+void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
+)";
+
         class Glsl420DeclarationScenario : public ScenarioTest {
         protected:
             void TearDown() override {
@@ -471,6 +478,26 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         const Rgba8 centre = DrawAndRead(program);
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(centre.g, 255) << "the atomic-counter shader linked but painted nothing";
+    }
+
+    // `layout(location = 0, index = 0)` is the GL default written out loud, and an application
+    // is entitled to write it - KHR-GL43.shader_atomic_counters.basic-program-query does. It has
+    // to reach the driver as an ORDINARY single-source output: GLSL ES has no `index` qualifier
+    // in core, so a transpiler that prints the decoration back gets "index layout qualifier
+    // requires EXT_blend_func_extended", the stage never compiles, the program runs with a stage
+    // missing and the draw paints nothing at all. Black, not red - which is why the conformance
+    // case looked like the atomic counters had stopped counting.
+    TEST_F(Glsl420DeclarationScenario, AnExplicitDefaultColorIndexStillDraws) {
+        if (!Ready()) return;
+
+        const GLuint program = Build(kQuadVS, kExplicitColorIndexFS);
+        if (program == 0) return;
+
+        const Rgba8 centre = DrawAndRead(program);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_EQ(centre.g, 255) << "a fragment output declared layout(location = 0, index = 0) painted "
+                                    "nothing; its stage was almost certainly refused by the driver";
+        EXPECT_EQ(centre.r, 0u);
     }
 
 } // namespace MGITest
