@@ -76,6 +76,7 @@ namespace MobileGL {
                 // assigned - see the comment on TMglGlslIoResolver::reserverResourceSlot.
                 UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
                 std::set<String>* storageBlocksWithoutBinding = nullptr;
+                std::set<String>* uniformBlocksWithoutBinding = nullptr;
             };
 
             struct ProgramBinaryAttrib {

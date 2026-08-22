@@ -29,16 +29,19 @@ namespace MobileGL {
         TMglGlslIoResolver(const glslang::TIntermediate& intermediate, const ExplicitVarSlotMap& vertexIns,
                            const ExplicitVarSlotMap& fragOuts, const ExplicitVarSlotMap& fragOutIndices,
                            ExplicitVarSlotMap* opaqueUniformBindings,
-                           std::set<String>* storageBlocksWithoutBinding = nullptr)
+                           std::set<String>* storageBlocksWithoutBinding = nullptr,
+                           std::set<String>* uniformBlocksWithoutBinding = nullptr)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
               m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings),
-              m_storageBlocksWithoutBinding(storageBlocksWithoutBinding) {}
+              m_storageBlocksWithoutBinding(storageBlocksWithoutBinding),
+              m_uniformBlocksWithoutBinding(uniformBlocksWithoutBinding) {}
         TMglGlslIoResolver(const glslang::TProgram& program, const EShLanguage stage,
                            const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts,
                            const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings,
-                           std::set<String>* storageBlocksWithoutBinding = nullptr)
+                           std::set<String>* storageBlocksWithoutBinding = nullptr,
+                           std::set<String>* uniformBlocksWithoutBinding = nullptr)
             : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
-                                 opaqueUniformBindings, storageBlocksWithoutBinding) {}
+                                 opaqueUniformBindings, storageBlocksWithoutBinding, uniformBlocksWithoutBinding) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         int resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
@@ -62,6 +65,13 @@ namespace MobileGL {
         // layout(binding = N). GL 4.3 core 7.8 gives such a block binding ZERO; see
         // ProgramLinkTask::SeedDefaultStorageBlockBindings for what is done with them.
         std::set<String>* m_storageBlocksWithoutBinding = nullptr;
+        // The same capture for UNIFORM blocks. GL 4.6 core 7.6.2 gives an unqualified uniform
+        // block binding ZERO, and glslang's auto-mapper does not: it packs uniform blocks into
+        // the same slot space as samplers and images (spvVersion.openGl is 0 under
+        // setEnvClient(EShClientVulkan), so TDefaultGlslIoResolver::resolveBinding keys every
+        // resource kind on set 0), so an unbound block declared after an unbound image lands on
+        // 1. See ProgramLinkTask's UBO reflection loop for what is done with them.
+        std::set<String>* m_uniformBlocksWithoutBinding = nullptr;
         std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
         std::map<glslang::TString, int> m_plainUniformLocationByName;
         bool m_plainUniformLocationsAssigned = false;

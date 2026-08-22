@@ -486,7 +486,8 @@ namespace MobileGL {
                                                        attrib.explicitFragmentOutLocations,
                                                        attrib.explicitFragmentOutIndices,
                                                        attrib.explicitOpaqueUniformBindings,
-                                                       attrib.storageBlocksWithoutBinding);
+                                                       attrib.storageBlocksWithoutBinding,
+                                                       attrib.uniformBlocksWithoutBinding);
                     break;
                 }
                 auto ioMapper = UniquePtr<glslang::TIoMapper>(glslang::GetGlslIoMapper());

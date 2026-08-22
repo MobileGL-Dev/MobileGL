@@ -123,6 +123,7 @@ namespace {
         String log;
         UnorderedMap<String, Uint> opaqueBindings;
         std::set<String> storageBlocksWithoutBinding;
+        std::set<String> uniformBlocksWithoutBinding;
         UnorderedMap<String, Int> uniformLocations;
     };
 
@@ -145,6 +146,7 @@ namespace {
         if (captureEnabled) {
             programAttrib.explicitOpaqueUniformBindings = &capture.opaqueBindings;
             programAttrib.storageBlocksWithoutBinding = &capture.storageBlocksWithoutBinding;
+            programAttrib.uniformBlocksWithoutBinding = &capture.uniformBlocksWithoutBinding;
         }
 
         auto programResult = ShaderCompiler::LinkProgram(programAttrib);
@@ -561,11 +563,49 @@ void main() {
         << "a declared binding must never be defaulted away";
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("BoundFirst"), 0u)
         << "the binding may appear anywhere in the layout list, not only last";
-    // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, and
-    // its default is already handled where uniformBlockBinding is seeded. Naming it here would
-    // make the seeder default a resource it does not own.
+    // A UNIFORM block is a different binding space with its own glUniformBlockBinding path, so it
+    // must not reach the storage-block seeder - it has a capture set of its own (see
+    // UnqualifiedUniformBlocksAreCapturedSeparatelyFromStorageBlocks below).
     EXPECT_EQ(capture.storageBlocksWithoutBinding.count("InputBuffer"), 0u)
-        << "uniform blocks are out of scope";
+        << "uniform blocks belong to the other set";
+}
+
+// The uniform-block half of the same capture, and the reason it exists: glslang packs uniform
+// blocks into the same auto-mapped slot space as samplers and images, so an unqualified block
+// declared AFTER an unbound image comes back carrying binding 1 while GL 4.6 core 7.6.2 requires
+// it to report 0. Reflection cannot tell the invented number from a declared one, so the shader's
+// own answer has to be captured here, during mapIO, and applied at reflection time.
+// KHR-GL4{2,3}.shading_language_420pack.binding_uniform_default is exactly this shader shape.
+TEST_F(GlslangCaptureProbeTest, UnqualifiedUniformBlocksAreCapturedSeparatelyFromStorageBlocks) {
+    const String source = R"(#version 430 core
+layout(local_size_x = 1) in;
+writeonly uniform image2D uni_image;
+layout(std140) uniform GOKU { vec4 gohan; vec4 goten; } goku;
+layout(std140, binding = 3) uniform VEGETA { vec4 trunks; } vegeta;
+layout(std430) buffer OutputBuffer { vec4 data0[]; } g_out_buffer;
+void main() {
+  g_out_buffer.data0[0] = goku.gohan + goku.goten + vegeta.trunks;
+  imageStore(uni_image, ivec2(0), vec4(1.0));
+}
+)";
+
+    const LinkCapture capture = CaptureFromCompute(source);
+    ASSERT_TRUE(capture.linked) << capture.log;
+
+    EXPECT_EQ(capture.uniformBlocksWithoutBinding.count("GOKU"), 1u)
+        << "an unqualified uniform block declared after an unbound image is the regressing shape";
+    EXPECT_EQ(capture.uniformBlocksWithoutBinding.count("VEGETA"), 0u)
+        << "a declared binding must never be defaulted away";
+    EXPECT_EQ(capture.uniformBlocksWithoutBinding.count("OutputBuffer"), 0u)
+        << "storage blocks belong to the other set";
+    EXPECT_EQ(capture.storageBlocksWithoutBinding.count("GOKU"), 0u)
+        << "the two sets must not cross-contaminate";
+
+    // The negative control every capture case here carries: with the OUT pointer left null the
+    // resolver must write nothing at all.
+    const LinkCapture off = CaptureFromCompute(source, /*captureEnabled=*/false);
+    ASSERT_TRUE(off.linked) << off.log;
+    EXPECT_TRUE(off.uniformBlocksWithoutBinding.empty());
 }
 
 // The capture must not mistake a buffer-typed SAMPLER or a member qualifier for a block, and

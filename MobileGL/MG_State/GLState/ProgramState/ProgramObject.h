@@ -1024,8 +1024,10 @@ namespace MobileGL::MG_State::GLState {
         Uint32 GetBlockBindingVersion() const { return m_blockBindingVersion; }
 
         // Set by glUniformBlockBinding. The vector is seeded at link with each block's DECLARED
-        // binding (layout(binding=N), else -1), so an untouched program already reports what its
-        // shaders asked for.
+        // binding (layout(binding=N)), and with GL's default of 0 for a block that declared none
+        // - which the reflection cannot tell apart on its own, so the seeder consults
+        // uniformBlocksWithoutBinding. Either way an untouched program already reports what GL
+        // says it should.
         void SetUniformBlockBinding(Uint index, Uint binding) {
             if (index >= Artifacts().uniformBlockBinding.size() || Artifacts().uniformBlockBinding[index] == static_cast<Int>(binding)) {
                 return;
@@ -1287,6 +1289,11 @@ namespace MobileGL::MG_State::GLState {
             // binding from an invented one - and, unlike the per-shader lexer this replaced,
             // sees the declaration with its macros expanded.
             std::set<String> storageBlocksWithoutBinding;
+            // The same list for UNIFORM blocks, and it is needed for the same reason: glslang's
+            // auto-mapper assigns every uniform block a binding whether or not the shader asked
+            // for one, so uniformBlockBinding below cannot tell "declared 1" from "invented 1".
+            // GL 4.6 core 7.6.2 requires an unqualified block to report ZERO.
+            std::set<String> uniformBlocksWithoutBinding;
 
             Uint activeUniformCount = 0;
             Uint maxUniformLocation = 0;
