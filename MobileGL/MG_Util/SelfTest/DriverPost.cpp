@@ -37,17 +37,19 @@
 namespace MobileGL::MG_Util::SelfTest {
     namespace {
         // Display ranks for PostCheck::displayRank: within one backend section, FAIL
-        // rows render first, then WARN, PASS, INFO, then the device-driver identity
+        // rows render first, then WARN, then PASS, then the device-driver identity
         // strings, and always last (regardless of status) the strings MobileGL itself
         // reports to applications. Rows are stable-sorted, so relative order within a
         // rank is preserved. Purely cosmetic: the verdict computation is unaffected.
+        //
+        // There is no rank between PASS and the identity blocks because there are no INFO
+        // capability rows any more - see the taxonomy on ReportBuilder below.
         enum DisplayRank : Int {
             RankFail = 0,
             RankWarn = 1,
             RankPass = 2,
-            RankInfo = 3,
-            RankDriverReported = 4,
-            RankMobileGLReported = 5,
+            RankDriverReported = 3,
+            RankMobileGLReported = 4,
         };
 
         // Both backends' fp64 rows end the same way, and the sentence they end with depends on
@@ -68,6 +70,28 @@ namespace MobileGL::MG_Util::SelfTest {
                    "to advertise it anyway";
         }
 
+        // ===================== THE ROW VERDICT TAXONOMY =====================
+        //
+        // EVERY CAPABILITY ROW IS PASS, WARN OR FAIL. INFO IS FOR IDENTITY ONLY - renderer
+        // names, version strings, driver strings - and there is deliberately no way to emit an
+        // INFO capability row from here: the only INFO emitters are the two identity helpers at
+        // the bottom of this struct. A row that says "not supported; no impact today" tells a
+        // reader nothing about whether their application will work, which is the one question
+        // the screen exists to answer.
+        //
+        //   PASS - the backend supports the capability directly.
+        //   WARN - the backend does NOT support it directly, but a MobileGL quirk substitutes
+        //          and the application still sees correct behaviour. The detail names the
+        //          substitute and whatever it costs.
+        //   FAIL - unsupported, with no substitute: an application that uses it gets wrong
+        //          output, a failed draw, or nothing at all. The detail says what breaks.
+        //
+        // FAIL comes in two flavours, and the difference is about the BACKEND, not the row.
+        // Fail() is for a capability the backend cannot start without, and it drives the
+        // backend summary to UNSUPPORTED. FailOptional() is for a capability that is just as
+        // unusable but that the backend runs fine without, so the summary stays DEGRADED - a
+        // device with no dual-source blend still plays Minecraft, and reporting the whole
+        // backend as unusable because of it would be a lie in the other direction.
         struct ReportBuilder {
             BackendPostReport report;
             Bool fatalFailed = false;
@@ -77,18 +101,25 @@ namespace MobileGL::MG_Util::SelfTest {
                 report.checks.push_back({Move(name), "PASS", Move(detail), RankPass});
             }
 
+            // FAIL on a capability the backend cannot run without: the backend summary becomes
+            // UNSUPPORTED.
             void Fail(String name, String detail) {
                 fatalFailed = true;
+                report.checks.push_back({Move(name), "FAIL", Move(detail), RankFail});
+            }
+
+            // FAIL on a capability with no substitute that the backend can nonetheless run
+            // without. The row is as red as any other FAIL - an application using it does not
+            // work - but the backend summary degrades rather than declaring the whole backend
+            // unusable.
+            void FailOptional(String name, String detail) {
+                warnUnmet = true;
                 report.checks.push_back({Move(name), "FAIL", Move(detail), RankFail});
             }
 
             void Warn(String name, String detail) {
                 warnUnmet = true;
                 report.checks.push_back({Move(name), "WARN", Move(detail), RankWarn});
-            }
-
-            void Info(String name, String detail) {
-                report.checks.push_back({Move(name), "INFO", Move(detail), RankInfo});
             }
 
             // A "Backend driver reported ..." identity string straight from the device
@@ -158,17 +189,19 @@ namespace MobileGL::MG_Util::SelfTest {
         // applications DO, not just what they can do: with the extension advertised, Iris
         // and Sodium batch their pipeline compiles and poll GL_COMPLETION_STATUS_KHR.
         //
-        // PASS when it is on (the intended configuration once the default flips), INFO when
-        // it is off - "off" is a supported configuration, not a degradation, so it must not
-        // colour the verdict. Either way the row names MOBILEGL_ASYNC_SHADER_COMPILE, so a
-        // user reading a POST page can tell which side of the switch they are on and how to
-        // change it.
+        // PASS when it is on (the intended configuration once the default flips), WARN when it
+        // is off: the capability is not advertised, and what stands in for it - compiling on
+        // the calling thread - produces exactly the same programs, just without the overlap.
+        // Either way the row names MOBILEGL_ASYNC_SHADER_COMPILE, so a user reading a POST page
+        // can tell which side of the switch they are on and how to change it.
         void AppendAsyncShaderCompileRow(ReportBuilder& builder) {
             constexpr const char* rowName = "Asynchronous shader compilation";
             if (!MG_Util::Async::AsyncShaderCompileEnabled()) {
-                builder.Info(rowName,
-                             "off; glCompileShader and glLinkProgram run on the calling thread and "
-                             "GL_KHR_parallel_shader_compile is not advertised (set environment variable "
+                builder.Warn(rowName,
+                             "off; GL_KHR_parallel_shader_compile is not advertised and "
+                             "glCompileShader/glLinkProgram run on the calling thread instead. The "
+                             "programs are identical - only the overlap is lost, so a shaderpack load "
+                             "takes as long as its compiles do (set environment variable "
                              "MOBILEGL_ASYNC_SHADER_COMPILE=1 to enable it)");
                 return;
             }
@@ -301,22 +334,30 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Pass("Polygon mode",
                              "glPolygonMode GL_LINE/GL_POINT available via GL_NV/ANGLE_polygon_mode");
             } else {
-                builder.Warn("Polygon mode",
-                             "no GL_NV/ANGLE_polygon_mode; glPolygonMode GL_LINE/GL_POINT falls back to GL_FILL");
+                builder.FailOptional("Polygon mode",
+                                     "no GL_NV/ANGLE_polygon_mode; glPolygonMode GL_LINE/GL_POINT silently "
+                                     "falls back to GL_FILL. There is no substitute - wireframe and point "
+                                     "rasterization would have to be rebuilt out of line/point primitives - "
+                                     "so an application asking for either gets solid triangles instead");
             }
             if (caps.SupportsIndexedColorMask) {
                 builder.Pass("Indexed color mask",
                              "per-draw-buffer glColorMaski available (ES 3.2 core or draw_buffers_indexed)");
             } else {
-                builder.Warn("Indexed color mask",
-                             "no indexed glColorMaski; per-draw-buffer color masks fall back to draw buffer 0");
+                builder.FailOptional("Indexed color mask",
+                                     "no indexed glColorMaski; every per-draw-buffer colour mask collapses "
+                                     "onto draw buffer 0's, so an MRT pass that masks its attachments "
+                                     "differently writes the wrong channels to all but one of them, with "
+                                     "nothing to substitute");
             }
             if (caps.SupportsDualSourceBlend) {
                 builder.Pass("Dual-source blend",
                              "GL_SRC1_* dual-source blend factors available via GL_EXT_blend_func_extended");
             } else {
-                builder.Warn("Dual-source blend",
-                             "no GL_EXT_blend_func_extended; GL_SRC1_* dual-source blend factors hard-fail at draw");
+                builder.FailOptional("Dual-source blend",
+                                     "no GL_EXT_blend_func_extended; a draw using a GL_SRC1_* blend factor "
+                                     "hard-fails, and a second fragment output cannot be produced any other "
+                                     "way");
             }
 
             if (es31) {
@@ -328,10 +369,13 @@ namespace MobileGL::MG_Util::SelfTest {
                     builder.Pass("Vertex shader storage blocks",
                                  format("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = {}", maxVertexSsboBlocks));
                 } else {
-                    builder.Warn("Vertex shader storage blocks",
-                                 format("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = {}; the Flywheel/Create indirect draw "
-                                        "machinery cannot read indirect command buffers from the vertex stage",
-                                        maxVertexSsboBlocks));
+                    builder.FailOptional(
+                        "Vertex shader storage blocks",
+                        format("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = {}; the vertex stage cannot read a "
+                               "storage buffer at all, and there is nothing to read one with instead - the "
+                               "Flywheel/Create indirect draw machinery, which fetches its per-instance data "
+                               "from a vertex-stage SSBO, cannot run",
+                               maxVertexSsboBlocks));
                 }
 
                 if (caps.MaxShaderStorageBufferBindings >= 8) {
@@ -350,14 +394,15 @@ namespace MobileGL::MG_Util::SelfTest {
             if (caps.SupportsPersistentMapping) {
                 builder.Pass("GL_EXT_buffer_storage", "supported (persistent buffer mapping)");
             } else {
-                builder.Info("GL_EXT_buffer_storage",
-                             "not supported; no impact today: the frontend fully emulates persistent "
-                             "mapping regardless of this extension");
+                builder.Warn("GL_EXT_buffer_storage",
+                             "not supported; the frontend emulates persistent mapping with its own "
+                             "shadow storage instead, so glBufferStorage and a GL_MAP_PERSISTENT_BIT "
+                             "mapping behave correctly - at the cost of the shadow copy");
             }
             if (caps.SupportsBaseInstance) {
                 builder.Pass("GL_EXT_base_instance", "supported (native baseInstance draws)");
             } else {
-                builder.Info("GL_EXT_base_instance",
+                builder.Warn("GL_EXT_base_instance",
                              "not supported; direct baseInstance draws are emulated by shifting the "
                              "instanced arrays' attribute offsets, and gl_BaseInstance by a uniform. "
                              "The one gap is an INDIRECT draw whose command carries a non-zero "
@@ -366,15 +411,17 @@ namespace MobileGL::MG_Util::SelfTest {
             // Both multi-draw rows gate on the capability flags, not the entry-point pointers:
             // eglGetProcAddress may hand back a non-NULL stub for these on drivers without the
             // extension (NVIDIA ES does, and its glMultiDrawElementsBaseVertexEXT stub silently
-            // drops every draw), so the pointers prove nothing. Absence is INFO in both cases
-            // because MobileGL falls back to an equivalent per-draw loop.
+            // drops every draw), so the pointers prove nothing. Absence is WARN in both cases:
+            // MobileGL falls back to an equivalent per-draw loop, so the output is identical and
+            // only the command count changes.
             if (caps.SupportsMultiDrawIndirect) {
                 builder.Pass("Multi-draw indirect",
                              "glMultiDrawArrays/ElementsIndirectEXT available via GL_EXT_multi_draw_indirect");
             } else {
-                builder.Info("Multi-draw indirect",
-                             "GL_EXT_multi_draw_indirect not supported; no impact today: multi-draw "
-                             "indirect is decomposed into per-command indirect draws regardless");
+                builder.Warn("Multi-draw indirect",
+                             "GL_EXT_multi_draw_indirect not supported; MobileGL decomposes a multi-draw "
+                             "indirect batch into per-command indirect draws, which renders the same "
+                             "thing for one driver call per command instead of one per batch");
             }
             if (caps.SupportsMultiDrawElementsBaseVertex) {
                 builder.Pass("Multi-draw base vertex",
@@ -382,7 +429,7 @@ namespace MobileGL::MG_Util::SelfTest {
                              "with GL_EXT_multi_draw_arrays); glMultiDrawElementsBaseVertex batches into one "
                              "driver call");
             } else {
-                builder.Info("Multi-draw base vertex",
+                builder.Warn("Multi-draw base vertex",
                              "glMultiDrawElementsBaseVertexEXT not supported (needs EXT/OES_"
                              "draw_elements_base_vertex plus GL_EXT_multi_draw_arrays); the batch "
                              "takes the next emulation tier instead, with identical output - see "
@@ -407,9 +454,12 @@ namespace MobileGL::MG_Util::SelfTest {
                              "available (ES 3.1 core); the opt-in \"compute\" multi-draw tier can flatten a "
                              "whole batch into one draw");
             } else {
-                builder.Info("Compute shaders",
-                             "not available (pre-ES 3.1); no impact on the default multi-draw tiers, which "
-                             "never use compute");
+                builder.FailOptional("Compute shaders",
+                                     "not available (pre-ES 3.1); MobileGL advertises "
+                                     "GL_ARB_compute_shader on an OpenGL 4.x context and there is no way to "
+                                     "run a glDispatchCompute without the ES counterpart, so a program with "
+                                     "a compute shader cannot be built at all. The default multi-draw tiers "
+                                     "never use compute, so nothing else is lost");
             }
             {
                 // The same resolution the backend runs, over the capabilities probed here.
@@ -420,45 +470,58 @@ namespace MobileGL::MG_Util::SelfTest {
                 // was consulted.
                 using MG_Backend::DirectGLES::MultiDrawImpl::ResolveTier;
                 String resolution;
-                ResolveTier(caps, glesFuncs, MG_Config::Features.EsprytMultiDrawMode, &resolution);
-                builder.Info("Multi-draw elements tier",
-                             "glMultiDrawElements(BaseVertex) emulation: " + resolution +
-                                 "; override with MOBILEGL_ESPRYT_MULTIDRAW_MODE");
+                const MG_Config::GLESMultiDrawMode tier =
+                    ResolveTier(caps, glesFuncs, MG_Config::Features.EsprytMultiDrawMode, &resolution);
+                const String detail = "glMultiDrawElements(BaseVertex) emulation: " + resolution +
+                                      "; override with MOBILEGL_ESPRYT_MULTIDRAW_MODE";
+                // PASS only on the tier that hands the whole batch to the driver in one call.
+                // Every other tier is a MobileGL substitute: the output is identical, the
+                // command count is not.
+                if (tier == MG_Config::GLESMultiDrawMode::Ext) {
+                    builder.Pass("Multi-draw elements tier", detail);
+                } else {
+                    builder.Warn("Multi-draw elements tier",
+                                 detail + " - the batch is replayed rather than handed over whole, "
+                                          "which renders the same thing for more driver calls");
+                }
             }
             if (caps.SupportsTextureBorderClamp) {
                 builder.Pass("Texture border clamp",
                              "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "
                              "GL_CLAMP_TO_BORDER samples the colour the application set)");
             } else {
-                builder.Warn("Texture border clamp",
-                             "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
-                             "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
-                             "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
-                             "border instead of the requested colour");
+                builder.FailOptional(
+                    "Texture border clamp",
+                    "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
+                    "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
+                    "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
+                    "border instead of the requested colour, and no wrap mode substitutes for it");
             }
             if (caps.SupportsTextureCubeMapArray) {
                 builder.Pass("Texture cube map array",
                              "supported (GL_TEXTURE_CUBE_MAP_ARRAY textures get real storage and can be "
                              "attached to a framebuffer)");
             } else {
-                builder.Warn("Texture cube map array",
-                             "not supported (pre-ES 3.2 without GL_EXT/OES_texture_cube_map_array); a cube "
-                             "map array texture gets no driver storage at all, so sampling one reads nothing "
-                             "and rendering to one does not reach the screen");
+                builder.FailOptional(
+                    "Texture cube map array",
+                    "not supported (pre-ES 3.2 without GL_EXT/OES_texture_cube_map_array); a cube "
+                    "map array texture gets no driver storage at all, so sampling one reads nothing "
+                    "and rendering to one does not reach the screen. Nothing substitutes: the "
+                    "shaders that declare a samplerCubeArray do not compile either");
             }
-            // WARN, not FAIL, and the choice is deliberate. The consequence is severe - buffer
-            // textures are CORE in OpenGL 3.1 and MobileGL advertises a 4.x context, so an
-            // application may use one without asking, and nothing degrades gracefully: the
-            // texture gets no driver storage, and every shader declaring a samplerBuffer fails
-            // to compile outright, because SPIRV-Cross emits `#extension GL_EXT_texture_buffer :
-            // require` for it below ESSL 320, so the program never links and every draw using it
-            // silently draws nothing. That is how Minecraft 26.3, whose cloud layer is built
-            // entirely from gl_VertexID plus texelFetch on a GL_R8I buffer texture, loses its
-            // clouds. But FAIL means "this backend cannot run on this driver", and that is not
-            // true: such a device runs everything that does not touch a buffer texture. It is
-            // also exactly the shape of the "Texture cube map array" row above, which loses its
-            // shaders to the same SPIRV-Cross `: require` mechanism and is a WARN - two adjacent
-            // rows with one consequence must not carry two severities.
+            // FAIL, and specifically FailOptional. The consequence is severe - buffer textures
+            // are CORE in OpenGL 3.1 and MobileGL advertises a 4.x context, so an application
+            // may use one without asking, and nothing degrades gracefully: the texture gets no
+            // driver storage, and every shader declaring a samplerBuffer fails to compile
+            // outright, because SPIRV-Cross emits `#extension GL_EXT_texture_buffer : require`
+            // for it below ESSL 320, so the program never links and every draw using it silently
+            // draws nothing. That is how Minecraft 26.3, whose cloud layer is built entirely
+            // from gl_VertexID plus texelFetch on a GL_R8I buffer texture, loses its clouds.
+            // There is no substitute, which is what makes the row FAIL; the backend still RUNS
+            // everything that does not touch a buffer texture, which is what keeps the failure
+            // out of the backend summary. It is exactly the shape of the "Texture cube map
+            // array" row above, which loses its shaders to the same SPIRV-Cross `: require`
+            // mechanism - two adjacent rows with one consequence must carry one severity.
             // The limit is stated on every tier because it is the one number an application can
             // read, and on the None tier it is knowingly a fiction (see below).
             {
@@ -495,16 +558,17 @@ namespace MobileGL::MG_Util::SelfTest {
                     break;
                 case Tier::None:
                 default:
-                    builder.Warn("Buffer textures",
-                                 format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
-                                        "glTexBuffer does not exist, so a buffer texture gets no storage, "
-                                        "and any shader declaring a samplerBuffer fails to compile and "
-                                        "leaves its program unlinked - every draw using it is a silent "
-                                        "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
-                                        "the value is a floor it cannot honour, kept because an OpenGL "
-                                        "4.x context may not answer 0 and GL has no way to say that a "
-                                        "core feature is missing",
-                                        advertisedLimit));
+                    builder.FailOptional(
+                        "Buffer textures",
+                        format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
+                               "glTexBuffer does not exist, so a buffer texture gets no storage, "
+                               "and any shader declaring a samplerBuffer fails to compile and "
+                               "leaves its program unlinked - every draw using it is a silent "
+                               "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
+                               "the value is a floor it cannot honour, kept because an OpenGL "
+                               "4.x context may not answer 0 and GL has no way to say that a "
+                               "core feature is missing",
+                               advertisedLimit));
                     break;
                 }
             }
@@ -513,7 +577,10 @@ namespace MobileGL::MG_Util::SelfTest {
             // either answer, and the rows exist so the two halves of the loss are named at
             // startup instead of discovered as a shader that will not compile or an
             // unexplained GL_INVALID_OPERATION at draw setup.
-            builder.Pass("fp64", AppendFp64AdvertisementNote(
+            // WARN, not PASS: ESSL has no 64-bit float type, so this backend does not support
+            // fp64 directly at all. What it has is a complete substitute - the shaders build and
+            // run - which is exactly what WARN means.
+            builder.Warn("fp64", AppendFp64AdvertisementNote(
                                      "demoted to fp32 - ESSL has no 64-bit float type, so every double / "
                                      "dvec / dmat in a shader is narrowed to 32 bits before transpilation "
                                      "(DemoteFloat64Pass). Such shaders COMPILE AND RUN, at single "
@@ -531,10 +598,11 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Pass("Tessellation patch parameters",
                              "glPatchParameteri present (GL_PATCH_VERTICES reaches the driver)");
             } else {
-                builder.Warn("Tessellation patch parameters",
-                             "glPatchParameteri missing (pre-ES 3.2 without GL_EXT_tessellation_shader); "
-                             "GL_PATCH_VERTICES stays at the driver default of 3 and a patch draw of any "
-                             "other size renders nothing");
+                builder.FailOptional("Tessellation patch parameters",
+                                     "glPatchParameteri missing (pre-ES 3.2 without "
+                                     "GL_EXT_tessellation_shader); GL_PATCH_VERTICES stays at the driver "
+                                     "default of 3 and a patch draw of any other size renders nothing - "
+                                     "the patch size cannot be communicated any other way");
             }
             if (glesFuncs.glGenTransformFeedbacks != nullptr && glesFuncs.glBindTransformFeedback != nullptr &&
                 glesFuncs.glPauseTransformFeedback != nullptr && glesFuncs.glResumeTransformFeedback != nullptr) {
@@ -550,7 +618,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Pass("GL_EXT_texture_norm16", "supported");
             } else {
                 builder.Warn("GL_EXT_texture_norm16",
-                             "not supported; 16-bit normalized texture formats need emulation");
+                             "not supported; MobileGL substitutes a wider format for every 16-bit "
+                             "normalized texture, so the texels are still readable at their declared "
+                             "precision at the cost of the extra storage");
             }
             if (caps.SupportsRenderSnorm) {
                 builder.Pass("GL_EXT_render_snorm",
@@ -583,23 +653,31 @@ namespace MobileGL::MG_Util::SelfTest {
                              "render targets (Iris reports GL_FRAMEBUFFER_UNSUPPORTED and refuses to load)");
             }
 
-            // INFO, never WARN: this is the HOST driver's ability to compile its own ESSL on
-            // its own threads, and MobileGL's asynchronous compilation does not depend on it
-            // in the slightest - the pool parallelises GLSL -> SPIR-V -> ESSL translation,
-            // which is where a shaderpack load actually spends its time, and it does that on
-            // a driver that has never heard of the extension. The row exists so that the day
-            // the driver-side half is overlapped too, the POST already says which devices can.
-            builder.Info("Driver GL_KHR_parallel_shader_compile",
-                         caps.SupportsParallelShaderCompile
-                             ? "supported; the device driver can also compile the translated ESSL off-thread"
-                             : "not supported; the device driver compiles the translated ESSL on the calling "
-                               "thread (MobileGL's own compile pool is unaffected)");
+            // WARN and never FAIL when it is absent: this is the HOST driver's ability to
+            // compile its own ESSL on its own threads, and MobileGL's own compile pool stands in
+            // for all of it that matters - the pool parallelises GLSL -> SPIR-V -> ESSL
+            // translation, which is where a shaderpack load actually spends its time, and it
+            // does that on a driver that has never heard of the extension. The row exists so
+            // that the day the driver-side half is overlapped too, the POST already says which
+            // devices can.
+            if (caps.SupportsParallelShaderCompile) {
+                builder.Pass("Driver GL_KHR_parallel_shader_compile",
+                             "supported; the device driver can also compile the translated ESSL off-thread");
+            } else {
+                builder.Warn("Driver GL_KHR_parallel_shader_compile",
+                             "not supported; the device driver compiles the translated ESSL on the calling "
+                             "thread. MobileGL's own compile pool substitutes for the expensive half of the "
+                             "work (GLSL -> SPIR-V -> ESSL) and is unaffected, so loads still overlap");
+            }
 
-            builder.Info("Indirect gl_InstanceID semantics",
-                         caps.IndirectDrawInstanceIdIncludesBaseInstance
-                             ? "includes baseInstance (ANGLE-style; MobileGL's shader rewrite keeps gl_InstanceID "
-                               "zero-based)"
-                             : "conforming (zero-based)");
+            if (caps.IndirectDrawInstanceIdIncludesBaseInstance) {
+                builder.Warn("Indirect gl_InstanceID semantics",
+                             "includes baseInstance (ANGLE-style), which is not what GL promises; "
+                             "MobileGL's shader rewrite subtracts it back out so gl_InstanceID stays "
+                             "zero-based and instanced indirect draws index their arrays correctly");
+            } else {
+                builder.Pass("Indirect gl_InstanceID semantics", "conforming (zero-based)");
+            }
 
             builder.DriverReported("Backend driver reported GL_VENDOR", caps.GLESVendorString);
             builder.DriverReported("Backend driver reported GL_RENDERER", caps.GLESRendererString);
@@ -614,10 +692,11 @@ namespace MobileGL::MG_Util::SelfTest {
                                  const MG_External::GLESFunctionsTable& glesFuncs) {
             const String disabledNote = TimerQueryDisabledNote();
             if (!caps.SupportsDisjointTimerQuery) {
-                builder.Warn("Timer queries",
-                             "GL_EXT_disjoint_timer_query not supported; timer queries unavailable; "
-                             "Minecraft F3 GPU% will not show" +
-                                 disabledNote);
+                builder.FailOptional("Timer queries",
+                                     "GL_EXT_disjoint_timer_query not supported; there is no way to time "
+                                     "GPU work from the client, so glBeginQuery(GL_TIME_ELAPSED) has "
+                                     "nothing to stand in for it and Minecraft's F3 GPU% will not show" +
+                                         disabledNote);
                 return;
             }
             // Every emit carries the extension-presence fact the old standalone
@@ -1505,7 +1584,13 @@ namespace MobileGL::MG_Util::SelfTest {
 
             const IterationRPWitnessEligibilityResult eligibility = EvaluateIterationRPWitnessEligibility(limits);
             if (eligibility.eligibility == IterationRPWitnessEligibility::SkipUnsupportedNativeFeatureSet) {
-                builder.Info(RowName, eligibility.detail);
+                // WARN, not FAIL: there is nothing to witness on a device with no native
+                // subgroup contract, and the renderer takes its non-subgroup iteration path,
+                // which produces the same image.
+                builder.Warn(RowName,
+                             eligibility.detail +
+                                 "; the renderer takes its non-subgroup iteration path instead, which "
+                                 "renders the same thing without the first-reduction shortcut");
                 return;
             }
             if (eligibility.eligibility == IterationRPWitnessEligibility::FailInadequateLimits) {
@@ -2204,20 +2289,23 @@ namespace MobileGL::MG_Util::SelfTest {
         if (features.multiDrawIndirect == VK_TRUE) {
             builder.Pass("multiDrawIndirect", "indirect multi-draw batches run as single native commands");
         } else {
-            builder.Info("multiDrawIndirect",
-                         "unsupported; multi-draw batches fall back to one draw per command (tier "
-                         "\"indirect\" of the multi-draw dispatch is unavailable)");
+            builder.Warn("multiDrawIndirect",
+                         "unsupported; MobileGL unrolls a multi-draw batch into one draw per command "
+                         "(tier \"indirect\" of the multi-draw dispatch is unavailable), which renders "
+                         "the same thing for more commands");
         }
         if (features.drawIndirectFirstInstance == VK_TRUE) {
             builder.Pass("drawIndirectFirstInstance", "indirect commands may carry a non-zero firstInstance");
         } else {
-            builder.Warn("drawIndirectFirstInstance",
-                         "unsupported; indirect commands with a non-zero baseInstance cannot run natively");
+            builder.FailOptional("drawIndirectFirstInstance",
+                                 "unsupported; an indirect command carrying a non-zero baseInstance "
+                                 "cannot run, and the offset cannot be folded into the command from the "
+                                 "CPU because the command is on the GPU");
         }
-        // Multi-draw dispatch tiers (ext -> indirect -> unroll). INFO on the missing
-        // pieces: every tier has a fallback, nothing is lost, only batched into more
-        // commands. The renderer resolves the same chain at device creation, clamped
-        // by MOBILEGL_MAGMA_MULTIDRAW_MODE.
+        // Multi-draw dispatch tiers (ext -> indirect -> unroll). WARN on the missing
+        // pieces: every tier has a fallback that renders the same thing, only batched
+        // into more commands. The renderer resolves the same chain at device creation,
+        // clamped by MOBILEGL_MAGMA_MULTIDRAW_MODE.
         {
             Bool multiDrawExtUsable = false;
             if (HasVkExtension(deviceExtensions, VK_EXT_MULTI_DRAW_EXTENSION_NAME) &&
@@ -2234,8 +2322,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 builder.Pass("VK_EXT_multi_draw",
                              "supported; a glMultiDraw* batch runs as one vkCmdDrawMulti(Indexed)EXT");
             } else {
-                builder.Info("VK_EXT_multi_draw",
-                             "unsupported; glMultiDraw* batches use the indirect or unrolled tier");
+                builder.Warn("VK_EXT_multi_draw",
+                             "unsupported; glMultiDraw* batches take the indirect or unrolled tier "
+                             "instead, with identical output");
             }
             const char* resolvedTier = multiDrawExtUsable                    ? "ext"
                                        : features.multiDrawIndirect == VK_TRUE ? "indirect"
@@ -2248,32 +2337,46 @@ namespace MobileGL::MG_Util::SelfTest {
                                      : multiDrawMode == MG_Config::MultiDrawMode::Indirect ? "indirect"
                                                                                            : "unroll");
             }
-            builder.Info("Multi-draw dispatch tier", tierDetail);
+            // PASS only on the tier that hands the whole batch to the driver in one command.
+            if (multiDrawExtUsable) {
+                builder.Pass("Multi-draw dispatch tier", tierDetail);
+            } else {
+                builder.Warn("Multi-draw dispatch tier",
+                             tierDetail + "; the batch is replayed rather than handed over whole, which "
+                                          "renders the same thing for more commands");
+            }
         }
         if (features.vertexPipelineStoresAndAtomics == VK_TRUE) {
             builder.Pass("vertexPipelineStoresAndAtomics",
                          "supported by driver (not currently enabled by the DirectVulkan backend)");
         } else {
-            builder.Warn("vertexPipelineStoresAndAtomics",
-                         "unsupported; shaders that write storage buffers from the vertex stage will not work");
+            builder.FailOptional("vertexPipelineStoresAndAtomics",
+                                 "unsupported; a shader that writes a storage buffer or runs an atomic "
+                                 "from the vertex stage cannot build a pipeline, and the write cannot be "
+                                 "moved to another stage without changing what the shader does");
         }
         if (features.fillModeNonSolid == VK_TRUE) {
             builder.Pass("fillModeNonSolid", "glPolygonMode GL_LINE/GL_POINT rasterization supported");
         } else {
-            builder.Warn("fillModeNonSolid",
-                         "unsupported; glPolygonMode GL_LINE/GL_POINT falls back to GL_FILL (no wireframe/point "
-                         "rasterization)");
+            builder.FailOptional("fillModeNonSolid",
+                                 "unsupported; glPolygonMode GL_LINE/GL_POINT silently falls back to "
+                                 "GL_FILL, and wireframe/point rasterization cannot be rebuilt out of "
+                                 "the triangle pipeline");
         }
         if (features.independentBlend == VK_TRUE) {
             builder.Pass("independentBlend", "per-draw-buffer glColorMaski and indexed blend state supported");
         } else {
-            builder.Warn("independentBlend",
-                         "unsupported; per-draw-buffer glColorMaski falls back to draw buffer 0 for all attachments");
+            builder.FailOptional("independentBlend",
+                                 "unsupported; every attachment takes draw buffer 0's colour mask and "
+                                 "blend state, so an MRT pass that configures them separately writes the "
+                                 "wrong channels to all but one attachment");
         }
         if (features.dualSrcBlend == VK_TRUE) {
             builder.Pass("dualSrcBlend", "GL_SRC1_* dual-source blend factors supported");
         } else {
-            builder.Warn("dualSrcBlend", "unsupported; GL_SRC1_* dual-source blend factors hard-fail at draw");
+            builder.FailOptional("dualSrcBlend",
+                                 "unsupported; a draw using a GL_SRC1_* blend factor hard-fails, and a "
+                                 "second fragment output cannot be produced any other way");
         }
         // The Magma counterpart of the GLES "Buffer textures" row, so the two sections can be
         // read side by side. Vulkan has no optional-feature bit here: a uniform texel buffer is
@@ -2313,10 +2416,11 @@ namespace MobileGL::MG_Util::SelfTest {
                              "back on its own; a format that refuses the flag is detected at image "
                              "creation and declines per-slice attachment)");
             } else {
-                builder.Warn("2D-array-compatible 3D images",
-                             "VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT unavailable for colour attachments; "
-                             "glFramebufferTextureLayer on a GL_TEXTURE_3D texture is declined for every "
-                             "slice past the first");
+                builder.FailOptional("2D-array-compatible 3D images",
+                                     "VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT unavailable for colour "
+                                     "attachments; glFramebufferTextureLayer on a GL_TEXTURE_3D texture "
+                                     "is declined for every slice past the first, and a 3D slice cannot "
+                                     "be rendered into any other way");
             }
         }
         if (features.imageCubeArray == VK_TRUE) {
@@ -2324,9 +2428,10 @@ namespace MobileGL::MG_Util::SelfTest {
                          "GL_TEXTURE_CUBE_MAP_ARRAY textures get a Vulkan image and can be sampled and "
                          "attached to a framebuffer per layer");
         } else {
-            builder.Warn("imageCubeArray",
-                         "unsupported; a GL_TEXTURE_CUBE_MAP_ARRAY texture gets no image at all, so sampling "
-                         "one reads nothing and glFramebufferTextureLayer on one is declined");
+            builder.FailOptional("imageCubeArray",
+                                 "unsupported; a GL_TEXTURE_CUBE_MAP_ARRAY texture gets no image at all, "
+                                 "so sampling one reads nothing and glFramebufferTextureLayer on one is "
+                                 "declined - there is no substitute image type");
         }
         // MobileGL follows the device here: shaderFloat64 decides whether a module keeps its
         // 64-bit floats or has them narrowed before pipeline creation (DemoteFloat64Pass). Adreno
@@ -2341,7 +2446,10 @@ namespace MobileGL::MG_Util::SelfTest {
                                      "FETCH here, so such a program is narrowed whole exactly as it would be on a "
                                      "device without the feature"));
         } else {
-            builder.Pass("fp64", AppendFp64AdvertisementNote(
+            // WARN rather than PASS: the device does not support fp64 at all here, and what
+            // stands in for it is a MobileGL pass that narrows the shader. It runs, at single
+            // precision - the definition of a substitute.
+            builder.Warn("fp64", AppendFp64AdvertisementNote(
                                      "demoted to fp32 (device shaderFloat64 = unsupported) - every double / dvec "
                                      "/ dmat in a shader is narrowed to 32 bits before pipeline creation, so such "
                                      "shaders BUILD AND RUN at single precision instead of failing to create a "
@@ -2374,8 +2482,10 @@ namespace MobileGL::MG_Util::SelfTest {
         if (shaderDrawParameters) {
             builder.Pass("shaderDrawParameters", "gl_DrawID/gl_BaseVertex/gl_BaseInstance shaders supported");
         } else {
-            builder.Warn("shaderDrawParameters",
-                         "unavailable; shaders using gl_DrawID/gl_BaseInstance will not work");
+            builder.FailOptional("shaderDrawParameters",
+                                 "unavailable; a shader reading gl_DrawID, gl_BaseVertex or "
+                                 "gl_BaseInstance has no SPIR-V builtin to read them from, so such "
+                                 "shaders do not work and nothing supplies the values instead");
         }
         summary.shaderDrawParametersSupported = shaderDrawParameters;
 
@@ -2412,10 +2522,12 @@ namespace MobileGL::MG_Util::SelfTest {
                          "supported; flat varyings take GL's last vertex and transform feedback records "
                          "strip/fan triangles in GL's vertex order");
         } else {
-            builder.Warn("provokingVertexLast",
-                         "unsupported; flat-shaded varyings take a primitive's first vertex instead of GL's "
-                         "last, and transform feedback records TRIANGLE_STRIP/TRIANGLE_FAN triangles rotated "
-                         "(e.g. 0,1,2 / 1,3,2 instead of 0,1,2 / 2,1,3)");
+            builder.FailOptional("provokingVertexLast",
+                                 "unsupported; flat-shaded varyings take a primitive's first vertex "
+                                 "instead of GL's last, and transform feedback records "
+                                 "TRIANGLE_STRIP/TRIANGLE_FAN triangles rotated (e.g. 0,1,2 / 1,3,2 "
+                                 "instead of 0,1,2 / 2,1,3). Rewriting the convention would mean "
+                                 "reordering every index buffer, which MobileGL does not do");
         }
         if (provokingVertexLast && !transformFeedbackPreservesProvokingVertex) {
             builder.Warn("transformFeedbackPreservesProvokingVertex",
@@ -2444,9 +2556,10 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("primitiveTopologyListRestart",
                          "primitive restart supported on list topologies (GL_PRIMITIVE_RESTART)");
         } else {
-            builder.Warn("primitiveTopologyListRestart",
-                         "unsupported; primitive restart works on strip/fan topologies only, list-topology restart "
-                         "hard-fails at draw");
+            builder.FailOptional("primitiveTopologyListRestart",
+                                 "unsupported; primitive restart works on strip/fan topologies only, and "
+                                 "a list-topology draw with GL_PRIMITIVE_RESTART enabled hard-fails - "
+                                 "splitting the index stream on the CPU is not done");
         }
 
         // Core 1.0 features the backend turns GL stages into pipeline stages with.
@@ -2456,9 +2569,10 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("tessellationShader",
                          "supported (GL_PATCHES draws run the tessellation control/evaluation stages)");
         } else {
-            builder.Warn("tessellationShader",
-                         "unsupported; a program with a tessellation control/evaluation shader cannot build a "
-                         "pipeline, so GL_PATCHES draws render nothing");
+            builder.FailOptional("tessellationShader",
+                                 "unsupported; a program with a tessellation control/evaluation shader "
+                                 "cannot build a pipeline, so GL_PATCHES draws render nothing and there "
+                                 "is no stage to run the tessellation on instead");
         }
 
         Bool vertexAttributeInstanceRateDivisor = false;
@@ -2476,10 +2590,11 @@ namespace MobileGL::MG_Util::SelfTest {
             builder.Pass("vertexAttributeInstanceRateDivisor",
                          "supported (glVertexAttribDivisor advances an attribute every N instances)");
         } else {
-            builder.Warn("vertexAttributeInstanceRateDivisor",
-                         "unsupported; Vulkan's instance input rate can only advance once per instance, so "
-                         "every non-zero glVertexAttribDivisor behaves as 1 and instanced attributes meant to "
-                         "change every N instances change every one");
+            builder.FailOptional("vertexAttributeInstanceRateDivisor",
+                                 "unsupported; Vulkan's instance input rate can only advance once per "
+                                 "instance, so every non-zero glVertexAttribDivisor behaves as 1 and "
+                                 "instanced attributes meant to change every N instances change every "
+                                 "one - silently wrong geometry, with no substitute fetch rate");
         }
 
         VkPhysicalDeviceSubgroupProperties subgroupProperties{};
@@ -2503,11 +2618,18 @@ namespace MobileGL::MG_Util::SelfTest {
                              format("basic subgroup operations in compute, subgroup size {}",
                                     subgroupProperties.subgroupSize));
             } else {
-                builder.Warn("Compute shader subgroup",
-                             "basic subgroup operations are not usable from compute shaders");
+                builder.FailOptional("Compute shader subgroup",
+                                     "basic subgroup operations are not usable from compute shaders, so "
+                                     "MobileGL withholds GL_KHR_shader_subgroup and the subgroup "
+                                     "iteration-render-pass path cannot run; there is no scalar rewrite "
+                                     "that stands in for a subgroup reduction");
             }
         } else {
-            builder.Warn("Compute shader subgroup", "subgroup properties could not be queried");
+            builder.FailOptional("Compute shader subgroup",
+                                 "subgroup properties could not be queried (no "
+                                 "vkGetPhysicalDeviceProperties2, or a pre-1.1 device), so MobileGL "
+                                 "withholds GL_KHR_shader_subgroup and the subgroup paths are "
+                                 "unavailable whatever the hardware can actually do");
         }
 
         ProbeVulkanIterationRPWitness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,
@@ -2527,9 +2649,9 @@ namespace MobileGL::MG_Util::SelfTest {
         if (indexTypeUint8) {
             builder.Pass("Index type uint8", "supported (native GL_UNSIGNED_BYTE index buffers)");
         } else {
-            builder.Warn("Index type uint8",
-                         "not supported; GL_UNSIGNED_BYTE index buffers cannot be drawn (the backend "
-                         "has no conversion fallback and asserts on uint8 index draws)");
+            builder.FailOptional("Index type uint8",
+                                 "not supported; a GL_UNSIGNED_BYTE index buffer cannot be drawn - the "
+                                 "backend has no widening conversion and asserts on uint8 index draws");
         }
         builder.DriverReported("Backend driver reported device", String(properties.deviceName));
         builder.DriverReported("Backend driver reported driver version", driverVersionString + " (vendor-encoded)");
@@ -2547,12 +2669,14 @@ namespace MobileGL::MG_Util::SelfTest {
             ProbeVulkanTimerQuery(builder, getInstanceProcAddr, instance, physicalDevice,
                                   graphicsQueueFamilyIndex, graphicsQueueTimestampValidBits, timestampPeriod);
         } else {
-            builder.Warn("Timer queries",
-                         format("timestampValidBits = 0 on the graphics queue family; timestampPeriod = {} ns "
-                                "per tick; timestamps unsupported on the graphics queue; timer queries "
-                                "unavailable",
-                                timestampPeriod) +
-                             TimerQueryDisabledNote());
+            builder.FailOptional(
+                "Timer queries",
+                format("timestampValidBits = 0 on the graphics queue family; timestampPeriod = {} ns "
+                       "per tick; the graphics queue cannot write a timestamp at all, so there is "
+                       "nothing to time GPU work with and glBeginQuery(GL_TIME_ELAPSED) has no "
+                       "substitute",
+                       timestampPeriod) +
+                    TimerQueryDisabledNote());
         }
         if (vkGetPhysicalDeviceFormatPropertiesFn != nullptr) {
             MG_External::VulkanCapabilities formatProbeCapabilities{};

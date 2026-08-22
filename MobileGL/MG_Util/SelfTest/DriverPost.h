@@ -14,21 +14,36 @@
 
 namespace MobileGL::MG_Util::SelfTest {
     // One row of a backend power-on self-test (POST) report.
+    //
+    // EVERY CAPABILITY ROW IS PASS, WARN OR FAIL; INFO IS FOR IDENTITY ONLY.
+    //   PASS - the backend supports the capability directly.
+    //   WARN - not directly, but a MobileGL quirk substitutes and the application still sees
+    //          correct behaviour; the detail names the substitute and what it costs.
+    //   FAIL - unsupported with no substitute; an application that uses it gets wrong output, a
+    //          failed draw, or nothing.
+    //   INFO - identity only: renderer name, API version, driver strings, and the strings
+    //          MobileGL itself reports to applications. Never a capability answer.
+    // A FAIL row does not by itself mean the backend cannot run - see BackendPostReport::verdict.
     struct PostCheck {
         String name;
         String status; // "PASS" | "WARN" | "FAIL" | "INFO"
         String detail;
         // Display ordering rank within a backend section (lower renders first): FAIL,
-        // WARN, PASS, INFO, then the device-driver identity strings, then the strings
+        // WARN, PASS, then the device-driver identity strings, then the strings
         // MobileGL itself reports to applications. Rows are stable-sorted by this rank
         // before the report is returned; it is not serialized to JSON.
         Int displayRank = 0;
     };
 
-    // Verdict for one backend's device driver.
-    //   - UNSUPPORTED: a fatal check failed; the backend cannot run on this driver.
-    //   - DEGRADED: every fatal check passed but at least one soft expectation is unmet.
-    //   - OK: all expectations met.
+    // Verdict for one backend's device driver, derived from the rows.
+    //   - UNSUPPORTED: a REQUIRED capability failed; the backend cannot run on this driver.
+    //   - DEGRADED: every required capability is present, but at least one row is WARN or is a
+    //     FAIL on an optional capability - the backend runs, and something an application might
+    //     ask for is substituted or missing.
+    //   - OK: every row passed.
+    // So a section can carry FAIL rows and still be DEGRADED rather than UNSUPPORTED: a device
+    // with no dual-source blend still runs. Which capabilities are required is decided at the
+    // row (ReportBuilder::Fail vs ReportBuilder::FailOptional in DriverPost.cpp).
     // available is false when no probeable driver exists at all (library missing, display
     // uninitializable, zero Vulkan physical devices, ...).
     struct BackendPostReport {
