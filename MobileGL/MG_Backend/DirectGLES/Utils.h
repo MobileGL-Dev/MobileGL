@@ -132,7 +132,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // What the upload has to do to the frontend shadow before it describes the level to
             // the driver (PrepareImageWidenedUpload).
             ImageWidenSourceEncoding SourceEncoding = ImageWidenSourceEncoding::Components;
+            // Non-zero when the carrier holds this format's channels as the INTEGER CODES of a
+            // NORMALIZED value - the seven 16-bit and 10-bit normalized formats, which core ESSL
+            // has no image format of any width for and which a float carrier would requantise.
+            // Each entry is the largest code that channel can hold, i.e. the denominator of GL 4.6
+            // 2.3.5; SignedNormalized picks which of the two conversions it is the denominator of.
+            //
+            // Two things depend on it, both because the ES storage no longer shares the frontend
+            // format's component class: the upload pads a missing alpha with ChannelMax[3] instead
+            // of the transfer type's own "one" (through a uint carrier the saturated field IS the
+            // one), and glGetTexImage divides the codes back out into the floats the application
+            // is still owed.
+            Uint ChannelMax[4] = {0u, 0u, 0u, 0u};
+            Bool SignedNormalized = false;
 
+            Bool CarriesNormalizedCodes() const { return ChannelMax[0] != 0u; }
             explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
         };
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat);

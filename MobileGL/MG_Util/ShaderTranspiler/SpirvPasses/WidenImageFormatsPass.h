@@ -136,6 +136,21 @@ namespace MobileGL {
                 // forty image formats. The count the widened accesses are masked back to.
                 static Uint ImageFormatChannelCount(Uint glInternalFormat);
 
+                // Whether the carrier holds this format's channels as the INTEGER CODES of a
+                // NORMALIZED value rather than as the values themselves - true for the seven
+                // 16-bit and 10-bit normalized formats and nothing else. `outChannelMax` takes the
+                // largest code each channel can hold (2^b - 1 unsigned, 2^(b-1) - 1 signed), which
+                // is the denominator of GL 4.6 2.3.5 for that channel; `outSignedNormalized` says
+                // which of the two conversions applies.
+                //
+                // DirectGLES asks this on both sides of the transfer: the upload pads a missing
+                // alpha with outChannelMax[3] rather than the transfer type's own 1 (through a
+                // uint carrier "one" is the saturated CODE, not the integer one), and
+                // glGetTexImage divides the codes back out, because the ES storage is an integer
+                // texture the client still expects to read as floats.
+                static bool NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
+                                                        bool& outSignedNormalized);
+
                 static spvtools::Optimizer::PassToken CreateWidenImageFormatsPass(
                     bool onlyFormatsSpirvCrossRefusesToPrint = false);
 

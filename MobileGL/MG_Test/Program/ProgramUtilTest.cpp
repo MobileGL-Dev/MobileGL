@@ -4000,6 +4000,7 @@ namespace {
     constexpr Uint kGlR32f = 0x822E;
     constexpr Uint kGlRgb10A2ui = 0x906F;
     constexpr Uint kGlRgb10A2 = 0x8059;
+    constexpr Uint kGlRgb8 = 0x8051; // not one of the forty image formats at all
 } // namespace
 
 // The KHR-GL4x.packed_depth_stencil.stencil_texturing compute shader, reduced: one format-less
@@ -4050,20 +4051,26 @@ void main() { imageStore(uni_image, ivec2(gl_GlobalInvocationID.xy), uvec4(15u, 
 // pass on the ESSL chain and re-declares them in a core carrier SPIRV-Cross does print, so for
 // those the module is the right place and the text completion would put back the narrow token no
 // ES driver accepts. r8ui - which the stencil half of the packed_depth_stencil case binds - is
-// one of the rescued ones; rgb10_a2, whose 10/10/10/2 NORMALIZED channels no core format has, is
-// not.
+// one of the rescued ones, and so, now that the carriers cover all twenty-six non-core formats,
+// is every other IMAGE format. What is left for the guard is a format that is not an image format
+// at all: it has no carrier and no ESSL image spelling either, so baking it would put a token in
+// the module that means nothing.
 TEST_F(ProgramUtilTest, BakeImageFormatsLeavesOnlyTheFormatsNoCoreCarrierRescues) {
     using namespace MG_Util::ShaderTranspiler;
 
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR8ui))
         << "if SPIRV-Cross ever learns to print r8ui for ES, this route can go";
     ASSERT_NE(ShaderCompiler::WidenedCoreEsslImageFormat(kGlR8ui), 0u);
-    // rgb10_a2ui is unprintable too and IS rescued: its channels are unsigned INTEGER, so an
-    // rgba16ui holds all four of them outright.
+    // Unprintable and rescued anyway: rgb10_a2ui's channels are unsigned INTEGER, so an rgba16ui
+    // holds all four outright, and rgb10_a2's are the same channels read as NORMALIZED, which the
+    // same carrier holds as their codes.
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlRgb10A2ui));
     ASSERT_NE(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb10A2ui), 0u);
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlRgb10A2));
-    ASSERT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb10A2), 0u);
+    ASSERT_NE(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb10A2), 0u);
+    // ...and the one the guard still turns away.
+    ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlRgb8));
+    ASSERT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(kGlRgb8), 0u);
     ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(kGlR32ui));
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(kGlR8ui), "r8ui");
     EXPECT_EQ(ShaderCompiler::EsslImageFormatSpelling(0x8051 /*GL_RGB8*/), "");
@@ -4078,7 +4085,7 @@ void main() { imageStore(uni_image, ivec2(0), uvec4(15u)); }
 
     {   // Unprintable AND uncarriable: declined, module untouched, and the stage still transpiles.
         Vector<Uint32> baked;
-        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlRgb10A2}}, baked));
+        ASSERT_TRUE(ShaderCompiler::BakeImageFormatsForEssl(spirv, {{"uni_image", kGlRgb8}}, baked));
         EXPECT_EQ(baked, spirv) << "a format nothing can carry must leave the module untouched";
         EXPECT_FALSE(DecompileToEssl(baked).empty());
     }

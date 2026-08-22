@@ -745,9 +745,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Returns `data` untouched when no widening applies. Pure CPU and context-free so a unit
         // test can exercise the exact packing the driver is handed; `widenedData` is the caller's
         // scratch buffer and has to outlive the returned pointer.
+        // `alphaOneCodeOverride`, when non-zero, replaces the value written into the synthetic
+        // alpha channel: an image carrier that holds a NORMALIZED format's channel CODES has to
+        // pad alpha with that channel's saturated CODE (65535, 32767, 3), which neither of the
+        // transfer type's own "ones" is.
         const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize, const void* data,
                                                 SizeT byteSize, GLenum uploadType, Vector<Uint8>& widenedData,
-                                                Bool integerData = false);
+                                                Bool integerData = false, Uint32 alphaOneCodeOverride = 0u);
 
         // Splits a GL_UNSIGNED_INT_2_10_10_10_REV shadow (rgb10_a2, rgb10_a2ui) into the four
         // GL_UNSIGNED_SHORT channel CODES its GL_RGBA16UI image carrier is uploaded as: red in
@@ -790,7 +794,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SyncMipmapsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-            void RequireImageBindableStorage();
+            // Marks the texture as one whose ES storage has to be image-bindable, which for a
+            // non-core image format means re-minting it in the widening's carrier. Takes the state
+            // object because the levels already uploaded have to be marked dirty again: the
+            // re-mint allocates fresh storage and only replays what the shadow still calls dirty.
+            void RequireImageBindableStorage(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // Whether this texture's ES storage was minted in an image carrier rather than in the
+            // frontend format's own layout - the readback has to ask, because for a NORMALIZED
+            // carrier the storage is an integer texture holding codes and glGetTexImage still owes
+            // the application floats.
+            Bool RequiresImageBindableStorage() const { return m_imageBindableStorageRequired; }
             void Bind(GLenum target, Uint unit = TempTextureUnit);
             Uint GetBackendTextureId() const;
 
@@ -1176,23 +1190,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into
     // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
     // assigned through glUniform1i.
+    //
+    // ALL THIRTY-THREE of them, in the one contiguous block ARB_shader_image_load_store allocated
+    // (GL_IMAGE_1D 0x904C through GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY 0x906C). The list
+    // used to hold only the fifteen whose TARGET exists in ES, which read as a reasonable
+    // shortcut and was two bugs: an image uniform this says "no" to is one
+    // CollectImageFormatBakeInputs never walks, so its non-core format is neither baked nor
+    // widened and SPIRV-Cross throws for the whole stage ("Attempting to use image format not
+    // supported in ES profile"), and it is also one SyncToBackend then treats as a SAMPLER and
+    // assigns with glUniform1i, which ES makes an INVALID_OPERATION. A GL_TEXTURE_CUBE_MAP_ARRAY
+    // image - which ES 3.2 has in core, so it is not even an emulated target - hit both.
     inline Bool IsImageUniformType(GLenum type) {
         switch (type) {
+        case 0x904C: /*GL_IMAGE_1D*/
         case 0x904D: /*GL_IMAGE_2D*/
         case 0x904E: /*GL_IMAGE_3D*/
+        case 0x904F: /*GL_IMAGE_2D_RECT*/
         case 0x9050: /*GL_IMAGE_CUBE*/
         case 0x9051: /*GL_IMAGE_BUFFER*/
+        case 0x9052: /*GL_IMAGE_1D_ARRAY*/
         case 0x9053: /*GL_IMAGE_2D_ARRAY*/
+        case 0x9054: /*GL_IMAGE_CUBE_MAP_ARRAY*/
+        case 0x9055: /*GL_IMAGE_2D_MULTISAMPLE*/
+        case 0x9056: /*GL_IMAGE_2D_MULTISAMPLE_ARRAY*/
+        case 0x9057: /*GL_INT_IMAGE_1D*/
         case 0x9058: /*GL_INT_IMAGE_2D*/
         case 0x9059: /*GL_INT_IMAGE_3D*/
+        case 0x905A: /*GL_INT_IMAGE_2D_RECT*/
         case 0x905B: /*GL_INT_IMAGE_CUBE*/
         case 0x905C: /*GL_INT_IMAGE_BUFFER*/
+        case 0x905D: /*GL_INT_IMAGE_1D_ARRAY*/
         case 0x905E: /*GL_INT_IMAGE_2D_ARRAY*/
+        case 0x905F: /*GL_INT_IMAGE_CUBE_MAP_ARRAY*/
+        case 0x9060: /*GL_INT_IMAGE_2D_MULTISAMPLE*/
+        case 0x9061: /*GL_INT_IMAGE_2D_MULTISAMPLE_ARRAY*/
+        case 0x9062: /*GL_UNSIGNED_INT_IMAGE_1D*/
         case 0x9063: /*GL_UNSIGNED_INT_IMAGE_2D*/
         case 0x9064: /*GL_UNSIGNED_INT_IMAGE_3D*/
+        case 0x9065: /*GL_UNSIGNED_INT_IMAGE_2D_RECT*/
         case 0x9066: /*GL_UNSIGNED_INT_IMAGE_CUBE*/
         case 0x9067: /*GL_UNSIGNED_INT_IMAGE_BUFFER*/
+        case 0x9068: /*GL_UNSIGNED_INT_IMAGE_1D_ARRAY*/
         case 0x9069: /*GL_UNSIGNED_INT_IMAGE_2D_ARRAY*/
+        case 0x906A: /*GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY*/
+        case 0x906B: /*GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE*/
+        case 0x906C: /*GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY*/
             return true;
         default:
             return false;

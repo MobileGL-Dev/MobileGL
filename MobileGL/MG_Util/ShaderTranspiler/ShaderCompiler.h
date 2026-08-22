@@ -298,6 +298,13 @@ namespace MobileGL {
                 // Channels a GL image internal format really has (1-4), 0 when it is not one of
                 // the forty image formats.
                 static Uint ImageFormatChannelCount(Uint glInternalFormat);
+                // Whether the carrier holds the format's channels as the INTEGER CODES of a
+                // normalized value, and the largest code each channel can hold. See
+                // WidenImageFormatsPass::NormalizedImageCarrierCodes - DirectGLES needs it for
+                // both halves of the transfer, which no longer share the frontend format's
+                // component class with the ES storage.
+                static bool NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
+                                                        bool& outSignedNormalized);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);

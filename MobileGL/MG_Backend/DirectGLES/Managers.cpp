@@ -2408,12 +2408,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_backendTextureId;
         }
 
-        void BackendTextureObject::RequireImageBindableStorage() {
+        void BackendTextureObject::RequireImageBindableStorage(
+            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (m_imageBindableStorageRequired) {
                 return;
             }
             m_imageBindableStorageRequired = true;
             m_isInitialized = false;
+            // Every level this object has ALREADY uploaded has to be replayed, because the
+            // regeneration this transition schedules re-mints the storage in the image carrier and
+            // only uploads levels the shadow still calls dirty - which, for a texture that was
+            // synced before its first glBindImageTexture, is none of them. The new storage would
+            // come out ALLOCATED AND EMPTY, and every texel the application defined before that
+            // bind would be gone: the shader reads zeroes and the shadow still holds the data, so
+            // glGetTexImage (which falls back to the shadow) keeps answering correctly and only
+            // the image loads are wrong. Reached whenever anything syncs the texture first - a
+            // glGetTexImage, a draw that samples it, an FBO attach - which is why it survived so
+            // long: the scenario that binds the image immediately after uploading never sees it.
+            if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
+                const auto levelCount = mipmapObject->GetMipmapLevelCount();
+                for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
+                    for (Uint level = 0; level < levelCount; ++level) {
+                        const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
+                        if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
+                        if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
+                        mipmapObject->MarkStorageDirty(uploadTarget, level, true);
+                    }
+                }
+            }
             // The storage this re-mints may also be CHANNEL WIDENED (a GL_RG32F image is not
             // bindable on this driver at all, so it becomes a GL_RGBA32F carrying two channels),
             // and a widened texture's sampled view has to answer the channels the logical format
@@ -2716,7 +2738,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // runs after any type conversion (which keeps the component count) has already happened.
         const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize,
                                                 const void* data, SizeT byteSize, GLenum uploadType,
-                                                Vector<Uint8>& widenedData, Bool integerData) {
+                                                Vector<Uint8>& widenedData, Bool integerData,
+                                                Uint32 alphaOneCodeOverride) {
             Uint8 oneBits[8] = {};
             SizeT componentSize = 0;
             // One and two source components as well as three: the image-format widening carries
@@ -2727,6 +2750,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (componentCount == 0 || componentCount > 3 || data == nullptr || byteSize == 0 ||
                 !GetUploadComponentOneBits(uploadType, integerData, oneBits, &componentSize)) {
                 return data;
+            }
+            // ...except where the carrier holds CODES of a normalized value (GL_R16 in a
+            // GL_RGBA16UI), where the transfer type says GL_UNSIGNED_SHORT and neither of that
+            // type's two "ones" is right: the integer 1 is a code for 1/65535 and the saturated
+            // 0xFFFF is only right for the UNSIGNED 16-bit formats, not the signed ones, whose
+            // saturated code is 0x7FFF. The caller passes the channel's own maximum instead.
+            // Written through a value of the component's own width rather than as the low
+            // `componentSize` bytes of the Uint32, so the encoding does not turn on the host's
+            // byte order.
+            if (alphaOneCodeOverride != 0u) {
+                if (componentSize == sizeof(Uint16)) {
+                    const auto one = static_cast<Uint16>(alphaOneCodeOverride);
+                    Memcpy(oneBits, &one, sizeof(one));
+                } else if (componentSize == sizeof(Uint32)) {
+                    Memcpy(oneBits, &alphaOneCodeOverride, sizeof(alphaOneCodeOverride));
+                } else if (componentSize == sizeof(Uint8)) {
+                    const auto one = static_cast<Uint8>(alphaOneCodeOverride);
+                    Memcpy(oneBits, &one, sizeof(one));
+                }
             }
 
             const SizeT srcTexelBytes = componentSize * componentCount;
@@ -2982,7 +3024,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return data;
             }
             return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
-                                               widenedData, widening.IntegerData);
+                                               widenedData, widening.IntegerData,
+                                               widening.CarriesNormalizedCodes() ? widening.ChannelMax[3] : 0u);
         }
 
         // Overwrites the (internal format, format, type) triple GenerateTextureFormatInfo chose
@@ -5447,6 +5490,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // 10/10/10/2 unsigned INTEGER channels in an rgba16ui: same component type, same
                 // channel count, every value representable. Only the transfer is re-encoded.
                 case glslang::ElfRgb10a2ui: return 0x906F; // GL_RGB10_A2UI
+                // The seven NORMALIZED formats, carried in an rgba16ui as their own channel CODES.
+                // These are the entries whose carrier changes the shader-visible type as well as
+                // the qualifier (image2D becomes uimage2D), so every access through them is
+                // wrapped in the GL 4.6 2.3.5 conversion - see WidenImageFormatsPass.h.
+                case glslang::ElfRgba16: return 0x805B;      // GL_RGBA16
+                case glslang::ElfRg16: return 0x822C;        // GL_RG16
+                case glslang::ElfR16: return 0x822A;         // GL_R16
+                case glslang::ElfRgb10A2: return 0x8059;     // GL_RGB10_A2
+                case glslang::ElfRgba16Snorm: return 0x8F9B; // GL_RGBA16_SNORM
+                case glslang::ElfRg16Snorm: return 0x8F99;   // GL_RG16_SNORM
+                case glslang::ElfR16Snorm: return 0x8F98;    // GL_R16_SNORM
                 default:
                     return 0;
                 }

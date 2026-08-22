@@ -292,12 +292,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 widening.SourceEncoding = ImageWidenSourceEncoding::PackedFloat11f11f10f;
                 break;
             case TextureInternalFormat::RGB10A2UI:
+            case TextureInternalFormat::RGB10A2:
                 // GL_UNSIGNED_INT_2_10_10_10_REV -> the GL_RGBA_INTEGER / GL_UNSIGNED_SHORT the
-                // GL_RGBA16UI carrier already asked for above; only the split is new.
+                // GL_RGBA16UI carrier already asked for above; only the split is new. The two
+                // formats share it: rgb10_a2's channel codes are the same fields rgb10_a2ui's are,
+                // and what the shader divides them by is not the transfer's business.
                 widening.SourceEncoding = ImageWidenSourceEncoding::PackedInt2101010Rev;
                 break;
             default:
                 break;
+            }
+            // The seven normalized formats whose carrier holds CODES rather than values. Both
+            // halves of the transfer need to know: a missing alpha is padded with the saturated
+            // code rather than the integer 1, and glGetTexImage has to divide the codes back out.
+            bool signedNormalized = false;
+            Uint32 channelMax[4] = {0u, 0u, 0u, 0u};
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::NormalizedImageCarrierCodes(requested, channelMax,
+                                                                                       signedNormalized)) {
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    widening.ChannelMax[channel] = channelMax[channel];
+                }
+                widening.SignedNormalized = signedNormalized;
             }
             return widening;
         }
