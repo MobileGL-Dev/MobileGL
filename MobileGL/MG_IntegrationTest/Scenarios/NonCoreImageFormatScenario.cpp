@@ -1075,6 +1075,141 @@ void main()
             }
         }
 
+        // The SAME buffer texture read through BOTH doors at once, which is the shape the split
+        // originally broke. A buffer texture that is image-bound is split - the view is re-declared
+        // one component at a time and every image subscript is doubled to match - but the sampler
+        // side is NOT subscript-rewritten, so re-describing the APPLICATION's own texture made
+        // texelFetch(s, i) return component 2i of the base view instead of texel i's whole pair.
+        // The split therefore goes on a private second name over the same buffer
+        // (BackendTextureObject::m_bufferImageSplitViewId) and the application's name keeps the
+        // format it asked for: rg32f is a legal SAMPLED buffer-texture format in ES 3.2, it is only
+        // the IMAGE binding ES cannot spell.
+        //
+        // This is KHR-GL42/43.shader_image_load_store.advanced-sync-imageAccess reduced to one
+        // dispatch. That case image-stores into a GL_RG32F buffer texture and then, in one shader,
+        // reads the same texture through an imageBuffer AND a samplerBuffer and compares the two -
+        // so it went red on every pixel while its sibling -vertexArray, which never samples the
+        // buffer texture, passed.
+        //
+        // Like the case above this runs on every backend, and on a driver that can spell rg32f for
+        // an imageBuffer nothing is split at all - both doors then trivially agree, which is the
+        // other half of the claim: a split that fired where the driver needed none would show up
+        // here as the two disagreeing.
+        TEST_F(NonCoreImageFormatScenario, ASplitBufferImageStillSamplesWholeTexels) {
+            if (!Ready()) GTEST_SKIP() << "no GL context";
+            if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
+            GLint maxTextureBufferSize = 0;
+            glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
+            while (glGetError() != GL_NO_ERROR) {
+            }
+            if (maxTextureBufferSize <= 0) GTEST_SKIP() << "no buffer textures on this driver";
+
+            constexpr int kBufferTexels = 4;
+            // Both components of every texel distinct and non-zero, so a sampler that reads the
+            // SPLIT view cannot accidentally agree: texel i would come back as (2i-th component,
+            // 0, 0, 1) rather than (x, y, 0, 1), and every one of those is a value no texel holds.
+            std::vector<float> seed(static_cast<std::size_t>(kBufferTexels) * 2u, 0.0f);
+            for (int texel = 0; texel < kBufferTexels; ++texel) {
+                seed[static_cast<std::size_t>(texel) * 2u + 0u] = static_cast<float>(texel * 10 + 1);
+                seed[static_cast<std::size_t>(texel) * 2u + 1u] = static_cast<float>(texel * 10 + 2);
+            }
+
+            GLuint buffer = 0;
+            glGenBuffers(1, &buffer);
+            glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+            glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(seed.size() * sizeof(float)), seed.data(),
+                         GL_DYNAMIC_DRAW);
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            m_textures.push_back(texture);
+            glBindTexture(GL_TEXTURE_BUFFER, texture);
+            glTexBuffer(GL_TEXTURE_BUFFER, GL_RG32F, buffer);
+            if (const GLenum error = FirstGLError()) {
+                glDeleteBuffers(1, &buffer);
+                GTEST_SKIP() << "glTexBuffer(GL_RG32F) errored with " << GLErrorName(error);
+            }
+
+            // The answer buffer is rgba32f, which IS core ESSL, so it is never split and cannot
+            // hide a mistake in the thing under test.
+            constexpr int kAnswers = kBufferTexels * 2;
+            const std::vector<float> answerSeed(static_cast<std::size_t>(kAnswers) * 4u, -12345.0f);
+            GLuint answerBuffer = 0;
+            glGenBuffers(1, &answerBuffer);
+            glBindBuffer(GL_TEXTURE_BUFFER, answerBuffer);
+            glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(answerSeed.size() * sizeof(float)),
+                         answerSeed.data(), GL_DYNAMIC_DRAW);
+            GLuint answerTexture = 0;
+            glGenTextures(1, &answerTexture);
+            m_textures.push_back(answerTexture);
+            glBindTexture(GL_TEXTURE_BUFFER, answerTexture);
+            glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, answerBuffer);
+            if (const GLenum error = FirstGLError()) {
+                glDeleteBuffers(1, &buffer);
+                glDeleteBuffers(1, &answerBuffer);
+                GTEST_SKIP() << "glTexBuffer(GL_RGBA32F) errored with " << GLErrorName(error);
+            }
+
+            const GLuint program = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (rg32f, binding = 0) readonly uniform imageBuffer narrow;
+layout (rgba32f, binding = 1) writeonly uniform imageBuffer answers;
+uniform samplerBuffer sampled;
+
+void main()
+{
+    int texel = int(gl_GlobalInvocationID.x);
+    imageStore(answers, texel * 2 + 0, imageLoad(narrow, texel));
+    imageStore(answers, texel * 2 + 1, texelFetch(sampled, texel));
+}
+)");
+            if (program == 0) {
+                glDeleteBuffers(1, &buffer);
+                glDeleteBuffers(1, &answerBuffer);
+                return;
+            }
+
+            BindImage(kNarrowUnit, texture, GL_RG32F, GL_READ_ONLY);
+            BindImage(kWideUnit, answerTexture, GL_RGBA32F, GL_WRITE_ONLY);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_BUFFER, texture);
+            glUseProgram(program);
+            glUniform1i(glGetUniformLocation(program, "sampled"), 0);
+            glDispatchCompute(kBufferTexels, 1, 1);
+            glMemoryBarrier(GL_ALL_BARRIER_BITS);
+            EXPECT_EQ(FirstGLError(), 0u) << "the dispatch leaked a GL error";
+            glUseProgram(0);
+
+            std::vector<float> readback(answerSeed.size(), -54321.0f);
+            glBindBuffer(GL_TEXTURE_BUFFER, answerBuffer);
+            glGetBufferSubData(GL_TEXTURE_BUFFER, 0,
+                               static_cast<GLsizeiptr>(readback.size() * sizeof(float)), readback.data());
+            EXPECT_EQ(FirstGLError(), 0u) << "reading the answers back errored";
+
+            for (int texel = 0; texel < kBufferTexels; ++texel) {
+                const float red = static_cast<float>(texel * 10 + 1);
+                const float green = static_cast<float>(texel * 10 + 2);
+                const std::size_t viaImage = static_cast<std::size_t>(texel) * 8u;
+                const std::size_t viaSampler = viaImage + 4u;
+                EXPECT_FLOAT_EQ(readback[viaImage + 0u], red) << "texel " << texel << " imageLoad red";
+                EXPECT_FLOAT_EQ(readback[viaImage + 1u], green) << "texel " << texel << " imageLoad green";
+                EXPECT_FLOAT_EQ(readback[viaSampler + 0u], red) << "texel " << texel << " texelFetch red";
+                EXPECT_FLOAT_EQ(readback[viaSampler + 1u], green)
+                    << "texel " << texel
+                    << " texelFetch green: a samplerBuffer must see whole texels even where the "
+                       "image side of the same texture was split";
+                EXPECT_FLOAT_EQ(readback[viaSampler + 2u], 0.0f) << "texel " << texel << " texelFetch blue";
+                EXPECT_FLOAT_EQ(readback[viaSampler + 3u], 1.0f) << "texel " << texel << " texelFetch alpha";
+            }
+
+            glBindBuffer(GL_TEXTURE_BUFFER, 0);
+            glDeleteBuffers(1, &buffer);
+            glDeleteBuffers(1, &answerBuffer);
+            while (glGetError() != GL_NO_ERROR) {
+            }
+        }
+
         // The other consumer of the same texture. A widened texture's ES storage really does have
         // four channels, so a sampler reading it raw would see whatever the carrier holds; the
         // logical format's missing channels have to keep reading 0 and 1 (which Espryt arranges

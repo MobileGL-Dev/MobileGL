@@ -808,6 +808,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Bind(GLenum target, Uint unit = TempTextureUnit);
             Uint GetBackendTextureId() const;
 
+            // The id to hand glBindImageTexture for a SPLIT buffer image, or 0 when this texture
+            // takes no split. See m_bufferImageSplitViewId.
+            Uint GetBufferImageSplitViewId() const { return m_bufferImageSplitViewId; }
+
             // Aggregate first-level clean gate for the per-draw trio
             // SyncTextureParamsToBackend + SyncBuiltinSamplerToBackend +
             // SyncMipmapsToBackend: EXACTLY the conjunction of their own early-outs
@@ -844,6 +848,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void RecreateBackendTexture();
 
             Uint m_backendTextureId = 0;
+            // A SECOND buffer-texture name over the SAME buffer object, viewed in the split's
+            // single-channel base format, used only as the glBindImageTexture target.
+            //
+            // The split needs the view to say r32f where the application said rg32f, but a buffer
+            // texture that is image-bound may ALSO be read through a samplerBuffer - and the
+            // sampler side is not subscript-rewritten, so re-describing the application's own
+            // texture broke it: texelFetch(s, i) returned component 2i of the base view instead of
+            // texel i's pair. That is exactly and only
+            // KHR-GL42/43.shader_image_load_store.advanced-sync-imageAccess, which image-stores
+            // into a GL_RG32F buffer texture and then reads the same texture through both an
+            // imageBuffer and a samplerBuffer in one shader, comparing the two.
+            //
+            // Two names over one buffer cost nothing and alias exactly: a buffer texture owns no
+            // storage, so both views are the application's bytes, and the split's whole premise is
+            // that the two describe the same memory. The application's own name therefore keeps
+            // the format it asked for - rg32f IS a legal SAMPLED buffer-texture format in ES 3.2,
+            // it is only the IMAGE binding ES cannot spell - and the private name below carries
+            // the split the shader was rewritten against. 0 when this texture takes no split.
+            Uint m_bufferImageSplitViewId = 0;
             // ES context generation the id was created under; a dtor running after
             // that context died must not delete a foreign (recycled) name.
             Uint m_contextGeneration = 0;

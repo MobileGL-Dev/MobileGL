@@ -1490,10 +1490,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Dim::Buffer guard there for the 32-byte GL_RG32F measurement that pinned it.
             //
             // What a buffer image takes instead is the SPLIT, which is the same three-layer move
-            // through a different door: the glTexBuffer view above and the bind below both name
-            // the single-channel base format, and the shader subscripts it two components per
-            // original texel. Same gate on both sides, so the two cannot disagree.
+            // through a different door: a private glTexBuffer view names the single-channel base
+            // format, the bind below names it too, and the shader subscripts it two components per
+            // original texel. Same gate on all three, so they cannot disagree.
+            //
+            // The split view is a SEPARATE texture name over the same buffer, and the bind has to
+            // name it rather than the application's own: the application's texture keeps the
+            // format it asked for so that a samplerBuffer reading the same buffer texture - which
+            // is NOT subscript-rewritten - still sees whole texels. See
+            // BackendTextureObject::m_bufferImageSplitViewId.
             GLenum bindFormat = imageBinding.Format;
+            GLuint bindTextureId = backendTexture->GetBackendTextureId();
             if (imageBinding.Texture->GetTarget() == TextureTarget::TextureBuffer) {
                 if (TextureImpl::GetImageBindableBufferSplitFormat(imageBinding.Texture->GetFormat()) !=
                     GL_UNKNOWN_MGL) {
@@ -1501,6 +1508,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
                         boundFormatSplit != GL_UNKNOWN_MGL) {
                         bindFormat = boundFormatSplit;
+                        if (const Uint splitViewId = backendTexture->GetBufferImageSplitViewId();
+                            splitViewId != 0) {
+                            bindTextureId = splitViewId;
+                        }
                     }
                 }
             } else if (TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
@@ -1510,7 +1521,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     bindFormat = boundFormatWidening.InternalFormat;
                 }
             }
-            g_GLESFuncs.glBindImageTexture(unit, backendTexture->GetBackendTextureId(), imageBinding.Level,
+            g_GLESFuncs.glBindImageTexture(unit, bindTextureId, imageBinding.Level,
                                            layered, layer, imageBinding.Access, bindFormat);
         }
 

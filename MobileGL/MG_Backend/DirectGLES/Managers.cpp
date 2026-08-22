@@ -2382,8 +2382,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteTextures) {
                 g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
+                if (m_bufferImageSplitViewId != 0) {
+                    g_GLESFuncs.glDeleteTextures(1, &m_bufferImageSplitViewId);
+                }
             }
             m_backendTextureId = 0;
+            m_bufferImageSplitViewId = 0;
         }
 
         void BackendTextureObject::Bind(GLenum target, Uint unit) {
@@ -3828,13 +3832,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // and WidenImageFormatsPass rewrites every access to subscript it that way. Only
                 // for a texture that is actually image-bound: a sampled-only buffer texture keeps
                 // the format the application asked for (see GetImageBindableBufferSplitFormat).
-                if (m_imageBindableStorageRequired) {
-                    if (const GLenum splitFormat =
-                            TextureImpl::GetImageBindableBufferSplitFormat(textureBufferObject->GetFormat());
-                        splitFormat != GL_UNKNOWN_MGL) {
-                        glInternalFormat = splitFormat;
-                    }
-                }
+                //
+                // The split goes on a SEPARATE name (m_bufferImageSplitViewId), not on this one.
+                // Re-describing the application's own texture also re-describes what a
+                // samplerBuffer reading it sees, and the sampler side is not subscript-rewritten -
+                // so texelFetch(s, i) started returning component 2i of the base view instead of
+                // texel i. rg32f is a legal SAMPLED buffer-texture format in ES 3.2; only the
+                // IMAGE binding needs the split, so only the image binding's name carries it.
+                const GLenum bufferImageSplitFormat =
+                    m_imageBindableStorageRequired
+                        ? TextureImpl::GetImageBindableBufferSplitFormat(textureBufferObject->GetFormat())
+                        : GL_UNKNOWN_MGL;
 
                 if (needsRegeneration) {
                     // Desktop GL has had buffer textures core since 3.1 and MobileGL advertises a
@@ -3890,6 +3898,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     func, file, line, MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
                                     backendId, MG_Util::ConvertGLEnumToString(err).c_str());
                         });
+
+                    // The image half of the SPLIT, on its own name over the same buffer. Minted
+                    // lazily - only a texture that is both image-bound AND holds a format with no
+                    // ESSL image spelling ever gets one - and re-pointed here, in the same
+                    // regeneration gate as the view above, so the two never describe different
+                    // buffers or different windows of one.
+                    if (bufferImageSplitFormat != GL_UNKNOWN_MGL) {
+                        if (m_bufferImageSplitViewId == 0) {
+                            g_GLESFuncs.glGenTextures(1, &m_bufferImageSplitViewId);
+                        }
+                        if (m_bufferImageSplitViewId == 0) {
+                            MGLOG_E_ONCE("Failed to generate the buffer-image split view for texture %u; "
+                                         "its image binding will read the unsplit view.",
+                                         stateTextureObject->GetExternalIndex());
+                        } else {
+                            g_GLESFuncs.glBindTexture(GL_TEXTURE_BUFFER, m_bufferImageSplitViewId);
+                            if (rangeOffset == 0 && rangeSize == buffer->GetSize()) {
+                                CallTexBuffer(GL_TEXTURE_BUFFER, bufferImageSplitFormat, backendId);
+                            } else if (!CallTexBufferRange(GL_TEXTURE_BUFFER, bufferImageSplitFormat, backendId,
+                                                           static_cast<GLintptr>(rangeOffset),
+                                                           static_cast<GLsizeiptr>(rangeSize))) {
+                                CallTexBuffer(GL_TEXTURE_BUFFER, bufferImageSplitFormat, backendId);
+                            }
+                            // The raw bind above went behind Bind()'s shadow, which tracks objects
+                            // rather than names: leaving it claiming THIS object is bound would
+                            // make the next Bind(GL_TEXTURE_BUFFER) a no-op and leave the split
+                            // view bound in the application texture's place.
+                            g_boundTexturesCache[g_activeTextureUnit][static_cast<SizeT>(
+                                TextureTarget::TextureBuffer)] = nullptr;
+                        }
+                    }
                 }
                 break;
             }
