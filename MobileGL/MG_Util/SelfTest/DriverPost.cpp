@@ -702,8 +702,11 @@ namespace MobileGL::MG_Util::SelfTest {
             // Every emit carries the extension-presence fact the old standalone
             // GL_EXT_disjoint_timer_query row showed, plus the probe outcome.
             const String extensionPresent = "GL_EXT_disjoint_timer_query extension present";
+            // FailOptional: a driver that advertises the extension and then cannot serve a
+            // query is broken in a way nothing substitutes for, but timing GPU work is not
+            // something the backend needs in order to run.
             const auto fail = [&](const String& detail) {
-                builder.Fail("Timer queries", extensionPresent + "; but " + detail + disabledNote);
+                builder.FailOptional("Timer queries", extensionPresent + "; but " + detail + disabledNote);
             };
 
             if (!glesFuncs.glGenQueries || !glesFuncs.glDeleteQueries || !glesFuncs.glBeginQuery ||
@@ -837,8 +840,11 @@ namespace MobileGL::MG_Util::SelfTest {
             const String pathNote = native ? "GL_NV_shader_noperspective_interpolation present (native path)"
                                            : "GL_NV_shader_noperspective_interpolation absent (gl_Position.w / "
                                              "gl_FragCoord.w emulation path)";
+            // FailOptional: a shaderpack that declares a noperspective varying renders it wrong
+            // and nothing stands in for the interpolation, but everything that does not use one
+            // is unaffected, so the backend still runs.
             const auto fail = [&](const String& detail) {
-                builder.Fail("noperspective interpolation", pathNote + "; " + detail);
+                builder.FailOptional("noperspective interpolation", pathNote + "; " + detail);
             };
 
             if (!g.glCreateShader || !g.glShaderSource || !g.glCompileShader || !g.glGetShaderiv ||
@@ -1336,8 +1342,10 @@ namespace MobileGL::MG_Util::SelfTest {
             const String timestampFacts =
                 format("timestampValidBits = {} on the graphics queue family; timestampPeriod = {} ns per tick",
                        timestampValidBits, timestampPeriod);
+            // FailOptional, for the same reason as the GLES row: the backend does not need to
+            // time GPU work in order to run.
             const auto fail = [&](const String& detail) {
-                builder.Fail("Timer queries", timestampFacts + "; but " + detail + disabledNote);
+                builder.FailOptional("Timer queries", timestampFacts + "; but " + detail + disabledNote);
             };
             const auto vkCreateDeviceFn =
                 reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
@@ -1557,7 +1565,13 @@ namespace MobileGL::MG_Util::SelfTest {
                                            Bool subgroupPropertiesAvailable,
                                            const VkPhysicalDeviceSubgroupProperties& subgroupProperties) {
             constexpr const char* RowName = "Subgroup first-reduction witness";
-            const auto fail = [&](String detail) { builder.Fail(RowName, Move(detail)); };
+            // FailOptional, not Fail. The witness reports whether the NATIVE subgroup
+            // first-reduction works; when it does not, the renderer takes its non-subgroup
+            // iteration path and draws the same image. Both an Adreno 830 and Mesa lavapipe
+            // fail this row's topology check today while running the DirectVulkan backend
+            // perfectly well, so a fatal verdict here would have the screen announce that a
+            // backend the user is looking at through that very backend cannot run.
+            const auto fail = [&](String detail) { builder.FailOptional(RowName, Move(detail)); };
 
             if (!subgroupPropertiesAvailable) {
                 fail("vkGetPhysicalDeviceProperties2 could not provide raw Vulkan subgroup properties");
