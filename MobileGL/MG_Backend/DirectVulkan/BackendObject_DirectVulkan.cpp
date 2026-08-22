@@ -514,7 +514,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   Bool anisotropicFilteringSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported) {
         Vector<GLExtension> extensions = {
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
+            // The version tokens have to reach the version the backend actually claims:
+            // TargetGLVersion is {4,3,0}, and a list that stopped at OpenGL40 told an
+            // application feature-detecting off these tokens the opposite of what
+            // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
+            E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
             E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
             E_GL_ARB_multi_draw_indirect,
@@ -539,6 +544,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT on the image, which SyncTextureResource sets for
             // every immutable-storage texture (see the comment there).
             E_GL_ARB_texture_view,
+            // Core since 3.2 and implemented here on both backends - glDrawElementsBaseVertex,
+            // glDrawRangeElementsBaseVertex, glDrawElementsInstancedBaseVertex and
+            // glMultiDrawElementsBaseVertex all reach real per-draw vertex rebasing. The string
+            // was simply never emitted, which left KHR-GL4*.draw_elements_base_vertex_tests
+            // NotSupported on a feature that works.
+            E_GL_ARB_draw_elements_base_vertex,
+            // glVertexAttribDivisor, core since 3.3 and real on both backends. Applications
+            // (Better Clouds' GLCompat among them) accept the extension string as an
+            // ALTERNATIVE to a 3.3 context when deciding whether instanced rendering is
+            // available, so withholding it makes MobileGL look less capable than it is.
+            E_GL_ARB_instanced_arrays,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
