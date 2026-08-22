@@ -144,6 +144,27 @@ namespace {
             out << '}';
         }
         out << ']';
+        // The "Known Driver Bugs" section, separate from "checks" because it answers a
+        // different question and uses a different verdict vocabulary (FIXED | UNFIXABLE).
+        // Every entry is a bug the device HAS - a clean probe contributes nothing - so an
+        // unaffected driver serializes an empty array and the screen renders no section.
+        out << ",\"knownDriverBugs\":[";
+        for (SizeT i = 0; i < report.knownDriverBugs.size(); ++i) {
+            const MobileGL::MG_Util::SelfTest::DriverBugFinding& bug = report.knownDriverBugs[i];
+            if (i != 0) {
+                out << ',';
+            }
+            out << "{\"name\":";
+            AppendJsonString(out, bug.name);
+            out << ",\"verdict\":";
+            AppendJsonString(out, bug.verdict == MobileGL::MG_Util::SelfTest::DriverBugVerdict::Fixed
+                                      ? "FIXED"
+                                      : "UNFIXABLE");
+            out << ",\"detail\":";
+            AppendJsonString(out, bug.detail);
+            out << '}';
+        }
+        out << ']';
         if (report.formatCapabilities.has_value()) {
             AppendFormatCapabilitiesJson(out, report.formatCapabilities.value());
         }

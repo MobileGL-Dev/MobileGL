@@ -385,7 +385,52 @@ public final class PostActivity extends Activity {
             }
         }
 
+        renderKnownDriverBugs(backend.optJSONArray("knownDriverBugs"));
         renderFormatCapabilities(backend.optJSONObject("formatCapabilities"));
+    }
+
+    /**
+     * The "Known Driver Bugs" section: core functionality this driver advertises, accepts,
+     * and then does not perform. Separate from the capability checks above because it answers
+     * a different question and uses its own vocabulary.
+     *
+     * Only bugs the device actually HAS are reported, so a clean driver renders no section at
+     * all rather than a list of reassurances - which is why the verdicts are FIXED (a MobileGL
+     * quirk makes application behaviour correct anyway) and UNFIXABLE (no substitute; the
+     * one-liner says what MobileGL does defensively), never PASS/FAIL.
+     */
+    private void renderKnownDriverBugs(JSONArray bugs) {
+        if (bugs == null || bugs.length() == 0) {
+            return;
+        }
+        addText("Known driver bugs", 14, COLOR_TEXT, true, dp(16));
+        LinearLayout table = new LinearLayout(this);
+        table.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        tableParams.topMargin = dp(6);
+        contentLayout.addView(table, tableParams);
+
+        int rowIndex = 0;
+        for (int i = 0; i < bugs.length(); ++i) {
+            JSONObject bug = bugs.optJSONObject(i);
+            if (bug == null) {
+                continue;
+            }
+            // addCheckRow renders name + chip + collapsible detail, which is exactly this
+            // section's shape; the chip text is the verdict rather than a status.
+            JSONObject row = new JSONObject();
+            try {
+                row.put("name", bug.optString("name", "unnamed bug"));
+                row.put("status", bug.optString("verdict", "UNFIXABLE"));
+                row.put("detail", bug.optString("detail", ""));
+            } catch (JSONException ignored) {
+                continue;
+            }
+            addCheckRow(table, row, rowIndex++);
+        }
     }
 
     /** The MOBILEGL_BACKEND_TYPE value a POST section name stands for, or null. */
@@ -731,6 +776,13 @@ public final class PostActivity extends Activity {
                 return COLOR_FAIL;
             case "INFO":
                 return COLOR_INFO;
+            // The "Known driver bugs" section's own vocabulary. Every row there is a defect
+            // this device HAS, so neither verdict is reassuring: FIXED means MobileGL papers
+            // over it and applications still behave correctly, UNFIXABLE means they do not.
+            case "FIXED":
+                return COLOR_WARN;
+            case "UNFIXABLE":
+                return COLOR_FAIL;
             default:
                 return COLOR_TEXT;
         }

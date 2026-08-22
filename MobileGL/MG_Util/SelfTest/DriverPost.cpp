@@ -1157,6 +1157,11 @@ namespace MobileGL::MG_Util::SelfTest {
             MG_Backend::DirectGLES::PopulateFormatCapabilities(
                 glesFuncs, caps, builder.report.formatCapabilities.value());
             ReportThreeChannelColorAttachments(builder, caps, builder.report.formatCapabilities.value());
+            // The "Known Driver Bugs" section. Deliberately last, and deliberately not a
+            // builder.Pass/Warn/Fail row: these are not capability checks and they must not move
+            // the backend verdict, which is about whether the backend can RUN on this driver.
+            // Only bugs the device actually has come back, so a clean driver adds nothing here.
+            builder.report.knownDriverBugs = CollectGlesKnownDriverBugs(glesFuncs);
         } while (false);
     }
 

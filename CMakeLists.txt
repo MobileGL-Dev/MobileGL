@@ -310,6 +310,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/BackendLoaders/OpenGL/Loader.cpp
     MobileGL/MG_Util/BackendLoaders/Vulkan/Loader.cpp
 
+    MobileGL/MG_Util/SelfTest/DriverBugProbes.cpp
     MobileGL/MG_Util/SelfTest/DriverPost.cpp
     MobileGL/MG_Util/SelfTest/DriverPostIterationRPWitness.cpp
 

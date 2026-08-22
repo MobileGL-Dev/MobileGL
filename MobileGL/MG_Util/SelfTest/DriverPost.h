@@ -7,6 +7,8 @@
 // End of Source File Header
 
 #pragma once
+#include "DriverBugProbes.h"
+
 #include <Includes.h>
 #include <MG_Backend/BackendObject.h>
 
@@ -34,6 +36,17 @@ namespace MobileGL::MG_Util::SelfTest {
         String verdict = "UNSUPPORTED"; // "OK" | "DEGRADED" | "UNSUPPORTED"
         String rendererInfo;
         Vector<PostCheck> checks;
+        // The "Known Driver Bugs" section, kept apart from `checks` on purpose. `checks` asks
+        // whether a feature is there and roughly works; these are core features the driver
+        // claims, accepts, and then does not perform - a separate question, from a separate
+        // inventory (campaign findings, not the extension string). See DriverBugProbes.h.
+        //
+        // Only bugs this device ACTUALLY HAS appear here: a probe that comes back clean
+        // contributes no entry, so an unaffected driver renders the section empty rather than
+        // as a list of reassurances. That is also why the verdict vocabulary is FIXED /
+        // UNFIXABLE rather than PASS / FAIL - every row is a bug that is present, and the
+        // verdict says whether MobileGL can do anything about it.
+        Vector<DriverBugFinding> knownDriverBugs;
         Optional<MG_Backend::FormatCapabilityCache> formatCapabilities;
     };
 
