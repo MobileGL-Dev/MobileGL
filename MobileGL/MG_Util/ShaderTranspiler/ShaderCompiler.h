@@ -23,10 +23,22 @@ namespace MobileGL {
                 static Result<SharedPtr<glslang::TShader>> CompileShader(const ShaderAttrib& attrib);
                 static Result<SharedPtr<glslang::TProgram>> LinkProgram(const ProgramAttrib& attrib);
                 static Result<Vector<Vector<unsigned>>> GetSpirvBinaryFromProgram(const ProgramBinaryAttrib& attrib);
+                // `nativeFloat64` is the caller's FINAL verdict, not a capability read: true means
+                // the two fp64 passes at the tail of the chain are skipped and real doubles reach
+                // the driver. False - which is DirectGLES always, every mobile device, and the
+                // no-backend default - runs the chain exactly as it always has. It is the ONE
+                // argument of this function that changes the output bytes, which is why it is
+                // also a field of the L1 memo's key.
+                //
+                // Production sets it in ProgramSpirvTask::GenerateSpirv, which takes the verdict
+                // for the WHOLE program (CompileEnv::ConsumesFloat64Natively() minus the
+                // 64-bit-vertex-input exception) before touching any module. Do not re-derive it
+                // per module: the global UBO is one buffer every stage reads.
                 static bool SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool validateOutput = true,
-                                                      bool enableSpirvValidation = false);
+                                                      bool enableSpirvValidation = false,
+                                                      bool nativeFloat64 = false);
                 // Demotes DrawIndex/BaseInstance/BaseVertex builtins to plain Private globals
                 // (mg_DrawID/mg_BaseInstance/mg_BaseVertex) so SPIRV-Cross can emit ESSL.
                 // Only for backends without native draw-parameter support (DirectGLES).
@@ -431,6 +443,18 @@ namespace MobileGL {
                 // module (see its header for the two operations that make it decline), which is
                 // what the backends report: no mobile driver can build such a module.
                 static Bool ModuleDeclaresFloat64(const Vector<Uint32>& spirv);
+
+                // True when the module is a VERTEX stage that declares a 64-bit float INPUT
+                // variable - `in double`, `in dvec2`, `in dmat3` and so on.
+                //
+                // Asked only on a backend with native fp64, and it is what keeps that backend's
+                // vertex path consistent. No backend here can FETCH 64 bits (VK_FORMAT_R64*_SFLOAT
+                // is optional and lavapipe advertises none of them), and the format is chosen from
+                // the VAO attribute, which does not know what the shader declared - so a module
+                // that keeps a Float64 input would be fed a narrowed float32 stream, or a packed
+                // uint pair with no matching format. Such a module is demoted WHOLE instead, which
+                // is exactly what every other backend does to it.
+                static Bool ModuleDeclaresFloat64VertexInput(const Vector<Uint32>& spirv);
 
                 // True when the module declares an Input variable carrying a Location - i.e. a
                 // user-defined varying or a per-patch input, as opposed to a built-in.

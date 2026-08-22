@@ -303,3 +303,45 @@ void main() {
     // reflects and what glUniform*d then writes into.
     EXPECT_EQ(MemberOffsetsOf(output, structId), (Vector<Uint32>{0, 4, 8})) << Disassemble(output);
 }
+
+// ---------------------------------------------------------------------------
+// The capability-gated half: a backend that consumes 64-bit floats natively gets neither pass.
+// ---------------------------------------------------------------------------
+
+// The flatten exists to preserve a byte layout ACROSS a narrowing. Where nothing narrows there is
+// nothing to preserve and the driver lays the block out itself - so the block keeps its seven
+// members at the offsets glslang computed, and the doubles in it are still doubles.
+TEST_F(FlattenFloat64StorageBlockTest, TheNativePathLeavesTheBlockAndItsDoublesAlone) {
+    const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, kStd140BlockSource);
+    ASSERT_FALSE(input.empty());
+    const Uint32 inputStructId = StructIdNamed(input, "Wide");
+    ASSERT_NE(inputStructId, 0u);
+    const Vector<Uint32> inputOffsets = MemberOffsetsOf(input, inputStructId);
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, output, true, true, true));
+    ASSERT_FALSE(output.empty());
+
+    const Uint32 structId = StructIdNamed(output, "Wide");
+    ASSERT_NE(structId, 0u) << Disassemble(output);
+    EXPECT_EQ(MemberTypesOf(output, structId).size(), 7u)
+        << "the block must not be flattened when nothing is narrowing it\n"
+        << Disassemble(output);
+    EXPECT_EQ(MemberOffsetsOf(output, structId), inputOffsets) << Disassemble(output);
+    EXPECT_GT(CountFloatTypesOfWidth(output, 64), 0u) << Disassemble(output);
+}
+
+// And the control: the SAME module through the SAME entry point with the bit clear is flattened
+// exactly as it always was. This is the pair that pins "capability-false is byte-for-byte the old
+// behaviour" at the level the device A/B checks.
+TEST_F(FlattenFloat64StorageBlockTest, TheDemotedPathIsUnchangedByTheCapabilityArgument) {
+    const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, kStd140BlockSource);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> explicitlyDemoted;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, explicitlyDemoted, true, true, false));
+    // The four-argument spelling every existing caller uses, which must keep meaning "demote".
+    const Vector<Uint32> defaulted = Sanitize(input);
+    EXPECT_EQ(explicitlyDemoted, defaulted);
+    EXPECT_EQ(CountFloatTypesOfWidth(defaulted, 64), 0u) << Disassemble(defaulted);
+}

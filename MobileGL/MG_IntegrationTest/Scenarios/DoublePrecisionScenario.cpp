@@ -6,25 +6,29 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// Scenario - GLSL DOUBLES, RUN AT SINGLE PRECISION.
+// Scenario - GLSL DOUBLES, AT WHATEVER PRECISION THE BACKEND CAN GIVE.
 //
 // No mobile GPU has 64-bit floats. Adreno and Mali both report shaderFloat64 == VK_FALSE, so
-// Magma cannot build a module that declares the Float64 capability, and ESSL has no fp64 type
-// at all, so SPIRV-Cross refuses the module outright on Espryt ("FP64 not supported in ES
-// profile") and the program never reaches the driver. MobileGL therefore narrows every 64-bit
-// float in a shader to 32 bits (ShaderTranspiler::DemoteFloat64Pass) rather than declining the
-// shader: `double` compiles and runs everywhere, at float precision.
+// Magma cannot build a module that declares the Float64 capability there, and ESSL has no fp64
+// type at all, so SPIRV-Cross refuses the module outright on Espryt ("FP64 not supported in ES
+// profile") and the program never reaches the driver. On every such backend MobileGL narrows
+// every 64-bit float in a shader to 32 bits (ShaderTranspiler::DemoteFloat64Pass) rather than
+// declining the shader: `double` compiles and runs everywhere, at float precision. Where the
+// backend DOES consume 64-bit floats - lavapipe is the one that does - the narrowing is skipped
+// and the doubles reach the driver whole.
 //
-// The narrowing is only half a contract. The other half is the API side: the global UBO is
-// laid out by reflecting the DEMOTED module, so glUniform*d has to store a float where the
-// shader reads a float, glGetUniform*v has to read one back, and a dmat4's columns are now
-// std140-padded like any other matrix's. Every one of those is a byte offset that fails
-// silently - the uniform simply reads as something else - so the cases below set values
-// through the API and have the SHADER report what it saw.
+// Either way it is only half a contract. The other half is the API side: the global UBO is laid
+// out by reflecting whichever module was produced, so glUniform*d has to store the width the
+// shader reads, glGetUniform*v has to read that width back, and a matrix's columns are
+// std140-padded to a vec4 or a dvec4 to match. Every one of those is a byte offset that fails
+// silently - the uniform simply reads as something else - so the cases below set values through
+// the API and have the SHADER report what it saw.
 //
-// What is deliberately NOT asserted: that the values are exact to double precision. They are
-// not, and cannot be. Every expectation here is the float value of the double that was set,
-// which is the whole point.
+// WHY ALMOST EVERY EXPECTATION HERE IS A FLOAT VALUE, and why that is not an accident of the
+// demotion: the shader reports through a `float` SSBO, and every value chosen is exact in
+// float32, so the same number is correct in both regimes and the assertions test the LAYOUT
+// rather than the precision. Exactly one case (GetUniformdvReadsBackWhatWasStored) uses a value
+// that is not - 0.1 - and it names both answers explicitly.
 
 #include <cmath>
 #include <cstring>
@@ -574,12 +578,24 @@ void main() {
             glUseProgram(0);
 
             // The readback has to undo exactly what the write did - the same std140 column
-            // padding, the same 4-byte components - or a dmat4 comes back with its columns
-            // shifted and nothing else in the API would say so.
+            // padding, the same component width - or a dmat4 comes back with its columns
+            // shifted and nothing else in the API would say so. Every value below except the
+            // scalar is exact in float32, so those expectations pin the LAYOUT and hold in
+            // either regime; the scalar is the one that also pins the PRECISION.
             GLdouble readScalar = 0.0;
             glGetUniformdv(m_program, scalar, &readScalar);
-            EXPECT_DOUBLE_EQ(readScalar, static_cast<double>(static_cast<float>(0.1)))
-                << "the value is what a float can hold, not the double that was passed in";
+            // 0.1 is not representable in float32, so what comes back names the regime: a
+            // backend without native fp64 narrowed it at the glUniform1d above (the module's own
+            // doubles were demoted, so its storage is 4 bytes per component), and one with it
+            // stored the double whole. Both are correct; asserting only the narrow answer would
+            // fail the moment fp64 stops being emulated, and asserting only the wide one would
+            // fail on every mobile device there is.
+            if (readScalar == 0.1) {
+                SUCCEED() << "this backend consumes 64-bit floats natively; the double survived whole";
+            } else {
+                EXPECT_DOUBLE_EQ(readScalar, static_cast<double>(static_cast<float>(0.1)))
+                    << "the value is what a float can hold, not the double that was passed in";
+            }
 
             GLdouble readVector[3] = {};
             glGetUniformdv(m_program, vector, readVector);
@@ -593,7 +609,8 @@ void main() {
                 EXPECT_DOUBLE_EQ(readMatrix[i], 100.0 + i) << "dmat4 component " << i;
             }
 
-            // The float query sees the same storage through the type it is actually stored as.
+            // The float query sees the same storage through a narrower type, and answers the
+            // same float either way: GL 4.6 core 7.6 converts on the way out.
             GLfloat readFloat = 0.0f;
             glGetUniformfv(m_program, scalar, &readFloat);
             EXPECT_FLOAT_EQ(readFloat, static_cast<float>(0.1));

@@ -972,10 +972,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    // The fetch half of the fp64 demotion the shader side already does unconditionally
-    // (DemoteFloat64Pass): the source bytes are ordinary IEEE-754 doubles, so a GL_DOUBLE array is
-    // deinterleaved into a tightly packed float32 stream rather than dropped. `normalized` is not
-    // consulted - GL ignores it for floating-point array types.
+    // The fetch half of the 64-bit vertex narrowing, whose shader half is guaranteed by
+    // SupportsFloat64VertexAttributes staying false on this backend: any program with a Float64
+    // vertex INPUT is demoted whole, native fp64 or not, so the input is always a 32-bit one. The
+    // source bytes are ordinary IEEE-754 doubles, so a GL_DOUBLE array is deinterleaved into a
+    // tightly packed float32 stream rather than dropped. `normalized` is not consulted - GL
+    // ignores it for floating-point array types.
     static Bool ConvertFloat64VertexStreamToFloat32(
         const MG_State::GLState::VertexAttribute& attribute,
         const Uint8* sourceData,

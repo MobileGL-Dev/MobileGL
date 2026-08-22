@@ -18,7 +18,13 @@ namespace MobileGL {
             // Rewrites a SHADER STORAGE BLOCK that contains a 64-bit float into a flat
             // `uint` word array, and turns every access to it into address arithmetic over
             // that array. The application's byte layout survives exactly; the VALUES are
-            // still narrowed to 32-bit floats, because that is all any target here has.
+            // still narrowed to 32-bit floats, because that is all the target has.
+            //
+            // Registered ONLY on the demoting path, immediately before DemoteFloat64Pass, and
+            // capability-gated with it (ShaderCompiler::SanitizeAndOptimizeBinary). Where the
+            // backend consumes 64-bit floats itself there is no narrowing for this to preserve a
+            // layout across, and flattening a block the driver would have laid out correctly by
+            // itself would only cost the shader its index arithmetic.
             //
             // WHY THIS EXISTS. DemoteFloat64Pass rewrites `double` to `float` in place and
             // lets SPIRV-Cross re-derive the block's packing from the declared types, because

@@ -701,6 +701,57 @@ namespace MobileGL {
                 return false;
             }
 
+            namespace {
+                // The leaf-width test behind ModuleDeclaresFloat64VertexInput, and it is a LEAF
+                // test rather than a shape test on purpose: a `dmat4` input is an OpTypeMatrix of
+                // OpTypeVector of OpTypeFloat 64, and it is as unfetchable as a bare `double`.
+                Bool TypeHoldsFloat64(const spvtools::opt::analysis::Type* type) {
+                    if (type == nullptr) return false;
+                    if (const auto* scalar = type->AsFloat()) return scalar->width() == 64;
+                    if (const auto* vector = type->AsVector()) return TypeHoldsFloat64(vector->element_type());
+                    if (const auto* matrix = type->AsMatrix()) return TypeHoldsFloat64(matrix->element_type());
+                    if (const auto* array = type->AsArray()) return TypeHoldsFloat64(array->element_type());
+                    return false;
+                }
+            } // namespace
+
+            Bool ShaderCompiler::ModuleDeclaresFloat64VertexInput(const Vector<Uint32>& spirv) {
+                if (spirv.empty()) {
+                    return false;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64VertexInput"),
+                    spirv.data(), spirv.size());
+                if (!context) {
+                    return false;
+                }
+                // Vertex only. Every other stage's inputs come from another stage's outputs, which
+                // MobileGL never re-formats, so a 64-bit varying between two stages is the driver's
+                // business and not this question's.
+                auto entryPoints = context->module()->entry_points();
+                if (entryPoints.begin() == entryPoints.end()) return false;
+                const spvtools::opt::Instruction& entryPoint = *entryPoints.begin();
+                if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) !=
+                    spv::ExecutionModel::Vertex) {
+                    return false;
+                }
+                auto* typeManager = context->get_type_mgr();
+                auto* defUseManager = context->get_def_use_mgr();
+                for (const spvtools::opt::Instruction& variable : context->module()->types_values()) {
+                    if (variable.opcode() != spv::Op::OpVariable || variable.NumInOperands() < 1) continue;
+                    if (static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0)) !=
+                        spv::StorageClass::Input) {
+                        continue;
+                    }
+                    const spvtools::opt::Instruction* pointerType = defUseManager->GetDef(variable.type_id());
+                    if (pointerType == nullptr || pointerType->NumInOperands() < 2) continue;
+                    if (TypeHoldsFloat64(typeManager->GetType(pointerType->GetSingleWordInOperand(1)))) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             Bool ShaderCompiler::ModuleReadsLocatedInput(const Vector<Uint32>& spirv) {
                 if (spirv.empty()) {
                     return false;
@@ -751,7 +802,8 @@ namespace MobileGL {
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary,
                                                            const bool validateOutput,
-                                                           const bool enableSpirvValidation) {
+                                                           const bool enableSpirvValidation,
+                                                           const bool nativeFloat64) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
@@ -788,16 +840,25 @@ namespace MobileGL {
                     RenameBuiltinShadowingFunctionsPass::CreateRenameBuiltinShadowingFunctionsPass());
                 optimizer.RegisterPass(EliminateFloatEqualsZeroPass::CreateEliminateFloatEqualsZeroPass());
                 optimizer.RegisterPass(DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass());
-                // No mobile GPU has 64-bit floats: Adreno and Mali both report shaderFloat64 ==
-                // VK_FALSE, and ESSL has no fp64 type for SPIRV-Cross to emit. Demoting here - in
-                // the one chain every module goes through, on both backends, at link - is what
-                // makes `double` compile at all, and makes it behave the SAME everywhere, which
-                // matters because the GL frontend's uniform storage cannot be per-backend: the
-                // glUniform*d shadow narrows to float unconditionally to match this. Runs last so
-                // no earlier pass ever has to reason about a width it will not see in the output;
-                // in particular it runs before the backends' PackDoubleVertexInputsPass, whose
-                // OpBitcast this one would otherwise decline on. Costs one types_values() walk on
-                // the overwhelming majority of modules, which declare no 64-bit float at all.
+                // The fp64 tail, and the ONE part of this chain that is not the same on every
+                // backend. Both passes are skipped when the backend can consume Float64 itself
+                // (`nativeFloat64`, i.e. VkPhysicalDeviceFeatures::shaderFloat64 on DirectVulkan):
+                // there is nothing to emulate then, and narrowing would only throw away precision
+                // the driver was willing to give. That is DirectVulkan-on-lavapipe today and
+                // nothing else - Adreno and Mali both report shaderFloat64 == VK_FALSE, and
+                // DirectGLES can never qualify because GLSL ES has no fp64 type for SPIRV-Cross to
+                // emit at all, so on every real mobile device this branch is not taken and the two
+                // passes run exactly as they always have.
+                //
+                // Demoting here - in the one chain every module goes through, at link - is what
+                // makes `double` compile at all where the hardware has none, and makes it behave
+                // the SAME across both backends of such a device, which matters because the GL
+                // frontend's uniform storage is per PROGRAM rather than per call: the glUniform*d
+                // shadow narrows to float to match this. Runs last so no earlier pass ever has to
+                // reason about a width it will not see in the output; in particular it runs before
+                // the backends' PackDoubleVertexInputsPass, whose OpBitcast this one would
+                // otherwise decline on. Costs one types_values() walk on the overwhelming majority
+                // of modules, which declare no 64-bit float at all.
                 // ...but demoting a double that lives in a SHADER STORAGE BLOCK also repacks that
                 // block, and the bytes an application put in the buffer do not move with it. This
                 // runs first and takes those blocks out of the demotion's hands: each becomes a
@@ -806,10 +867,16 @@ namespace MobileGL {
                 // and only the VALUES narrow. Gated on a block actually holding a 64-bit float, so
                 // every other module pays one types_values() walk and nothing else, and it declines
                 // (leaving the block for the demotion to handle the old way) on any shape it cannot
-                // re-address exactly. See FlattenFloat64StorageBlockPass.h.
-                optimizer.RegisterPass(
-                    FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass());
-                optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
+                // re-address exactly. See FlattenFloat64StorageBlockPass.h. It is skipped with the
+                // demotion rather than kept: its whole purpose is to preserve the byte layout ACROSS
+                // a narrowing that is no longer happening, and flattening a block a native driver
+                // would have laid out correctly by itself only costs the shader its index
+                // arithmetic.
+                if (!nativeFloat64) {
+                    optimizer.RegisterPass(
+                        FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass());
+                    optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
+                }
 
                 return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
                                            outputBinary, validateOutput, enableSpirvValidation);

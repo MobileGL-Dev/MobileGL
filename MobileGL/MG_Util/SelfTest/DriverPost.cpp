@@ -51,19 +51,21 @@ namespace MobileGL::MG_Util::SelfTest {
         };
 
         // Both backends' fp64 rows end the same way, and the sentence they end with depends on
-        // a config flag rather than on anything either backend probes: the demotion is what
-        // makes doubles work, but GL_ARB_gpu_shader_fp64 promises the PRECISION the demotion
-        // cannot deliver, so the string is opt-in and the row has to say which way it went.
+        // a config flag rather than on anything either backend probes: doubles WORK on every
+        // backend, but GL_ARB_gpu_shader_fp64 additionally promises 64-bit PRECISION, which only
+        // a backend that consumes fp64 natively actually has. The string is opt-in either way -
+        // advertising it is a decision about the whole extension's surface, not just about
+        // precision - so the row has to say which way it went.
         String AppendFp64AdvertisementNote(String detail) {
             if (MG_Config::Features.AdvertiseFp64) {
                 return Move(detail) +
                        ". GL_ARB_gpu_shader_fp64 IS advertised (MOBILEGL_ADVERTISE_FP64): an application "
-                       "that checks the string will believe it has 64-bit precision, and it does not";
+                       "that checks the string will believe it has 64-bit precision, which is true only "
+                       "where the row above says native";
             }
             return Move(detail) +
-                   ". GL_ARB_gpu_shader_fp64 is not advertised, because the precision it promises is the "
-                   "one thing the demotion cannot provide; set MOBILEGL_ADVERTISE_FP64=1 to advertise it "
-                   "anyway";
+                   ". GL_ARB_gpu_shader_fp64 is not advertised by default; set MOBILEGL_ADVERTISE_FP64=1 "
+                   "to advertise it anyway";
         }
 
         struct ReportBuilder {
@@ -2321,27 +2323,35 @@ namespace MobileGL::MG_Util::SelfTest {
                          "unsupported; a GL_TEXTURE_CUBE_MAP_ARRAY texture gets no image at all, so sampling "
                          "one reads nothing and glFramebufferTextureLayer on one is declined");
         }
-        // Reported whichever way the device answers, because MobileGL no longer follows the
-        // device here: every 64-bit float is narrowed to 32 bits before any module reaches this
-        // backend (DemoteFloat64Pass), so the Float64 capability is never declared and a device
-        // that HAS the feature gains nothing from it. The device's own answer is still worth
-        // printing - it is the reason the demotion is unconditional.
-        builder.Pass("fp64", AppendFp64AdvertisementNote(
-                                 format("demoted to fp32 (device shaderFloat64 = {}) - every double / dvec / "
-                                        "dmat in a shader is narrowed to 32 bits before pipeline creation, so "
-                                        "such shaders BUILD AND RUN at single precision on every device "
-                                        "instead of failing to create a shader module on the ones without the "
-                                        "feature. A block containing a double is re-laid-out for the narrowed "
-                                        "members, so an application that hard-codes std140 offsets computed "
-                                        "for doubles must query them instead",
-                                        features.shaderFloat64 == VK_TRUE ? "supported" : "unsupported")));
+        // MobileGL follows the device here: shaderFloat64 decides whether a module keeps its
+        // 64-bit floats or has them narrowed before pipeline creation (DemoteFloat64Pass). Adreno
+        // and Mali both report VK_FALSE, so the demoted row is what a real phone prints; lavapipe
+        // reports VK_TRUE and gets real doubles.
+        if (features.shaderFloat64 == VK_TRUE) {
+            builder.Pass("fp64", AppendFp64AdvertisementNote(
+                                     "native (device shaderFloat64 = supported) - every double / dvec / dmat in "
+                                     "a shader keeps its declared width, blocks keep the layout glslang computed "
+                                     "for them, and glUniform*d stores 8-byte components. The one exception is a "
+                                     "VERTEX stage that declares a 64-bit float INPUT: there is no 64-bit vertex "
+                                     "FETCH here, so such a program is narrowed whole exactly as it would be on a "
+                                     "device without the feature"));
+        } else {
+            builder.Pass("fp64", AppendFp64AdvertisementNote(
+                                     "demoted to fp32 (device shaderFloat64 = unsupported) - every double / dvec "
+                                     "/ dmat in a shader is narrowed to 32 bits before pipeline creation, so such "
+                                     "shaders BUILD AND RUN at single precision instead of failing to create a "
+                                     "shader module. A block containing a double is re-laid-out for the narrowed "
+                                     "members, so an application that hard-codes std140 offsets computed for "
+                                     "doubles must query them instead"));
+        }
         builder.Warn("64-bit vertex attributes",
-                     "narrowed to float32; there is no 64-bit shader input left to feed after the fp64 "
-                     "demotion above, and no VK_FORMAT_R64*_SFLOAT vertex fetch to feed it with on most "
-                     "devices anyway. glVertexAttribLFormat succeeds, its state is queryable, and an "
-                     "ENABLED 64-bit array IS fetched - the source doubles are deinterleaved into a "
-                     "float32 stream at draw, so values outside float32's range or precision are "
-                     "rounded rather than exact");
+                     "narrowed to float32 on every device, whatever the row above says: there is no "
+                     "VK_FORMAT_R64*_SFLOAT vertex fetch here, and the format is chosen from the VAO "
+                     "attribute, which does not know what type the shader declared - which is why a "
+                     "vertex stage with a 64-bit float INPUT is narrowed whole even where fp64 is native. "
+                     "glVertexAttribLFormat succeeds, its state is queryable, and an ENABLED 64-bit array "
+                     "IS fetched - the source doubles are deinterleaved into a float32 stream at draw, so "
+                     "values outside float32's range or precision are rounded rather than exact");
 
         Bool shaderDrawParameters = false;
         if (vkGetPhysicalDeviceFeatures2Fn != nullptr && properties.apiVersion >= VK_API_VERSION_1_1) {

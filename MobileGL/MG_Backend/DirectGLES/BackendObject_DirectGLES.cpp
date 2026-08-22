@@ -1331,9 +1331,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     DynParams::PerLayerFramebufferAttachmentBit(TextureTarget::TextureCubeMapArray);
             }
         }
-        // Not a driver question and never will be: OpenGL ES has no double-precision vertex format
-        // and ESSL has no fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to
-        // land on this backend regardless of what the driver underneath happens to support.
+        // Not a driver question and never will be: GLSL ES has no 64-bit float type in ANY version
+        // or extension, so SPIRV-Cross cannot emit one ("FP64 not supported in ES profile") and a
+        // module that still declared Float64 would never reach the driver at all. The demotion is
+        // mathematically mandatory here, on every device, forever - which is why this stays false
+        // regardless of what the driver underneath happens to support.
+        m_dynamicParameters.SupportsShaderFloat64 = false;
+        // Follows the line above, and must: OpenGL ES has no double-precision vertex format and no
+        // fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to land here.
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;

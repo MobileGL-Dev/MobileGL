@@ -30,7 +30,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //    key (that map is an output of mapIO, not an input to it), and L1c's PAYLOAD gained
         //    the explicit uniform locations - so a blob written under 3 describes a differently
         //    shaped answer at both levels even where the bytes would have matched.
-        constexpr Uint32 kKeyLayoutVersion = 4u;
+        // 5: L1 gained nativeFloat64. SanitizeAndOptimizeBinary's fp64 tail is now capability-
+        //    gated, so one L1 key shape can describe two materially different module sets (real
+        //    doubles vs demoted-and-flattened) and a blob written under 4 says nothing about
+        //    which one it holds.
+        constexpr Uint32 kKeyLayoutVersion = 5u;
 
         // The repo's existing cache epoch (MG_Config::CacheVersion, the seed
         // ProgramFactory::ComputeHash uses). Strictly redundant for an in-memory
@@ -123,6 +127,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         builder.Value(inputs.frontendFingerprint);
         builder.Value(inputs.shaderCompileFlags);
         builder.Value(static_cast<Uint8>(inputs.enableSpirvValidation));
+        builder.Value(static_cast<Uint8>(inputs.nativeFloat64));
         builder.Value(static_cast<Uint64>(inputs.stages.size()));
         for (const auto& stage : inputs.stages) {
             builder.Value(static_cast<Uint32>(stage.type));

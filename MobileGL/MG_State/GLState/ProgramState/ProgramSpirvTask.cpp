@@ -122,7 +122,14 @@ namespace MobileGL::MG_State::GLState {
             m_phaseA->in.env != nullptr && m_phaseA->in.env->backend == BackendType::DirectVulkan;
         const Bool enableSpirvValidation = m_phaseA->in.enableSpirvValidation;
         artifacts.enableSpirvValidation = enableSpirvValidation;
-        GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan, enableSpirvValidation);
+        // Whether this backend consumes 64-bit floats itself. Read off the SNAPSHOT, like every
+        // other environment question this node asks: a worker may not touch
+        // MG_Backend::pActiveBackendObject, and the answer has to be the one the L1 key was built
+        // with (ProgramLinkTask::BuildSpirvCacheKey reads the same env) or a memo written under
+        // one answer could be handed back under the other.
+        const Bool nativeFloat64 = m_phaseA->in.env != nullptr && m_phaseA->in.env->ConsumesFloat64Natively();
+        GenerateSpirv(handoff, externalIndex, deferOutputValidationForDirectVulkan, enableSpirvValidation,
+                      nativeFloat64);
         // GlslangToSpv was the only consumer of the parsed ASTs; everything after this point
         // works on the SPIR-V and on the TProgram's own self-contained reflection pool. Drop
         // them here rather than at the end of the body, which is ~87% of this node's runtime
@@ -181,7 +188,7 @@ namespace MobileGL::MG_State::GLState {
 
     void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex,
                                          const Bool deferOutputValidationForDirectVulkan,
-                                         const Bool enableSpirvValidation) {
+                                         const Bool enableSpirvValidation, const Bool nativeFloat64) {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
@@ -209,12 +216,39 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: GenerateSpirv - generated %zu SPIR-V modules", externalIndex,
                 artifacts.generatedSpirv.size());
 
+        // The fp64 verdict, taken ONCE for the whole program and before any module is touched.
+        //
+        // Per program rather than per module, and that is forced by the global UBO: all stages
+        // read one buffer whose layout is derived by reflecting the modules, so a vertex stage
+        // that stored a `uniform double` as 4 bytes next to a fragment stage that stored it as 8
+        // would put every uniform after it somewhere different in each, and the routing table
+        // (one offset per location) could only describe one of them.
+        //
+        // The exception itself is the vertex INPUT: no backend here can fetch a 64-bit attribute,
+        // and VertexInputStateFactory picks the format from the VAO attribute without ever seeing
+        // what the shader declared, so a Float64 input would meet a narrowed float32 stream. One
+        // such stage demotes the whole program, which is exactly what every backend without
+        // native fp64 does to it anyway.
+        Bool keepFloat64 = nativeFloat64;
+        if (keepFloat64) {
+            for (const auto& spv : artifacts.generatedSpirv) {
+                if (ShaderCompiler::ModuleDeclaresFloat64VertexInput(spv)) {
+                    keepFloat64 = false;
+                    MGLOG_D("ProgramObject %u: a vertex stage declares a 64-bit float input; demoting the "
+                            "whole program despite native fp64",
+                            externalIndex);
+                    break;
+                }
+            }
+        }
+        artifacts.nativeFloat64 = keepFloat64;
+
         // Linked SPIR-V generated, sanitize and optimize it
         Bool allOptimized = true;
         {
             for (auto& spv : artifacts.generatedSpirv) {
                 auto success = ShaderCompiler::SanitizeAndOptimizeBinary(
-                    spv, spv, !deferOutputValidationForDirectVulkan, enableSpirvValidation);
+                    spv, spv, !deferOutputValidationForDirectVulkan, enableSpirvValidation, keepFloat64);
                 if (!success) {
                     // The one genuine phase-B failure mode: one of the seven optimizer passes
                     // reported failure, so `spv` is whatever the run left behind. A fordebug

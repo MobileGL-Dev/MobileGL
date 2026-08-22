@@ -29,6 +29,16 @@ namespace MobileGL {
             // Espryt path never even reaches the driver. Demotion is what makes `double` in an
             // application's GLSL compile and run everywhere, at fp32 precision.
             //
+            // WHEN IT RUNS AT ALL. This pass is CAPABILITY-GATED at its one production caller,
+            // ShaderCompiler::SanitizeAndOptimizeBinary: a backend that can consume Float64 itself
+            // (DynamicBackendParameters::SupportsShaderFloat64, i.e. shaderFloat64 on DirectVulkan
+            // - lavapipe today and nothing else) skips it, and the module keeps its doubles.
+            // DirectGLES can never qualify, and neither can any real mobile device, so everything
+            // below still describes what happens there - which is everywhere that ships. The one
+            // exception that survives the capability: a VERTEX stage declaring a 64-bit float
+            // INPUT demotes the whole program regardless, because no backend here can FETCH 64
+            // bits (see ProgramSpirvTask::GenerateSpirv).
+            //
             // BLOCK LAYOUT IS RE-DERIVED, NOT PRESERVED, and that was not the first choice - see
             // BlockRelayout in the .cpp for the measurement that forced it. Preserving the 64-bit
             // offsets (float + 4 bytes of padding in each slot) keeps the application's byte layout
@@ -67,9 +77,11 @@ namespace MobileGL {
             // Index 0 of the same case PASSES by accident, for the same reason - writing 0.0f into
             // the low half of 1.0 leaves it unchanged - so a partial pass here is not progress.
             // Fixing it means carrying a double in the DEFAULT UNIFORM block without re-deriving
-            // its layout, and that block's routing is built by reflecting the module this pass
-            // produces, so the representation change ripples into every glUniform*d. Deliberately
-            // not attempted. compute_shader.fp64-case2 passes today and any attempt has to keep it
+            // its layout - which is precisely what the capability gate now does where the backend
+            // allows it: fp64-case1 PASSES on DirectVulkan/lavapipe (measured) and still fails on
+            // Espryt and on every device without shaderFloat64, where this pass runs. There is no
+            // fix for the demoted path itself; the value simply does not fit.
+            // compute_shader.fp64-case2 passes in both regimes and any attempt has to keep it
             // green.
             //
             // SHADER STORAGE BLOCKS ARE NO LONGER IN THAT LIST, and the two cases that used to be

@@ -379,6 +379,90 @@ TEST_F(DemoteFloat64Test, TheSharedChainDemotesToo) {
     EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64(output)) << Disassemble(output);
 }
 
+// ---------------------------------------------------------------------------
+// The capability gate. A backend that consumes 64-bit floats itself gets none of this.
+// ---------------------------------------------------------------------------
+
+namespace {
+    // Everything kWideVertexSource has except the 64-bit vertex INPUT, which is what the
+    // whole-program demotion falls back for. A fragment stage, so there is no input to have.
+    constexpr const char* kWideFragmentSource = R"(#version 460 core
+layout(std140, binding = 0) uniform Blk {
+    float  a;
+    double d;
+    dvec2  v2;
+    dvec4  v4;
+    dmat4  m4;
+    double arr[3];
+};
+layout(location = 0) uniform double uScale;
+layout(location = 0) in vec3 inNormal;
+layout(location = 0) out float fOut;
+void main() {
+    double s = d * uScale + a;
+    s += v2.x + v4.y + m4[0].z + arr[0] + arr[1] + arr[2] + 0.5lf;
+    fOut = float(s) + inNormal.x;
+}
+)";
+} // namespace
+
+// THE NEGATIVE CONTROL for the whole change: the identical module through the identical entry
+// point answers both ways, and the only thing that moved is the capability argument.
+TEST_F(DemoteFloat64Test, TheSharedChainKeepsFloat64WhenTheBackendConsumesIt) {
+    const Vector<Uint32> input = CompileToSpirv(GL_FRAGMENT_SHADER, kWideFragmentSource);
+    ASSERT_FALSE(input.empty());
+    ASSERT_TRUE(DeclaresFloat64Capability(input));
+    ASSERT_GT(CountFloatTypesOfWidth(input, 64), 0u);
+
+    Vector<Uint32> native;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, native, true, true, true));
+    EXPECT_TRUE(DeclaresFloat64Capability(native)) << Disassemble(native);
+    EXPECT_GT(CountFloatTypesOfWidth(native, 64), 0u) << Disassemble(native);
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64(native));
+
+    Vector<Uint32> demoted;
+    ASSERT_TRUE(ShaderCompiler::SanitizeAndOptimizeBinary(input, demoted, true, true, false));
+    EXPECT_FALSE(DeclaresFloat64Capability(demoted)) << Disassemble(demoted);
+    EXPECT_EQ(CountFloatTypesOfWidth(demoted, 64), 0u) << Disassemble(demoted);
+    EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64(demoted));
+
+    EXPECT_NE(native, demoted);
+}
+
+// The exception the vertex path needs, at the level ProgramSpirvTask asks it: no backend here can
+// FETCH 64 bits, so a stage that declares a Float64 input is demoted whole even where the rest of
+// its doubles could have survived.
+TEST_F(DemoteFloat64Test, AFloat64VertexInputIsRecognisedAndOnlyOnAVertexStage) {
+    const Vector<Uint32> vertexWithDoubleInput = CompileToSpirv(GL_VERTEX_SHADER, kWideVertexSource);
+    ASSERT_FALSE(vertexWithDoubleInput.empty());
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64VertexInput(vertexWithDoubleInput));
+
+    // Doubles everywhere but the inputs: the same verdict must be false, or nothing would ever
+    // take the native path.
+    const Vector<Uint32> fragmentWithDoubles = CompileToSpirv(GL_FRAGMENT_SHADER, kWideFragmentSource);
+    ASSERT_FALSE(fragmentWithDoubles.empty());
+    EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64VertexInput(fragmentWithDoubles));
+
+    // A vertex stage whose doubles are all internal is fine too - it is the INPUT that cannot be
+    // fed, not the stage.
+    const String vertexWithoutDoubleInput = R"(#version 460 core
+layout(location = 0) uniform double uScale;
+layout(location = 0) in vec3 inPos;
+layout(location = 0) out float vOut;
+void main() {
+    double s = double(inPos.x) * uScale + 0.5lf;
+    vOut = float(s);
+    gl_Position = vec4(float(s));
+}
+)";
+    const Vector<Uint32> internalOnly = CompileToSpirv(GL_VERTEX_SHADER, vertexWithoutDoubleInput);
+    ASSERT_FALSE(internalOnly.empty());
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresFloat64(internalOnly));
+    EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64VertexInput(internalOnly));
+
+    EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64VertexInput({}));
+}
+
 // The payoff on the Espryt path: SPIRV-Cross throws "FP64 not supported in ES profile" for every
 // one of these before demotion, so the program simply could not be transpiled at all.
 class DemoteFloat64EsslTest : public DemoteFloat64Test, public ::testing::WithParamInterface<const char*> {};

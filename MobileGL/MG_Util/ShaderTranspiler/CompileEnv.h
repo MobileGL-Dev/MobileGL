@@ -117,8 +117,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //     preprocessed text is in the L1 key verbatim, a strictly finer discriminator
         //     than the extension list. (E_GL_ARB_gpu_shader_fp64 is never read by the front
         //     end at all: MOBILEGL_ADVERTISE_FP64 only adds it to the extension STRING the
-        //     application queries, and DemoteFloat64Pass runs unconditionally either way, so
-        //     fp64 GLSL translates identically with the flag on or off.)
+        //     application queries, and glslang parses `double` the same way either way.)
+        //   * params.SupportsShaderFloat64, i.e. ConsumesFloat64Natively(). glslang produces
+        //     the SAME SPIR-V under it - a `double` parses, reflects and generates as a
+        //     64-bit float regardless - so it is not a front-end input and putting it here
+        //     would also cost L1c (the parse-verdict memo, which keys on this fingerprint and
+        //     is genuinely independent of it) a false miss per backend. It DOES change what
+        //     SanitizeAndOptimizeBinary produces, and L1's payload is post-Sanitize, so it
+        //     rides in L1's key as a field of its own; see SpirvTranslationKeyInputs.
         //   * the other ~50 DynamicBackendParameters fields: read by the GL getters and by
         //     the backends, never by the parse, the link or reflection.
         //   * maxComputeWorkGroupInvocations - and ONLY this one; its two former companions
@@ -135,6 +141,16 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         Uint64 frontendFingerprint = 0;   // set by CaptureCompileEnv()
 
         Bool HasBackend() const { return backend != BackendType::Unknown; }
+        // Whether the backend this env was captured against can CONSUME a module that still
+        // declares 64-bit floats - the one thing that decides whether the transpile keeps
+        // `double` or narrows it (FlattenFloat64StorageBlockPass + DemoteFloat64Pass).
+        //
+        // The no-backend case answers FALSE, deliberately opposite to IsExtensionAdvertised's
+        // permissive fallback: an extension the frontend cannot gate against is best assumed
+        // present, but a hardware capability nothing has declared must be assumed absent. The
+        // demoted module is the one that works everywhere, so it is what a standalone compile
+        // (an internal shader object, a unit test) gets.
+        Bool ConsumesFloat64Natively() const { return HasBackend() && params.SupportsShaderFloat64; }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
         Bool IsExtensionAdvertised(GLExtension extension) const {

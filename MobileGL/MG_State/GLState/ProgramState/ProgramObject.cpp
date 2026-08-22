@@ -155,6 +155,10 @@ namespace MobileGL::MG_State::GLState {
 
         Uint8* const scratch = m_spirv.globalUboScratch.data();
         const SizeT uboSize = m_spirv.globalUboScratch.size();
+        // Read straight off m_spirv, not through UsesNativeFloat64(): this runs INSIDE the
+        // phase-B publish, where the join gate is not re-entrant. Same reason the scratch above
+        // is taken directly.
+        const Bool nativeFloat64 = m_spirv.nativeFloat64;
 
         for (const auto& init : initializers) {
             // Scalars per array ELEMENT. A matrix element carries cols * rows of them, laid
@@ -165,12 +169,13 @@ namespace MobileGL::MG_State::GLState {
             const Int elements = init.arraySize;
             if (componentsPerElement <= 0 || elements <= 0) continue;
 
-            // EbtDouble belongs with the floats now, not with the skipped types: every 64-bit
-            // float in a shader is narrowed to 32 bits before the module reaches a backend
+            // EbtDouble belongs with the floats, not with the skipped types. On a DEMOTED
+            // program its 64-bit floats were narrowed to 32 before the module reached a backend
             // (ShaderTranspiler::DemoteFloat64Pass), so a `uniform double d = 1.5;` has exactly
-            // the 32-bit shadow encoding a `uniform float` does - and glslang already folded its
-            // value into floatValues, which is a vector<double> either way. Leaving it out meant
-            // the initializer was silently dropped and the uniform came up zero.
+            // the 32-bit shadow encoding a `uniform float` does; on a program that kept them it
+            // has an 8-byte one, which the store width below picks up. glslang folded the value
+            // into floatValues, a vector<double>, in both cases. Leaving it out meant the
+            // initializer was silently dropped and the uniform came up zero.
             const Bool isFloat = init.basicType == glslang::EbtFloat ||
                                  init.basicType == glslang::EbtFloat16 ||
                                  init.basicType == glslang::EbtDouble;
@@ -195,22 +200,36 @@ namespace MobileGL::MG_State::GLState {
                 // std140 pads every column of a float matrix out to a vec4, so the columns of
                 // a mat3 are 16 bytes apart even though each carries 12. The slot's own span
                 // states the stride the rest of the pipeline agreed on rather than guessing it.
-                const SizeT slotSpan = GetUniformStorageSpanInBytes(static_cast<Uint>(location));
+                // The static form, with the width taken from m_spirv directly: the member
+                // overload asks UsesNativeFloat64(), which joins phase B - and phase B is what
+                // is publishing right now.
+                const SizeT slotSpan =
+                    UniformStorageSpanInBytes(GetUniformTypeFacts(static_cast<Uint>(location)),
+                                              GetUniformSizesInBytes(static_cast<Uint>(location)), nativeFloat64);
                 const SizeT columnStride =
                     columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
                 const Int componentsPerColumn = columns > 0 ? rows : componentsPerElement;
                 const Int columnCount = columns > 0 ? columns : 1;
 
+                // A `double` initializer on a program that KEPT its doubles lands in an 8-byte
+                // component, not a 4-byte one; every other basic type - and every double on a
+                // demoted program - stays one 32-bit word. glslang folded the value into
+                // floatValues (a vector<double>) either way, so only the store width moves.
+                const Bool isWideDouble = init.basicType == glslang::EbtDouble && nativeFloat64;
+                const SizeT componentSize = isWideDouble ? sizeof(Double) : sizeof(Uint32);
                 for (Int column = 0; column < columnCount; ++column) {
                     const SizeT byteOffset = static_cast<SizeT>(offset) + static_cast<SizeT>(column) * columnStride;
-                    const SizeT writeSize = static_cast<SizeT>(componentsPerColumn) * sizeof(Uint32);
+                    const SizeT writeSize = static_cast<SizeT>(componentsPerColumn) * componentSize;
                     if (byteOffset + writeSize > uboSize) break;
                     const SizeT firstComponent = static_cast<SizeT>(element) * componentsPerElement +
                                                  static_cast<SizeT>(column) * componentsPerColumn;
                     for (Int component = 0; component < componentsPerColumn; ++component) {
                         const SizeT source = firstComponent + static_cast<SizeT>(component);
-                        Uint8* const destination = scratch + byteOffset + component * sizeof(Uint32);
-                        if (isFloat) {
+                        Uint8* const destination = scratch + byteOffset + component * componentSize;
+                        if (isWideDouble) {
+                            const Double value = init.floatValues[source];
+                            std::memcpy(destination, &value, sizeof(value));
+                        } else if (isFloat) {
                             const Float value = static_cast<Float>(init.floatValues[source]);
                             std::memcpy(destination, &value, sizeof(value));
                         } else {

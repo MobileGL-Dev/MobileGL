@@ -112,10 +112,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 ToVkVertexFormat(attr.Type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
             VertexStreamConversion conversion = VertexStreamConversion::None;
             // Gated on the SAME flag ToVkVertexFormat gates its 64-bit path on, and that is
-            // load-bearing rather than belt-and-braces: the narrowing is only correct because
-            // DemoteFloat64Pass already turned the shader's `dvec` input into a `vec`, and that
-            // pass runs precisely when the backend declares no 64-bit vertex support. With the
-            // flag set, a dvec3/dvec4 is declined by ToVkVertexFormat AND left 64-bit in the
+            // load-bearing rather than belt-and-braces: the narrowing is only correct because the
+            // shader's `dvec` input is a `vec` by the time the pipeline is built, and what
+            // guarantees that is the flag being clear. It is clear on every backend today, and a
+            // program with a 64-bit float vertex input is demoted WHOLE for the same reason even
+            // where the device has native fp64 (ProgramSpirvTask::GenerateSpirv). With the flag
+            // set, a dvec3/dvec4 would be declined by ToVkVertexFormat AND left 64-bit in the
             // module, so a float32 stream would be fed to a Float64 input.
             const Bool narrowFloat64Arrays =
                 MG_Backend::pActiveBackendObject == nullptr ||

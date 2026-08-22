@@ -565,26 +565,47 @@ namespace MobileGL::MG_State::GLState {
                                                           : kInvalidUniformOffset;
         }
         Uint GetUniformSizesInBytes(Uint location) const { return MG_Util::GetGLTypeSize(GetUniformType(location)); }
-        // Bytes a uniform actually occupies in the global UBO, which is not its GL type size,
-        // for two reasons. std140 pads each column of a matrix out to a vec4, so a mat3 spans
-        // 48 bytes even though only 36 of them carry components. And every 64-bit float in a
-        // shader is narrowed to 32 bits before the module reaches a backend
-        // (ShaderTranspiler::DemoteFloat64Pass) - the global UBO is laid out by reflecting that
-        // demoted module - so a `double` uniform occupies exactly what its float-typed twin
-        // would, half its GL type size, and a `dmat4` is padded like any other matrix. Anything
-        // reading or writing a whole uniform's storage - a bounds check, a copy between two
-        // programs' shadows - wants this rather than GetUniformSizesInBytes.
-        static SizeT UniformStorageSpanInBytes(const TypeFacts& type, SizeT tightSize) {
-            if (type.isMatrix) {
-                return static_cast<SizeT>(type.matrixCols) * 4 * sizeof(Float);
+        // std140 column stride of a matrix uniform in the global UBO: every column is padded out
+        // to the base alignment of a vec4 for 32-bit components, and of a dvec4 for 64-bit ones -
+        // except that a 2-ROW double column is a dvec2, whose base alignment is already 16.
+        // (GL 4.6 core 7.6.2.2 rules 2-4; SPIRV-Cross derives the same numbers, which is what
+        // makes this agree with the reflected module.)
+        static SizeT UniformMatrixColumnStride(const TypeFacts& type, const Bool nativeFloat64) {
+            if (type.isDouble && nativeFloat64) {
+                return type.matrixRows <= 2 ? 2 * sizeof(GLdouble) : 4 * sizeof(GLdouble);
             }
-            if (type.isDouble) {
+            return 4 * sizeof(Float);
+        }
+        // Bytes a uniform actually occupies in the global UBO, which is not its GL type size,
+        // for two reasons. std140 pads each column of a matrix out to a vec4 (or a dvec4), so a
+        // mat3 spans 48 bytes even though only 36 of them carry components. And a 64-bit float
+        // may have been narrowed to 32 before the module reached the backend
+        // (ShaderTranspiler::DemoteFloat64Pass) - the global UBO is laid out by reflecting
+        // whichever module was produced - so on a DEMOTED program a `double` uniform occupies
+        // exactly what its float-typed twin would, half its GL type size, and a `dmat4` is padded
+        // like any other 32-bit matrix. On a program that kept its doubles it occupies the full
+        // GL type size and its matrix columns are twice as far apart. `nativeFloat64` is the
+        // program's own SpirvArtifacts flag, never a live backend read: it describes the modules
+        // that were actually built. Anything reading or writing a whole uniform's storage - a
+        // bounds check, a copy between two programs' shadows - wants this rather than
+        // GetUniformSizesInBytes.
+        static SizeT UniformStorageSpanInBytes(const TypeFacts& type, SizeT tightSize,
+                                               const Bool nativeFloat64 = false) {
+            if (type.isMatrix) {
+                return static_cast<SizeT>(type.matrixCols) * UniformMatrixColumnStride(type, nativeFloat64);
+            }
+            if (type.isDouble && !nativeFloat64) {
                 return tightSize / 2;
             }
             return tightSize;
         }
+        // Whether this program's modules KEPT their 64-bit floats. Joins phase B, like every
+        // other question about the global UBO's layout - and it is one: it decides how wide a
+        // `double` uniform's slot is.
+        Bool UsesNativeFloat64() const { return Spirv().nativeFloat64; }
         SizeT GetUniformStorageSpanInBytes(Uint location) const {
-            return UniformStorageSpanInBytes(GetUniformTypeFacts(location), GetUniformSizesInBytes(location));
+            return UniformStorageSpanInBytes(GetUniformTypeFacts(location), GetUniformSizesInBytes(location),
+                                             UsesNativeFloat64());
         }
 
         // ---- "written since link": the per-location dirty set the pipeline composite mirrors from ----
@@ -1323,6 +1344,15 @@ namespace MobileGL::MG_State::GLState {
             // not drawable, which the backends already express through their link-status
             // gates.
             Bool spirvStatus = false;
+            // Whether these modules KEPT their 64-bit floats instead of being narrowed to 32
+            // (ShaderTranspiler::DemoteFloat64Pass). Decided per PROGRAM, never per module - the
+            // global UBO is one buffer all stages read, so two stages disagreeing about whether a
+            // `uniform double` occupies 4 or 8 bytes would put every uniform after it at a
+            // different offset in each. Recorded here rather than re-derived from the backend
+            // because it is the layout THESE modules were built with: it is what the routing
+            // table's offsets mean, and glUniform*d / glGetUniform*v have to write and read the
+            // width the shader actually declares.
+            Bool nativeFloat64 = false;
         };
 
         // ---- artifacts-only helpers, shared with ProgramLinkTask ----

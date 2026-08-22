@@ -787,9 +787,11 @@ namespace MobileGL::MG_State::GLState {
     // The L1 key. Every input below is one that can change the SPIR-V this program
     // generates; see the key inventory on SpirvTranslationKeyInputs.
     //
-    // Deliberately NOT keyed on: nothing that only steers a BACKEND transpile - see the
+    // Deliberately NOT keyed on: anything that only steers a BACKEND transpile - see the
     // classification on CompileEnv::frontendFingerprint, and L2's own key in
-    // MG_Util/ShaderTranspiler/TranslationCache.h.
+    // MG_Util/ShaderTranspiler/TranslationCache.h. The single capability bit that IS here
+    // (nativeFloat64) earns its place by changing SanitizeAndOptimizeBinary's own output,
+    // which is what the payload stores.
     MG_Util::ShaderTranspiler::TranslationCacheKey ProgramLinkTask::BuildSpirvCacheKey(
         const MG_Util::ShaderTranspiler::CompileEnv& env) const {
         using namespace MG_Util::ShaderTranspiler;
@@ -805,6 +807,11 @@ namespace MobileGL::MG_State::GLState {
         // value cannot alias a module parsed without it.
         keyInputs.shaderCompileFlags = 0;
         keyInputs.enableSpirvValidation = in.enableSpirvValidation;
+        // The one BACKEND capability bit in this key, and it has to be here: it reaches inside
+        // SanitizeAndOptimizeBinary, whose output is what the payload holds. Read from the same
+        // env snapshot ProgramSpirvTask hands the chain, so the key and the bytes can never
+        // disagree.
+        keyInputs.nativeFloat64 = env.ConsumesFloat64Natively();
         keyInputs.stages.reserve(in.shaders.size());
         for (const LinkShaderInput& shader : in.shaders) {
             const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);

@@ -445,12 +445,36 @@ namespace MobileGL {
                 const Uint32 bit = PerLayerFramebufferAttachmentBit(target);
                 return bit != 0 && (PerLayerFramebufferAttachmentTargets & bit) != 0;
             }
+            // Whether this backend can CONSUME a shader module that still declares 64-bit floats,
+            // i.e. whether `double` survives the transpile instead of being narrowed to `float`
+            // (ShaderTranspiler::DemoteFloat64Pass). Detected, never assumed:
+            //   * DirectVulkan sets it from VkPhysicalDeviceFeatures::shaderFloat64, the feature
+            //     VUID-VkShaderModuleCreateInfo-pCode-08740 requires before a module declaring
+            //     OpCapability Float64 may be created at all. lavapipe has it; Adreno and Mali
+            //     both report VK_FALSE, so no real mobile device does.
+            //   * DirectGLES can NEVER have it. GLSL ES has no 64-bit float type in any version
+            //     or extension, so SPIRV-Cross cannot emit one ("FP64 not supported in ES
+            //     profile") and the demotion there is mathematically mandatory, always.
+            // Defaults to false so a backend that never sets it - and the no-backend case, which
+            // is what standalone shader compiles and the unit tests run under - keeps the
+            // demotion, which is the behaviour that works everywhere.
+            Bool SupportsShaderFloat64 = false;
             // Whether glVertexAttribLFormat / glVertexArrayAttribLFormat can be honoured, i.e.
             // whether a 64-bit vertex attribute can actually reach a shader unconverted. Detected,
             // never assumed: DirectVulkan needs VkPhysicalDeviceFeatures::shaderFloat64 (the
             // attribute travels as its 32-bit word pair, so no VK_FORMAT_R64* is required, but the
             // bitcast result is Float64); DirectGLES can never have it, ESSL having no fp64 type at
             // all. Defaults to false so a backend that never sets it gets the conservative answer.
+            //
+            // INDEPENDENT of SupportsShaderFloat64, and it has to be: this flag decides a VkFormat
+            // from the VAO ATTRIBUTE alone, which does not know what type the shader declared, and
+            // glVertexAttribFormat(GL_DOUBLE) feeding a plain `in vec4` is both legal and common
+            // (KHR-GL43.vertex_attrib_binding.basic-input-case4/5, advanced-bindingUpdate). A
+            // backend with native fp64 that still cannot FETCH 64 bits keeps this false and relies
+            // on the per-MODULE rule in ShaderCompiler::SanitizeAndOptimizeBinary instead: a vertex
+            // module that declares a 64-bit float INPUT is demoted whole, so the two shader-side
+            // halves (PackDoubleVertexInputsPass and VertexInputStateFactory::ToVkVertexFormat)
+            // still see one consistent world.
             Bool SupportsFloat64VertexAttributes = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
