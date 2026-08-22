@@ -243,6 +243,18 @@ void main() {
 }
 )";
 
+    // rg32f again, but as a BUFFER image. Same format, same carrier on paper - and it must be
+    // left alone anyway, because a buffer image's texels are the application's buffer object.
+    const char* const kRg32fBufferLoadStore = R"(#version 430 core
+layout(rg32f, binding = 0) uniform imageBuffer img;
+out vec4 fragColor;
+void main() {
+    vec4 texel = imageLoad(img, int(gl_FragCoord.x));
+    imageStore(img, int(gl_FragCoord.x), vec4(1.0, 2.0, 3.0, 4.0));
+    fragColor = texel;
+}
+)";
+
     // rg16 is one of the EIGHT with no core carrier at all - core ESSL has no 16-bit normalized
     // format, so every candidate loses range or changes the component type the texture presents.
     // It must be left alone and keep the honest "no GLSL ES spelling" diagnostic instead.
@@ -437,6 +449,39 @@ TEST(WidenImageFormats, PackedFloatImageOnlyReachesEsslThroughTheCarrier) {
     ASSERT_TRUE(after.succeeded) << after.error;
     EXPECT_NE(after.text.find("rgba16f"), String::npos) << after.text;
     EXPECT_EQ(after.text.find("r11f_g11f_b10f"), String::npos) << after.text;
+}
+
+// A BUFFER image is declined whatever its format, and the format alone cannot say so - rg32f is
+// carried exactly when it is an image2D. What makes the difference is that widening REALLOCATES
+// the texture behind the image in the carrier, and a buffer image has no texture storage to
+// reallocate: its texels are the application's buffer object, usually also a vertex, index or
+// storage buffer. Widening one leaves the shader striding 16 bytes through 8-byte texels - the
+// measured symptom on an Adreno 830 was a 32-byte GL_RG32F buffer reading back
+// [1,100] [0,1] [2,100] [0,1] instead of [1,100] [2,100] [3,100] [4,100], with the last two texels
+// written past the end of the application's buffer.
+TEST(WidenImageFormats, BufferImagesAreDeclinedEvenWhenTheirFormatHasACarrier) {
+    const Vector<Uint32> spirv = CompileFragment(kRg32fBufferLoadStore);
+    ASSERT_FALSE(spirv.empty());
+
+    const auto types = CollectStorageImageTypes(spirv);
+    ASSERT_EQ(types.size(), 1u);
+    EXPECT_EQ(types.front().format, static_cast<Uint32>(spv::ImageFormat::Rg32f))
+        << "the fixture stopped declaring the format this test is about";
+
+    // The gate says no, so the optimizer is never even run for it...
+    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+    // ...and running it anyway changes nothing, which is what keeps the gate and the pass from
+    // disagreeing about a module.
+    Vector<Uint32> widened;
+    ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                             /*enableSpirvValidation=*/true);
+    EXPECT_TRUE(widened.empty() || widened == spirv) << "a buffer image was rewritten";
+
+    // The same format in a NON-buffer image still widens, or this test would pass for the wrong
+    // reason - a widening that had simply stopped working.
+    const Vector<Uint32> planar = CompileFragment(kRg32fLoadStore);
+    ASSERT_FALSE(planar.empty());
+    EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(planar));
 }
 
 TEST(WidenImageFormats, SingleChannelUnsignedImageBecomesRgba8uiWithBothAccessesMasked) {

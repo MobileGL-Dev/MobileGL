@@ -39,6 +39,7 @@ namespace MobileGL {
                 // OpTypeImage in-operands: 0 sampled type, 1 Dim, 2 Depth, 3 Arrayed, 4 MS,
                 // 5 Sampled, 6 Format.
                 constexpr uint32_t kImageSampledTypeOperand = 0;
+                constexpr uint32_t kImageDimOperand = 1;
                 constexpr uint32_t kImageSampledOperand = 5;
                 constexpr uint32_t kImageFormatOperand = 6;
                 // A storage image, i.e. one reached through imageLoad/imageStore rather than a
@@ -246,6 +247,24 @@ namespace MobileGL {
                                                  bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
                     if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
+                    // A BUFFER image is never widened, whatever its format. Widening works because
+                    // the ES texture behind the image can be REALLOCATED in the carrier, so the
+                    // texel the shader addresses and the texel the storage holds stay the same
+                    // size. A buffer image has no storage of its own to reallocate: its texels are
+                    // the application's buffer object, at the size and layout the application gave
+                    // it, and that buffer is usually also a vertex, index or storage buffer whose
+                    // contents are not ours to relayout.
+                    //
+                    // Widening one anyway makes the shader stride 16 bytes through 8-byte texels.
+                    // Measured on an Adreno 830 with a 32-byte GL_RG32F buffer and a shader storing
+                    // (i+1, 100) at texel i: the readback came back [1,100] [0,1] [2,100] [0,1] -
+                    // texels 0 and 1 landed on top of all four, texels 2 and 3 ran off the end of
+                    // the application's buffer. Declining leaves the honest "no GLSL ES spelling"
+                    // failure instead, which loses the same stage but corrupts nothing.
+                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) ==
+                        spv::Dim::Buffer) {
+                        return false;
+                    }
                     const auto format =
                         static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
                     if (!WideningOfSpirvImageFormat(format)) return false;
