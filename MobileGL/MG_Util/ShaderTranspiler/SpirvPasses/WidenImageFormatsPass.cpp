@@ -50,16 +50,40 @@ namespace MobileGL {
                 constexpr uint32_t kImageAccessImageOperand = 0;
                 constexpr uint32_t kImageWriteTexelOperand = 2;
 
-                // The exact carrier of a non-core image format: the core GLSL ES format with the
-                // SAME component type and the SAME per-channel width, differing only in channel
-                // count. `channels` is what the original format really has, which is what every
-                // access through the carrier is masked back to.
+                // The carrier of a non-core image format: a core GLSL ES format that represents
+                // every value the original can hold, WITHOUT LOSS. `channels` is what the original
+                // format really has, which is what every access through the carrier is masked back
+                // to.
                 //
-                // Only formats that widen EXACTLY appear here. r11f_g11f_b10f, rgb10_a2,
-                // rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm, rg16_snorm and r16_snorm have no
-                // same-width core carrier - every candidate is either lossy or changes the numeric
-                // domain a sampler would read - and are deliberately absent, so they keep the
-                // honest "no GLSL ES spelling" diagnostic rather than a silent approximation.
+                // Almost every entry is a pure CHANNEL widening - same component type, same
+                // per-channel width, more channels (rg32f -> rgba32f) - and for those the carrier
+                // is bit-exact: the storage holds the identical encoding, only wider.
+                //
+                // r11f_g11f_b10f is the one entry that is not. It has no same-width core carrier,
+                // so it takes rgba16f, and the two encodings differ. What matters is that the
+                // carrier is still LOSSLESS: an 11-bit float is e5m6 and a 10-bit float is e5m5,
+                // while a half is s1e5m10 - the SAME 5-bit exponent with a strictly longer
+                // mantissa - so every value the packed format can represent has an exact half.
+                // Nothing an application stores is rounded away.
+                //
+                // What DOES change is the reverse direction: the carrier can hold values the
+                // packed format could not - negatives (11f and 10f are unsigned), and mantissa
+                // bits finer than the 6 and 5 the format quantises to - so a value written through
+                // the image and then SAMPLED comes back on half's grid rather than the packed
+                // format's. That is a strictly finer grid, never a lossy one, and it is measured
+                // against the alternative, which is not a more faithful quantisation but no
+                // program at all: `layout(r11f_g11f_b10f)` has no ESSL spelling, SPIRV-Cross
+                // throws for it, and the stage - with every other image uniform declared beside it
+                // - is lost (KHR-GL43.shader_image_load_store.basic-allFormats-*, which fail on
+                // this format alone, and multiple-uniforms, where one such declaration killed a
+                // program holding eight images).
+                //
+                // The remaining eight - rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm,
+                // rg16_snorm and r16_snorm - stay absent, and for a stronger reason than
+                // quantisation: core ESSL has no 16-bit normalized format at all and no 10-bit
+                // one, so every candidate carrier for them either loses range or changes the
+                // component TYPE the texture presents. They keep the honest "no GLSL ES spelling"
+                // diagnostic rather than a silent approximation.
                 struct ImageFormatWidening {
                     spv::ImageFormat Carrier = spv::ImageFormat::Unknown;
                     uint32_t Channels = 0;
@@ -73,6 +97,9 @@ namespace MobileGL {
                     case spv::ImageFormat::Rg32f: return {spv::ImageFormat::Rgba32f, 2};
                     case spv::ImageFormat::Rg16f: return {spv::ImageFormat::Rgba16f, 2};
                     case spv::ImageFormat::R16f: return {spv::ImageFormat::Rgba16f, 1};
+                    // Not a channel widening but a lossless re-encoding - see above. Three
+                    // channels, so the fourth reads as the 1 GL defines for a format without one.
+                    case spv::ImageFormat::R11fG11fB10f: return {spv::ImageFormat::Rgba16f, 3};
                     // Unsigned normalized.
                     case spv::ImageFormat::Rg8: return {spv::ImageFormat::Rgba8, 2};
                     case spv::ImageFormat::R8: return {spv::ImageFormat::Rgba8, 1};
