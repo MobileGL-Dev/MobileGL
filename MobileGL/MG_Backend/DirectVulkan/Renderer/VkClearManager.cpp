@@ -122,8 +122,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return &attachment;
     }
 
-    PendingClearKey VkClearManager::MakePendingClearKey(MG_State::GLState::ITextureObject* texture, Uint32 mipLevel,
+    // The texture a pending clear is actually ABOUT. A clear issued through a GL texture view
+    // (ARB_texture_view) targets the storage it views, so it must queue against - and be found
+    // by - the storage texture; keying it on the view instead left the clear invisible to every
+    // materialisation done through the parent's name (and vice versa), so the image stayed in
+    // VK_IMAGE_LAYOUT_UNDEFINED and the readback was dropped as unreadable.
+    static MG_State::GLState::ITextureObject* ClearStorageTextureOf(MG_State::GLState::ITextureObject* texture) {
+        if (texture == nullptr) {
+            return nullptr;
+        }
+        const auto& storageOwner = texture->GetViewStorageOwner();
+        return storageOwner ? storageOwner.get() : texture;
+    }
+
+    PendingClearKey VkClearManager::MakePendingClearKey(MG_State::GLState::ITextureObject* rawTexture, Uint32 mipLevel,
                                                         Uint32 baseArrayLayer, Uint32 layerCount) {
+        MG_State::GLState::ITextureObject* texture = ClearStorageTextureOf(rawTexture);
+        if (rawTexture != nullptr && texture != rawTexture) {
+            // The caller named a level and a layer of the VIEW; the key describes the STORAGE, so
+            // both have to be shifted into its numbering (GL 4.6 core 8.18). Without this a clear
+            // of a view's level 0 would collide with a clear of the storage's level 0 even when
+            // the view opened onto level 1.
+            mipLevel += static_cast<Uint32>(rawTexture->GetViewMinLevel());
+            baseArrayLayer += static_cast<Uint32>(rawTexture->GetViewMinLayer());
+        }
         return PendingClearKey {
             .texture = texture,
             .textureLifetimeId = texture ? texture->GetLifetimeId() : 0,
@@ -157,6 +179,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     TextureIdentity VkClearManager::MakeTextureIdentity(MG_State::GLState::ITextureObject* texture) {
+        // Same rule as VkTextureManager::MakeTextureIdentity: a GL texture view is identified by
+        // the storage it views. A clear posted against a view and one posted against its parent
+        // target the same image, so they have to coalesce rather than queue independently.
+        if (texture != nullptr) {
+            const auto& storageOwner = texture->GetViewStorageOwner();
+            if (storageOwner) {
+                texture = storageOwner.get();
+            }
+        }
         return TextureIdentity {
             .texture = texture,
             .lifetimeId = texture ? texture->GetLifetimeId() : 0,
@@ -286,9 +317,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
 
-        const PendingClearKey key = MakePendingClearKey(texture.get());
+        const auto& storageOwner = texture->GetViewStorageOwner();
+        const SharedPtr<MG_State::GLState::ITextureObject>& storageTexture = storageOwner ? storageOwner : texture;
+        const PendingClearKey key = MakePendingClearKey(storageTexture.get());
         const std::lock_guard<std::mutex> lock(m_mutex);
-        m_aliveObjects[MakeTextureIdentity(texture.get())] = texture;
+        m_aliveObjects[MakeTextureIdentity(storageTexture.get())] = storageTexture;
         auto& pending = m_pendingClears[key];
         MergeClearPayload(pending, clearPayload);
         m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
@@ -305,8 +338,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const PendingClearKey key = MakePendingClearKey(attachment);
+        // The alive entry must hold the STORAGE object, because the key names it:
+        // LockTextureIdentityLocked cross-checks the two, and registering a view here under its
+        // storage's identity made every lookup of this clear fail that check and silently report
+        // "nothing pending" - which is how a clear issued through a view's framebuffer vanished.
+        const auto& storageOwner = texture->GetViewStorageOwner();
+        const SharedPtr<MG_State::GLState::ITextureObject>& storageTexture = storageOwner ? storageOwner : texture;
         const std::lock_guard<std::mutex> lock(m_mutex);
-        m_aliveObjects[MakeTextureIdentity(texture.get())] = texture;
+        m_aliveObjects[MakeTextureIdentity(storageTexture.get())] = storageTexture;
         auto& pending = m_pendingClears[key];
         MergeClearPayload(pending, clearPayload);
         m_pendingCount.store(static_cast<Uint32>(m_pendingClears.size()), std::memory_order_relaxed);
@@ -321,6 +360,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;  // per-draw hot path: nothing pending anywhere
         }
 
+        texture = ClearStorageTextureOf(texture);
         const Uint64 lifetimeId = texture->GetLifetimeId();
         const std::lock_guard<std::mutex> lock(m_mutex);
         for (auto it = m_pendingClears.begin(); it != m_pendingClears.end(); ++it) {
@@ -411,6 +451,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;  // per-draw hot path: nothing pending anywhere
         }
 
+        texture = ClearStorageTextureOf(texture);
         const Uint64 lifetimeId = texture->GetLifetimeId();
         const std::lock_guard<std::mutex> lock(m_mutex);
         SharedPtr<MG_State::GLState::ITextureObject> liveTexture;

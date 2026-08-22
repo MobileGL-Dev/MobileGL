@@ -72,7 +72,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
         if (!IsCubeMapFaceUploadTarget(uploadTarget)) {
-            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            return ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
         }
         return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
     }
@@ -633,11 +633,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (att.IsTexture()) {
                 const Uint64 textureLifetimeId = att.GetTexture()->GetLifetimeId();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLifetimeId, sizeof(textureLifetimeId)));
-                const Int textureLevel = att.GetTextureLevel();
+                const Int textureLevel = static_cast<Int>(ToStorageMipLevel(att.GetTexture().get(),
+                                                                             att.GetTextureLevel()));
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLevel, sizeof(textureLevel)));
                 const TextureUploadTarget textureUploadTarget = att.GetTextureUploadTarget();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureUploadTarget, sizeof(textureUploadTarget)));
-                const Int textureLayer = att.GetTextureLayer();
+                const Int textureLayer = static_cast<Int>(ToStorageArrayLayer(att.GetTexture().get(),
+                                                                              att.GetTextureLayer()));
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayer, sizeof(textureLayer)));
                 const Bool textureLayered = att.IsLayered();
                 XXHASH_VERIFY(XXH64_update(m_hashState, &textureLayered, sizeof(textureLayered)));
@@ -1006,7 +1008,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
 
             auto& att = fbo.GetAttachment(drawbuf);
-            const Uint32 attachmentMipLevel = static_cast<Uint32>(std::max(att.GetTextureLevel(), 0));
+            const Uint32 attachmentMipLevel = ToStorageMipLevel(att.GetTexture().get(), att.GetTextureLevel());
             const auto textureTarget = texture->GetTarget();
             const Uint32 attachmentIndex = static_cast<Uint32>(attachmentDescriptions.size());
             attachmentDescriptions.emplace_back();
@@ -1144,7 +1146,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (a.IsTexture() && b.IsTexture()) {
                 return a.GetTexture().get() == b.GetTexture().get() &&
                        a.GetTextureUploadTarget() == b.GetTextureUploadTarget() &&
-                       a.GetTextureLevel() == b.GetTextureLevel();
+                       ToStorageMipLevel(a.GetTexture().get(), a.GetTextureLevel()) ==
+                           ToStorageMipLevel(b.GetTexture().get(), b.GetTextureLevel());
             }
             if (a.IsRenderbuffer() && b.IsRenderbuffer()) {
                 return a.GetRenderbuffer().get() == b.GetRenderbuffer().get();
@@ -1254,7 +1257,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } else if (selectedDepthStencilAttachment->IsTexture()) {
                 auto& texture = *selectedDepthStencilAttachment->GetTexture();
                 const Uint32 attachmentMipLevel =
-                    static_cast<Uint32>(std::max(selectedDepthStencilAttachment->GetTextureLevel(), 0));
+                    ToStorageMipLevel(selectedDepthStencilAttachment->GetTexture().get(),
+                                      selectedDepthStencilAttachment->GetTextureLevel());
                 MOBILEGL_ASSERT(depthTextureResource->layout != VK_IMAGE_LAYOUT_UNDEFINED ||
                                     depthAttachmentDescription.loadOp != VK_ATTACHMENT_LOAD_OP_LOAD,
                                 "GetOrCreateRenderPass: depth attachment textureId=%d has undefined tracked layout with LOAD_OP_LOAD",

@@ -41,6 +41,27 @@ inline IntVec3 ToVulkanLevelExtent(TextureTarget stateTarget, const IntVec3& glT
     return glTexelSize;
 }
 
+// A GL framebuffer attachment's level/layer, and a GL image unit's, are relative to the texture
+// the application NAMED. When that texture was created by glTextureView (ARB_texture_view) they
+// are relative to the VIEW, and have to be shifted into the storage image's numbering before they
+// can index a Vulkan subresource - DirectVulkan gives a view no image of its own, it shares the
+// storage texture's (VkTextureManager::StorageTextureOf).
+//
+// Apply EXACTLY ONCE, at the boundary where a GL level/layer becomes a subresource index. Every
+// GetOrCreate*View entry point below expects values that have already been through here, and so
+// does everything that reads or copies an attachment directly. Both are identity on a plain
+// texture (TEXTURE_VIEW_MIN_LEVEL / MIN_LAYER are 0 there), so the conversion is unconditional
+// and there is no second, view-only code path to keep in step.
+inline Uint32 ToStorageMipLevel(const MG_State::GLState::ITextureObject* texture, Int glLevel) {
+    const Uint32 level = static_cast<Uint32>(glLevel > 0 ? glLevel : 0);
+    return texture != nullptr ? level + static_cast<Uint32>(texture->GetViewMinLevel()) : level;
+}
+
+inline Uint32 ToStorageArrayLayer(const MG_State::GLState::ITextureObject* texture, Int glLayer) {
+    const Uint32 layer = static_cast<Uint32>(glLayer > 0 ? glLayer : 0);
+    return texture != nullptr ? layer + static_cast<Uint32>(texture->GetViewMinLayer()) : layer;
+}
+
 class VkTextureManager {
 public:
     // Monotonic epoch bumped whenever a texture VkImage is (re)created. The render-pass
@@ -139,17 +160,28 @@ public:
             }
         };
 
+        // Layer range and aspect join the key because a GL texture view (ARB_texture_view) can
+        // differ from its storage on either: the Better Clouds shape samples ONE D24S8 image
+        // through two GL names in one draw, the parent with the stencil aspect and the view with
+        // the depth aspect, and a layer-sliced view of an array texture names a sub-range of the
+        // same image. Without these two fields those views would alias each other in the cache.
         struct SampledImageViewKey {
             Uint32 baseMipLevel = 0;
             Uint32 levelCount = 1;
+            Uint32 baseArrayLayer = 0;
+            Uint32 layerCount = 1;
             VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
             VkFormat format = VK_FORMAT_UNDEFINED;
+            VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
 
             Bool operator==(const SampledImageViewKey& other) const {
                 return baseMipLevel == other.baseMipLevel &&
                        levelCount == other.levelCount &&
+                       baseArrayLayer == other.baseArrayLayer &&
+                       layerCount == other.layerCount &&
                        viewType == other.viewType &&
-                       format == other.format;
+                       format == other.format &&
+                       aspect == other.aspect;
             }
         };
 
@@ -157,9 +189,13 @@ public:
             SizeT operator()(const SampledImageViewKey& key) const {
                 SizeT hash = std::hash<Uint32>{}(key.baseMipLevel);
                 hash ^= std::hash<Uint32>{}(key.levelCount) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(key.baseArrayLayer) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(key.layerCount) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
                 hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.viewType)) +
                         0x9e3779b9u + (hash << 6) + (hash >> 2);
                 hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.format)) +
+                        0x9e3779b9u + (hash << 6) + (hash >> 2);
+                hash ^= std::hash<Uint32>{}(static_cast<Uint32>(key.aspect)) +
                         0x9e3779b9u + (hash << 6) + (hash >> 2);
                 return hash;
             }
@@ -357,6 +393,45 @@ public:
     // the caller has proven every queue submission complete; used by the
     // present-less frame-boundary drain.
     void CollectAllDeferredReleases();
+
+    // ---- GL texture views (ARB_texture_view / GL 4.6 core 8.18) ----
+    // The GL texture whose STORAGE backs the given one: itself, or - for a texture created by
+    // glTextureView - the texture it views. Every image-scoped question (which VkImage, its
+    // LAYOUT, its uploads, its extent, its usage) must be asked of this object, because a view
+    // has none of its own; only the VkImageViews differ per GL texture object. Sharing one
+    // TextureResource is not an optimisation, it is the only correct arrangement: layout is a
+    // property of the image, and VulkanRenderer caches raw pointers straight to the resource's
+    // layout field, so a second resource aliasing the same image would desynchronise the moment
+    // either of them transitioned it.
+    static MG_State::GLState::ITextureObject& StorageTextureOf(MG_State::GLState::ITextureObject& texture);
+
+    // The window a GL texture object opens onto its storage image. For a plain texture this is
+    // the resource's own full extent; for a view it is the sub-range, format and aspect
+    // glTextureView gave it. Views built from a non-default window must live in the KEYED caches
+    // (attachmentViews / alternateSampledViews), never in the per-mip vectors, which belong to
+    // the storage texture's own defaults.
+    struct TextureViewWindow {
+        Uint32 baseMipLevel = 0;
+        Uint32 levelCount = 1;
+        Uint32 baseArrayLayer = 0;
+        Uint32 layerCount = 1;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+        VkImageAspectFlags sampledAspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        Bool isTextureView = false;
+    };
+    TextureViewWindow ResolveTextureViewWindow(MG_State::GLState::ITextureObject& texture,
+                                               const TextureResource& resource) const;
+    // Records what a GL texture view needs of the image it views, so the next sync of the
+    // STORAGE texture creates (or recreates and copies forward) an image the view can be built
+    // over. See m_viewRequestedImageFlags for why this is lazy rather than unconditional.
+    void NoteTextureViewImageRequirements(MG_State::GLState::ITextureObject& viewTexture,
+                                          MG_State::GLState::ITextureObject& storageTexture);
+    VkImageCreateFlags GetViewRequestedImageFlags(const MG_State::GLState::ITextureObject& storageTexture) const;
+    // Builds (and caches, keyed by the whole window) one sampled VkImageView over a storage
+    // image. Shared back end of every GL-texture-view sampled path.
+    VkImageView GetOrCreateWindowedSampledView(MG_State::GLState::ITextureObject& texture,
+                                               TextureResource& resource, const TextureViewWindow& window);
 
     TextureResource* SyncTextureAndGetDescriptor(
         MG_State::GLState::ITextureObject& texture);
@@ -572,6 +647,14 @@ private:
     std::unordered_map<TextureIdentity, TextureResource, TextureIdentityHash> m_textureResources;
     // Textures that have been bound to a GL image unit (see MarkStorageImageTexture).
     std::unordered_set<TextureIdentity, TextureIdentityHash> m_storageImageTextures;
+    // Extra VkImageCreateFlags a GL texture view needs on the storage image it views, keyed by
+    // the STORAGE texture's identity. Requested lazily, exactly like STORAGE usage above and for
+    // the same reason: VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT costs bandwidth compression on tilers
+    // (it is what VK_KHR_image_format_list exists to claw back), so setting it on every
+    // immutable-storage texture would tax every glTexStorage2D render target in a game for a
+    // feature almost none of them use. A SAME-format view - which is the common case, and the
+    // Better Clouds case - needs no flag at all and therefore costs nothing.
+    std::unordered_map<TextureIdentity, VkImageCreateFlags, TextureIdentityHash> m_viewRequestedImageFlags;
     // Supported multisample counts per format, so repeat texture syncs do not
     // re-query vkGetPhysicalDeviceImageFormatProperties.
     std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;

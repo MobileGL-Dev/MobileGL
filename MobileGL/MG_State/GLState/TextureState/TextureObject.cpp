@@ -291,6 +291,13 @@ namespace MobileGL {
                 return m_lifetimeId;
             }
 
+            const SharedPtr<ITextureObject>& TextureObjectBase::GetViewStorageOwner() const {
+                // A plain texture owns its own storage. Only TextureObjectView overrides this,
+                // which is what IsTextureView() keys on everywhere else.
+                static const SharedPtr<ITextureObject> noStorageOwner = nullptr;
+                return noStorageOwner;
+            }
+
             Uint TextureObjectWithOneMipmap::GetMipmapLevelCount() const {
                 return m_textureStorage.GetLevelCount();
             }

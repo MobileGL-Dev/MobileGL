@@ -267,6 +267,13 @@ namespace MobileGL::MG_State {
             return m_textureState.CreateTextureObject(index, target);
         }
 
+        const SharedPtr<ITextureObject>& GLContext::CreateTextureViewObject(
+            Uint index, TextureTarget target, const SharedPtr<ITextureObject>& storageOwner, Uint minLevel,
+            Uint numLevels, Uint minLayer, Uint numLayers) {
+            return m_textureState.CreateTextureViewObject(index, target, storageOwner, minLevel, numLevels, minLayer,
+                                                          numLayers);
+        }
+
         void GLContext::MarkTextureObjectForDeletion(Uint index) {
             // GL 3.3 core 4.4.2: deleting a texture whose image is attached to the framebuffer
             // that is currently bound acts as if FramebufferTexture* had been called with texture

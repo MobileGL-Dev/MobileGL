@@ -1258,7 +1258,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         return depthAttachment.GetTexture().get() != stencilAttachment.GetTexture().get() ||
                depthAttachment.GetTextureUploadTarget() != stencilAttachment.GetTextureUploadTarget() ||
-               depthAttachment.GetTextureLevel() != stencilAttachment.GetTextureLevel();
+               ToStorageMipLevel(depthAttachment.GetTexture().get(), depthAttachment.GetTextureLevel()) !=
+                   ToStorageMipLevel(stencilAttachment.GetTexture().get(), stencilAttachment.GetTextureLevel());
     }
 
     static Bool IsColorAttachment(FramebufferAttachmentType attachmentType) {
@@ -1475,11 +1476,15 @@ void main() {
         static Uint32 ResolveAttachmentBaseArrayLayer(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
             const TextureUploadTarget uploadTarget = attachment.GetTextureUploadTarget();
             if (IsCubeMapFaceUploadTarget(uploadTarget)) {
-                return static_cast<Uint32>(uploadTarget) - static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+                // The face index IS the layer index, so it takes the same view shift as one that
+                // arrived through GetTextureLayer (see ToStorageArrayLayer).
+                const Int face = static_cast<Int>(uploadTarget) -
+                                 static_cast<Int>(TextureUploadTarget::CubeMapPositiveX);
+                return ToStorageArrayLayer(attachment.GetTexture().get(), face);
             }
             // Every other layered attachment names its layer directly. Returning 0 regardless made
             // every blit, copy and ReadPixels against such an attachment read layer zero.
-            return static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            return ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
         }
 
         // A 3D image has arrayLayers == 1: its "layer" is a z slice, which has to travel as an
@@ -1755,10 +1760,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = resource->mipLevels;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -1871,10 +1876,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = resource->mipLevels;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -2020,10 +2025,10 @@ void main() {
             outBinding.sampleCount = resource->sampleCount;
             const auto attachmentExtent = attachment.GetSize();
             outBinding.extent = {attachmentExtent.x(), attachmentExtent.y()};
-            outBinding.mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
+            outBinding.mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
             outBinding.mipLevelCount = 1;
             if (AttachmentIsDepthSlice(attachment)) {
-                outBinding.depthOffset = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+                outBinding.depthOffset = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
                 outBinding.baseArrayLayer = 0;
             } else {
                 outBinding.baseArrayLayer = ResolveAttachmentBaseArrayLayer(attachment);
@@ -9828,8 +9833,8 @@ void main() {
             vkFormat = resource->format;
             trackedLayout = &resource->layout;
             imageAspect = resource->aspect;
-            mipLevel = static_cast<Uint32>(std::max(attachment.GetTextureLevel(), 0));
-            baseArrayLayer = static_cast<Uint32>(std::max(attachment.GetTextureLayer(), 0));
+            mipLevel = ToStorageMipLevel(attachment.GetTexture().get(), attachment.GetTextureLevel());
+            baseArrayLayer = ToStorageArrayLayer(attachment.GetTexture().get(), attachment.GetTextureLayer());
         } else if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
             const auto& renderbufferObject = attachment.GetRenderbuffer();
             const Bool clearReady = MaterializePendingClearForRenderbuffer(frame.commandBuffer, renderbufferObject);

@@ -18,6 +18,7 @@
 #include "TextureObject2DCube.h"
 #include "TextureObjectBuffer.h"
 #include "TextureObjectStubs.h"
+#include "TextureObjectView.h"
 
 namespace MobileGL::MG_State::GLState {
     static std::atomic<Uint64> s_nextTextureStateContextId = 1;
@@ -101,6 +102,16 @@ namespace MobileGL::MG_State::GLState {
             static SharedPtr<ITextureObject> nullTextureObject = nullptr;
             return nullTextureObject;
         }
+        return textureObject;
+    }
+
+    const SharedPtr<ITextureObject>& TextureState::CreateTextureViewObject(
+        Uint index, TextureTarget target, const SharedPtr<ITextureObject>& storageOwner, Uint minLevel,
+        Uint numLevels, Uint minLayer, Uint numLayers) {
+        MOBILEGL_ASSERT(storageOwner != nullptr, "CreateTextureViewObject: storage owner is null");
+        auto& textureObject = m_textureObjects[index];
+        textureObject = MakeShared<TextureObjectView>(index, target, storageOwner, minLevel, numLevels, minLayer,
+                                                      numLayers);
         return textureObject;
     }
 

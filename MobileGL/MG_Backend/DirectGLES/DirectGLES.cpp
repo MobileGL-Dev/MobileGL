@@ -1082,19 +1082,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             auto* backendTextureSlot = g_backendTextureObjects.Find(textureObject.get());
-            auto& backendObj = backendTextureSlot ? *backendTextureSlot
-                                                  : g_backendTextureObjects.GetOrCreate(textureObject);
-            if (!backendObj) {
-                backendObj = MakeShared<BackendTextureObject>();
+            auto& backendSlot = backendTextureSlot ? *backendTextureSlot
+                                                   : g_backendTextureObjects.GetOrCreate(textureObject);
+            if (!backendSlot) {
+                backendSlot = MakeShared<BackendTextureObject>();
             }
+
+            // A by-VALUE copy of the twin for the duration of the syncs below. `backendSlot` is a
+            // reference INTO the open-addressed registry, and syncing can RE-ENTER this function:
+            // a texture created by glTextureView has to sync the texture whose storage it views
+            // first (SyncTextureViewToBackend), and that nested call may insert, grow the map and
+            // relocate every entry - leaving the reference dangling. Holding the object itself
+            // keeps the calls below working on the right twin regardless; the slot is re-resolved
+            // at the end for the reference this function returns.
+            const SharedPtr<BackendTextureObject> backendObj = backendSlot;
+
             if (imageBindableStorageRequired) {
                 backendObj->RequireImageBindableStorage(textureObject);
             }
             backendObj->SyncTextureParamsToBackend(textureObject);
             backendObj->SyncBuiltinSamplerToBackend(textureObject);
             backendObj->SyncMipmapsToBackend(textureObject);
+            // The storage sync may RE-MINT the driver texture - a fresh glTexStorage after a
+            // shape change, an image-bindable widening, or the glTextureView that an
+            // ARB_texture_view view is created on - which discards every parameter the two calls
+            // above just pushed. Re-push them here rather than leaving it to the next sync: the
+            // very next thing that happens is usually the draw this sync was run for, and until
+            // the filters land the new texture is at the ES defaults, which for a single-level or
+            // integer texture is not merely mis-filtered but INCOMPLETE, i.e. it samples zero.
+            if (backendObj->NeedsParameterResync()) {
+                backendObj->SyncTextureParamsToBackend(textureObject);
+                backendObj->SyncBuiltinSamplerToBackend(textureObject);
+            }
 
-            return backendObj;
+            auto* refreshedSlot = g_backendTextureObjects.Find(textureObject.get());
+            auto& refreshedBackendObj = refreshedSlot ? *refreshedSlot
+                                                      : g_backendTextureObjects.GetOrCreate(textureObject);
+            if (!refreshedBackendObj) {
+                // A collection ran during the nested sync and took this slot with it; put the
+                // twin the caller is about to use back, rather than handing back an empty one.
+                refreshedBackendObj = backendObj;
+            }
+            return refreshedBackendObj;
         }
 
         // Identity snapshot of what one texture unit has bound: the object in every binding

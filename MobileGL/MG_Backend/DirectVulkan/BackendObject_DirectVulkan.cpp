@@ -533,6 +533,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Sampling the stencil aspect through DEPTH_STENCIL_TEXTURE_MODE. Core from 4.3,
             // so on a 4.0 context the string is the only way to reach it.
             E_GL_ARB_stencil_texturing,
+            // Unconditional, unlike DirectGLES: a GL texture view is a second set of VkImageViews
+            // over the same VkImage with a sub-range and possibly a reinterpreted VkFormat, which
+            // is core Vulkan on every device MobileGL runs on. Format-reinterpreting views need
+            // VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT on the image, which SyncTextureResource sets for
+            // every immutable-storage texture (see the comment there).
+            E_GL_ARB_texture_view,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.

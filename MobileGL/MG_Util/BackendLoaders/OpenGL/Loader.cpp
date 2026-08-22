@@ -514,6 +514,10 @@ namespace MobileGL::MG_Util::BackendLoader {
             // Optional: absent on an ES 3.2 core driver, and absent on ES 3.1 without the
             // matching extension. The tier resolution below picks whichever spelling the
             // driver's own support actually comes from.
+            // Optional by nature: ES never made texture views core, so both spellings are
+            // absent on plenty of drivers and neither absence is an error.
+            INIT_GLES_FUNC_OPTIONAL(glTextureViewEXT)
+            INIT_GLES_FUNC_OPTIONAL(glTextureViewOES)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferEXT)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferOES)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferRangeEXT)
@@ -889,6 +893,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Resolved into caps.TextureBufferSupport below, once the ES version is also known.
         Bool hasExtTextureBuffer = false;
         Bool hasOesTextureBuffer = false;
+        // Resolved into caps.SupportsTextureView below. Two spellings of one extension; the
+        // entry points differ only in suffix, so unlike the buffer-texture tier there is nothing
+        // downstream that needs to know WHICH one answered.
+        Bool hasExtTextureView = false;
+        Bool hasOesTextureView = false;
         // Combined with the three entry points below; DirectGLES emulates baseInstance when this
         // comes out false, so a stub pointer counting as support would silently break the draws.
         Bool hasBaseInstanceExtension = false;
@@ -924,6 +933,12 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_texture_cube_map_array") == 0 ||
                     std::strcmp(extension, "GL_OES_texture_cube_map_array") == 0) {
                     caps.SupportsTextureCubeMapArray = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_texture_view") == 0) {
+                    hasExtTextureView = true;
+                }
+                if (std::strcmp(extension, "GL_OES_texture_view") == 0) {
+                    hasOesTextureView = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_texture_buffer") == 0) {
                     hasExtTextureBuffer = true;
@@ -985,6 +1000,18 @@ namespace MobileGL::MG_Util::BackendLoader {
                                     glesFuncs.glDrawArraysInstancedBaseInstanceEXT != nullptr &&
                                     glesFuncs.glDrawElementsInstancedBaseInstanceEXT != nullptr &&
                                     glesFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT != nullptr;
+        // ES has no core texture views at any version, so this is extension-only by nature.
+        // Each spelling must bring its OWN entry point: a driver that advertises the OES string
+        // is not required to export glTextureViewEXT.
+        caps.SupportsTextureView = (hasExtTextureView && glesFuncs.glTextureViewEXT != nullptr) ||
+                                   (hasOesTextureView && glesFuncs.glTextureViewOES != nullptr);
+        // Escape hatch for the integration suite: the no-extension path is the one MobileGL has
+        // to refuse honestly rather than emulate, and on a driver that HAS the extension there
+        // would otherwise be no way to exercise that refusal (see TextureViewScenario).
+        if (std::getenv("MOBILEGL_DISABLE_TEXTURE_VIEW") != nullptr) {
+            MGLOG_I("MOBILEGL_DISABLE_TEXTURE_VIEW is set; reporting no EXT/OES_texture_view support");
+            caps.SupportsTextureView = false;
+        }
         // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
         // extension is, and the pointer still has to have resolved either way.
         const Bool esAtLeast32 = caps.GLESVersion.Major > 3 ||

@@ -604,6 +604,12 @@ namespace MobileGL {
             // support comes from GL_EXT_texture_buffer or GL_OES_texture_buffer exports the
             // suffixed spellings instead, and a strict eglGetProcAddress returns NULL for the core
             // one there - so resolving only the core name makes both extension tiers look absent.
+            GL_FUNC_TYPEDEF(void, glTextureViewEXT, GLuint texture, GLenum target, GLuint origtexture,
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
+                            GLuint numlayers)
+            GL_FUNC_TYPEDEF(void, glTextureViewOES, GLuint texture, GLenum target, GLuint origtexture,
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
+                            GLuint numlayers)
             GL_FUNC_TYPEDEF(void, glTexBufferEXT, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferOES, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferRangeEXT, GLenum target, GLenum internalformat, GLuint buffer,
@@ -1023,6 +1029,8 @@ namespace MobileGL {
             GL_FUNC_DECL(glGetSamplerParameterIuiv)
             GL_FUNC_DECL(glTexBuffer)
             GL_FUNC_DECL(glTexBufferRange)
+            GL_FUNC_DECL(glTextureViewEXT)
+            GL_FUNC_DECL(glTextureViewOES)
             GL_FUNC_DECL(glTexBufferEXT)
             GL_FUNC_DECL(glTexBufferOES)
             GL_FUNC_DECL(glTexBufferRangeEXT)
@@ -1086,6 +1094,14 @@ namespace MobileGL {
             Bool SupportsTextureBorderClamp = false;
             // GL_TEXTURE_CUBE_MAP_ARRAY: ES 3.2 core, or EXT/OES_texture_cube_map_array before it.
             Bool SupportsTextureCubeMapArray = false;
+            // GL_EXT_texture_view / GL_OES_texture_view: two ES texture names sharing one
+            // storage, i.e. the only way DirectGLES can answer glTextureView at all. ES never
+            // made this core - not even in 3.2 - so unlike every other capability here there is
+            // no version that implies it, and a driver without it leaves MobileGL with no honest
+            // implementation (a copy is not a view: writes through one name must be visible
+            // through the other). Gate on this, never on the entry points: eglGetProcAddress
+            // hands back live-looking stubs (see AcquireGLESFunctions).
+            Bool SupportsTextureView = false;
             // Which spelling of buffer-texture support the host driver has. Desktop GL makes buffer
             // textures core from 3.1 on, so the frontend advertises them unconditionally and an app
             // may call glTexBuffer at any time; ES only gained them in 3.2, and before that only

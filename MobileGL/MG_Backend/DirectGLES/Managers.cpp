@@ -2495,6 +2495,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     TextureSwizzleParam::Alpha};
             m_cacheDepthStencilTextureMode = GL_DEPTH_COMPONENT;
             m_forceTextureParamsResync = true;
+            // The filter/wrap/LOD cache belongs to the name that just went away, and its gate is
+            // the frontend SAMPLER's version, which a backend re-mint does not move - so without
+            // this the new driver texture keeps the ES defaults for life. See m_forceSamplerResync.
+            m_cacheSamplerParameters = SamplerParameters{};
+            m_forceSamplerResync = true;
         }
 
         // Sets the backend GL unpack state to MobileGL's upload default for the scope,
@@ -3117,10 +3122,135 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+        // The ES entry point for EXT/OES_texture_view, whichever spelling this driver brought.
+        // Callers must have checked g_GLESCapabilities.SupportsTextureView first - the capability
+        // is the extension AND the pointer, because eglGetProcAddress hands back live-looking
+        // stubs (see AcquireGLESFunctions).
+        static MG_External::GLES::glTextureViewEXT_PTR ResolveTextureViewEntryPoint() {
+            if (g_GLESFuncs.glTextureViewEXT != nullptr) {
+                return g_GLESFuncs.glTextureViewEXT;
+            }
+            return reinterpret_cast<MG_External::GLES::glTextureViewEXT_PTR>(g_GLESFuncs.glTextureViewOES);
+        }
+
+        // Stamps the same per-draw clean-gate keys a completed storage sync stamps, so a view
+        // that needs no work costs the same nothing per draw that any other synced texture does.
+        void BackendTextureObject::StampViewSyncKeys(
+            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
+            if (MG_State::pGLContext) {
+                m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
+                m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
+            }
+            m_syncedContentVersion = stateTextureObject->GetContentVersion();
+        }
+
+        void BackendTextureObject::SyncTextureViewToBackend(
+            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
+            const auto& storageObject = stateTextureObject->GetViewStorageOwner();
+            if (!storageObject) {
+                MGLOG_E_ONCE("Texture %u claims to be a view but names no storage owner.",
+                             stateTextureObject->GetExternalIndex());
+                return;
+            }
+            if (!g_GLESCapabilities.SupportsTextureView) {
+                // Unreachable through the API: the frontend refuses glTextureView with
+                // GL_INVALID_OPERATION when the backend does not advertise GL_ARB_texture_view,
+                // and DirectGLES only advertises it when this capability is set.
+                MGLOG_E_ONCE("Texture view %u reached the backend on a driver without "
+                             "EXT/OES_texture_view.",
+                             stateTextureObject->GetExternalIndex());
+                return;
+            }
+
+            // Deliberately a by-VALUE copy of the SharedPtr: SyncTextureObjectToBackend hands back
+            // a reference INTO the open-addressed registry map, and the params/sampler syncs below
+            // (plus any nested growth) can rehash it out from under a reference.
+            const SharedPtr<BackendTextureObject> storageBackendObject =
+                SyncTextureObjectToBackend(storageObject, m_imageBindableStorageRequired);
+            if (!storageBackendObject) {
+                MGLOG_E_ONCE("Failed to sync the storage texture of view %u.",
+                             stateTextureObject->GetExternalIndex());
+                return;
+            }
+            const Uint storageBackendTextureId = storageBackendObject->GetBackendTextureId();
+            if (storageBackendTextureId == 0) {
+                MGLOG_D("Storage texture of view %u has no ES name yet.",
+                        stateTextureObject->GetExternalIndex());
+                return;
+            }
+            if (m_isInitialized && m_viewSourceBackendTextureId == storageBackendTextureId) {
+                StampViewSyncKeys(stateTextureObject);
+                return;
+            }
+            // Either the first sync, or the storage was re-minted underneath us. A name that has
+            // already been through glTextureView cannot be viewed again, so start from a fresh
+            // one (this also scrubs the binding caches and bumps the FBO attachment generation).
+            RecreateBackendTexture();
+
+            GLenum glInternalFormat = 0;
+            GLenum glFormat = 0;
+            GLenum glType = 0;
+            TextureImpl::GenerateTextureFormatInfo(stateTextureObject->GetFormat(), &glInternalFormat, &glFormat,
+                                                   &glType, stateTextureObject->GetTarget());
+            const GLenum target = ConvertTextureTargetToBackendGLEnum(stateTextureObject->GetTarget());
+
+            DebugImpl::ErrorLopper::Clear();
+            ResolveTextureViewEntryPoint()(m_backendTextureId, target, storageBackendTextureId, glInternalFormat,
+                                           stateTextureObject->GetViewMinLevel(),
+                                           stateTextureObject->GetViewNumLevels(),
+                                           stateTextureObject->GetViewMinLayer(),
+                                           stateTextureObject->GetViewNumLayers());
+            const GLenum error = g_GLESFuncs.glGetError();
+            if (error != GL_NO_ERROR) {
+                MGLOG_E_ONCE("glTextureView(view=%u target=%s origtexture=%u internalformat=%s levels=[%u,%u) "
+                             "layers=[%u,%u)) failed: %s",
+                             m_backendTextureId, MG_Util::ConvertGLEnumToString(target).c_str(),
+                             storageBackendTextureId, MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
+                             stateTextureObject->GetViewMinLevel(),
+                             stateTextureObject->GetViewMinLevel() + stateTextureObject->GetViewNumLevels(),
+                             stateTextureObject->GetViewMinLayer(),
+                             stateTextureObject->GetViewMinLayer() + stateTextureObject->GetViewNumLayers(),
+                             MG_Util::ConvertGLEnumToString(error).c_str());
+                return;
+            }
+
+            m_viewSourceBackendTextureId = storageBackendTextureId;
+            m_isInitialized = true;
+            // A view's storage is immutable by construction (its origtexture had to be), which is
+            // what keeps the respecify paths away from this name.
+            m_backendStorageImmutable = true;
+            const auto baseSize = stateTextureObject->GetBaseSize();
+            m_prevTextureInfo = {stateTextureObject->GetFormat(),
+                                 static_cast<SizeT>(baseSize.x()),
+                                 static_cast<SizeT>(baseSize.y()),
+                                 static_cast<SizeT>(baseSize.z()),
+                                 static_cast<SizeT>(stateTextureObject->GetViewNumLevels()),
+                                 0,
+                                 stateTextureObject->GetSamples(),
+                                 stateTextureObject->HasFixedSampleLocations()};
+            MGLOG_D("Texture view %u (ES %u) now views storage texture %u (ES %u), levels [%u,%u) layers [%u,%u)",
+                    stateTextureObject->GetExternalIndex(), m_backendTextureId, storageObject->GetExternalIndex(),
+                    storageBackendTextureId, stateTextureObject->GetViewMinLevel(),
+                    stateTextureObject->GetViewMinLevel() + stateTextureObject->GetViewNumLevels(),
+                    stateTextureObject->GetViewMinLayer(),
+                    stateTextureObject->GetViewMinLayer() + stateTextureObject->GetViewNumLayers());
+            StampViewSyncKeys(stateTextureObject);
+        }
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
                 MGLOG_E_ONCE("State texture object is null, cannot sync to backend.");
+                return;
+            }
+
+            // A texture created by glTextureView owns no storage: the levels, the format and
+            // every texel belong to the texture it views, and this name only has to be made to
+            // ALIAS them. Everything below - storage allocation, respecification, per-level
+            // uploads - would be re-doing the storage texture's work on the wrong name.
+            if (stateTextureObject->IsTextureView()) {
+                SyncTextureViewToBackend(stateTextureObject);
                 return;
             }
 
@@ -3977,12 +4107,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             auto* samplerObject = stateTextureObject->GetSamplerObject().get();
             Uint currentSamplerVersion = samplerObject->GetVersion();
-            if (m_syncedSamplerVersion == currentSamplerVersion) {
+            if (m_syncedSamplerVersion == currentSamplerVersion && !m_forceSamplerResync) {
                 MGLOG_D("Sampler parameters have not changed for texture ID: %u, skipping sync.", m_backendTextureId);
                 return;
             }
 
             m_syncedSamplerVersion = currentSamplerVersion;
+            m_forceSamplerResync = false;
 
             MGLOG_D("Syncing texture built-in sampler with backend ID %u to backend for state ID %u",
                     m_backendTextureId, stateTextureObject->GetExternalIndex());

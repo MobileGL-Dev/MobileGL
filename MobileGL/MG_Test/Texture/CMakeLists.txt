@@ -20,6 +20,24 @@ include(GoogleTest)
 gtest_discover_tests(TextureTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
 add_executable(
+        TextureViewTest
+        TextureViewTest.cpp
+)
+
+target_include_directories(TextureViewTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        TextureViewTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(TextureViewTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
         VkClearManagerTest
         VkClearManagerTest.cpp
 )

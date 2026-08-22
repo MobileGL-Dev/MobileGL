@@ -753,7 +753,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no runtime capabilities yet); reconciled once
                         // the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
-                        .Extensions = BuildAdvertisedExtensions(false, false, false, false),
+                        .Extensions = BuildAdvertisedExtensions(false, false, false, false, false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -777,7 +777,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MutableRendererInfo().RendererGLInfo.Extensions = BuildAdvertisedExtensions(
                 AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
                 capabilities.SupportsDrawIndirect,
-                capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance);
+                capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
+                capabilities.SupportsTextureView);
         }
     } // namespace
 
@@ -990,7 +991,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported) {
+                                                  Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool textureViewSupported) {
         Vector<GLExtension> extensions = {
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
@@ -1064,6 +1066,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
         if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
             extensions.push_back(E_GL_ARB_timer_query);
+        }
+        // Only advertised when the host ES driver has EXT/OES_texture_view. ES has no core
+        // texture views at any version and no honest emulation exists: a view is a SECOND NAME
+        // over the SAME storage, so that writes through either are visible through the other and
+        // the two carry independent per-texture parameters at the same time - which is exactly
+        // what applications use it for (Better Clouds samples one D24S8 through its own name with
+        // DEPTH_STENCIL_TEXTURE_MODE = STENCIL_INDEX and through a view with DEPTH_COMPONENT, in
+        // a single shading pass). A copy-based fallback satisfies neither half, and fails
+        // silently; withholding the string and answering glTextureView with INVALID_OPERATION is
+        // the only behaviour that cannot be mistaken for success.
+        if (textureViewSupported) {
+            extensions.push_back(E_GL_ARB_texture_view);
         }
         // Only advertised when the host ES driver actually filters anisotropically: the sampler
         // state is accepted regardless, but forwarding it would be a no-op without the extension,

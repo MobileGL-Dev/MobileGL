@@ -1183,7 +1183,8 @@ namespace MobileGL::MG_Util::SelfTest {
             advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectGLES::BuildAdvertisedExtensions(
                 summary.caps.SupportsDisjointTimerQuery, summary.caps.SupportsTextureFilterAnisotropy,
                 summary.caps.SupportsDrawIndirect,
-                summary.caps.SupportsDrawIndirect && summary.caps.SupportsBaseInstance));
+                summary.caps.SupportsDrawIndirect && summary.caps.SupportsBaseInstance,
+                summary.caps.SupportsTextureView));
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectGLES::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);

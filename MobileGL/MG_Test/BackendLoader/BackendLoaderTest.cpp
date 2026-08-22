@@ -1087,11 +1087,11 @@ TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSu
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
-    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false);
+    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_FALSE(contains(without, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_FALSE(contains(without, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
-    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false);
+    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false, false);
     EXPECT_TRUE(contains(with, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(with, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
@@ -1113,17 +1113,17 @@ TEST(IndirectDrawAdvertisement, MatchesEachBackendsUsableCommandSemantics) {
     };
 
     const auto esWithoutIndirect =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_base_instance));
 
     const auto esWithoutBaseInstance =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, false);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, false, false);
     EXPECT_TRUE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_FALSE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_base_instance));
 
     const auto esWithBoth =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, true);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, true, false);
     EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_base_instance));
 

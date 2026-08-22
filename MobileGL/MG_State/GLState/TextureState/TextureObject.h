@@ -78,6 +78,29 @@ namespace MobileGL::MG_State::GLState {
         virtual GLenum GetDepthStencilTextureMode() const = 0;
         virtual void SetDepthStencilTextureMode(GLenum mode) = 0;
 
+        // ---- Texture views (ARB_texture_view / GL 4.6 core 8.18) ----
+        // The texture object whose immutable storage this one's texels actually live in, or
+        // nullptr when this texture owns its storage. It is itself NEVER a view: glTextureView
+        // composes a view-of-a-view onto the ROOT at creation, which is exactly what the spec's
+        // additive "<minlevel> plus the value of TEXTURE_VIEW_MIN_LEVEL from the original
+        // texture" rule describes, so one hop always reaches the storage.
+        //
+        // Holding it as a SharedPtr is what gives GL's name-deletion semantics for free: after
+        // glDeleteTextures(origtexture) the name is gone and TextureState has dropped its entry,
+        // but the object - and therefore the storage and every backend resource keyed on it -
+        // stays alive as long as some view still references it (GL 4.6 core 5.1.2).
+        virtual const SharedPtr<ITextureObject>& GetViewStorageOwner() const = 0;
+        Bool IsTextureView() const { return GetViewStorageOwner() != nullptr; }
+        // GL 4.6 core table 23.17, expressed in the storage owner's level/layer coordinates
+        // (see above - composition makes the two the same number). All four are 0 on a mutable
+        // texture; TexStorage* seeds them with (0, levels, 0, layers) because the spec makes an
+        // immutable texture a full-extent view of itself, and glTextureView composes onto those.
+        virtual Uint GetViewMinLevel() const = 0;
+        virtual Uint GetViewNumLevels() const = 0;
+        virtual Uint GetViewMinLayer() const = 0;
+        virtual Uint GetViewNumLayers() const = 0;
+        virtual void SetViewLevelLayerRange(Uint minLevel, Uint numLevels, Uint minLayer, Uint numLayers) = 0;
+
     protected:
         virtual Uint GetIndexOfTextureUploadTarget(TextureUploadTarget target) const = 0;
     };
@@ -123,6 +146,18 @@ namespace MobileGL::MG_State::GLState {
         Bool HasFixedSampleLocations() const override;
         void SetFixedSampleLocations(Bool fixedSampleLocations) override;
         Uint64 GetLifetimeId() const override;
+        // A plain texture owns its storage; TextureObjectView overrides this.
+        const SharedPtr<ITextureObject>& GetViewStorageOwner() const override;
+        Uint GetViewMinLevel() const override { return m_viewMinLevel; }
+        Uint GetViewNumLevels() const override { return m_viewNumLevels; }
+        Uint GetViewMinLayer() const override { return m_viewMinLayer; }
+        Uint GetViewNumLayers() const override { return m_viewNumLayers; }
+        void SetViewLevelLayerRange(Uint minLevel, Uint numLevels, Uint minLayer, Uint numLayers) override {
+            m_viewMinLevel = minLevel;
+            m_viewNumLevels = numLevels;
+            m_viewMinLayer = minLayer;
+            m_viewNumLayers = numLayers;
+        }
         GLenum GetDepthStencilTextureMode() const override { return m_depthStencilTextureMode; }
         // Bumps the params version like every other backend-visible texture parameter: the mode
         // decides which ASPECT of a packed depth/stencil image a sampler reads, which DirectGLES
@@ -165,6 +200,12 @@ namespace MobileGL::MG_State::GLState {
         // matches before its first sync. Bumped only on dirty=true in MarkStorageDirty.
         Uint64 m_contentVersion = 1;
         GLenum m_depthStencilTextureMode = GL_DEPTH_COMPONENT;
+        // GL 4.6 core table 23.17: all four are 0 until immutable storage exists, which is what
+        // makes glGetTexParameteriv(GL_TEXTURE_VIEW_NUM_LEVELS) answer 0 on a mutable texture.
+        Uint m_viewMinLevel = 0;
+        Uint m_viewNumLevels = 0;
+        Uint m_viewMinLayer = 0;
+        Uint m_viewNumLayers = 0;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
     };
