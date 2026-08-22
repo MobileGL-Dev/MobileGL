@@ -6106,6 +6106,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             spvcSession.SetAtomicCounterBlockBindings(atomicCounterEsslBindingTop,
                                                       outAtomicCounterGlBindings);
 
+            // `layout(index = 0)` is the GL default spelled out loud, and GLSL ES has no such
+            // qualifier in core - a stage that prints it is refused with "index layout
+            // qualifier requires EXT_blend_func_extended" and the whole program then draws
+            // nothing. Drop the decoration when it carries the default; a REAL dual-source
+            // index (1) is left alone, because that one genuinely needs the extension and the
+            // driver has to see it. Fragment stage only: no other stage can carry it.
+            if (glShaderType == GL_FRAGMENT_SHADER) {
+                spvcSession.DropDefaultFragmentOutputColorIndex();
+            }
+
+            // `readonly writeonly` together says the buffer variable can only be asked its
+            // .length(), which the frontend has already enforced - so the pair is inert, and
+            // printing it is not. Mesa's ES compiler refuses a block spelled that way and the
+            // stage never reaches the program.
+            spvcSession.RelaxReadWriteExclusiveStorageBuffers();
+
             const char* result = nullptr;
             spvcSession.Compile(&result);
 

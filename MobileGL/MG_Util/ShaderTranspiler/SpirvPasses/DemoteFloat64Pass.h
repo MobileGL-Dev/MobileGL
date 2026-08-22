@@ -50,12 +50,10 @@ namespace MobileGL {
             // for the same reason - writes exactly where the demoted shader reads. Blocks with no
             // 64-bit member anywhere are never touched.
             //
-            // THE MEASURED COST, so the next wave does not re-diagnose it. Four GL 4.3 conformance
-            // cases fail on BOTH backends and on both an Adreno 830 and a Mali G925 - i.e. on every
-            // device, because no device has shaderFloat64 and the demotion therefore always runs:
+            // WHAT RE-DERIVING STILL COSTS, so the next wave does not re-diagnose it. Two GL 4.3
+            // conformance cases fail on BOTH backends and on every device, because no device has
+            // shaderFloat64 and the demotion therefore always runs:
             //
-            //   KHR-GL43.shader_storage_buffer_object.basic-stdLayout-case3-cs
-            //   KHR-GL43.shader_storage_buffer_object.basic-stdLayout-case3-vs
             //   KHR-GL43.compute_shader.fp64-case1
             //   KHR-GL43.compute_shader.fp64-case3
             //
@@ -63,44 +61,28 @@ namespace MobileGL {
             // against it: it is blocked on GLSL subroutines ("FP64 support - subroutines"), which
             // glslang deletes when targeting SPIR-V, and is out of scope by standing instruction.
             //
-            // The other three fail in the two ways this comment predicts and in no other.
-            // stdLayout-case3 copies a block byte for byte: the output matches the input for
-            // bytes [0, 76) and is zero from there on, which is exactly the block's size once
-            // every double became a float and the layout repacked tightly. Re-derived byte-exactly
-            // in 2026-08: the block is `int data0; float data1[5]; mat3x2 data2; double data3;
-            // double data4[2]; int data5; dvec3 data6`, and demoting every double to float and
-            // repacking std430 gives data0@0, data1@4..23, data2@24..47, data3@48, data4@52..59,
-            // data5@60, data6@64..75 - 76 bytes. EVERY mismatching byte the QPA reports is >= 76
-            // and every expected-non-zero byte below 76 matched, on both the std140 output and the
-            // std430 one.
-            //
-            // ONE TRAP FOR THE NEXT READER, because it reads as evidence AGAINST demotion and is
-            // not: in the std430 output the doubles below the boundary appear to have round-tripped
-            // BIT-EXACTLY, which looks like fp64 surviving. It is an artifact. The shader reads and
-            // writes through the SAME demoted offset, so those four bytes are copied verbatim
-            // whatever they are interpreted as - the copy proves nothing about the width.
-            //
             // fp64-case1 reports ceil(2.2) as 2: the uniform's double 2.0 is 0x4000000000000000,
             // the demoted read takes its low 32 bits (0.0), ceil(0.0 + 0.2) = 1.0f = 0x3F800000
             // lands in the low half of the 8-byte output slot and the whole thing prints as 2.
             // Index 0 of the same case PASSES by accident, for the same reason - writing 0.0f into
             // the low half of 1.0 leaves it unchanged - so a partial pass here is not progress.
+            // Fixing it means carrying a double in the DEFAULT UNIFORM block without re-deriving
+            // its layout, and that block's routing is built by reflecting the module this pass
+            // produces, so the representation change ripples into every glUniform*d. Deliberately
+            // not attempted. compute_shader.fp64-case2 passes today and any attempt has to keep it
+            // green.
             //
-            // Both backends produce a CHARACTER-FOR-CHARACTER identical QPA byte list, which is
-            // the cheapest available proof that the defect is in this shared pass and in neither
-            // backend. A future wave that wants to re-open this should start by re-checking that
-            // identity rather than by re-deriving the layout.
-            //
-            // Fixing them means NOT demoting a double that lives in a buffer block, and carrying
-            // it as a uvec2 word pair instead - preserving the application's byte layout exactly,
-            // unpacking to fp32 for arithmetic and repacking on store. That is a large pass with
-            // the same dmat problem the paragraph above describes (a uvec2 representation cannot
-            // express a matrix stride either, so it would have to decline dmat types), and the
-            // default-uniform routing above reflects the demoted module, so a representation
-            // change there ripples into every glUniform*d. THREE actionable cases of 16085 (the
-            // fourth, fp64-case3, is subroutine-blocked and unreachable from here); deliberately
-            // not attempted, and re-confirmed as not worth attempting in the 2026-08 wave.
-            // compute_shader.fp64-case2 passes today and any attempt has to keep it green.
+            // SHADER STORAGE BLOCKS ARE NO LONGER IN THAT LIST, and the two cases that used to be
+            // (shader_storage_buffer_object.basic-stdLayout-case3-cs and -vs, which copy a block
+            // byte for byte and used to come back zero from the first double's slot onwards) pass
+            // on both backends. FlattenFloat64StorageBlockPass runs immediately before this one
+            // and takes every storage block holding a 64-bit float out of its hands, rewriting the
+            // block into a flat `uint` array whose index arithmetic carries the offsets glslang
+            // computed WITH the doubles in place. A flat array has no layout for SPIRV-Cross to
+            // re-derive, which is what makes it expressible where a padded struct is not, and an
+            // offset in an address computation has none of the dmat trouble the paragraph above
+            // describes. See that pass's header. Everything below still describes what happens to
+            // every OTHER block, and to the doubles in the function bodies of all of them.
             //
             // Declines (leaves the module byte-identical, so the caller's existing "this module
             // still declares Float64" failure path reports it) when the module contains an
