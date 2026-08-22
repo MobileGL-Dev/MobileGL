@@ -239,13 +239,34 @@ public final class PostActivity extends Activity {
         nativeLoaded = true;
     }
 
+    /**
+     * Writes the whole report to logcat. The report is the only machine-readable form of the
+     * POST, and logcat drops everything past roughly 4000 bytes of a single entry - which is
+     * less than one backend section, so a one-call log silently truncated the report to about
+     * the first dozen rows. Each chunk is prefixed with its index so a reader can reassemble
+     * them in order (concatenate the payloads after the "] " separator).
+     */
+    private static void logReport(String json) {
+        if (json == null) {
+            Log.i(TAG, "<null report>");
+            return;
+        }
+        final int chunkSize = 3000;
+        final int chunks = (json.length() + chunkSize - 1) / chunkSize;
+        for (int index = 0; index < chunks; ++index) {
+            final int start = index * chunkSize;
+            final int end = Math.min(start + chunkSize, json.length());
+            Log.i(TAG, "[" + (index + 1) + "/" + chunks + "] " + json.substring(start, end));
+        }
+    }
+
     private static void runDriverPost() {
         String json = null;
         Throwable failure = null;
         try {
             ensureNativeLoaded();
             json = nativeRunDriverPost();
-            Log.i(TAG, json == null ? "<null report>" : json);
+            logReport(json);
         } catch (Throwable error) {
             Log.e(TAG, "Driver POST failed", error);
             failure = error;
