@@ -277,6 +277,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // its own; this call is only here to spell the transfer pair that describes it.
             MG_Util::TextureFormatProcessor::NormalizePixelFormat(carrier, Flags<PixelFormatNormalizeOptionBit>{},
                                                                   nullptr, &widening.Format, &widening.Type);
+            // r11f_g11f_b10f is the one carrier that is not a channel widening, and the transfer
+            // pair has to say so. Every other entry keeps the frontend format's own component
+            // type - a GL_RG16F shadow is halves and so is its GL_RGBA16F carrier, so padding the
+            // channels is the whole conversion. This shadow is a PACKED 32-bit word (GL_RGB with
+            // GL_UNSIGNED_INT_10F_11F_11F_REV, TextureFormatProcessor::NormalizePixelFormat), and
+            // no ES driver accepts that type for a GL_RGBA16F level. GL_FLOAT is asked for
+            // instead - legal for GL_RGBA16F, and the type the unpack in
+            // PrepareImageWidenedUpload writes - so the two sides name the same layout.
+            if (internalFormat == TextureInternalFormat::R11FG11FB10F) {
+                widening.Format = GL_RGBA;
+                widening.Type = GL_FLOAT;
+                widening.PackedFloatSource = true;
+            }
             return widening;
         }
     } // namespace TextureImpl

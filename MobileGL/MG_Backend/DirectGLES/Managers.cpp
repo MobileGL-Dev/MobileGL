@@ -29,7 +29,9 @@
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <cstring>
@@ -2836,21 +2838,98 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                widenedData, IsIntegerWidenableFormat(format));
         }
 
+        // One channel of a packed r11f_g11f_b10f word as a float. The two 11-bit channels are
+        // e5m6 and the 10-bit one e5m5 - IEEE-shaped but UNSIGNED, so there is no sign bit to
+        // read and the exponent bias is the 15 a 5-bit exponent always carries.
+        static Float DecodePackedUnsignedFloat(Uint32 bits, Uint mantissaBits) {
+            const Uint32 mantissaScale = 1u << mantissaBits;
+            const Uint32 mantissa = bits & (mantissaScale - 1u);
+            const Uint32 exponent = bits >> mantissaBits;
+            if (exponent == 0u) {
+                // Subnormal, and zero with it: no implied leading 1, and the exponent is the
+                // smallest NORMAL one rather than the encoded 0.
+                return std::ldexp(static_cast<Float>(mantissa) / static_cast<Float>(mantissaScale), -14);
+            }
+            if (exponent == 31u) {
+                return mantissa == 0u ? std::numeric_limits<Float>::infinity()
+                                      : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return std::ldexp(1.0f + static_cast<Float>(mantissa) / static_cast<Float>(mantissaScale),
+                              static_cast<Int>(exponent) - 15);
+        }
+
+        // The r11f_g11f_b10f shadow decoded into the GL_RGBA / GL_FLOAT level its GL_RGBA16F
+        // carrier is uploaded as. Alpha is the 1 GL defines for a format that has no alpha
+        // channel, which is the same constant the shader-side mask writes, so a texel this
+        // function produced and a texel an imageStore produced are indistinguishable.
+        //
+        // Sized from the LEVEL, not the source, for the reason PrepareChannelWidenedUpload is:
+        // the driver reads a full width*height*depth*4 floats for the transfer it was handed.
+        static const void* PreparePackedFloatWidenedUpload(const IntVec3& texelSize, const void* data,
+                                                           SizeT byteSize, Vector<Uint8>& widenedData) {
+            constexpr SizeT kSourceTexelBytes = sizeof(Uint32);
+            if (data == nullptr || byteSize < kSourceTexelBytes) {
+                return data;
+            }
+            const SizeT texelCount = static_cast<SizeT>(std::max(texelSize.x(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.y(), 0)) *
+                                     static_cast<SizeT>(std::max(texelSize.z(), 1));
+            if (texelCount == 0) {
+                return data;
+            }
+            const SizeT copyTexelCount = std::min(texelCount, byteSize / kSourceTexelBytes);
+
+            widenedData.assign(texelCount * 4u * sizeof(Float), 0);
+            const auto* src = static_cast<const Uint8*>(data);
+            auto* dst = reinterpret_cast<Float*>(widenedData.data());
+            for (SizeT i = 0; i < texelCount; ++i, dst += 4) {
+                Float rgb[3] = {0.0f, 0.0f, 0.0f};
+                if (i < copyTexelCount) {
+                    Uint32 packed = 0;
+                    // Through a memcpy rather than a Uint32 read of `src`: the shadow is a byte
+                    // buffer with no alignment promise of its own.
+                    Memcpy(&packed, src + i * kSourceTexelBytes, sizeof(packed));
+                    rgb[0] = DecodePackedUnsignedFloat(packed & 0x7FFu, 6u);
+                    rgb[1] = DecodePackedUnsignedFloat((packed >> 11u) & 0x7FFu, 6u);
+                    rgb[2] = DecodePackedUnsignedFloat((packed >> 22u) & 0x3FFu, 5u);
+                }
+                dst[0] = rgb[0];
+                dst[1] = rgb[1];
+                dst[2] = rgb[2];
+                dst[3] = 1.0f;
+            }
+            return widenedData.data();
+        }
+
         // The transfer half of the image-format widening: an image-bindable texture whose ES
         // storage was widened to a core carrier is described to the driver as a four-component
-        // transfer, so its one- or two-component client data has to be repacked the same way the
-        // three-channel colour-renderable widening repacks its own.
+        // transfer, so its narrower client data has to be repacked the same way the three-channel
+        // colour-renderable widening repacks its own.
+        //
+        // Two shapes, because the carriers come in two kinds. Seventeen of the eighteen keep the
+        // frontend format's component TYPE and only add channels, so padding the shadow out to
+        // four components is the whole conversion. r11f_g11f_b10f does not: its shadow is one
+        // PACKED 32-bit word per texel and its carrier is GL_RGBA16F, so the word has to be
+        // DECODED into four floats. Reading it as three components of the carrier's type - what
+        // the repack below would do - would take twelve bytes from a four-byte texel and shear
+        // the level, which is what the allFormats LOAD walkers see and the STORE ones do not (a
+        // store overwrites every texel the upload got wrong).
         //
         // Composes with PrepareFallbackUpload rather than replacing it, and the composition is a
-        // no-op by construction: none of the seventeen widened formats is a three-channel one
-        // (GetWidenableClientComponentCount reports 0 for every one of them), and the SNORM
-        // shadow-to-float conversion only fires for a GL_FLOAT transfer type, which the widened
-        // triple never picks for the two SNORM8 formats. So the shadow reaches this untouched and
-        // one repack is all that runs.
+        // no-op by construction: none of the widened formats is one GetWidenableClientComponentCount
+        // reports a count for, and the SNORM shadow-to-float conversion only fires for a GL_FLOAT
+        // transfer type, which the widened triple never picks for the two SNORM8 formats. So the
+        // shadow reaches this untouched and one conversion is all that runs.
         static const void* PrepareImageWidenedUpload(const TextureImpl::ImageBindableStorageWidening& widening,
                                                      const IntVec3& texelSize, const void* data, SizeT byteSize,
                                                      Vector<Uint8>& widenedData) {
-            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels >= 4) {
+            if (!widening || widening.SourceChannels == 0 || widening.SourceChannels > 4) {
+                return data;
+            }
+            if (widening.PackedFloatSource) {
+                return PreparePackedFloatWidenedUpload(texelSize, data, byteSize, widenedData);
+            }
+            if (widening.SourceChannels == 4) {
                 return data;
             }
             return PrepareChannelWidenedUpload(widening.SourceChannels, texelSize, data, byteSize, widening.Type,
@@ -5280,12 +5359,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // The GL internal format a glslang layout format names, for the seventeen non-core
-            // formats WidenImageFormatsForEssl carries exactly plus nothing else: the only
+            // The GL internal format a glslang layout format names, for the eighteen non-core
+            // formats WidenImageFormatsForEssl carries losslessly plus nothing else: the only
             // question asked of it is "does this DECLARED format widen", and answering 0 for
             // everything else is the same "no" a non-widenable format gets. Kept as its own
             // switch rather than routed through the frontend's enum converters because a
             // TLayoutFormat is a glslang value and the reflection snapshot stores it raw.
+            //
+            // IT MUST LIST EXACTLY WHAT WideningOfSpirvImageFormat DOES. This table is what arms
+            // the pass (ImageFormatWillBeWidened -> declaresWidenableImageFormat), so a format the
+            // pass would carry but this switch answers 0 for never gets the chance: the module
+            // reaches SPIRV-Cross with its original qualifier, the throw takes the stage, and the
+            // only visible symptom is the "no GLSL ES spelling" diagnostic for a format that has
+            // one. That is exactly what r11f_g11f_b10f did until it was added here.
             Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
                 switch (format) {
                 case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
@@ -5305,6 +5391,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
                 case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
                 case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                // Not a channel widening but a lossless re-encoding into rgba16f - the one entry
+                // here whose carrier has a different per-channel layout. See
+                // WidenImageFormatsPass.h.
+                case glslang::ElfR11fG11fB10f: return 0x8C3A; // GL_R11F_G11F_B10F
                 default:
                     return 0;
                 }
@@ -5365,11 +5455,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // spelling still has to become legal ESSL somehow.
                     const auto declaredFormat = static_cast<glslang::TLayoutFormat>(type.layoutFormat);
                     if (!IsCoreEsslLayoutFormat(declaredFormat)) {
-                        // Seventeen of the twenty-six non-core formats are re-declared in the core
-                        // format that carries them exactly, with every access masked back to the
-                        // channels GL says they have (WidenImageFormatsForEssl, and the matching
-                        // storage/bind widening in TextureImpl). Those need neither the extension
-                        // nor the diagnostic: there IS a legal spelling for them now.
+                        // Eighteen of the twenty-six non-core formats are re-declared in a core
+                        // format that carries them losslessly, with every access masked back to
+                        // the channels GL says they have (WidenImageFormatsForEssl, and the
+                        // matching storage/bind widening in TextureImpl). Those need neither the
+                        // extension nor the diagnostic: there IS a legal spelling for them now.
                         if (ImageFormatWillBeWidened(GLInternalFormatOfLayoutFormat(declaredFormat))) {
                             inputs.declaresWidenableImageFormat = true;
                         } else {

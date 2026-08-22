@@ -262,6 +262,95 @@ void main()
             }
         }
 
+        // GL_R11F_G11F_B10F, the format the allFormats and allTargets walkers stop at once the
+        // channel widening has carried everything before it - and the one carrier that is NOT a
+        // channel widening. It has no core format of its own per-channel width, so it is carried
+        // in GL_RGBA16F, whose 5-bit exponent and longer mantissa hold every 11f (e5m6) and 10f
+        // (e5m5) value exactly.
+        //
+        // What makes this case different from every other one here, and why it is worth its own
+        // test: the frontend's shadow for this format is ONE PACKED 32-BIT WORD per texel, not
+        // three components of the carrier's type. The upload therefore has to DECODE it, where
+        // every other widening only pads channels onto data already in the right component type.
+        // A widening that reused the channel repack reads three floats out of a four-byte texel
+        // and shears the whole level - which a STORE test cannot see, because the dispatch
+        // overwrites every texel the upload got wrong. So the seed here is per-texel distinct and
+        // is checked through an imageLoad BEFORE anything is stored.
+        //
+        // Every constant is chosen to be exact in both encodings, so the comparisons can be
+        // equality rather than tolerance: the 1/8 steps need three mantissa bits of the 11f
+        // channels' six, and the 1/16 steps at exponent 1 need one of the 10f channel's five.
+        TEST_F(NonCoreImageFormatScenario, PackedFloatImageDecodesItsUploadAndDropsSurplusStores) {
+            if (!Ready()) GTEST_SKIP() << "no GL context";
+            if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
+
+            constexpr int kTexels = kExtent * kExtent;
+            std::vector<float> seed(static_cast<std::size_t>(kTexels) * 3u, 0.0f);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                seed[texel * 3 + 0] = 1.0f + static_cast<float>(texel) / 8.0f;
+                seed[texel * 3 + 1] = 2.0f + static_cast<float>(texel) / 8.0f;
+                seed[texel * 3 + 2] = 3.0f + static_cast<float>(texel) / 16.0f;
+            }
+            const std::vector<float> wideSeed(static_cast<std::size_t>(kTexels) * 4u, -1.0f);
+            const GLuint narrow = MakeTexture(GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT, seed.data());
+            const GLuint wide = MakeTexture(GL_RGBA32F, GL_RGBA, GL_FLOAT, wideSeed.data());
+            if (narrow == 0 || wide == 0) return;
+
+            const GLuint loadProgram = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (r11f_g11f_b10f, binding = 0) readonly uniform image2D narrow;
+layout (rgba32f, binding = 1) writeonly uniform image2D wide;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(wide, coord, imageLoad(narrow, coord));
+}
+)");
+            const GLuint storeProgram = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (r11f_g11f_b10f, binding = 0) writeonly uniform image2D narrow;
+
+void main()
+{
+    imageStore(narrow, ivec2(gl_GlobalInvocationID.xy), vec4(5.0, 6.0, 7.0, 8.0));
+}
+)");
+            if (loadProgram == 0 || storeProgram == 0) return;
+
+            // THE UPLOAD, read back through the image. A sheared decode still produces plausible
+            // floats, so the check is per texel and the seed never repeats a value.
+            BindImage(kNarrowUnit, narrow, GL_R11F_G11F_B10F, GL_READ_ONLY);
+            BindImage(kWideUnit, wide, GL_RGBA32F, GL_WRITE_ONLY);
+            Dispatch(loadProgram);
+
+            const std::vector<float> loaded = ReadFloats(wide, GL_RGBA, 4);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                EXPECT_FLOAT_EQ(loaded[texel * 4 + 0], seed[texel * 3 + 0]) << "texel " << texel << " red";
+                EXPECT_FLOAT_EQ(loaded[texel * 4 + 1], seed[texel * 3 + 1]) << "texel " << texel << " green";
+                EXPECT_FLOAT_EQ(loaded[texel * 4 + 2], seed[texel * 3 + 2]) << "texel " << texel << " blue";
+                EXPECT_FLOAT_EQ(loaded[texel * 4 + 3], 1.0f)
+                    << "texel " << texel << ": imageLoad on a format without alpha must report 1";
+            }
+
+            // THE STORE. Three channels survive and the fourth is dropped, which is the mask this
+            // format needs and no other widened format does - every other carrier here pins two
+            // or three of the carrier's channels, this one pins only alpha.
+            BindImage(kNarrowUnit, narrow, GL_R11F_G11F_B10F, GL_WRITE_ONLY);
+            Dispatch(storeProgram);
+
+            const std::vector<float> stored = ReadFloats(narrow, GL_RGB, 3);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                EXPECT_FLOAT_EQ(stored[texel * 3 + 0], 5.0f) << "texel " << texel << " red";
+                EXPECT_FLOAT_EQ(stored[texel * 3 + 1], 6.0f) << "texel " << texel << " green";
+                EXPECT_FLOAT_EQ(stored[texel * 3 + 2], 7.0f) << "texel " << texel << " blue";
+            }
+        }
+
         // GL_R8UI: the only format KHR-GL43.shader_image_load_store.single-byte_data_alignment
         // declares, and one SPIRV-Cross refuses to print for ESSL at all, so before the emulation
         // no text was produced for the stage and the dispatch could not run.
