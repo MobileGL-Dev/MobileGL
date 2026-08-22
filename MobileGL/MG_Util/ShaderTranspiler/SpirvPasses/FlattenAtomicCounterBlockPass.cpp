@@ -325,9 +325,31 @@ namespace MobileGL {
                 // appending it at the end of the section would make the module invalid. A
                 // duplicate OpTypeArray is legal (SPIR-V 2.8 exempts aggregates from the
                 // uniqueness rule, and so does spirv-val), so no search for an existing one is
-                // needed; the LENGTH CONSTANT is not exempt, and if the module already declares
-                // it after the block there is nowhere legal to put the array - the block is then
-                // declined and keeps today's behaviour. Returns 0 for that.
+                // needed; the LENGTH CONSTANT is not exempt, so when the module already declares
+                // it the pass has to work with the one instruction that exists.
+                //
+                // That instruction is not always in a usable place. GetDefiningInstruction only
+                // honours `position` when it MINTS the constant; when the module already has one
+                // it hands back the existing instruction wherever it happens to sit, and glslang
+                // emits constants in first-use order, so a shader whose first use of the value is
+                // below the counter block declares it below the block. The flattened array would
+                // then forward-reference its own length.
+                //
+                // KHR-GL43.compute_shader.pipeline-compute-chain is exactly that shader: two
+                // counters at offset 8 need a 4-element array, and its `%uint_4` is first used by
+                // a later declaration, so it lands AFTER gl_AtomicCounterBlock_1. Declining there
+                // - which is what this used to do - left the offsets in place, and SPIRV-Cross
+                // then refused the whole stage with "Push constant block cannot be expressed as
+                // neither std430 nor std140", so the chain's first kernel never reached the
+                // driver and every resource it writes stayed at its initial value.
+                //
+                // Moving the constant UP to just before the block is always legal, which is why
+                // this is a relocation and not a second declaration: an OpConstant's only operand
+                // is its result TYPE, and that type already precedes the block (it is the element
+                // type of the counter array the block declares). Every existing use sits after
+                // the constant's old position and therefore after its new one too, so no use is
+                // left dangling - moving a definition earlier in the types/constants section
+                // cannot invalidate anything. Ordering is all that changes; def-use is untouched.
                 uint32_t CreateCounterArrayTypeBefore(IRContext* context, Instruction* structType,
                                                       uint32_t uintTypeId, uint32_t length) {
                     auto* constantMgr = context->get_constant_mgr();
@@ -341,7 +363,12 @@ namespace MobileGL {
                     if (position == context->types_values_end()) return 0;
                     Instruction* lengthInst = constantMgr->GetDefiningInstruction(lengthConstant, 0, &position);
                     if (lengthInst == nullptr) return 0;
-                    if (!DeclaredBefore(context, lengthInst->result_id(), structType->result_id())) return 0;
+                    if (!DeclaredBefore(context, lengthInst->result_id(), structType->result_id())) {
+                        // Pre-existing constant, declared below the block. Relocate it; see above
+                        // for why that is sound. InsertBefore unlinks it from its current spot
+                        // first, so this is a move rather than an aliasing second entry.
+                        lengthInst->InsertBefore(structType);
+                    }
 
                     const uint32_t arrayTypeId = context->TakeNextId();
                     if (arrayTypeId == 0) return 0;
