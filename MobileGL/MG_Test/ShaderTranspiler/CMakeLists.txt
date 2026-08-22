@@ -8,6 +8,7 @@ add_executable(
         FixIterationRPSubgroupScratchTest.cpp
         EmulateSubgroupsTest.cpp
         DemoteFloat64Test.cpp
+        FlattenFloat64StorageBlockTest.cpp
         FlattenXfbInterfaceBlocksTest.cpp
         UniquifyIoBlockNamesTest.cpp
         LowerViewportIndexTest.cpp

@@ -19,6 +19,7 @@
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
 #include "SpirvPasses/DecoratePositionInvariantPass.h"
 #include "SpirvPasses/DemoteFloat64Pass.h"
+#include "SpirvPasses/FlattenFloat64StorageBlockPass.h"
 #include "SpirvPasses/LowerDrawParametersPass.h"
 #include "SpirvPasses/LowerViewportIndexPass.h"
 #include "SpirvPasses/PackDoubleVertexInputsPass.h"
@@ -797,6 +798,17 @@ namespace MobileGL {
                 // in particular it runs before the backends' PackDoubleVertexInputsPass, whose
                 // OpBitcast this one would otherwise decline on. Costs one types_values() walk on
                 // the overwhelming majority of modules, which declare no 64-bit float at all.
+                // ...but demoting a double that lives in a SHADER STORAGE BLOCK also repacks that
+                // block, and the bytes an application put in the buffer do not move with it. This
+                // runs first and takes those blocks out of the demotion's hands: each becomes a
+                // flat `uint` array whose index arithmetic carries the std140/std430 offsets
+                // glslang computed WITH the doubles in place, so the layout survives byte for byte
+                // and only the VALUES narrow. Gated on a block actually holding a 64-bit float, so
+                // every other module pays one types_values() walk and nothing else, and it declines
+                // (leaving the block for the demotion to handle the old way) on any shape it cannot
+                // re-address exactly. See FlattenFloat64StorageBlockPass.h.
+                optimizer.RegisterPass(
+                    FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass());
                 optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
                 return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
