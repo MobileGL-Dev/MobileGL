@@ -5286,3 +5286,53 @@ TEST_F(TextureTest, ImageWidenedUploadExpandsOneAndTwoChannelDataWithGLsMissingC
         EXPECT_TRUE(widened.empty());
     }
 }
+
+// The OTHER transfer shape the image widening needs, and the one a channel repack cannot serve:
+// GL_RGB10_A2UI's shadow is ONE 32-bit word per texel, not four components of the GL_RGBA16UI
+// carrier's own type. Repacking it as components would take sixteen bytes out of a four-byte texel
+// and shear the level - which only a LOAD notices, because a store overwrites whatever the upload
+// got wrong.
+//
+// GL_UNSIGNED_INT_2_10_10_10_REV puts the FIRST component in the LOW bits, which is the whole
+// content of the word "REV" and the single thing this can get backwards, so every field here is a
+// different value and the boundary codes (0, the 10-bit maximum, the 2-bit maximum) are pinned
+// exactly rather than compared with a tolerance.
+TEST_F(TextureTest, ImageWidenedUploadSplitsAPacked2101010RevShadowIntoFourChannelCodes) {
+    using MobileGL::MG_Backend::DirectGLES::TextureImpl::PreparePackedIntWidenedUpload;
+
+    const IntVec3 texelSize(3, 1, 1);
+    // r=1, g=2, b=3, a=1 | r=1023, g=0, b=1023, a=3 | r=0, g=1023, b=0, a=0
+    const Uint32 source[] = {
+        1u | (2u << 10) | (3u << 20) | (1u << 30),
+        1023u | (0u << 10) | (1023u << 20) | (3u << 30),
+        0u | (1023u << 10) | (0u << 20) | (0u << 30),
+    };
+    Vector<Uint8> widened;
+    const auto* result = static_cast<const Uint16*>(
+        PreparePackedIntWidenedUpload(texelSize, source, sizeof(source), widened));
+    ASSERT_NE(result, static_cast<const void*>(source));
+    ASSERT_EQ(widened.size(), 12 * sizeof(Uint16));
+    const Uint16 expected[] = {1, 2, 3, 1, 1023, 0, 1023, 3, 0, 1023, 0, 0};
+    for (SizeT i = 0; i < 12; ++i) {
+        EXPECT_EQ(result[i], expected[i]) << "component " << i;
+    }
+
+    // Sized from the LEVEL, never from the source: the driver reads a full width*height*4 shorts
+    // for the transfer it was handed, so a short source still has to leave a full destination.
+    {
+        Vector<Uint8> shortWidened;
+        const auto* shortResult = static_cast<const Uint16*>(
+            PreparePackedIntWidenedUpload(texelSize, source, sizeof(Uint32), shortWidened));
+        ASSERT_EQ(shortWidened.size(), 12 * sizeof(Uint16));
+        for (SizeT i = 4; i < 12; ++i) {
+            EXPECT_EQ(shortResult[i], 0u) << "component " << i << " past the source must be zero";
+        }
+    }
+
+    // Nothing to split.
+    {
+        Vector<Uint8> empty;
+        EXPECT_EQ(PreparePackedIntWidenedUpload(texelSize, nullptr, 0, empty), nullptr);
+        EXPECT_TRUE(empty.empty());
+    }
+}

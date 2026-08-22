@@ -749,6 +749,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                 SizeT byteSize, GLenum uploadType, Vector<Uint8>& widenedData,
                                                 Bool integerData = false);
 
+        // Splits a GL_UNSIGNED_INT_2_10_10_10_REV shadow (rgb10_a2, rgb10_a2ui) into the four
+        // GL_UNSIGNED_SHORT channel CODES its GL_RGBA16UI image carrier is uploaded as: red in
+        // bits 0-9, green 10-19, blue 20-29, alpha 30-31. Pure CPU and context-free so a unit test
+        // can pin the exact fields; `widenedData` is the caller's scratch and has to outlive the
+        // returned pointer.
+        const void* PreparePackedIntWidenedUpload(const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                  Vector<Uint8>& widenedData);
+
         struct StateTextureBasicInfo { // Used for tracking texture state changes
             TextureInternalFormat internalFormat = TextureInternalFormat::Unknown;
             SizeT width = 0;

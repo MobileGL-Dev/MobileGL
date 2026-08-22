@@ -60,12 +60,20 @@ namespace MobileGL {
                 // per-channel width, more channels (rg32f -> rgba32f) - and for those the carrier
                 // is bit-exact: the storage holds the identical encoding, only wider.
                 //
-                // r11f_g11f_b10f is the one entry that is not. It has no same-width core carrier,
-                // so it takes rgba16f, and the two encodings differ. What matters is that the
-                // carrier is still LOSSLESS: an 11-bit float is e5m6 and a 10-bit float is e5m5,
-                // while a half is s1e5m10 - the SAME 5-bit exponent with a strictly longer
-                // mantissa - so every value the packed format can represent has an exact half.
-                // Nothing an application stores is rounded away.
+                // Two entries are not. r11f_g11f_b10f has no same-width core carrier, so it takes
+                // rgba16f, and the two encodings differ. What matters is that the carrier is still
+                // LOSSLESS: an 11-bit float is e5m6 and a 10-bit float is e5m5, while a half is
+                // s1e5m10 - the SAME 5-bit exponent with a strictly longer mantissa - so every
+                // value the packed format can represent has an exact half. Nothing an application
+                // stores is rounded away.
+                //
+                // rgb10_a2ui is the other. Its four channels are 10, 10, 10 and 2 bits of UNSIGNED
+                // INTEGER, and rgba16ui gives each of them sixteen - every value of every channel
+                // fits, with the same component type and the same channel COUNT, so nothing is
+                // masked and nothing is re-encoded on the shader side at all. Only the transfer
+                // differs: the frontend's shadow for it is one packed 32-bit word per texel
+                // (GL_UNSIGNED_INT_2_10_10_10_REV), so the upload has to split that word into four
+                // shorts the way r11f_g11f_b10f's has to be decoded into four floats.
                 //
                 // What DOES change is the reverse direction: the carrier can hold values the
                 // packed format could not - negatives (11f and 10f are unsigned), and mantissa
@@ -79,12 +87,12 @@ namespace MobileGL {
                 // this format alone, and multiple-uniforms, where one such declaration killed a
                 // program holding eight images).
                 //
-                // The remaining eight - rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm,
-                // rg16_snorm and r16_snorm - stay absent, and for a stronger reason than
-                // quantisation: core ESSL has no 16-bit normalized format at all and no 10-bit
-                // one, so every candidate carrier for them either loses range or changes the
-                // component TYPE the texture presents. They keep the honest "no GLSL ES spelling"
-                // diagnostic rather than a silent approximation.
+                // The remaining seven - rgb10_a2, rgba16, rg16, r16, rgba16_snorm, rg16_snorm and
+                // r16_snorm - stay absent, and for a stronger reason than quantisation: core ESSL
+                // has no 16-bit normalized format at all and no 10-bit one, so every candidate
+                // carrier for them either loses range or changes the component TYPE the texture
+                // presents. They keep the honest "no GLSL ES spelling" diagnostic rather than a
+                // silent approximation.
                 struct ImageFormatWidening {
                     spv::ImageFormat Carrier = spv::ImageFormat::Unknown;
                     uint32_t Channels = 0;
@@ -119,6 +127,9 @@ namespace MobileGL {
                     case spv::ImageFormat::R16ui: return {spv::ImageFormat::Rgba16ui, 1};
                     case spv::ImageFormat::Rg8ui: return {spv::ImageFormat::Rgba8ui, 2};
                     case spv::ImageFormat::R8ui: return {spv::ImageFormat::Rgba8ui, 1};
+                    // FOUR channels, so there is no surplus channel to mask and no access is
+                    // rewritten - 10, 10, 10 and 2 bits of unsigned integer all fit in sixteen.
+                    case spv::ImageFormat::Rgb10a2ui: return {spv::ImageFormat::Rgba16ui, 4};
                     default:
                         return {};
                     }
@@ -513,6 +524,10 @@ namespace MobileGL {
                 for (Instruction* write : writes) {
                     const WidenedImage* widened = widenedOf(write);
                     if (widened == nullptr) continue;
+                    // A carrier with as many channels as the original (rgb10_a2ui in rgba16ui) has
+                    // no surplus channel to pin, and the shuffle would select (0, 1, 2, 3) from the
+                    // texel - an identity the emitter would still print. Left out entirely.
+                    if (widened->Channels >= 4) continue;
                     uint32_t zeroOneId = 0;
                     uint32_t vec4TypeId = 0;
                     if (!resolveMaskMaterial(widened->SampledTypeId, zeroOneId, vec4TypeId)) {
@@ -540,6 +555,7 @@ namespace MobileGL {
                 for (Instruction* read : reads) {
                     const WidenedImage* widened = widenedOf(read);
                     if (widened == nullptr) continue;
+                    if (widened->Channels >= 4) continue; // see the store loop
                     uint32_t zeroOneId = 0;
                     uint32_t vec4TypeId = 0;
                     if (!resolveMaskMaterial(widened->SampledTypeId, zeroOneId, vec4TypeId)) {

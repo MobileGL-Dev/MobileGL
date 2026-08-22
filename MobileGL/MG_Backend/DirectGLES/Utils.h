@@ -102,6 +102,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // would see them. Closing it needs the per-draw-buffer colour mask the three-channel
         // widening already carries (FramebufferImpl::g_alphaWidenedDrawBufferMask) generalized
         // from "alpha" to a channel count, which is its own change.
+        // How the FRONTEND's CPU shadow for a widened format is laid out relative to the carrier's
+        // transfer, i.e. what the upload has to do to it. Almost every entry is `Components`: the
+        // shadow already holds SourceChannels components of exactly the carrier's own type, so
+        // padding it out to four is the whole conversion. The packed entries do not - their shadow
+        // is ONE 32-bit word per texel - and reading such a word as components of the carrier's
+        // type takes twelve or sixteen bytes out of four and shears the level.
+        enum class ImageWidenSourceEncoding : Uint8 {
+            Components = 0,
+            // r11f_g11f_b10f: GL_UNSIGNED_INT_10F_11F_11F_REV -> four GL_FLOATs of an rgba16f.
+            PackedFloat11f11f10f,
+            // rgb10_a2 and rgb10_a2ui: GL_UNSIGNED_INT_2_10_10_10_REV -> four GL_UNSIGNED_SHORT
+            // channel CODES of an rgba16ui. The same split serves both: the two formats differ
+            // only in what the codes MEAN, which is the shader's business and not the transfer's.
+            PackedInt2101010Rev,
+        };
+
         struct ImageBindableStorageWidening {
             GLenum InternalFormat = GL_UNKNOWN_MGL;
             GLenum Format = GL_UNKNOWN_MGL;
@@ -113,13 +129,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // transfer type cannot tell the two apart (GL_UNSIGNED_BYTE serves both RG8 and
             // RG8UI), so the carrier decides.
             Bool IntegerData = false;
-            // The frontend shadow is a PACKED word rather than SourceChannels separate components
-            // of the carrier's own type, so the upload has to DECODE it instead of padding it out
-            // (PrepareImageWidenedUpload). True only for r11f_g11f_b10f, whose shadow is one
-            // GL_UNSIGNED_INT_10F_11F_11F_REV per texel and whose carrier is GL_RGBA16F: the
-            // channel repack every other entry uses would read three floats out of a four-byte
-            // texel and shear the level.
-            Bool PackedFloatSource = false;
+            // What the upload has to do to the frontend shadow before it describes the level to
+            // the driver (PrepareImageWidenedUpload).
+            ImageWidenSourceEncoding SourceEncoding = ImageWidenSourceEncoding::Components;
 
             explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
         };

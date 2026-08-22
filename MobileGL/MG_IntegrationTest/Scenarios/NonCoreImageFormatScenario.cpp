@@ -351,6 +351,93 @@ void main()
             }
         }
 
+        // GL_RGB10_A2UI, the format all four allFormats walkers stop at once r11f_g11f_b10f is
+        // carried - and the only widening whose carrier has as MANY channels as the original, so
+        // GL leaves nothing to pin and neither access is rewritten. What it does need is the other
+        // packed transfer: its shadow is one GL_UNSIGNED_INT_2_10_10_10_REV word per texel, which
+        // the GL_RGBA16UI carrier is uploaded as four shorts.
+        //
+        // The seed is checked through an imageLoad BEFORE anything is stored, for the reason the
+        // r11f case is: a sheared split still produces plausible integers, and a store would
+        // overwrite every texel the upload got wrong. Every channel of every texel is distinct,
+        // and the alpha values walk the whole 0..3 a two-bit channel has - a widening that pinned
+        // alpha to GL's "1" the way a three-channel one must would pass for texel 1 alone.
+        TEST_F(NonCoreImageFormatScenario, PackedIntegerImageSplitsItsUploadAndKeepsAllFourChannels) {
+            if (!Ready()) GTEST_SKIP() << "no GL context";
+            if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
+
+            constexpr int kTexels = kExtent * kExtent;
+            std::vector<GLuint> seed(static_cast<std::size_t>(kTexels), 0u);
+            std::vector<GLuint> expected(static_cast<std::size_t>(kTexels) * 4u, 0u);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                const GLuint r = static_cast<GLuint>(texel) * 7u;          // 0 .. 105
+                const GLuint g = 1023u - static_cast<GLuint>(texel) * 11u; // 1023 .. 858
+                const GLuint b = 512u + static_cast<GLuint>(texel);        // 512 .. 527
+                const GLuint a = static_cast<GLuint>(texel) % 4u;          // the whole 0..3
+                seed[texel] = r | (g << 10) | (b << 20) | (a << 30);
+                expected[texel * 4 + 0] = r;
+                expected[texel * 4 + 1] = g;
+                expected[texel * 4 + 2] = b;
+                expected[texel * 4 + 3] = a;
+            }
+            const std::vector<GLuint> wideSeed(static_cast<std::size_t>(kTexels) * 4u, 999u);
+            const GLuint narrow =
+                MakeTexture(GL_RGB10_A2UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT_2_10_10_10_REV, seed.data());
+            const GLuint wide = MakeTexture(GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT, wideSeed.data());
+            if (narrow == 0 || wide == 0) return;
+
+            const GLuint loadProgram = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (rgb10_a2ui, binding = 0) readonly uniform uimage2D narrow;
+layout (rgba32ui, binding = 1) writeonly uniform uimage2D wide;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    imageStore(wide, coord, imageLoad(narrow, coord));
+}
+)");
+            const GLuint storeProgram = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (rgb10_a2ui, binding = 0) writeonly uniform uimage2D narrow;
+
+void main()
+{
+    imageStore(narrow, ivec2(gl_GlobalInvocationID.xy), uvec4(11u, 22u, 33u, 2u));
+}
+)");
+            if (loadProgram == 0 || storeProgram == 0) return;
+
+            BindImage(kNarrowUnit, narrow, GL_RGB10_A2UI, GL_READ_ONLY);
+            BindImage(kWideUnit, wide, GL_RGBA32UI, GL_WRITE_ONLY);
+            Dispatch(loadProgram);
+
+            const std::vector<GLuint> loaded = ReadUints(wide, GL_RGBA_INTEGER, 4);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                EXPECT_EQ(loaded[texel * 4 + 0], expected[texel * 4 + 0]) << "texel " << texel << " red";
+                EXPECT_EQ(loaded[texel * 4 + 1], expected[texel * 4 + 1]) << "texel " << texel << " green";
+                EXPECT_EQ(loaded[texel * 4 + 2], expected[texel * 4 + 2]) << "texel " << texel << " blue";
+                EXPECT_EQ(loaded[texel * 4 + 3], expected[texel * 4 + 3]) << "texel " << texel << " alpha";
+            }
+
+            // THE STORE. All four channels survive - this is the one widened format where GL drops
+            // nothing, so a mask here would be a bug rather than the emulation.
+            BindImage(kNarrowUnit, narrow, GL_RGB10_A2UI, GL_WRITE_ONLY);
+            Dispatch(storeProgram);
+
+            const std::vector<GLuint> stored = ReadUints(narrow, GL_RGBA_INTEGER, 4);
+            for (int texel = 0; texel < kTexels; ++texel) {
+                EXPECT_EQ(stored[texel * 4 + 0], 11u) << "texel " << texel << " red";
+                EXPECT_EQ(stored[texel * 4 + 1], 22u) << "texel " << texel << " green";
+                EXPECT_EQ(stored[texel * 4 + 2], 33u) << "texel " << texel << " blue";
+                EXPECT_EQ(stored[texel * 4 + 3], 2u) << "texel " << texel << " alpha";
+            }
+        }
+
         // GL_R8UI: the only format KHR-GL43.shader_image_load_store.single-byte_data_alignment
         // declares, and one SPIRV-Cross refuses to print for ESSL at all, so before the emulation
         // no text was produced for the stage and the dispatch could not run.

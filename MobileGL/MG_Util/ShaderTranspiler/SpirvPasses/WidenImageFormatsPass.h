@@ -65,12 +65,18 @@ namespace MobileGL {
             // the SPIRV-Cross throw takes the whole stage, every image uniform declared beside it
             // included.
             //
-            // The other EIGHT (rgb10_a2, rgb10_a2ui, rgba16, rg16, r16, rgba16_snorm, rg16_snorm,
-            // r16_snorm) are deliberately NOT widened here: core ESSL has no 16-bit normalized
-            // format at all and no 10-bit one, so every carrier for them either loses range or
-            // changes the component TYPE the texture a `sampler2D` would read presents. They keep
-            // the honest "no GLSL ES spelling" diagnostic instead of silently changing an
-            // application's numeric domain.
+            // rgb10_a2ui takes rgba16ui for a simpler reason still: its channels are 10, 10, 10 and
+            // 2 bits of UNSIGNED INTEGER, and rgba16ui gives each of them sixteen. Same component
+            // type, same channel COUNT, every value representable - so no access is rewritten at
+            // all, and only the TRANSFER differs (its shadow is one packed 32-bit word per texel,
+            // which the upload splits into four shorts).
+            //
+            // The other SEVEN (rgb10_a2, rgba16, rg16, r16, rgba16_snorm, rg16_snorm, r16_snorm)
+            // are deliberately NOT widened here: core ESSL has no 16-bit normalized format at all
+            // and no 10-bit one, so every carrier for them either loses range or changes the
+            // component TYPE the texture a `sampler2D` would read presents. They keep the honest
+            // "no GLSL ES spelling" diagnostic instead of silently changing an application's
+            // numeric domain.
             //
             // MUST MOVE WITH THE OTHER TWO LAYERS. The widening is not a shader-local rewrite: the
             // ES texture behind the image has to be allocated in the carrier format too, and

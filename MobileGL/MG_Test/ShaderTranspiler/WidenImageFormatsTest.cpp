@@ -255,7 +255,21 @@ void main() {
 }
 )";
 
-    // rg16 is one of the EIGHT with no core carrier at all - core ESSL has no 16-bit normalized
+    // rgb10_a2ui: FOUR unsigned-integer channels of 10, 10, 10 and 2 bits, carried in an rgba16ui
+    // that gives each of them sixteen. The only widening whose carrier has as many channels as the
+    // original, so it is the only one where GL leaves NOTHING to pin and both accesses must come
+    // out exactly as glslang emitted them.
+    const char* const kRgb10A2uiLoadStore = R"(#version 430 core
+layout(rgb10_a2ui, binding = 0) uniform uimage2D img;
+out vec4 fragColor;
+void main() {
+    uvec4 texel = imageLoad(img, ivec2(gl_FragCoord.xy));
+    imageStore(img, ivec2(gl_FragCoord.xy), uvec4(7u, 8u, 9u, 3u));
+    fragColor = vec4(texel);
+}
+)";
+
+    // rg16 is one of the SEVEN with no core carrier at all - core ESSL has no 16-bit normalized
     // format, so every candidate loses range or changes the component type the texture presents.
     // It must be left alone and keep the honest "no GLSL ES spelling" diagnostic instead.
     const char* const kRg16LoadStore = R"(#version 430 core
@@ -273,7 +287,7 @@ void main() {
 // the shader rewrite, the ES texture storage and the glBindImageTexture argument. If it drifts
 // the three stop agreeing, and a narrow texture read through a wide image goes out of bounds
 // silently on every driver tested.
-TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
+TEST(WidenImageFormats, NineteenNonCoreFormatsHaveALosslessCoreCarrier) {
     struct Case {
         Uint requested;
         Uint carrier;
@@ -302,6 +316,9 @@ TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
         // is e5m5 against a half's s1e5m10, so the carrier is still lossless - and three channels,
         // so the mask has to pin only alpha.
         {0x8C3A, 0x881A, 3, "GL_R11F_G11F_B10F -> GL_RGBA16F"},
+        // FOUR channels: 10, 10, 10 and 2 bits of unsigned integer all fit in sixteen, so nothing
+        // is masked at all and only the packed TRANSFER is re-encoded.
+        {0x906F, 0x8D76, 4, "GL_RGB10_A2UI -> GL_RGBA16UI"},
     };
     for (const Case& testCase : cases) {
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(testCase.requested), testCase.carrier)
@@ -317,7 +334,7 @@ TEST(WidenImageFormats, EighteenNonCoreFormatsHaveALosslessCoreCarrier) {
     }
 }
 
-TEST(WidenImageFormats, CoreFormatsAndTheEightWithoutALosslessCarrierAreRefused) {
+TEST(WidenImageFormats, CoreFormatsAndTheSevenWithoutALosslessCarrierAreRefused) {
     // The thirteen GLSL ES already has: nothing to carry.
     for (const Uint coreFormat : {0x8814u /*RGBA32F*/, 0x881Au /*RGBA16F*/, 0x822Eu /*R32F*/,
                                   0x8058u /*RGBA8*/, 0x8F97u /*RGBA8_SNORM*/, 0x8D82u /*RGBA32I*/,
@@ -327,13 +344,12 @@ TEST(WidenImageFormats, CoreFormatsAndTheEightWithoutALosslessCarrierAreRefused)
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(coreFormat), 0u)
             << "core format 0x" << std::hex << coreFormat;
     }
-    // The eight with no LOSSLESS core carrier: core ESSL has no 16-bit normalized format and no
+    // The seven with no LOSSLESS core carrier: core ESSL has no 16-bit normalized format and no
     // 10-bit one, so every candidate for these either loses range or changes the component type
     // the texture presents to anything that samples it. Deliberately left to the honest
-    // diagnostic. r11f_g11f_b10f is NOT among them - rgba16f holds every value it can, so it is
-    // carried above.
-    for (const Uint hardFormat : {0x8059u /*RGB10_A2*/,
-                                  0x906Fu /*RGB10_A2UI*/, 0x805Bu /*RGBA16*/, 0x822Cu /*RG16*/,
+    // diagnostic. r11f_g11f_b10f is NOT among them - rgba16f holds every value it can - and
+    // neither is rgb10_a2ui, whose channels are INTEGER and fit an rgba16ui outright.
+    for (const Uint hardFormat : {0x8059u /*RGB10_A2*/, 0x805Bu /*RGBA16*/, 0x822Cu /*RG16*/,
                                   0x822Au /*R16*/, 0x8F9Bu /*RGBA16_SNORM*/, 0x8F99u /*RG16_SNORM*/,
                                   0x8F98u /*R16_SNORM*/}) {
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(hardFormat), 0u)
@@ -427,6 +443,38 @@ TEST(WidenImageFormats, ThreeChannelPackedFloatImageBecomesRgba16fWithOnlyAlphaP
     const VectorShuffle* loadMask = FindShuffleOver(shuffles, readIds.front());
     ASSERT_NE(loadMask, nullptr) << "the imageLoad result is consumed unmasked";
     EXPECT_TRUE(HasComponents(*loadMask, {0u, 1u, 2u, 7u}));
+}
+
+// The four-channel case, which is the whole of rgb10_a2ui's shader-side emulation: the carrier has
+// as many channels as the original, every value of every channel fits, and GL therefore defines
+// NOTHING about a surplus channel because there is none. So both accesses have to come out
+// untouched - a pass that masked here would replace the alpha the application stored (0..3 of a
+// two-bit channel, which the CTS walker writes as 3) with the constant 1 and drop blue outright.
+TEST(WidenImageFormats, FourChannelIntegerImageBecomesRgba16uiWithNeitherAccessMasked) {
+    const Vector<Uint32> spirv = CompileFragment(kRgb10A2uiLoadStore);
+    ASSERT_FALSE(spirv.empty());
+    ASSERT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv));
+
+    const auto beforeTypes = CollectStorageImageTypes(spirv);
+    ASSERT_EQ(beforeTypes.size(), 1u);
+    EXPECT_EQ(beforeTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgb10a2ui));
+
+    Vector<Uint32> widened;
+    ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
+                                                         /*enableSpirvValidation=*/true));
+    ASSERT_FALSE(widened.empty());
+    EXPECT_TRUE(Validates(widened));
+    EXPECT_FALSE(ShaderCompiler::DeclaresWidenableImageFormat(widened));
+
+    const auto afterTypes = CollectStorageImageTypes(widened);
+    ASSERT_EQ(afterTypes.size(), 1u);
+    EXPECT_EQ(afterTypes.front().format, static_cast<Uint32>(spv::ImageFormat::Rgba16ui));
+
+    // The declaration moved and nothing else did.
+    EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size())
+        << "a carrier with as many channels as the original must add no mask";
+    EXPECT_EQ(CollectImageReadResultIds(widened).size(), CollectImageReadResultIds(spirv).size())
+        << "the imageLoad was duplicated for a rewrite that has nothing to rewrite";
 }
 
 // ...and the same module through the emitter, which is where the failure actually showed: ESSL has
