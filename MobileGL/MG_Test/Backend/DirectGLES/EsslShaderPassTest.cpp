@@ -160,8 +160,12 @@ TEST(SplitReadWriteImageUniformsTest, ExemptFormatsAreLeftCompletelyAlone) {
     }
 }
 
-// A declaration SPIRV-Cross already qualified is none of this pass's business.
-TEST(SplitReadWriteImageUniformsTest, AlreadyQualifiedDeclarationsAreUntouched) {
+// A declaration SPIRV-Cross already qualified needs no REPAIR - but it still needs the rename.
+// The input to this pass is SPIRV-Cross output, not application source, and SPIRV-Cross picks
+// `readonly` or `writeonly` from the accesses of the stage it is emitting, so "already qualified"
+// says nothing about whether the other stages spell it the same way. The qualifiers must survive
+// untouched; only the identifier changes.
+TEST(SplitReadWriteImageUniformsTest, AlreadyQualifiedDeclarationsAreRenamedButNotRequalified) {
     const String source = R"(#version 320 es
 layout(binding = 0, rgba8) uniform readonly highp image2D reader;
 layout(binding = 1, rgba8) uniform writeonly highp image2D writer;
@@ -170,9 +174,33 @@ void main()
     imageStore(writer, ivec2(0), imageLoad(reader, ivec2(0)));
 }
 )";
-    // Untouched means UNRENAMED too: a declaration that already carries its qualifier in the
-    // source carries the SAME one in every stage, so there is no cross-stage mismatch to break up
-    // and renaming it would only churn the text.
+    const String out = SplitReadWriteImageUniforms(source);
+    EXPECT_TRUE(Contains(out, "layout(binding = 0, rgba8) uniform readonly highp image2D " +
+                                  RoAlias("reader") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " +
+                                  WoAlias("writer") + ";"))
+        << out;
+    EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("writer") + ",")) << out;
+    EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("reader") + ",")) << out;
+    // Neither declaration is doubled and neither gains a qualifier it did not have: this is a
+    // rename, not a repair.
+    EXPECT_FALSE(Contains(out, IMAGE_WRITE_ALIAS_PREFIX)) << out;
+    EXPECT_EQ(CountOf(out, "coherent"), 0u) << out;
+    EXPECT_FALSE(Contains(out, "memoryBarrierImage")) << out;
+}
+
+// A declaration carrying BOTH qualifiers is a spelling no per-stage access analysis produces, so
+// it came from the application and reads the same in every stage. Nothing to rename.
+TEST(SplitReadWriteImageUniformsTest, ADeclarationQualifiedBothWaysIsLeftCompletelyAlone) {
+    const String source = R"(#version 320 es
+layout(binding = 0, rgba8) uniform readonly writeonly highp image2D inert;
+void main()
+{
+    highp ivec2 size = imageSize(inert);
+    if (size.x < 0) discard;
+}
+)";
     EXPECT_EQ(SplitReadWriteImageUniforms(source), source);
 }
 
@@ -492,6 +520,67 @@ void main()
     // Both bindings are untouched - the image unit is still the same one.
     EXPECT_TRUE(Contains(vsOut, "binding = 0"));
     EXPECT_TRUE(Contains(fsOut, "binding = 0"));
+}
+
+// The same defect, in the shape it actually reaches the driver in. SPIRV-Cross emits the access
+// qualifier ITSELF whenever the stage only loads or only stores, so the declaration arrives here
+// already legal - and this pass used to skip it on exactly that ground, leaving the vertex stage's
+// `coherent writeonly g_image` and the fragment stage's `coherent readonly g_image` sharing one
+// name. That is the pair a raw-ES probe on the Adreno 830 reproduces with no MobileGL in the
+// process: the fragment stage reads back the untouched zeros
+// (KHR-GL4x.shader_image_load_store.advanced-memory-dependentInvocation's [1,0,0,0.2]), and
+// renaming either half fixes it. This is the emitted text of that test, verbatim.
+TEST(SplitReadWriteImageUniformsTest, StagesSpirvCrossQualifiedDifferentlyGetDifferentNames) {
+    const String vertexSource = R"(#version 320 es
+layout(binding = 1, rgba32f) uniform coherent writeonly highp image2D g_image;
+void main()
+{
+    imageStore(g_image, ivec2(0), vec4(2.0));
+    gl_Position = vec4(0.0);
+}
+)";
+    const String fragmentSource = R"(#version 320 es
+layout(binding = 1, rgba32f) uniform coherent readonly highp image2D g_image;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = imageLoad(g_image, ivec2(0));
+}
+)";
+    const String vsOut = SplitReadWriteImageUniforms(vertexSource);
+    const String fsOut = SplitReadWriteImageUniforms(fragmentSource);
+
+    const String vsName = WoAlias("g_image");
+    const String fsName = RoAlias("g_image");
+    EXPECT_NE(vsName, fsName);
+    EXPECT_TRUE(Contains(vsOut, "uniform coherent writeonly highp image2D " + vsName + ";")) << vsOut;
+    EXPECT_TRUE(Contains(fsOut, "uniform coherent readonly highp image2D " + fsName + ";")) << fsOut;
+    EXPECT_TRUE(Contains(vsOut, "imageStore(" + vsName + ",")) << vsOut;
+    EXPECT_TRUE(Contains(fsOut, "imageLoad(" + fsName + ",")) << fsOut;
+    // Nothing left for a linker to merge and mis-qualify...
+    EXPECT_FALSE(Contains(vsOut, fsName)) << vsOut;
+    EXPECT_FALSE(Contains(fsOut, vsName)) << fsOut;
+    // ...and the image unit is still the one the application asked for.
+    EXPECT_TRUE(Contains(vsOut, "binding = 1")) << vsOut;
+    EXPECT_TRUE(Contains(fsOut, "binding = 1")) << fsOut;
+}
+
+// ...and the budget half of it: two stages SPIRV-Cross qualified the SAME way must still land on
+// one shared name, or every stage that names the image spends an image location of its own.
+TEST(SplitReadWriteImageUniformsTest, StagesSpirvCrossQualifiedAlikeShareOneName) {
+    const String stage = R"(#version 320 es
+layout(binding = 1, rgba32f) uniform coherent readonly highp image2D g_image;
+layout(location = 0) out highp vec4 mg_FragColor;
+void main()
+{
+    mg_FragColor = imageLoad(g_image, ivec2(0));
+}
+)";
+    const String first = SplitReadWriteImageUniforms(stage);
+    const String second = SplitReadWriteImageUniforms(stage);
+    EXPECT_EQ(first, second);
+    EXPECT_TRUE(Contains(first, "uniform coherent readonly highp image2D " + RoAlias("g_image") + ";"))
+        << first;
 }
 
 // The other side of that coin, and the one a per-STAGE tag got wrong. Two stages that use the

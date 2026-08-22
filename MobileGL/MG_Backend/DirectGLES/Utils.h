@@ -399,8 +399,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reading back zero. Mali and Mesa link the same text, so nothing but a device gate
         // catches this.
         //
-        // The declarations this pass leaves untouched keep their names, and those are exactly the
-        // ones that already agree across stages.
+        // A declaration SPIRV-Cross already tagged `readonly` or `writeonly` needs no qualifier
+        // repair, but it is NOT stage-independent: that tag is derived from the accesses of the
+        // stage being emitted, so an image stored in the vertex stage and loaded in the fragment
+        // stage arrives here as `coherent writeonly g_image` and `coherent readonly g_image` -
+        // one name, two spellings, which is exactly the pair Adreno merges. Those declarations
+        // are therefore renamed too, keyed on the qualifier they already carry (readonly ->
+        // IMAGE_READONLY_ALIAS_PREFIX, writeonly -> IMAGE_WRITEONLY_ALIAS_PREFIX) and with
+        // nothing but the identifier changed. Stages that agree still reach the same alias and
+        // stay merged, so this costs no shader an extra image uniform.
+        //
+        // The declarations this pass still leaves untouched keep their names: one carrying BOTH
+        // readonly and writeonly (a spelling no access analysis produces, so it came from the
+        // application and is identical everywhere), and one carrying NEITHER, which is legal only
+        // for the r32f/r32i/r32ui formats and is likewise spelled the same in every stage.
         //
         // The `coherent` on both halves of the pair is load-bearing, not decoration: GLSL only
         // guarantees a write through one image variable is visible to a read through a DIFFERENT
