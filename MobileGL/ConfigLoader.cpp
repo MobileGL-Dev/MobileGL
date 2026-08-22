@@ -195,6 +195,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.AsyncOptimisticShaderStatus =
             QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
         features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
+        features.ViewportArrayEmulation =
+            QueryEnvQuirkOverride("MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION");
     }
 
     inline void InitBackendType() {

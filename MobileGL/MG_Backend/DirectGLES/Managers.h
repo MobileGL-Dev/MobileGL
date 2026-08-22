@@ -21,6 +21,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
     String PromoteDrawParameterGlobalsToUniforms(String source, GLenum shaderType);
 
+    // The ESSL half of the gl_ViewportIndex routing emulation, in the order a program's stages
+    // meet it. Both are pure String -> String rewrites over what SPIRV-Cross emitted once
+    // LowerViewportIndexPass has demoted the builtin to the plain global `mg_ViewportIndex`.
+    //
+    // The producing stage's global becomes an ordinary flat varying; true when there was one to
+    // promote, which is also the answer to "does this program route viewports at all".
+    Bool PromoteViewportIndexGlobalToVarying(String& source);
+    // The fragment stage grows a matching flat input, the mg_ViewportPassMask uniform the draw
+    // path writes, and a wrapper entry point that discards every fragment whose primitive routed
+    // to an index the current replay pass is not drawing. False when the stage has no entry point
+    // to wrap, which leaves the program renderable but unrouted.
+    Bool InjectViewportIndexPassGate(String& source);
+
     // Whether a vertex shader may declare a storage block at all, given what the host driver
     // reports for GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS. Pure, and separated from the capability
     // global purely so the decision can be tested without one.
@@ -112,6 +125,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // asked yet". Answers true whenever the backend twin is missing or predates the current
     // link.
     Bool CurrentProgramMayNeedPerSubDrawBuiltins(Bool batchCarriesBaseVertices);
+
+    // ---- gl_ViewportIndex routing emulation, draw half ---------------------------------------
+    //
+    // GLES has ONE viewport, ONE scissor rectangle and ONE depth range; GL 4.1 has sixteen of
+    // each, selected per primitive by gl_ViewportIndex. There is no ES entry point to program the
+    // other fifteen with (GL_OES_viewport_array exists but Adreno 830 does not have it, verified
+    // three ways), so the only way to rasterize a primitive against index i's rectangle is to
+    // make index i's rectangle THE viewport for the duration of a draw - which means issuing the
+    // draw once per distinct viewport state and letting the fragment stage throw away the
+    // primitives that belong to the other indices (the gate Managers.cpp injects).
+    //
+    // Indices whose whole state tuple (viewport rectangle, scissor rectangle, scissor-test enable,
+    // depth range) is identical share ONE pass, so the overwhelmingly common case - every index
+    // still holding what glViewport/glScissor/glDepthRange broadcast to all sixteen - collapses
+    // to a single pass with an all-ones gate mask, i.e. one draw and no behaviour change at all.
+    //
+    // Whether emulation runs. Off only under MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION falsy, which
+    // restores the pre-emulation path as a negative control.
+    Bool ViewportArrayEmulationEnabled();
+    // Whether ANY program built in this process has come out with a viewport gate. Sticky once
+    // true; it exists so that BeginViewportRoutingPasses - which runs on every draw of every
+    // workload - can answer with one static load in the case that matters, which is every
+    // application that has never heard of gl_ViewportIndex.
+    extern Bool g_anyProgramRoutesViewportIndex;
+    // Number of times the current draw has to be issued. Always >= 1, and exactly 1 - with no
+    // state touched - whenever the current program does not route viewports, whenever every
+    // configured index shares one state, and whenever replaying would multiply a side effect the
+    // fragment gate cannot undo (transform feedback, rasterizer discard). Also seeds the pass
+    // mask uniform for that single-pass case, so a gated fragment shader never runs against the
+    // zero every GLSL uniform starts at - which would discard the whole draw.
+    Uint BeginViewportRoutingPasses();
+    // Push pass `pass`'s viewport / scissor / scissor-test / depth range onto the ES context and
+    // set the gate mask to the indices it serves. Only called when the count above exceeds 1.
+    void ApplyViewportRoutingPass(Uint pass);
+    // Restore the gate mask and mark the render-state shadow dirty, so the next ordinary draw
+    // re-pushes index 0's state. Takes the count so it can do nothing at all in the common case.
+    void EndViewportRoutingPasses(Uint passCount);
+
+    // Issue one draw, replayed once per viewport-routing pass. Every application-visible draw
+    // entry point wraps its native glDraw* call in this; the internal blit and clear helpers
+    // deliberately do not, because they bind their own programs, which never route.
+    template <typename IssueDraw>
+    inline void ForEachViewportRoutingPass(IssueDraw&& issue) {
+        const Uint passCount = BeginViewportRoutingPasses();
+        for (Uint pass = 0; pass < passCount; ++pass) {
+            if (passCount > 1) {
+                ApplyViewportRoutingPass(pass);
+            }
+            issue();
+        }
+        EndViewportRoutingPasses(passCount);
+    }
 
     template <typename StateObject, typename BackendObject>
     class StateBackendObjectRegistry {
@@ -1200,6 +1265,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same for gl_BaseVertex: only a program that reads it pays for the per-draw
             // uniform write, and only such a program needs the reset after one.
             Bool ReadsBaseVertex() const { return m_baseVertexUniformLocation >= 0; }
+            // Which viewport indices the next draw's fragments may keep, one bit each. Written
+            // once per replay pass; see ForEachViewportRoutingPass.
+            void SetViewportPassMask(Uint32 indexMask) const;
+            // True when this build injected the fragment-stage viewport gate, i.e. when a
+            // pre-rasterization stage routes by gl_ViewportIndex AND the fragment stage can act
+            // on it. The uniform is the honest test for both halves: it exists only where the
+            // gate was injected, and the gate is injected only where a stage routes.
+            Bool RoutesViewportIndex() const { return m_viewportPassMaskUniformLocation >= 0; }
             Int GetIndirectParamsBinding() const { return m_indirectParamsBinding; }
             Uint GetBackendProgramId() const { return m_backendProgramId; }
             // False when the last SyncToBackend could not produce a usable program (a
@@ -1316,6 +1389,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_drawIdUniformLocation = -1;
             Int m_baseVertexUniformLocation = -1;
             Int m_baseInstanceWordIndexUniformLocation = -1;
+            Int m_viewportPassMaskUniformLocation = -1;
             Int m_indirectParamsBinding = -1;
             Uint32 m_snormFallbackClampOutputMask = 0;
             Uint32 m_unormFallbackClampOutputMask = 0;
