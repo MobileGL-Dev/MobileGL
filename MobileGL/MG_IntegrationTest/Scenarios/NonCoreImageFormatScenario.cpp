@@ -988,6 +988,93 @@ void main()
             }
         }
 
+        // A BUFFER image, which takes neither of the emulations above. Its texels are the
+        // application's buffer object - at the size and layout the application gave it, and
+        // usually also a vertex, index or storage buffer - so there is nothing to reallocate a
+        // carrier in. What CAN be done is a SPLIT: rg32f over N texels and r32f over 2N texels
+        // describe exactly the same bytes, so the view is re-declared and every subscript is
+        // doubled (WidenImageFormatsPass, and the matching glTexBuffer/glBindImageTexture format
+        // in TextureImpl).
+        //
+        // THE NUMBERS HERE ARE THE ONES THAT PINNED THE OLD BUG. Widening a buffer image instead
+        // leaves the shader striding 16 bytes through 8-byte texels: measured on an Adreno 830
+        // with this exact 32-byte GL_RG32F buffer and this exact shader, the readback came back
+        // [1,100] [0,1] [2,100] [0,1] - texels 0 and 1 landed on top of all four, and texels 2 and
+        // 3 were written past the end of the application's buffer.
+        //
+        // This runs on every backend, and on a driver that CAN spell rg32f for an imageBuffer
+        // (Mesa's, which the software lanes use) nothing is split at all - which is the other half
+        // of the claim: the arming has to agree with the shader, so a split that fired where the
+        // driver needed none would double every subscript and fail here just as loudly.
+        TEST_F(NonCoreImageFormatScenario, BufferImageAddressesTheApplicationsOwnTexels) {
+            if (!Ready()) GTEST_SKIP() << "no GL context";
+            if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
+            GLint maxTextureBufferSize = 0;
+            glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
+            while (glGetError() != GL_NO_ERROR) {
+            }
+            if (maxTextureBufferSize <= 0) GTEST_SKIP() << "no buffer textures on this driver";
+
+            constexpr int kBufferTexels = 4;
+            const std::vector<float> seed(static_cast<std::size_t>(kBufferTexels) * 2u, -1.0f);
+
+            GLuint buffer = 0;
+            glGenBuffers(1, &buffer);
+            glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+            glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(seed.size() * sizeof(float)), seed.data(),
+                         GL_DYNAMIC_DRAW);
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            m_textures.push_back(texture);
+            glBindTexture(GL_TEXTURE_BUFFER, texture);
+            glTexBuffer(GL_TEXTURE_BUFFER, GL_RG32F, buffer);
+            if (const GLenum error = FirstGLError()) {
+                glDeleteBuffers(1, &buffer);
+                GTEST_SKIP() << "glTexBuffer(GL_RG32F) errored with " << GLErrorName(error);
+            }
+
+            const GLuint storeProgram = MakeComputeProgram(R"(#version 430 core
+
+layout (local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout (rg32f, binding = 0) writeonly uniform imageBuffer narrow;
+
+void main()
+{
+    int texel = int(gl_GlobalInvocationID.x);
+    imageStore(narrow, texel, vec4(float(texel + 1), 100.0, 3.0, 4.0));
+}
+)");
+            if (storeProgram == 0) {
+                glDeleteBuffers(1, &buffer);
+                return;
+            }
+
+            BindImage(kNarrowUnit, texture, GL_RG32F, GL_WRITE_ONLY);
+            glUseProgram(storeProgram);
+            glDispatchCompute(kBufferTexels, 1, 1);
+            glMemoryBarrier(GL_ALL_BARRIER_BITS);
+            EXPECT_EQ(FirstGLError(), 0u) << "the dispatch leaked a GL error";
+            glUseProgram(0);
+
+            std::vector<float> readback(seed.size(), -12345.0f);
+            glBindBuffer(GL_TEXTURE_BUFFER, buffer);
+            glGetBufferSubData(GL_TEXTURE_BUFFER, 0,
+                               static_cast<GLsizeiptr>(readback.size() * sizeof(float)), readback.data());
+            EXPECT_EQ(FirstGLError(), 0u) << "reading the buffer back errored";
+
+            for (int texel = 0; texel < kBufferTexels; ++texel) {
+                EXPECT_FLOAT_EQ(readback[texel * 2 + 0], static_cast<float>(texel + 1))
+                    << "texel " << texel << " red";
+                EXPECT_FLOAT_EQ(readback[texel * 2 + 1], 100.0f) << "texel " << texel << " green";
+            }
+
+            glBindBuffer(GL_TEXTURE_BUFFER, 0);
+            glDeleteBuffers(1, &buffer);
+            while (glGetError() != GL_NO_ERROR) {
+            }
+        }
+
         // The other consumer of the same texture. A widened texture's ES storage really does have
         // four channels, so a sampler reading it raw would see whatever the carrier holds; the
         // logical format's missing channels have to keep reading 0 and 1 (which Espryt arranges

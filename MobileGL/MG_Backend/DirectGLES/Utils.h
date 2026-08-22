@@ -150,6 +150,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             explicit operator Bool() const { return InternalFormat != GL_UNKNOWN_MGL; }
         };
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat);
+
+        // The single-channel core format an image-bindable BUFFER texture's view is SPLIT into, or
+        // GL_UNKNOWN_MGL for a format that needs no split (or has no core base).
+        //
+        // A buffer texture cannot be widened: its texels are the application's buffer object, at
+        // the size and layout the application gave it, and it is usually also a vertex, index or
+        // storage buffer whose bytes are not ours to restride. But an rg32f view of N texels and
+        // an r32f view of 2N texels describe exactly the SAME bytes, so the split changes only
+        // how the shader subscripts them - component j of texel i is texel 2i + j of the base
+        // view - which WidenImageFormatsPass rewrites every access to do. The same rule as the
+        // widening decides WHETHER: a driver that can spell rg32f for an imageBuffer needs
+        // nothing.
+        //
+        // KNOWN GAP, and the reason this is not applied to a texture that is merely sampled: a
+        // buffer texture that is BOTH image-bound and read through a samplerBuffer would have its
+        // sampled view split too, and the sampler side is not rewritten. Accepted for the same
+        // reason the storage widening's gaps are - on a driver where the split applies at all
+        // there is no legal ESSL for the image declaration, so such a program did not compile.
+        GLenum GetImageBindableBufferSplitFormat(TextureInternalFormat internalFormat);
     } // namespace TextureImpl
 
     namespace FramebufferImpl {} // namespace FramebufferImpl

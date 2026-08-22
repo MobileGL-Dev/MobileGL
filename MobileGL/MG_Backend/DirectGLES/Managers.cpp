@@ -3822,6 +3822,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 GLenum glInternalFormat, glType, glFormat;
                 TextureImpl::GenerateTextureFormatInfo(textureBufferObject->GetFormat(), &glInternalFormat, &glFormat,
                                                        &glType, TextureTarget::TextureBuffer);
+                // The view half of the buffer-image SPLIT. A buffer texture has no storage of its
+                // own to widen, but the VIEW its format describes can be re-described one
+                // component at a time over the same bytes - rg32f over N texels is r32f over 2N -
+                // and WidenImageFormatsPass rewrites every access to subscript it that way. Only
+                // for a texture that is actually image-bound: a sampled-only buffer texture keeps
+                // the format the application asked for (see GetImageBindableBufferSplitFormat).
+                if (m_imageBindableStorageRequired) {
+                    if (const GLenum splitFormat =
+                            TextureImpl::GetImageBindableBufferSplitFormat(textureBufferObject->GetFormat());
+                        splitFormat != GL_UNKNOWN_MGL) {
+                        glInternalFormat = splitFormat;
+                    }
+                }
 
                 if (needsRegeneration) {
                     // Desktop GL has had buffer textures core since 3.1 and MobileGL advertises a

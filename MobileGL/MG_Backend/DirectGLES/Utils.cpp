@@ -316,6 +316,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return widening;
         }
+
+        GLenum GetImageBindableBufferSplitFormat(TextureInternalFormat internalFormat) {
+            const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
+            const auto base = static_cast<GLenum>(
+                MG_Util::ShaderTranspiler::ShaderCompiler::SplitCoreEsslBufferImageFormat(requested));
+            if (base == 0) {
+                return GL_UNKNOWN_MGL;
+            }
+            // EXACTLY the arming WidenImageFormatsForEssl uses, for the reason the widening's is:
+            // the shader, the glTexBuffer view and the glBindImageTexture argument must all split
+            // or none of them may, or the shader subscripts a view the buffer is not described as.
+            if (g_GLESCapabilities.SupportsExtendedImageFormats &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
+                return GL_UNKNOWN_MGL;
+            }
+            return base;
+        }
     } // namespace TextureImpl
     namespace PrgramImpl {
         String ProcessOutColorLocations(const String& glslCode) {

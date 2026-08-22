@@ -51,7 +51,9 @@ namespace MobileGL {
 
                 // OpImageRead in-operands: 0 image, 1 coordinate, 2.. optional image operands.
                 // OpImageWrite in-operands: 0 image, 1 coordinate, 2 texel, 3.. optional.
+                // OpImageQuerySize in-operands: 0 image.
                 constexpr uint32_t kImageAccessImageOperand = 0;
+                constexpr uint32_t kImageAccessCoordinateOperand = 1;
                 constexpr uint32_t kImageWriteTexelOperand = 2;
 
                 // The carrier of a non-core image format: a core GLSL ES format that represents
@@ -311,6 +313,58 @@ namespace MobileGL {
                     }
                 }
 
+                // A BUFFER image cannot be widened, but it CAN be SPLIT. Its texels are the
+                // application's linear buffer - no padding, no swizzle, no mip chain - so an
+                // rg32f view of N texels and an r32f view of 2N texels describe exactly the same
+                // bytes, and texel i's two components are components 2i and 2i+1 of the base
+                // format. That is not an approximation of anything: it is the same memory
+                // addressed one component at a time, which is why the split is exact where the
+                // widening (which reallocates) is impossible.
+                //
+                // ONLY the 32-bit component family, and for one reason: the base format has to be
+                // core ESSL, and of the single-channel formats only r32f, r32i and r32ui are.
+                // rg16f would want an r16f base and rg8i an r8i, and neither exists in core, so
+                // those buffer images keep the honest "no GLSL ES spelling" failure. Three- and
+                // four-channel buffer images need nothing: the only four-channel 32-bit formats
+                // are already core and GL has no three-channel image format at all.
+                struct BufferImageSplit {
+                    spv::ImageFormat Base = spv::ImageFormat::Unknown;
+                    uint32_t Components = 0;
+
+                    explicit operator bool() const { return Base != spv::ImageFormat::Unknown; }
+                };
+
+                BufferImageSplit SplitOfBufferImageFormat(spv::ImageFormat format) {
+                    switch (format) {
+                    case spv::ImageFormat::Rg32f: return {spv::ImageFormat::R32f, 2};
+                    case spv::ImageFormat::Rg32i: return {spv::ImageFormat::R32i, 2};
+                    case spv::ImageFormat::Rg32ui: return {spv::ImageFormat::R32ui, 2};
+                    default:
+                        return {};
+                    }
+                }
+
+                Bool IsSplittableBufferImageType(const Instruction* type,
+                                                 bool onlyFormatsSpirvCrossRefusesToPrint) {
+                    if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
+                    if (type->GetSingleWordInOperand(kImageSampledOperand) != kSampledStorageImage) return false;
+                    if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) !=
+                        spv::Dim::Buffer) {
+                        return false;
+                    }
+                    const auto format =
+                        static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand));
+                    if (!SplitOfBufferImageFormat(format)) return false;
+                    // The same narrowing the widening takes, and it has to be the same: a driver
+                    // that can spell rg32f for an imageBuffer needs no split, and splitting it
+                    // anyway would double every subscript for nothing.
+                    if (onlyFormatsSpirvCrossRefusesToPrint &&
+                        BakeImageFormatsPass::IsSpirvCrossEsslPrintableFormat(static_cast<Uint32>(format))) {
+                        return false;
+                    }
+                    return true;
+                }
+
                 Bool IsWidenableStorageImageType(const Instruction* type,
                                                  bool onlyFormatsSpirvCrossRefusesToPrint) {
                     if (type == nullptr || type->opcode() != spv::Op::OpTypeImage) return false;
@@ -327,8 +381,9 @@ namespace MobileGL {
                     // Measured on an Adreno 830 with a 32-byte GL_RG32F buffer and a shader storing
                     // (i+1, 100) at texel i: the readback came back [1,100] [0,1] [2,100] [0,1] -
                     // texels 0 and 1 landed on top of all four, texels 2 and 3 ran off the end of
-                    // the application's buffer. Declining leaves the honest "no GLSL ES spelling"
-                    // failure instead, which loses the same stage but corrupts nothing.
+                    // the application's buffer. It is SPLIT instead where its format allows
+                    // (IsSplittableBufferImageType), which addresses the same bytes rather than
+                    // restriding them, and left alone where it does not.
                     if (static_cast<spv::Dim>(type->GetSingleWordInOperand(kImageDimOperand)) ==
                         spv::Dim::Buffer) {
                         return false;
@@ -527,6 +582,19 @@ namespace MobileGL {
                 return GLInternalFormatOfSpirvImageFormat(widening.Carrier);
             }
 
+            Uint WidenImageFormatsPass::SplitCoreEsslBufferImageFormat(Uint glInternalFormat) {
+                const BufferImageSplit split =
+                    SplitOfBufferImageFormat(SpirvImageFormatOfGL(glInternalFormat));
+                if (!split) return 0;
+                switch (split.Base) {
+                case spv::ImageFormat::R32f: return 0x822E;  // GL_R32F
+                case spv::ImageFormat::R32i: return 0x8235;  // GL_R32I
+                case spv::ImageFormat::R32ui: return 0x8236; // GL_R32UI
+                default:
+                    return 0;
+                }
+            }
+
             bool WidenImageFormatsPass::NormalizedImageCarrierCodes(Uint glInternalFormat,
                                                                     Uint32 (&outChannelMax)[4],
                                                                     bool& outSignedNormalized) {
@@ -548,7 +616,8 @@ namespace MobileGL {
                     return false;
                 }
                 for (const Instruction& type : context->module()->types_values()) {
-                    if (IsWidenableStorageImageType(&type, onlyFormatsSpirvCrossRefusesToPrint)) {
+                    if (IsWidenableStorageImageType(&type, onlyFormatsSpirvCrossRefusesToPrint) ||
+                        IsSplittableBufferImageType(&type, onlyFormatsSpirvCrossRefusesToPrint)) {
                         return true;
                     }
                 }
@@ -570,12 +639,15 @@ namespace MobileGL {
                 // Cheap gate first: no widenable image type, and the module is handed back
                 // byte-identical - which is every shader but a handful.
                 std::vector<Instruction*> imageTypes;
+                std::vector<Instruction*> bufferSplitTypes;
                 for (Instruction& type : irContext->types_values()) {
                     if (IsWidenableStorageImageType(&type, m_onlyFormatsSpirvCrossRefusesToPrint)) {
                         imageTypes.push_back(&type);
+                    } else if (IsSplittableBufferImageType(&type, m_onlyFormatsSpirvCrossRefusesToPrint)) {
+                        bufferSplitTypes.push_back(&type);
                     }
                 }
-                if (imageTypes.empty()) {
+                if (imageTypes.empty() && bufferSplitTypes.empty()) {
                     return Status::SuccessWithoutChange;
                 }
 
@@ -611,8 +683,23 @@ namespace MobileGL {
                 // the shader runs and quietly reads the carrier's surplus channels, which GL says
                 // are 0 and 1. Refusing hands the stage back to the "no GLSL ES spelling"
                 // diagnostic instead, which at least names the failure.
+                // The same for the buffer images that SPLIT. Keyed the same way and collected in
+                // the same walk, because the decline below has to be all-or-nothing across both:
+                // a module with one of each that could only rewrite one of them would emit a
+                // stage that addresses one image right and the other wrong.
+                std::map<uint32_t, BufferImageSplit> splitByTypeId;
+                for (Instruction* type : bufferSplitTypes) {
+                    splitByTypeId.emplace(
+                        type->result_id(),
+                        SplitOfBufferImageFormat(
+                            static_cast<spv::ImageFormat>(type->GetSingleWordInOperand(kImageFormatOperand))));
+                }
+
                 std::vector<Instruction*> reads;
                 std::vector<Instruction*> writes;
+                std::vector<Instruction*> splitReads;
+                std::vector<Instruction*> splitWrites;
+                std::vector<Instruction*> splitSizeQueries;
                 Bool rewritable = true;
                 for (auto funcIt = irContext->module()->begin();
                      funcIt != irContext->module()->end() && rewritable; ++funcIt) {
@@ -623,13 +710,14 @@ namespace MobileGL {
                         case spv::Op::OpImageWrite:
                         case spv::Op::OpImageSparseRead:
                         case spv::Op::OpImageTexelPointer:
+                        case spv::Op::OpImageQuerySize:
                             break;
                         default:
                             return;
                         }
-                        // OpImageTexelPointer names the image VARIABLE (a pointer), the other
-                        // three an image VALUE; both reach the OpTypeImage through the def's
-                        // type, one hop further for the pointer.
+                        // OpImageTexelPointer names the image VARIABLE (a pointer), the others an
+                        // image VALUE; both reach the OpTypeImage through the def's type, one hop
+                        // further for the pointer.
                         const Instruction* imageDef =
                             defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
                         if (imageDef == nullptr) return;
@@ -637,6 +725,19 @@ namespace MobileGL {
                         if (const Instruction* imageType = defUseMgr->GetDef(imageTypeId);
                             imageType != nullptr && imageType->opcode() == spv::Op::OpTypePointer) {
                             imageTypeId = imageType->GetSingleWordInOperand(1);
+                        }
+                        if (splitByTypeId.count(imageTypeId) != 0) {
+                            switch (inst->opcode()) {
+                            case spv::Op::OpImageRead: splitReads.push_back(inst); return;
+                            case spv::Op::OpImageWrite: splitWrites.push_back(inst); return;
+                            // imageSize() has to be halved with everything else: the ES view has
+                            // twice the texels the application's format describes, and a shader
+                            // that walks the buffer by its own size would run off the end of it.
+                            case spv::Op::OpImageQuerySize: splitSizeQueries.push_back(inst); return;
+                            default:
+                                rewritable = false;
+                                return;
+                            }
                         }
                         const auto widenedIt = widenedByTypeId.find(imageTypeId);
                         if (widenedIt == widenedByTypeId.end()) return;
@@ -647,6 +748,11 @@ namespace MobileGL {
                         }
                         if (inst->opcode() == spv::Op::OpImageWrite) {
                             writes.push_back(inst);
+                            return;
+                        }
+                        // A widened image's size does not move - the carrier has the same texel
+                        // COUNT - so a query through one needs nothing.
+                        if (inst->opcode() == spv::Op::OpImageQuerySize) {
                             return;
                         }
                         // OpImageSparseRead yields a struct rather than a plain texel vector, and
@@ -753,6 +859,79 @@ namespace MobileGL {
                     return it == widenedByTypeId.end() ? nullptr : &it->second;
                 };
 
+                auto splitOf = [&](const Instruction* inst) -> const BufferImageSplit* {
+                    const Instruction* imageDef =
+                        defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
+                    if (imageDef == nullptr) return nullptr;
+                    const auto it = splitByTypeId.find(imageDef->type_id());
+                    return it == splitByTypeId.end() ? nullptr : &it->second;
+                };
+
+                auto splitSampledTypeOf = [&](const Instruction* inst) -> uint32_t {
+                    const Instruction* imageDef =
+                        defUseMgr->GetDef(inst->GetSingleWordInOperand(kImageAccessImageOperand));
+                    if (imageDef == nullptr) return 0u;
+                    const Instruction* imageType = defUseMgr->GetDef(imageDef->type_id());
+                    if (imageType == nullptr || imageType->opcode() != spv::Op::OpTypeImage) return 0u;
+                    return imageType->GetSingleWordInOperand(kImageSampledTypeOperand);
+                };
+
+                // The 1 and the component COUNT the subscript arithmetic multiplies by, one pair
+                // per integer type a coordinate (or an imageSize result) is spelled in. Resolved
+                // before any instruction is inserted, for the reason the masks' material is.
+                std::map<uint32_t, std::pair<uint32_t, uint32_t>> splitConstantsByIntType;
+                auto resolveSplitCoordConstants = [&](uint32_t intTypeId, uint32_t& outOne,
+                                                      uint32_t& outComponents) -> Bool {
+                    if (const auto cached = splitConstantsByIntType.find(intTypeId);
+                        cached != splitConstantsByIntType.end()) {
+                        outOne = cached->second.first;
+                        outComponents = cached->second.second;
+                        return outOne != 0 && outComponents != 0;
+                    }
+                    const Instruction* intType = defUseMgr->GetDef(intTypeId);
+                    // A buffer image's coordinate is a 32-bit integer SCALAR in every dialect this
+                    // backend compiles; a vector one is a shape that has never been seen and is
+                    // refused rather than guessed at.
+                    if (intType == nullptr || intType->opcode() != spv::Op::OpTypeInt ||
+                        intType->GetSingleWordInOperand(0) != 32) {
+                        return false;
+                    }
+                    analysis::Integer component(32, intType->GetSingleWordInOperand(1) != 0);
+                    analysis::Type* componentReg = irContext->get_type_mgr()->GetRegisteredType(&component);
+                    if (componentReg == nullptr) return false;
+                    const uint32_t oneId = MakeScalarConstant(irContext, componentReg, 1u);
+                    const uint32_t componentsId = MakeScalarConstant(irContext, componentReg, 2u);
+                    if (oneId == 0u || componentsId == 0u) return false;
+                    splitConstantsByIntType.emplace(intTypeId, std::make_pair(oneId, componentsId));
+                    outOne = oneId;
+                    outComponents = componentsId;
+                    return true;
+                };
+
+                // 2i and 2i+1, inserted in front of `before`.
+                auto insertSplitCoordinates = [&](Instruction* before, uint32_t coordId, uint32_t& outFirst,
+                                                  uint32_t& outSecond) -> Bool {
+                    const Instruction* coord = defUseMgr->GetDef(coordId);
+                    if (coord == nullptr) return false;
+                    uint32_t oneId = 0;
+                    uint32_t componentsId = 0;
+                    if (!resolveSplitCoordConstants(coord->type_id(), oneId, componentsId)) return false;
+                    const uint32_t firstId = irContext->TakeNextId();
+                    const uint32_t secondId = irContext->TakeNextId();
+                    if (firstId == 0 || secondId == 0) return false;
+                    before->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpIMul, coord->type_id(), firstId,
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {coordId}},
+                                                 {SPV_OPERAND_TYPE_ID, {componentsId}}}));
+                    before->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpIAdd, coord->type_id(), secondId,
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {firstId}},
+                                                 {SPV_OPERAND_TYPE_ID, {oneId}}}));
+                    outFirst = firstId;
+                    outSecond = secondId;
+                    return true;
+                };
+
                 // Every constant and vector type the masks will need, declared BEFORE the first
                 // instruction is inserted. The constant and type managers append to the module's
                 // globals and keep their own def-use bookkeeping straight; the shuffles below do
@@ -763,6 +942,36 @@ namespace MobileGL {
                     uint32_t unusedConstantId = 0;
                     uint32_t unusedVec4TypeId = 0;
                     if (!resolveMaskMaterial(widened.second.SampledTypeId, unusedConstantId, unusedVec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                }
+                // ...and everything the buffer-image SPLIT needs: the same (0, .., 0, 1) constant
+                // for its own sampled types, and the 1 and 2 its subscript arithmetic uses, one
+                // pair per integer type a coordinate or an imageSize result is spelled in.
+                for (Instruction* type : bufferSplitTypes) {
+                    uint32_t unusedConstantId = 0;
+                    uint32_t unusedVec4TypeId = 0;
+                    if (!resolveMaskMaterial(type->GetSingleWordInOperand(kImageSampledTypeOperand),
+                                             unusedConstantId, unusedVec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                }
+                for (const std::vector<Instruction*>* accesses : {&splitReads, &splitWrites}) {
+                    for (Instruction* access : *accesses) {
+                        const Instruction* coord =
+                            defUseMgr->GetDef(access->GetSingleWordInOperand(kImageAccessCoordinateOperand));
+                        uint32_t unusedOneId = 0;
+                        uint32_t unusedComponentsId = 0;
+                        if (coord == nullptr ||
+                            !resolveSplitCoordConstants(coord->type_id(), unusedOneId, unusedComponentsId)) {
+                            return Status::SuccessWithoutChange;
+                        }
+                    }
+                }
+                for (Instruction* query : splitSizeQueries) {
+                    uint32_t unusedOneId = 0;
+                    uint32_t unusedComponentsId = 0;
+                    if (!resolveSplitCoordConstants(query->type_id(), unusedOneId, unusedComponentsId)) {
                         return Status::SuccessWithoutChange;
                     }
                 }
@@ -1054,6 +1263,155 @@ namespace MobileGL {
                         shuffleOperands.push_back(component);
                     }
                     read->SetInOperands(Move(shuffleOperands));
+                }
+
+                // THE BUFFER-IMAGE SPLIT. Same three parts as the widening - accesses first, the
+                // declaration last - but the arithmetic is on the SUBSCRIPT rather than on the
+                // texel: what was texel i of an rg32f is components 2i and 2i+1 of an r32f over
+                // the same bytes. A read gathers the pair and fills the two channels the format
+                // does not have with GL's own 0 and 1; a store writes each component on its own.
+                //
+                // TWO OpImageWrites where the application wrote one, and they are not atomic
+                // together. That is not a coherence hole this introduces: GL already gives an
+                // imageStore no atomicity ACROSS components, and both writes are issued by the
+                // same invocation to two texels no other invocation of a well-formed program is
+                // writing (each invocation owns its own texel i). A program that DID have two
+                // invocations racing for one texel had undefined results before the split too.
+                for (Instruction* write : splitWrites) {
+                    const BufferImageSplit* split = splitOf(write);
+                    if (split == nullptr) continue;
+                    uint32_t zeroOneId = 0;
+                    uint32_t vec4TypeId = 0;
+                    if (!resolveMaskMaterial(splitSampledTypeOf(write), zeroOneId, vec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t texelId = write->GetSingleWordInOperand(kImageWriteTexelOperand);
+                    const Instruction* texel = defUseMgr->GetDef(texelId);
+                    if (texel == nullptr || texel->type_id() != vec4TypeId) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t coordId = write->GetSingleWordInOperand(kImageAccessCoordinateOperand);
+                    uint32_t firstCoordId = 0;
+                    uint32_t secondCoordId = 0;
+                    if (!insertSplitCoordinates(write, coordId, firstCoordId, secondCoordId)) {
+                        return Status::Failure;
+                    }
+                    uint32_t componentTexelIds[2] = {0u, 0u};
+                    for (uint32_t component = 0; component < split->Components; ++component) {
+                        const uint32_t maskedId = irContext->TakeNextId();
+                        if (maskedId == 0) return Status::Failure;
+                        // (texel[component], 0, 0, 1) - a one-channel base format keeps only red,
+                        // and GL's own values for the rest.
+                        Instruction::OperandList shuffleOperands{{SPV_OPERAND_TYPE_ID, {texelId}},
+                                                                 {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {component}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                        shuffleOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {7u}});
+                        write->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            irContext, spv::Op::OpVectorShuffle, vec4TypeId, maskedId, shuffleOperands));
+                        componentTexelIds[component] = maskedId;
+                    }
+                    // The FIRST component's write is the inserted one and the second is the
+                    // original, so the original instruction (and anything that ordered against
+                    // it) stays where it was.
+                    Instruction::OperandList firstWriteOperands;
+                    for (uint32_t i = 0; i < write->NumInOperands(); ++i) {
+                        firstWriteOperands.push_back(write->GetInOperand(i));
+                    }
+                    firstWriteOperands[kImageAccessCoordinateOperand] = {SPV_OPERAND_TYPE_ID, {firstCoordId}};
+                    firstWriteOperands[kImageWriteTexelOperand] = {SPV_OPERAND_TYPE_ID, {componentTexelIds[0]}};
+                    write->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpImageWrite, 0, 0, firstWriteOperands));
+                    write->SetInOperand(kImageAccessCoordinateOperand, {secondCoordId});
+                    write->SetInOperand(kImageWriteTexelOperand, {componentTexelIds[1]});
+                }
+
+                for (Instruction* read : splitReads) {
+                    const BufferImageSplit* split = splitOf(read);
+                    if (split == nullptr) continue;
+                    uint32_t zeroOneId = 0;
+                    uint32_t vec4TypeId = 0;
+                    if (!resolveMaskMaterial(splitSampledTypeOf(read), zeroOneId, vec4TypeId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    if (read->type_id() != vec4TypeId) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t coordId = read->GetSingleWordInOperand(kImageAccessCoordinateOperand);
+                    uint32_t firstCoordId = 0;
+                    uint32_t secondCoordId = 0;
+                    if (!insertSplitCoordinates(read, coordId, firstCoordId, secondCoordId)) {
+                        return Status::Failure;
+                    }
+                    uint32_t componentReadIds[2] = {0u, 0u};
+                    const uint32_t coordIds[2] = {firstCoordId, secondCoordId};
+                    for (uint32_t component = 0; component < split->Components; ++component) {
+                        const uint32_t componentReadId = irContext->TakeNextId();
+                        if (componentReadId == 0) return Status::Failure;
+                        Instruction::OperandList readOperands;
+                        for (uint32_t i = 0; i < read->NumInOperands(); ++i) {
+                            readOperands.push_back(read->GetInOperand(i));
+                        }
+                        readOperands[kImageAccessCoordinateOperand] = {SPV_OPERAND_TYPE_ID, {coordIds[component]}};
+                        read->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            irContext, spv::Op::OpImageRead, vec4TypeId, componentReadId, readOperands));
+                        componentReadIds[component] = componentReadId;
+                    }
+                    // (first.x, second.x, ., .) - the last two selectors are anything in range;
+                    // the mask below replaces them with GL's 0 and 1.
+                    const uint32_t gatheredId = irContext->TakeNextId();
+                    if (gatheredId == 0) return Status::Failure;
+                    Instruction::OperandList gatherOperands{{SPV_OPERAND_TYPE_ID, {componentReadIds[0]}},
+                                                            {SPV_OPERAND_TYPE_ID, {componentReadIds[1]}}};
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {4u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    gatherOperands.push_back({SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}});
+                    read->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpVectorShuffle, vec4TypeId, gatheredId, gatherOperands));
+
+                    read->SetOpcode(spv::Op::OpVectorShuffle);
+                    Instruction::OperandList maskOperands{{SPV_OPERAND_TYPE_ID, {gatheredId}},
+                                                          {SPV_OPERAND_TYPE_ID, {zeroOneId}}};
+                    for (const Operand& component : maskComponents(split->Components)) {
+                        maskOperands.push_back(component);
+                    }
+                    read->SetInOperands(Move(maskOperands));
+                }
+
+                for (Instruction* query : splitSizeQueries) {
+                    const BufferImageSplit* split = splitOf(query);
+                    if (split == nullptr) continue;
+                    uint32_t oneId = 0;
+                    uint32_t componentsId = 0;
+                    if (!resolveSplitCoordConstants(query->type_id(), oneId, componentsId)) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const Instruction* resultType = defUseMgr->GetDef(query->type_id());
+                    if (resultType == nullptr || resultType->opcode() != spv::Op::OpTypeInt) {
+                        return Status::SuccessWithoutChange;
+                    }
+                    const uint32_t rawSizeId = irContext->TakeNextId();
+                    if (rawSizeId == 0) return Status::Failure;
+                    Instruction::OperandList queryOperands;
+                    for (uint32_t i = 0; i < query->NumInOperands(); ++i) {
+                        queryOperands.push_back(query->GetInOperand(i));
+                    }
+                    query->InsertBefore(spvtools::MakeUnique<Instruction>(
+                        irContext, spv::Op::OpImageQuerySize, query->type_id(), rawSizeId, queryOperands));
+                    query->SetOpcode(resultType->GetSingleWordInOperand(1) != 0 ? spv::Op::OpSDiv
+                                                                                : spv::Op::OpUDiv);
+                    query->SetInOperands({{SPV_OPERAND_TYPE_ID, {rawSizeId}},
+                                          {SPV_OPERAND_TYPE_ID, {componentsId}}});
+                }
+
+                for (Instruction* type : bufferSplitTypes) {
+                    const auto splitIt = splitByTypeId.find(type->result_id());
+                    if (splitIt == splitByTypeId.end()) continue;
+                    // Only the format: the base format's component type is the original's by
+                    // construction, so the Sampled Type still agrees with it.
+                    type->SetInOperand(kImageFormatOperand, {static_cast<uint32_t>(splitIt->second.Base)});
                 }
 
                 // The declaration itself, last. For most carriers only the format operand moves:

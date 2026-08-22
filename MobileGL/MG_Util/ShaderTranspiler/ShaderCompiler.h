@@ -305,6 +305,10 @@ namespace MobileGL {
                 // component class with the ES storage.
                 static bool NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
                                                         bool& outSignedNormalized);
+                // The single-channel core format a non-core BUFFER image is SPLIT into, or 0. See
+                // WidenImageFormatsPass::SplitCoreEsslBufferImageFormat - DirectGLES asks it for
+                // glTexBuffer's internal format and for glBindImageTexture's.
+                static Uint SplitCoreEsslBufferImageFormat(Uint glInternalFormat);
                 static bool RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
                                                          Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);

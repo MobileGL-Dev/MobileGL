@@ -151,6 +151,16 @@ namespace MobileGL {
                 static bool NormalizedImageCarrierCodes(Uint glInternalFormat, Uint32 (&outChannelMax)[4],
                                                         bool& outSignedNormalized);
 
+                // The core-ESSL single-channel format a non-core BUFFER image is SPLIT into, or 0
+                // when the format needs no split or has no core single-channel base. A buffer
+                // image cannot be WIDENED - its texels are the application's buffer object, which
+                // has no room to restride - but rg32f over N texels and r32f over 2N texels
+                // describe exactly the same bytes, so the shader reads and writes each component
+                // by itself at 2i and 2i+1 instead. DirectGLES asks this for glTexBuffer's
+                // internal format and for glBindImageTexture's, which have to name the same view
+                // the shader addresses.
+                static Uint SplitCoreEsslBufferImageFormat(Uint glInternalFormat);
+
                 static spvtools::Optimizer::PassToken CreateWidenImageFormatsPass(
                     bool onlyFormatsSpirvCrossRefusesToPrint = false);
 

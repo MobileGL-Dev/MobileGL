@@ -1030,6 +1030,10 @@ namespace MobileGL {
                                                                           outSignedNormalized);
             }
 
+            Uint ShaderCompiler::SplitCoreEsslBufferImageFormat(Uint glInternalFormat) {
+                return WidenImageFormatsPass::SplitCoreEsslBufferImageFormat(glInternalFormat);
+            }
+
             bool ShaderCompiler::FlattenXfbInterfaceBlocksForEssl(const Vector<Uint32>& inputBinary,
                                                                   const std::set<String>& blockNames,
                                                                   std::set<String>& flattenedBlockNames,

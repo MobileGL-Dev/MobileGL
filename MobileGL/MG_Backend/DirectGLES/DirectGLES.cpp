@@ -1483,14 +1483,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // already calls that undefined, and inventing a carrier for it would only make the
             // out-of-class read wider.
             //
-            // A BUFFER texture is excluded on both sides: it has no storage of its own to widen
-            // (its texels are the application's buffer object), so WidenImageFormatsPass declines
-            // every buffer image and the bind must decline with it, or the driver would be handed
-            // a carrier the shader never addressed. See the Dim::Buffer guard there for the
-            // 32-byte GL_RG32F measurement that pinned it.
+            // A BUFFER texture is excluded from the WIDENING on both sides: it has no storage of
+            // its own to widen (its texels are the application's buffer object), so
+            // WidenImageFormatsPass declines to widen every buffer image and the bind must decline
+            // with it, or the driver would be handed a carrier the shader never addressed. See the
+            // Dim::Buffer guard there for the 32-byte GL_RG32F measurement that pinned it.
+            //
+            // What a buffer image takes instead is the SPLIT, which is the same three-layer move
+            // through a different door: the glTexBuffer view above and the bind below both name
+            // the single-channel base format, and the shader subscripts it two components per
+            // original texel. Same gate on both sides, so the two cannot disagree.
             GLenum bindFormat = imageBinding.Format;
-            if (imageBinding.Texture->GetTarget() != TextureTarget::TextureBuffer &&
-                TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
+            if (imageBinding.Texture->GetTarget() == TextureTarget::TextureBuffer) {
+                if (TextureImpl::GetImageBindableBufferSplitFormat(imageBinding.Texture->GetFormat()) !=
+                    GL_UNKNOWN_MGL) {
+                    if (const GLenum boundFormatSplit = TextureImpl::GetImageBindableBufferSplitFormat(
+                            MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
+                        boundFormatSplit != GL_UNKNOWN_MGL) {
+                        bindFormat = boundFormatSplit;
+                    }
+                }
+            } else if (TextureImpl::GetImageBindableStorageWidening(imageBinding.Texture->GetFormat())) {
                 const auto boundFormatWidening = TextureImpl::GetImageBindableStorageWidening(
                     MG_Util::ConvertGLEnumToTextureInternalFormat(imageBinding.Format));
                 if (boundFormatWidening) {
