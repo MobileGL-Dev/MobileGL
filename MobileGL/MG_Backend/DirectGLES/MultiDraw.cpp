@@ -414,14 +414,18 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             const Uint previousIndirectBinding = BoundDrawIndirectBufferId();
             BufferImpl::BindBufferId(GL_DRAW_INDIRECT_BUFFER, g_indirectCommands.id);
             if (batched) {
-                g_GLESFuncs.glMultiDrawElementsIndirectEXT(mode, type, reinterpret_cast<const void*>(commandBase),
-                                                           drawcount, 0);
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glMultiDrawElementsIndirectEXT(mode, type, reinterpret_cast<const void*>(commandBase),
+                                                               drawcount, 0);
+                });
             } else {
                 for (GLsizei i = 0; i < drawcount; ++i) {
                     if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
                     if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
                     const SizeT commandOffset = commandBase + static_cast<SizeT>(i) * sizeof(DrawElementsIndirectCommand);
-                    g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(commandOffset));
+                    ForEachViewportRoutingPass([&] {
+                        g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(commandOffset));
+                    });
                 }
                 if (feedDrawID) SetCurrentDrawID(0);
                 if (feedBaseVertex) SetCurrentBaseVertex(0);
@@ -442,8 +446,10 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 if (count[i] <= 0) continue;
                 if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
                 if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
-                g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i],
-                                                     basevertex ? basevertex[i] : 0);
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawElementsBaseVertex(mode, count[i], type, indices[i],
+                                                         basevertex ? basevertex[i] : 0);
+                });
             }
             if (feedDrawID) SetCurrentDrawID(0);
             if (feedBaseVertex) SetCurrentBaseVertex(0);
@@ -515,8 +521,10 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 // driver sees none - but gl_BaseVertex still has to report the value the
                 // application passed for this sub-draw.
                 if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
-                g_GLESFuncs.glDrawElements(mode, count[i], GL_UNSIGNED_INT,
-                                           reinterpret_cast<const void*>(indexBase + cursor * sizeof(Uint32)));
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawElements(mode, count[i], GL_UNSIGNED_INT,
+                                               reinterpret_cast<const void*>(indexBase + cursor * sizeof(Uint32)));
+                });
                 cursor += static_cast<SizeT>(count[i]);
             }
             if (feedDrawID) SetCurrentDrawID(0);
@@ -870,7 +878,9 @@ void main() {
         if (flattened.indexCount != 0) {
             const Uint previousIndexBinding = BoundIndexBufferId();
             BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, flattened.bufferId);
-            g_GLESFuncs.glDrawElements(mode, static_cast<GLsizei>(flattened.indexCount), GL_UNSIGNED_INT, nullptr);
+            ForEachViewportRoutingPass([&] {
+                g_GLESFuncs.glDrawElements(mode, static_cast<GLsizei>(flattened.indexCount), GL_UNSIGNED_INT, nullptr);
+            });
             BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, previousIndexBinding);
             return;
         }

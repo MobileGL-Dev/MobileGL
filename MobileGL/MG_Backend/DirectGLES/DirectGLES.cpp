@@ -3260,6 +3260,188 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return program->ReadsDrawID() || (batchCarriesBaseVertices && program->ReadsBaseVertex());
     }
 
+    // ---- gl_ViewportIndex routing emulation, draw half ---------------------------------------
+    // See the block comment in Managers.h for what this is and why. Here is the state half: one
+    // replay pass per DISTINCT viewport state, each pushing that state onto the ES context's one
+    // viewport / one scissor / one depth range and telling the fragment gate which indices it
+    // serves.
+    namespace ViewportRoutingImpl {
+        // One replay pass: the state to push, and the set of gl_ViewportIndex values whose
+        // fragments this pass is allowed to keep.
+        struct RoutingPass {
+            IntVec4 viewport{};
+            IntVec4 scissorBox{};
+            FloatVec2 depthRange{};
+            Bool scissorTest = false;
+            Uint32 indexMask = 0;
+        };
+
+        static constexpr Uint32 kAllViewportsMask =
+            (RenderStateParameters::MAX_VIEWPORTS >= 32)
+                ? 0xFFFFFFFFu
+                : ((1u << RenderStateParameters::MAX_VIEWPORTS) - 1u);
+
+        // The plan for the draw currently being issued. A file-scope buffer rather than a return
+        // value because Begin/Apply/End are three calls around a draw the caller writes, and a
+        // fixed array of 16 keeps it allocation-free on a path that is per draw. NOT re-entrant,
+        // which is a property of the call sites and not an accident: every wrap in this file and
+        // in MultiDraw.cpp is around the innermost native glDraw*, so no replay can begin inside
+        // another - and a multi-draw tier that replayed its whole loop would be nesting.
+        static Array<RoutingPass, RenderStateParameters::MAX_VIEWPORTS> g_passes{};
+        static Uint g_passCount = 0;
+        static PrgramImpl::BackendProgramObjectImpl* g_routedProgram = nullptr;
+
+        // What index `i` actually rasterizes against, resolved exactly the way SyncRenderState
+        // resolves index 0 - including both substitutions it makes, which are not cosmetic:
+        //
+        //   * a viewport of zero extent means "the application has never called glViewport", and
+        //     GL's initial viewport is the whole surface, which the frontend cannot spell before
+        //     a surface exists;
+        //   * a scissor rectangle is read through the WRITTEN flag and not through its extent,
+        //     because glScissor(0, 0, 0, 0) is a legal request meaning "reject every fragment"
+        //     and is byte-identical to the never-written default that means the opposite.
+        //
+        // Resolving them here rather than deferring to SyncRenderState is what makes the grouping
+        // below correct: two indices that differ only in a field that resolves to the same
+        // rectangle really do rasterize identically and must share one pass.
+        static RoutingPass ResolveIndexState(const RenderStateParameters& parameters, Uint index,
+                                             Int surfaceWidth, Int surfaceHeight) {
+            RoutingPass pass;
+            const FloatVec4& viewport = parameters.Viewports[index];
+            pass.viewport = IntVec4(static_cast<Int>(std::lround(viewport.x())),
+                                    static_cast<Int>(std::lround(viewport.y())),
+                                    static_cast<Int>(std::lround(viewport.z())),
+                                    static_cast<Int>(std::lround(viewport.w())));
+            if ((pass.viewport.z() <= 0 || pass.viewport.w() <= 0) && surfaceWidth > 0 && surfaceHeight > 0) {
+                pass.viewport = IntVec4(0, 0, surfaceWidth, surfaceHeight);
+            }
+            pass.scissorBox = parameters.ScissorBoxes[index];
+            if ((parameters.ScissorBoxWrittenMask & (1u << index)) == 0 && surfaceWidth > 0 &&
+                surfaceHeight > 0) {
+                pass.scissorBox = IntVec4(0, 0, surfaceWidth, surfaceHeight);
+            }
+            pass.depthRange = parameters.DepthRanges[index];
+            pass.scissorTest = (parameters.ScissorTestEnabledMask & (1u << index)) != 0;
+            return pass;
+        }
+
+        static Bool SameState(const RoutingPass& a, const RoutingPass& b) {
+            return a.viewport == b.viewport && a.scissorBox == b.scissorBox &&
+                   a.depthRange == b.depthRange && a.scissorTest == b.scissorTest;
+        }
+    } // namespace ViewportRoutingImpl
+
+    Uint BeginViewportRoutingPasses() {
+        using namespace ViewportRoutingImpl;
+        g_passCount = 1;
+        g_routedProgram = nullptr;
+
+        // The whole emulation behind one static load, for every application that has never built
+        // a program writing gl_ViewportIndex - which is all of them but the conformance suite.
+        // Without it every draw in the process would pay GetCurrentBackendProgram's chain of
+        // frontend lookups for an answer that cannot change.
+        if (!g_anyProgramRoutesViewportIndex) {
+            return 1;
+        }
+
+        auto* program = GetCurrentBackendProgram();
+        if (program == nullptr || !program->RoutesViewportIndex()) {
+            return 1;
+        }
+        g_routedProgram = program;
+        // The gate reads zero until something writes it, and a zero mask discards every fragment.
+        // So this is not an optimization that can be skipped in the one-pass case - it is what
+        // keeps a routing program drawing at all.
+        program->SetViewportPassMask(kAllViewportsMask);
+
+        // Replaying multiplies every side effect the vertex and geometry stages have, and the
+        // fragment gate can only undo the ones that happen in the FRAGMENT stage. Transform
+        // feedback records per emitted primitive, so a replayed draw would write its vertices N
+        // times; rasterizer discard means there are no fragments to gate at all, so replaying
+        // would be pure cost with nothing to show for it. Both fall back to a single pass with an
+        // open gate, i.e. to the pre-emulation behaviour, rather than to wrong data.
+        if (MG_State::pGLContext->IsTransformFeedbackActive() ||
+            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+            return 1;
+        }
+
+        const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
+        Int surfaceWidth = 0;
+        Int surfaceHeight = 0;
+        if (!QueryCurrentSurfaceSize(surfaceWidth, surfaceHeight)) {
+            surfaceWidth = 0;
+            surfaceHeight = 0;
+        }
+
+        Uint count = 0;
+        for (Uint index = 0; index < RenderStateParameters::MAX_VIEWPORTS; ++index) {
+            const RoutingPass resolved =
+                ResolveIndexState(parameters, index, surfaceWidth, surfaceHeight);
+            Uint existing = 0;
+            for (; existing < count; ++existing) {
+                if (SameState(g_passes[existing], resolved)) break;
+            }
+            if (existing == count) {
+                g_passes[count] = resolved;
+                ++count;
+            }
+            g_passes[existing].indexMask |= (1u << index);
+        }
+
+        // One group is the overwhelmingly common case - it is what glViewport, glScissor and
+        // glDepthRange leave behind, because ARB_viewport_array defines all three as writing
+        // EVERY index. The mask is already open and index 0's state is what SyncRenderState
+        // pushed, so there is nothing to replay and nothing to restore.
+        if (count <= 1) {
+            g_passCount = 1;
+            return 1;
+        }
+        g_passCount = count;
+        return count;
+    }
+
+    void ApplyViewportRoutingPass(Uint pass) {
+        using namespace ViewportRoutingImpl;
+        if (pass >= g_passCount || g_routedProgram == nullptr) {
+            return;
+        }
+        const RoutingPass& entry = g_passes[pass];
+        g_GLESFuncs.glViewport(entry.viewport.x(), entry.viewport.y(), entry.viewport.z(),
+                               entry.viewport.w());
+        g_GLESFuncs.glScissor(entry.scissorBox.x(), entry.scissorBox.y(), entry.scissorBox.z(),
+                              entry.scissorBox.w());
+        // ES has one scissor-test enable where GL has sixteen, so the per-index bit becomes a
+        // per-pass glEnable/glDisable. This is the half DirectVulkan cannot do at all (Vulkan has
+        // no per-viewport scissor toggle either and has to widen a disabled index's rectangle to
+        // the whole framebuffer instead); here the rectangle stays honest.
+        entry.scissorTest ? g_GLESFuncs.glEnable(GL_SCISSOR_TEST) : g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+        g_GLESFuncs.glDepthRangef(entry.depthRange.x(), entry.depthRange.y());
+        g_routedProgram->SetViewportPassMask(entry.indexMask);
+    }
+
+    void EndViewportRoutingPasses(Uint passCount) {
+        using namespace ViewportRoutingImpl;
+        if (passCount <= 1) {
+            // Nothing was pushed and the mask is already open; leaving the shadow alone here is
+            // what keeps a non-routing draw at exactly its previous cost.
+            g_routedProgram = nullptr;
+            return;
+        }
+        if (g_routedProgram != nullptr) {
+            // Any draw that reaches the driver without going through a replay - an internal blit,
+            // or a path this emulation has not been taught about - must not inherit the last
+            // pass's mask and paint nothing.
+            g_routedProgram->SetViewportPassMask(kAllViewportsMask);
+        }
+        g_routedProgram = nullptr;
+        g_passCount = 0;
+        // The viewport, scissor, scissor-test enable and depth range now on the ES context belong
+        // to the last replay pass, and the shadow SyncRenderState diffs against does not know it.
+        // A full resync is the honest repair and costs one state push on the next draw, which
+        // only a viewport-routing workload ever pays.
+        RenderStateImpl::InvalidateSyncedRenderState();
+    }
+
     static Bool SupportsNativeIndirectDraws() {
         return g_GLESCapabilities.SupportsDrawIndirect;
     }
@@ -3317,7 +3499,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     SetCurrentBaseInstance(cmd.baseInstance);
                     SetCurrentBaseVertex(cmd.baseVertex);
                 }
-                g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(cmdByteOffset));
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(cmdByteOffset));
+                });
             }
         } else {
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -3330,9 +3514,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SetCurrentBaseInstance(cmd.baseInstance);
                 SetCurrentBaseVertex(cmd.baseVertex);
                 const auto indexByteOffset = static_cast<SizeT>(cmd.firstIndex) * indexSize;
-                g_GLESFuncs.glDrawElementsInstancedBaseVertex(
-                    mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
-                    static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawElementsInstancedBaseVertex(
+                        mode, static_cast<GLsizei>(cmd.count), type, reinterpret_cast<const GLvoid*>(indexByteOffset),
+                        static_cast<GLsizei>(cmd.instanceCount), cmd.baseVertex);
+                });
             }
         }
         SetCurrentDrawID(0);
@@ -3371,7 +3557,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     std::memcpy(&cmd, commandBytes + static_cast<SizeT>(i) * stride, sizeof(cmd));
                     SetCurrentBaseInstance(cmd.baseInstance);
                 }
-                g_GLESFuncs.glDrawArraysIndirect(mode, reinterpret_cast<const void*>(cmdByteOffset));
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawArraysIndirect(mode, reinterpret_cast<const void*>(cmdByteOffset));
+                });
             }
         } else {
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -3382,9 +3570,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 SetCurrentDrawID(static_cast<Uint32>(i));
                 SetCurrentBaseInstance(cmd.baseInstance);
-                g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
-                                                  static_cast<GLsizei>(cmd.count),
-                                                  static_cast<GLsizei>(cmd.instanceCount));
+                ForEachViewportRoutingPass([&] {
+                    g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
+                                                      static_cast<GLsizei>(cmd.count),
+                                                      static_cast<GLsizei>(cmd.instanceCount));
+                });
             }
         }
         SetCurrentDrawID(0);
@@ -3610,7 +3800,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
-        g_GLESFuncs.glDrawElements(mode, count, type, indices);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawElements(mode, count, type, indices);
+        });
     }
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
@@ -3626,7 +3818,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 (*backendVAOSlot)->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
             }
         }
-        g_GLESFuncs.glDrawArrays(mode, first, count);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawArrays(mode, first, count);
+        });
     }
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
@@ -3637,7 +3831,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         CheckPrimitiveRestartSupported(type);
         SetCurrentBaseVertex(basevertex);
-        g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, indices, basevertex);
+        });
         SetCurrentBaseVertex(0);
     }
 
@@ -3663,7 +3859,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
             if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
-            g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
+            ForEachViewportRoutingPass([&] {
+                g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
+            });
         }
         if (feedDrawID) SetCurrentDrawID(0);
     }
@@ -3900,14 +4098,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
         SetCurrentBaseVertex(basevertex);
-        g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, type, indices, basevertex);
+        });
         SetCurrentBaseVertex(0);
     }
 
     void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void* indices) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer;
         PrepareForDraw(syncBit);
-        g_GLESFuncs.glDrawRangeElements(mode, start, end, count, type, indices);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawRangeElements(mode, start, end, count, type, indices);
+        });
     }
 
     // True when the driver will apply baseInstance to the vertex fetch itself, in which case the
@@ -3930,12 +4132,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         SetCurrentBaseVertex(basevertex);
-        if (UseNativeBaseInstance()) {
-            g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, type, indices, instancecount,
-                                                                        basevertex, baseinstance);
-        } else {
-            g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
-        }
+        ForEachViewportRoutingPass([&] {
+            if (UseNativeBaseInstance()) {
+                g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, type, indices, instancecount,
+                                                                            basevertex, baseinstance);
+            } else {
+                g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+            }
+        });
         SetCurrentBaseVertex(0);
         SetCurrentBaseInstance(0);
     }
@@ -3945,7 +4149,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         SetCurrentBaseVertex(basevertex);
-        g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount, basevertex);
+        });
         SetCurrentBaseVertex(0);
     }
 
@@ -3955,19 +4161,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
-        if (UseNativeBaseInstance()) {
-            g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, type, indices, instancecount,
-                                                              baseinstance);
-        } else {
-            g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
-        }
+        ForEachViewportRoutingPass([&] {
+            if (UseNativeBaseInstance()) {
+                g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, type, indices, instancecount,
+                                                                  baseinstance);
+            } else {
+                g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
+            }
+        });
         SetCurrentBaseInstance(0);
     }
 
     void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices, GLsizei instancecount) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
-        g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawElementsInstanced(mode, count, type, indices, instancecount);
+        });
     }
 
     void DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
@@ -3999,18 +4209,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
-        if (UseNativeBaseInstance()) {
-            g_GLESFuncs.glDrawArraysInstancedBaseInstanceEXT(mode, first, count, instancecount, baseinstance);
-        } else {
-            g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
-        }
+        ForEachViewportRoutingPass([&] {
+            if (UseNativeBaseInstance()) {
+                g_GLESFuncs.glDrawArraysInstancedBaseInstanceEXT(mode, first, count, instancecount, baseinstance);
+            } else {
+                g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
+            }
+        });
         SetCurrentBaseInstance(0);
     }
 
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
         DrawSyncFlags syncBit = DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
-        g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
+        ForEachViewportRoutingPass([&] {
+            g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
+        });
     }
 
     void DrawArraysIndirect(GLenum mode, const void* indirect) {
