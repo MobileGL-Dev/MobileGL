@@ -98,6 +98,11 @@ Working tree is clean.
   - `DrawsFromMobileGLState`
   - `DrawsTexturedFromMobileGLState`
   - `DrawsIndexedFromMobileGLState`
+  - `DrawsRealTexturedFromMobileGLState`
+  - `DrawsUniformFromMobileGLState`
+  - `DrawsToOffscreenFramebufferFromMobileGLState`
+  - `DrawsWithScissorFromMobileGLState`
+  - `DrawsWithBlendFromMobileGLState`
 
 ---
 
@@ -149,7 +154,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 8 tests
+[  PASSED  ] 10 tests
 ```
 
 ---
@@ -236,12 +241,12 @@ Notes:
    - [ ] `GetTexImage` / `CopyTexImage*` / indirect draws
 
 6. **Expand local test suite**
-   - Depth test visual test
-   - Stencil test
-   - Blend test
-   - Scissor test
-   - Texture filtering / sampler state test
-   - framebuffer offscreen render-to-texture test
+   - [x] Scissor test
+   - [x] Blend test
+   - [x] Texture filtering / sampler state test
+   - [x] framebuffer offscreen render-to-texture test
+   - [ ] Depth test visual test
+   - [ ] Stencil test
 
 ---
 
