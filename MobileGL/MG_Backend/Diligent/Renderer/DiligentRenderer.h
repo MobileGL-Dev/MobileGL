@@ -64,6 +64,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         // Creates a real Diligent swap chain for a native EGL window surface.
         Bool CreateSwapChain(::Diligent::IEngineFactoryVk* factory, const WindowHandle& handle,
                              Uint32 width, Uint32 height);
+        Bool ResizeSwapChain(Uint32 width, Uint32 height);
         // Creates a simple 2D RGBA8 texture from CPU data and makes it available
         // to state PSOs under the shader variable name "g_Texture".
         Bool CreateTestTexture(const void* data, Uint32 width, Uint32 height);

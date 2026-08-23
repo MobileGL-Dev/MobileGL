@@ -420,6 +420,16 @@ void main()
         return true;
     }
 
+    Bool DiligentRenderer::ResizeSwapChain(Uint32 width, Uint32 height) {
+        if (m_pSwapChain == nullptr) {
+            return false;
+        }
+        m_pSwapChain->Resize(width > 0 ? width : 1, height > 0 ? height : 1);
+        m_width = width > 0 ? width : m_width;
+        m_height = height > 0 ? height : m_height;
+        return true;
+    }
+
     Bool DiligentRenderer::CreateOffscreenTargets() {
         ::Diligent::TextureDesc texDesc;
         texDesc.Name = "MobileGL Diligent offscreen color target";
