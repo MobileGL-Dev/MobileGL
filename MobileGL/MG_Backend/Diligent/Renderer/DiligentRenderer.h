@@ -117,6 +117,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Uint32 m_width = 256;
         Uint32 m_height = 256;
         Uint32 m_lastDrawVertexCount = 0;
+        Uint64 m_lastPSOKey = 0;
+        Bool m_hasCachedPSO = false;
         Bool m_initialized = false;
     };
 } // namespace MobileGL::MG_Backend::DiligentBackend

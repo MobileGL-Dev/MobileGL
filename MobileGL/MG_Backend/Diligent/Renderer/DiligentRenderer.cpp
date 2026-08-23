@@ -1164,6 +1164,29 @@ void main()
             return false;
         }
 
+        // Cheap last-PSO cache: the pipeline depends only on the program, the
+        // render-state subset baked into the PSO, the primitive topology and the
+        // enabled vertex-attribute layout. Textures/UBOs are bound dynamically, so
+        // they do not participate in this key.
+        const auto& cachedVao = *MG_State::pGLContext->GetBoundVertexArray();
+        const auto& cachedAttributes = cachedVao.GetAllAttributes();
+        Uint64 psoKey = program->GetLifetimeId();
+        psoKey = psoKey * 1099511628211ull + MG_State::pGLContext->GetPipelineStateVersion();
+        psoKey = psoKey * 1099511628211ull + static_cast<Uint64>(mode);
+        for (Uint32 i = 0; i < cachedVao.MAX_VERTEX_ATTRIBS; ++i) {
+            const auto& attr = cachedAttributes[i];
+            if (!attr.Enabled) {
+                continue;
+            }
+            psoKey = psoKey * 1099511628211ull + i;
+            psoKey = psoKey * 1099511628211ull + static_cast<Uint64>(attr.Size);
+            psoKey = psoKey * 1099511628211ull + static_cast<Uint64>(attr.Type);
+            psoKey = psoKey * 1099511628211ull + (attr.Normalized ? 1ull : 0ull);
+        }
+        if (m_hasCachedPSO && m_lastPSOKey == psoKey && m_pPSO && m_pStateSRB) {
+            return true;
+        }
+
         const auto& spirvs = program->GetGeneratedSpirv();
         ::Diligent::RefCntAutoPtr<::Diligent::IShader> pVS;
         ::Diligent::RefCntAutoPtr<::Diligent::IShader> pPS;
@@ -1326,6 +1349,8 @@ void main()
             return false;
         }
         BindShaderResourcesFromState(*program);
+        m_lastPSOKey = psoKey;
+        m_hasCachedPSO = true;
         return true;
     }
 

@@ -200,7 +200,7 @@ Notes:
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
 - No transform feedback / queries / sync / readback of non-color resources.
 - Some GL 3.2 entry points are still not implemented in the backend (draw range, multi-draw, blit, buffer subdata paths, etc.).
-- The state PSO is recreated on every draw (no caching), which is slow but correct for now.
+- A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.
 - The `GLFunctionsTable` is only partially populated.
 
 ---
@@ -223,8 +223,8 @@ Notes:
    - [ ] Handle per-program uniform block bindings / named UBO blocks.
 
 4. **PSO / resource caching**
-   - Cache PSOs by program + VAO config + render state + topology.
-   - Cache textures, buffers, and SRBs.
+   - [~] Cache PSOs by program + VAO config + render state + topology (single last-PSO fast path).
+   - [~] Cache textures and samplers; buffers/SRBs can still be re-bound per draw.
 
 5. **More GL 3.2 entry points**
    - `DrawRangeElements`
