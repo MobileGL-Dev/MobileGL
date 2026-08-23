@@ -106,6 +106,20 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || pixels == nullptr) {
+                return;
+            }
+            // The Diligent backend's offscreen targets are RGBA8; the frontend currently
+            // uses this entry for the common GL_RGBA/GL_UNSIGNED_BYTE readback path.
+            if (format != GL_RGBA || type != GL_UNSIGNED_BYTE) {
+                return;
+            }
+            renderer->ReadPixels(static_cast<Uint32>(x), static_cast<Uint32>(y),
+                                 static_cast<Uint32>(width), static_cast<Uint32>(height), pixels);
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -198,6 +212,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.DrawRangeElementsBaseVertex = DrawRangeElementsBaseVertex;
         m_functions.GL.MultiDrawArrays = MultiDrawArrays;
         m_functions.GL.MultiDrawElements = MultiDrawElements;
+        m_functions.GL.ReadPixels = ReadPixels;
         m_functions.Present = Present;
 
         m_initialized = true;
