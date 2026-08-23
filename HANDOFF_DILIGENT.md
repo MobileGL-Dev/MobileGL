@@ -108,6 +108,7 @@ Working tree is clean.
   - `DrawsWithStencilTestFromMobileGLState`
   - `DrawsToRenderbufferFramebufferFromMobileGLState`
   - `DrawsToMultipleColorAttachmentsFromMobileGLState`
+  - `DrawsIndexedBaseVertexFromMobileGLState`
 
 ---
 
@@ -149,6 +150,7 @@ Verified locally on Turnip Adreno 750:
   - `ReadPixels` can read back from a user FBO color attachment
 - More GL entry points wired:
   - `DrawRangeElements` / `DrawRangeElementsBaseVertex`
+  - `DrawElementsBaseVertex` with real baseVertex selection
   - `MultiDrawArrays` / `MultiDrawElements` / `MultiDrawElementsBaseVertex`
   - `DrawArraysInstanced` / `DrawElementsInstanced` family
   - Indirect draw CPU fallback: `DrawArraysIndirect`, `DrawElementsIndirect`, `MultiDraw*Indirect`, `*IndirectCount`
@@ -163,7 +165,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 15 tests
+[  PASSED  ] 16 tests
 ```
 
 ---

@@ -1190,14 +1190,15 @@ void main()
         return true;
     }
 
-    void DiligentRenderer::DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices) {
+    void DiligentRenderer::DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices,
+                                     GLint baseVertex) {
         if (!m_initialized || !m_pContext || MG_State::pGLContext == nullptr) {
             return;
         }
         if (!CreatePipelineFromState(mode)) {
             return;
         }
-        if (!UploadVertexDataFromState(mode, first, count, type, indices)) {
+        if (!UploadVertexDataFromState(mode, first, count, type, indices, baseVertex)) {
             return;
         }
 
@@ -1496,7 +1497,7 @@ void main()
     }
 
     Bool DiligentRenderer::UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type,
-                                                     const void* indices) {
+                                                     const void* indices, GLint baseVertex) {
         if (MG_State::pGLContext == nullptr) {
             return false;
         }
@@ -1581,7 +1582,16 @@ void main()
 
         Vector<Uint8> vertexData(static_cast<SizeT>(drawVertexCount) * vertexStride);
         for (Uint32 vi = 0; vi < drawVertexCount; ++vi) {
-            const Uint32 srcIndex = indicesData.empty() ? (static_cast<Uint32>(first) + vi) : indicesData[vi];
+            Uint32 srcIndex = 0;
+            if (indicesData.empty()) {
+                srcIndex = static_cast<Uint32>(first) + vi;
+            } else {
+                const Int64 resolvedIndex = static_cast<Int64>(indicesData[vi]) + baseVertex;
+                if (resolvedIndex < 0) {
+                    return false;
+                }
+                srcIndex = static_cast<Uint32>(resolvedIndex);
+            }
             Uint8* dst = vertexData.data() + static_cast<SizeT>(vi) * vertexStride;
             for (Uint32 attrIndex : activeAttribs) {
                 const auto& attr = attributes[attrIndex];

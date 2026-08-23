@@ -59,7 +59,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool CreateTestTexture(const void* data, Uint32 width, Uint32 height);
         // Draws using the live MG_State GL context: current program, VAO and
         // bound buffers. This is the front-end emulation entry point.
-        void DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
+        void DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices,
+                           GLint baseVertex = 0);
         void ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels);
         void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
@@ -91,7 +92,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool CreatePipeline();
         Bool CreateVertexBuffer();
         Bool CreatePipelineFromState(GLenum mode);
-        Bool UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
+        Bool UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices,
+                                        GLint baseVertex = 0);
         ::Diligent::ITextureView* SyncTexture(MG_State::GLState::ITextureObject& texture);
         ::Diligent::ITextureView* SyncTextureForAttachment(MG_State::GLState::ITextureObject& texture, Bool depth);
         ::Diligent::ITextureView* SyncRenderbuffer(MG_State::GLState::RenderbufferObject& renderbuffer);

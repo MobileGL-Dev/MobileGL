@@ -113,8 +113,10 @@ namespace MobileGL::MG_Backend::DiligentBackend {
                                          const void* indices, GLint basevertex) {
             (void)start;
             (void)end;
-            (void)basevertex;
-            DrawElements(mode, count, type, indices);
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->DrawFromState(mode, 0, count, type, indices, basevertex);
+            }
         }
 
         void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
@@ -144,11 +146,10 @@ namespace MobileGL::MG_Backend::DiligentBackend {
 
         void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                     GLint basevertex) {
-            // The CPU vertex-upload path currently treats the element indices as absolute
-            // vertex indices; basevertex is accepted for compatibility and applied by the
-            // UploadVertexDataFromState path when it is extended.
-            (void)basevertex;
-            DrawElements(mode, count, type, indices);
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->DrawFromState(mode, 0, count, type, indices, basevertex);
+            }
         }
 
         void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type,
@@ -204,7 +205,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
             const void* indices = reinterpret_cast<const void*>(static_cast<SizeT>(cmd.FirstIndex) * indexSize);
             for (Uint32 i = 0; i < cmd.InstanceCount; ++i) {
-                renderer->DrawFromState(mode, 0, static_cast<GLsizei>(cmd.Count), type, indices);
+                renderer->DrawFromState(mode, 0, static_cast<GLsizei>(cmd.Count), type, indices,
+                                        static_cast<GLint>(cmd.BaseVertex));
             }
         }
 
@@ -258,7 +260,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
                 }
                 const void* indices = reinterpret_cast<const void*>(static_cast<SizeT>(cmd.FirstIndex) * indexSize);
                 for (Uint32 instance = 0; instance < cmd.InstanceCount; ++instance) {
-                    renderer->DrawFromState(mode, 0, static_cast<GLsizei>(cmd.Count), type, indices);
+                    renderer->DrawFromState(mode, 0, static_cast<GLsizei>(cmd.Count), type, indices,
+                                            static_cast<GLint>(cmd.BaseVertex));
                 }
             }
         }
@@ -332,8 +335,13 @@ namespace MobileGL::MG_Backend::DiligentBackend {
 
         void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                              GLsizei instancecount, GLint basevertex) {
-            (void)basevertex;
-            DrawElementsInstanced(mode, count, type, indices, instancecount);
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || instancecount <= 0) {
+                return;
+            }
+            for (GLsizei i = 0; i < instancecount; ++i) {
+                renderer->DrawFromState(mode, 0, count, type, indices, basevertex);
+            }
         }
 
         void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
@@ -345,9 +353,14 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type,
                                                          const void* indices, GLsizei instancecount,
                                                          GLint basevertex, GLuint baseinstance) {
-            (void)basevertex;
             (void)baseinstance;
-            DrawElementsInstanced(mode, count, type, indices, instancecount);
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || instancecount <= 0) {
+                return;
+            }
+            for (GLsizei i = 0; i < instancecount; ++i) {
+                renderer->DrawFromState(mode, 0, count, type, indices, basevertex);
+            }
         }
 
         void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
