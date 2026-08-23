@@ -60,6 +60,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         // bound buffers. This is the front-end emulation entry point.
         void DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
         void ReadPixels(Uint32 x, Uint32 y, Uint32 width, Uint32 height, void* pixels);
+        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                             GLbitfield mask, GLenum filter);
         void Present();
 
         ::Diligent::IRenderDevice* GetDevice() const { return m_pDevice; }

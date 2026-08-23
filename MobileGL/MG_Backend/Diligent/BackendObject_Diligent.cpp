@@ -106,6 +106,111 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                    GLint basevertex) {
+            // The CPU vertex-upload path currently treats the element indices as absolute
+            // vertex indices; basevertex is accepted for compatibility and applied by the
+            // UploadVertexDataFromState path when it is extended.
+            (void)basevertex;
+            DrawElements(mode, count, type, indices);
+        }
+
+        void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type,
+                                         const GLvoid* const* indices, GLsizei drawcount,
+                                         const GLint* basevertex) {
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                if (count[i] > 0) {
+                    DrawElementsBaseVertex(mode, count[i], type, indices[i],
+                                           basevertex != nullptr ? basevertex[i] : 0);
+                }
+            }
+        }
+
+        void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || instancecount <= 0) {
+                return;
+            }
+            for (GLsizei i = 0; i < instancecount; ++i) {
+                renderer->DrawFromState(mode, first, count, 0, nullptr);
+            }
+        }
+
+        void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
+                                             GLuint baseinstance) {
+            (void)baseinstance;
+            DrawArraysInstanced(mode, first, count, instancecount);
+        }
+
+        void DrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                   GLsizei instancecount) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || instancecount <= 0) {
+                return;
+            }
+            for (GLsizei i = 0; i < instancecount; ++i) {
+                renderer->DrawFromState(mode, 0, count, type, indices);
+            }
+        }
+
+        void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                             GLsizei instancecount, GLint basevertex) {
+            (void)basevertex;
+            DrawElementsInstanced(mode, count, type, indices, instancecount);
+        }
+
+        void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                               GLsizei instancecount, GLuint baseinstance) {
+            (void)baseinstance;
+            DrawElementsInstanced(mode, count, type, indices, instancecount);
+        }
+
+        void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type,
+                                                         const void* indices, GLsizei instancecount,
+                                                         GLint basevertex, GLuint baseinstance) {
+            (void)basevertex;
+            (void)baseinstance;
+            DrawElementsInstanced(mode, count, type, indices, instancecount);
+        }
+
+        void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || value == nullptr) {
+                return;
+            }
+            if (buffer == GL_COLOR && drawbuffer == 0) {
+                renderer->Clear(value[0], value[1], value[2], value[3]);
+            } else if (buffer == GL_DEPTH && drawbuffer == 0) {
+                renderer->ClearDepth(value[0]);
+            }
+        }
+
+        void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+            if (buffer == GL_STENCIL || value == nullptr) {
+                return;
+            }
+            Float color[4] = {
+                static_cast<Float>(value[0]) / 255.0f,
+                static_cast<Float>(value[1]) / 255.0f,
+                static_cast<Float>(value[2]) / 255.0f,
+                static_cast<Float>(value[3]) / 255.0f,
+            };
+            ClearBufferfv(buffer, drawbuffer, color);
+        }
+
+        void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+            if (buffer == GL_STENCIL || value == nullptr) {
+                return;
+            }
+            Float color[4] = {
+                static_cast<Float>(value[0]) / 255.0f,
+                static_cast<Float>(value[1]) / 255.0f,
+                static_cast<Float>(value[2]) / 255.0f,
+                static_cast<Float>(value[3]) / 255.0f,
+            };
+            ClearBufferfv(buffer, drawbuffer, color);
+        }
+
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
             auto* renderer = GetActiveRenderer();
             if (renderer == nullptr || pixels == nullptr) {
@@ -118,6 +223,16 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
             renderer->ReadPixels(static_cast<Uint32>(x), static_cast<Uint32>(y),
                                  static_cast<Uint32>(width), static_cast<Uint32>(height), pixels);
+        }
+
+        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                             GLbitfield mask, GLenum filter) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
+                                          mask, filter);
+            }
         }
 
         void Present() {
@@ -208,10 +323,22 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.Clear = Clear;
         m_functions.GL.DrawArrays = DrawArrays;
         m_functions.GL.DrawElements = DrawElements;
+        m_functions.GL.DrawElementsBaseVertex = DrawElementsBaseVertex;
         m_functions.GL.DrawRangeElements = DrawRangeElements;
         m_functions.GL.DrawRangeElementsBaseVertex = DrawRangeElementsBaseVertex;
         m_functions.GL.MultiDrawArrays = MultiDrawArrays;
         m_functions.GL.MultiDrawElements = MultiDrawElements;
+        m_functions.GL.MultiDrawElementsBaseVertex = MultiDrawElementsBaseVertex;
+        m_functions.GL.DrawArraysInstanced = DrawArraysInstanced;
+        m_functions.GL.DrawArraysInstancedBaseInstance = DrawArraysInstancedBaseInstance;
+        m_functions.GL.DrawElementsInstanced = DrawElementsInstanced;
+        m_functions.GL.DrawElementsInstancedBaseVertex = DrawElementsInstancedBaseVertex;
+        m_functions.GL.DrawElementsInstancedBaseInstance = DrawElementsInstancedBaseInstance;
+        m_functions.GL.DrawElementsInstancedBaseVertexBaseInstance = DrawElementsInstancedBaseVertexBaseInstance;
+        m_functions.GL.ClearBufferfv = ClearBufferfv;
+        m_functions.GL.ClearBufferiv = ClearBufferiv;
+        m_functions.GL.ClearBufferuiv = ClearBufferuiv;
+        m_functions.GL.BlitFramebuffer = BlitFramebuffer;
         m_functions.GL.ReadPixels = ReadPixels;
         m_functions.Present = Present;
 

@@ -137,10 +137,12 @@ Verified locally on Turnip Adreno 750:
   - Current draw/read FBO resolves texture attachments to Diligent RTV/DSV
   - `ReadPixels` can read back from a user FBO color attachment
 - More GL entry points wired:
-  - `DrawRangeElements`
-  - `DrawRangeElementsBaseVertex`
-  - `MultiDrawArrays`
-  - `MultiDrawElements`
+  - `DrawRangeElements` / `DrawRangeElementsBaseVertex`
+  - `MultiDrawArrays` / `MultiDrawElements` / `MultiDrawElementsBaseVertex`
+  - `DrawArraysInstanced` / `DrawElementsInstanced` family
+  - `ClearBufferfv` / `ClearBufferiv` / `ClearBufferuiv`
+  - `BlitFramebuffer` (same-size color copy between current read/draw FBOs)
+  - `ReadPixels` from default and user color attachments
 - Primitive expansion:
   - `GL_TRIANGLE_FAN` expanded to triangle list
   - `GL_LINE_LOOP` expanded to line strip
@@ -199,7 +201,7 @@ Notes:
 - Global UBO (default-block `glUniform*`) now uploads and binds; named application UBO blocks and SSBOs are not fed from frontend buffer bindings yet.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
 - No transform feedback / queries / sync / readback of non-color resources.
-- Some GL 3.2 entry points are still not implemented in the backend (draw range, multi-draw, blit, buffer subdata paths, etc.).
+- Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit and read-pixels are now wired; indirect draws, CopyTexImage/GetTexImage and buffer subdata paths still remain.
 - A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.
 - The `GLFunctionsTable` is only partially populated.
 
@@ -227,11 +229,11 @@ Notes:
    - [~] Cache textures and samplers; buffers/SRBs can still be re-bound per draw.
 
 5. **More GL 3.2 entry points**
-   - `DrawRangeElements`
-   - `MultiDraw*`
-   - `BlitFramebuffer`
-   - `ReadPixels` from non-default framebuffer
-   - `GetTexImage` / `CopyTexImage*`
+   - [x] `DrawRangeElements`
+   - [x] `MultiDraw*`
+   - [x] `BlitFramebuffer` (same-size color copy)
+   - [x] `ReadPixels` from non-default framebuffer
+   - [ ] `GetTexImage` / `CopyTexImage*` / indirect draws
 
 6. **Expand local test suite**
    - Depth test visual test
