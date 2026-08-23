@@ -106,6 +106,7 @@ Working tree is clean.
   - `DrawsWithDepthTestFromMobileGLState`
   - `DrawsNamedUniformBlockFromMobileGLState`
   - `DrawsWithStencilTestFromMobileGLState`
+  - `DrawsToRenderbufferFramebufferFromMobileGLState`
 
 ---
 
@@ -161,7 +162,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 13 tests
+[  PASSED  ] 14 tests
 ```
 
 ---
@@ -208,7 +209,7 @@ Notes:
 
 ## 7. Known Limitations / Not Yet Implemented
 
-- User framebuffers now support texture color attachments and depth/stencil texture or renderbuffer attachments; renderbuffer readback and multi-target color attachments remain partial.
+- User framebuffers now support texture color attachments, renderbuffer color readback, and depth/stencil texture or renderbuffer attachments; multi-target color attachments remain partial.
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
@@ -224,7 +225,8 @@ Notes:
 1. **Framebuffer / Renderbuffer mapping**
    - [x] Map `MG_State::GLState::FramebufferObject` attachments to Diligent `ITextureView` / `ITexture`.
    - [x] Support default framebuffer as current offscreen target.
-   - [~] Support `glBindFramebuffer`, `glFramebufferTexture2D`, renderbuffer color/depth attachments (texture color + depth/renderbuffer work; renderbuffer readback and multiple color targets still partial).
+   - [x] Support `glBindFramebuffer`, `glFramebufferTexture2D`, renderbuffer color/depth attachments and renderbuffer color readback.
+   - [ ] Multiple simultaneous color attachments (currently single RT resolution).
 
 2. **Texture / Sampler full integration**
    - [x] Translate MobileGL `ITextureObject` to Diligent `ITexture` and cache by `GetLifetimeId()`.

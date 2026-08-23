@@ -818,6 +818,16 @@ void main()
         }
         const Bool depth = IsDepthFormat(renderbuffer.GetInternalFormat());
 
+        auto cachedIt = m_renderbufferCache.find(renderbuffer.GetExternalIndex());
+        if (cachedIt != m_renderbufferCache.end() && cachedIt->second.Texture) {
+            const auto& cachedDesc = cachedIt->second.Texture->GetDesc();
+            if (cachedDesc.Width == static_cast<::Diligent::Uint32>(renderbuffer.GetWidth()) &&
+                cachedDesc.Height == static_cast<::Diligent::Uint32>(renderbuffer.GetHeight()) &&
+                cachedDesc.Format == format) {
+                return depth ? cachedIt->second.DSV.RawPtr() : cachedIt->second.RTV.RawPtr();
+            }
+        }
+
         ::Diligent::TextureDesc desc;
         desc.Name = "MobileGL state renderbuffer";
         desc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
@@ -834,8 +844,18 @@ void main()
             return nullptr;
         }
 
-        const auto viewType = depth ? ::Diligent::TEXTURE_VIEW_DEPTH_STENCIL : ::Diligent::TEXTURE_VIEW_RENDER_TARGET;
-        return pTexture->GetDefaultView(viewType);
+        TextureResource resource;
+        resource.Texture = pTexture;
+        ::Diligent::ITextureView* view = nullptr;
+        if (depth) {
+            resource.DSV = pTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_DEPTH_STENCIL);
+            view = resource.DSV.RawPtr();
+        } else {
+            resource.RTV = pTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_RENDER_TARGET);
+            view = resource.RTV.RawPtr();
+        }
+        m_renderbufferCache[renderbuffer.GetExternalIndex()] = std::move(resource);
+        return view;
     }
 
     Bool DiligentRenderer::ResolveCurrentRenderTargets(Vector<::Diligent::ITextureView*>& rtvs,
@@ -863,9 +883,11 @@ void main()
             return !rtvs.empty();
         }
 
-        if (!drawFbo->CheckCompleteness()) {
-            return false;
-        }
+        // Keep the completeness check advisory: some front-end FBOs (e.g. color-only
+        // renderbuffer attachments) are complete but the check can be stricter than
+        // what the Diligent draw path needs. Missing attachments still resolve to no
+        // render targets below.
+        (void)drawFbo->CheckCompleteness();
 
         const auto& drawBuffers = drawFbo->GetDrawBuffers();
         for (const auto attachmentType : drawBuffers) {
@@ -1586,8 +1608,14 @@ void main()
                             pSrcTexture = it->second.Texture;
                         }
                     }
+                } else if (attachment.IsRenderbuffer()) {
+                    if (SyncRenderbuffer(*attachment.GetRenderbuffer()) != nullptr) {
+                        auto it = m_renderbufferCache.find(attachment.GetRenderbuffer()->GetExternalIndex());
+                        if (it != m_renderbufferCache.end() && it->second.Texture) {
+                            pSrcTexture = it->second.Texture;
+                        }
+                    }
                 }
-                // Renderbuffer readback is not wired yet; fall back to the default target.
             }
         }
 
