@@ -20,6 +20,28 @@ namespace MobileGL {
             // buffer, and the trailing number is the only place the GL binding survives.
             inline constexpr const char* ATOMIC_COUNTER_BLOCK_PREFIX = "gl_AtomicCounterBlock";
 
+            // "gl_AtomicCounterBlock_5" -> 5; -1 for any name that is not one of these blocks.
+            // Recovering N from the NAME is not a shortcut, it is the only way: the block reaches
+            // a backend auto-mapped to whatever storage-block slot the IO mapper had free, and
+            // that number has no relation to the GL atomic-counter binding the application asked
+            // for (see TMglGlslIoResolver). A backend that resolves the block from the
+            // shader-storage binding points therefore binds the wrong buffer - or, worse, the
+            // application's own SSBO at the same slot.
+            inline Int AtomicCounterBlockGlBinding(StringView name) {
+                const SizeT prefixLength = StringView(ATOMIC_COUNTER_BLOCK_PREFIX).size();
+                // Needs the prefix, the '_' and at least one digit.
+                if (name.size() <= prefixLength + 1) return -1;
+                if (name.compare(0, prefixLength, ATOMIC_COUNTER_BLOCK_PREFIX) != 0) return -1;
+                if (name[prefixLength] != '_') return -1;
+                Int binding = 0;
+                for (SizeT i = prefixLength + 1; i < name.size(); ++i) {
+                    if (name[i] < '0' || name[i] > '9') return -1;
+                    binding = binding * 10 + (name[i] - '0');
+                    if (binding > 0x0FFFFFFF) return -1; // absurd suffix; treat as not-a-counter
+                }
+                return binding;
+            }
+
             // Atomic-counter limits, in ONE place because GL 4.6 requires glGetIntegerv and the
             // shading language's gl_MaxAtomicCounter* constants to report the same numbers
             // (KHR-GL43.shader_atomic_counters.basic-glsl-built-in compares them directly).

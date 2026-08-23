@@ -87,11 +87,6 @@ void main() {
                                  << " and GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS is " << buffers
                                  << "; this needs 3 and 2";
                 }
-                if (!AtomicCountersAreWired()) {
-                    GTEST_SKIP() << "atomic counter buffers are not wired up on " << Gl().BackendName()
-                                 << " yet: glslang lowers them onto a storage block and that block's descriptor "
-                                 << "is still resolved from the shader-storage binding points";
-                }
                 m_program = CompileComputeProgram(kCounterComputeSource);
                 ASSERT_NE(m_program, 0u) << m_buildLog;
             }
@@ -104,12 +99,6 @@ void main() {
                 m_buffers.clear();
                 m_program = 0;
             }
-
-            // Magma binds the lowered block as an ordinary storage-buffer descriptor resolved
-            // from GL_SHADER_STORAGE_BUFFER point N, so the counter buffer never reaches it. The
-            // frontend half (limits, reflection queries, the link-time offset rules) is
-            // backend-agnostic and is covered by the unit suites; only the VALUE is scoped here.
-            bool AtomicCountersAreWired() const { return Gl().BackendName() != "DirectVulkan"; }
 
             unsigned int CompileComputeProgram(const char* source) {
                 const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
