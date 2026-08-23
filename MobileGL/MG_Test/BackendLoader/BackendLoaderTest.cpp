@@ -1087,20 +1087,74 @@ TEST(TextureAnisotropyCapabilities, ExtensionIsAdvertisedOnlyWhenTheHostDriverSu
         return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
     };
 
-    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false);
+    const auto without = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
     EXPECT_FALSE(contains(without, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_FALSE(contains(without, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
-    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false, false);
+    const auto with = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, true, false, false, false, false);
     EXPECT_TRUE(contains(with, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(with, MobileGL::E_GL_ARB_texture_filter_anisotropic));
 
     // Same rule on the Vulkan backend, where the gate is the samplerAnisotropy device feature.
-    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false);
+    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_EXT_texture_filter_anisotropic));
-    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true, false);
+    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, true, false, false);
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_EXT_texture_filter_anisotropic));
     EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_ARB_texture_filter_anisotropic));
+}
+
+// Cube map arrays are core at the version MobileGL claims, but there is nothing underneath on a
+// pre-ES-3.2 driver without EXT/OES_texture_cube_map_array, and no VK_IMAGE_VIEW_TYPE_CUBE_ARRAY
+// without the imageCubeArray feature. The string has to follow the capability on both backends -
+// and it has to BE there when the capability is, because KHR-GL4*.texture_gather.*-cube-array
+// gates on the string with no core-version fallback.
+TEST(CubeMapArrayAdvertisement, FollowsTheHostCapabilityOnBothBackends) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+
+    const auto esWithout =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
+    EXPECT_FALSE(contains(esWithout, MobileGL::E_GL_ARB_texture_cube_map_array));
+    const auto esWith =
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, true);
+    EXPECT_TRUE(contains(esWith, MobileGL::E_GL_ARB_texture_cube_map_array));
+
+    const auto vkWithout = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                         false);
+    EXPECT_FALSE(contains(vkWithout, MobileGL::E_GL_ARB_texture_cube_map_array));
+    const auto vkWith = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, true);
+    EXPECT_TRUE(contains(vkWith, MobileGL::E_GL_ARB_texture_cube_map_array));
+}
+
+// The core-plumbing strings carry no capability gate: they name entry points that have been real
+// on both backends for as long as the backends have existed, and an application that gates its
+// entry-point resolution on the string (LWJGL does) would otherwise call through null. Pinned
+// together so a future edit cannot quietly drop one, and pinned on BOTH backends so the two
+// cannot disagree about what MobileGL is.
+TEST(CorePlumbingAdvertisement, IsUnconditionalAndIdenticalOnBothBackends) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    const MobileGL::GLExtension expected[] = {
+        MobileGL::E_GL_ARB_sync,          MobileGL::E_GL_ARB_shader_atomic_counters,
+        MobileGL::E_GL_ARB_vertex_array_object, MobileGL::E_GL_ARB_sampler_objects,
+        MobileGL::E_GL_ARB_map_buffer_range,    MobileGL::E_GL_ARB_copy_buffer,
+        MobileGL::E_GL_ARB_copy_image,          MobileGL::E_GL_ARB_texture_swizzle,
+        MobileGL::E_GL_ARB_vertex_type_2_10_10_10_rev, MobileGL::E_GL_ARB_texture_rg,
+        MobileGL::E_GL_ARB_depth_buffer_float,  MobileGL::E_GL_ARB_texture_float,
+        MobileGL::E_GL_ARB_viewport_array};
+
+    // Every gate off: none of these may depend on one.
+    const auto es = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false,
+                                                                                false);
+    const auto vk = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
+    for (const auto extension : expected) {
+        EXPECT_TRUE(contains(es, extension)) << "DirectGLES stopped advertising extension " << extension;
+        EXPECT_TRUE(contains(vk, extension)) << "DirectVulkan stopped advertising extension " << extension;
+    }
 }
 
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised
@@ -1113,27 +1167,27 @@ TEST(IndirectDrawAdvertisement, MatchesEachBackendsUsableCommandSemantics) {
     };
 
     const auto esWithoutIndirect =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false);
     EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_FALSE(contains(esWithoutIndirect, MobileGL::E_GL_ARB_base_instance));
 
     const auto esWithoutBaseInstance =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, false, false);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, false, false, false);
     EXPECT_TRUE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_FALSE(contains(esWithoutBaseInstance, MobileGL::E_GL_ARB_base_instance));
 
     const auto esWithBoth =
-        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, true, false);
+        MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, true, true, false, false);
     EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_TRUE(contains(esWithBoth, MobileGL::E_GL_ARB_base_instance));
 
     const auto vkWithoutBaseInstance =
-        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false);
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
     EXPECT_TRUE(contains(vkWithoutBaseInstance, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_FALSE(contains(vkWithoutBaseInstance, MobileGL::E_GL_ARB_base_instance));
 
     const auto vkWithBoth =
-        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, true);
+        MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, true, false);
     EXPECT_TRUE(contains(vkWithBoth, MobileGL::E_GL_ARB_draw_indirect));
     EXPECT_TRUE(contains(vkWithBoth, MobileGL::E_GL_ARB_base_instance));
 }

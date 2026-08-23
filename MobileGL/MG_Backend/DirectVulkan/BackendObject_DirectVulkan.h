@@ -75,7 +75,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // the detected device support (passing an already-gated value is harmless).
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported);
+                                                  Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool cubeMapArraySupported);
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
     // string an initialized backend returns from GetBackendAPIVersionString (and that
