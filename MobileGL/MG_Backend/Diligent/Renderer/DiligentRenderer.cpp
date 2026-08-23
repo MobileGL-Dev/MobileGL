@@ -714,6 +714,7 @@ void main()
             } else {
                 texDesc.BindFlags |= ::Diligent::BIND_RENDER_TARGET;
             }
+            texDesc.MiscFlags = ::Diligent::MISC_TEXTURE_FLAG_GENERATE_MIPS;
 
             ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pTexture;
             m_pDevice->CreateTexture(texDesc, nullptr, &pTexture);
@@ -1837,6 +1838,17 @@ void main()
             srcIt->second.Texture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
             dstIt->second.Texture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         m_pContext->CopyTexture(copyAttribs);
+    }
+
+    void DiligentRenderer::GenerateMipmap(MG_State::GLState::ITextureObject& texture) {
+        if (m_pContext == nullptr || SyncTexture(texture) == nullptr) {
+            return;
+        }
+        auto it = m_textureCache.find(texture.GetLifetimeId());
+        if (it == m_textureCache.end() || !it->second.SRV) {
+            return;
+        }
+        m_pContext->GenerateMips(it->second.SRV);
     }
 
     Bool DiligentRenderer::ReadTextureImage(MG_State::GLState::ITextureObject& texture, Uint32 level,

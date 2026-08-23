@@ -67,6 +67,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
                              GLbitfield mask, GLenum filter);
         void CopyReadFramebufferToTexture(MG_State::GLState::ITextureObject& dst);
         void CopyTextureSubData(MG_State::GLState::ITextureObject& src, MG_State::GLState::ITextureObject& dst);
+        void GenerateMipmap(MG_State::GLState::ITextureObject& texture);
         Bool ReadTextureImage(MG_State::GLState::ITextureObject& texture, Uint32 level, void* pixels);
         void Present();
 

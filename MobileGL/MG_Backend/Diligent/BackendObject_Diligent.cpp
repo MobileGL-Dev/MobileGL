@@ -539,6 +539,18 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void GenerateMipmap(GLenum target) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || MG_State::pGLContext == nullptr || target != GL_TEXTURE_2D) {
+                return;
+            }
+            auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto texture = unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+            if (texture) {
+                renderer->GenerateMipmap(*texture);
+            }
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -653,6 +665,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.CopyTexImage2D = CopyTexImage2D;
         m_functions.GL.CopyTexSubImage2D = CopyTexSubImage2D;
         m_functions.GL.CopyImageSubData = CopyImageSubData;
+        m_functions.GL.GenerateMipmap = GenerateMipmap;
         m_functions.GL.GetTexImage = GetTexImage;
         m_functions.GL.GetTextureImage = GetTextureImage;
         m_functions.GL.ReadPixels = ReadPixels;
