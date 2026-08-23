@@ -515,6 +515,30 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             renderer->ReadTextureImage(*texture, static_cast<Uint32>(level), pixels);
         }
 
+        void CopyImageSubData(const SharedPtr<MG_State::GLState::ITextureObject>& srcTexture,
+                              GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
+                              const SharedPtr<MG_State::GLState::ITextureObject>& dstTexture,
+                              GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+                              GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+            (void)srcTarget;
+            (void)srcLevel;
+            (void)srcX;
+            (void)srcY;
+            (void)srcZ;
+            (void)dstTarget;
+            (void)dstLevel;
+            (void)dstX;
+            (void)dstY;
+            (void)dstZ;
+            (void)srcWidth;
+            (void)srcHeight;
+            (void)srcDepth;
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr && srcTexture && dstTexture) {
+                renderer->CopyTextureSubData(*srcTexture, *dstTexture);
+            }
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -628,6 +652,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.BlitFramebuffer = BlitFramebuffer;
         m_functions.GL.CopyTexImage2D = CopyTexImage2D;
         m_functions.GL.CopyTexSubImage2D = CopyTexSubImage2D;
+        m_functions.GL.CopyImageSubData = CopyImageSubData;
         m_functions.GL.GetTexImage = GetTexImage;
         m_functions.GL.GetTextureImage = GetTextureImage;
         m_functions.GL.ReadPixels = ReadPixels;

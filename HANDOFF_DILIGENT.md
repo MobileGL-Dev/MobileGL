@@ -157,6 +157,7 @@ Verified locally on Turnip Adreno 750:
   - `ClearBufferfv` / `ClearBufferfi` / `ClearBufferiv` / `ClearBufferuiv` (incl. stencil clear)
   - `BlitFramebuffer` (same-size color copy between current read/draw FBOs)
   - `CopyTexImage2D` / `CopyTexSubImage2D` (whole-color copy fallback)
+  - `CopyImageSubData` (whole-texture copy between two texture objects)
   - `GetTexImage` / `GetTextureImage` (RGBA8 readback)
   - `ReadPixels` from default and user color attachments
 - Primitive expansion:
@@ -250,7 +251,7 @@ Notes:
    - [x] `MultiDraw*`
    - [x] `BlitFramebuffer` (same-size color copy)
    - [x] `ReadPixels` from non-default framebuffer
-   - [x] `CopyTexImage*` wired as whole-color copy
+   - [x] `CopyTexImage*` / `CopyImageSubData` wired as whole-resource copies
    - [x] `GetTexImage` / `GetTextureImage` (RGBA8)
    - [x] Indirect draws (CPU fallback)
 

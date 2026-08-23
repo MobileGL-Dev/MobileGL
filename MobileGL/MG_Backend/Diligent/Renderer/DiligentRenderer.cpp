@@ -1816,6 +1816,29 @@ void main()
         m_pContext->CopyTexture(copyAttribs);
     }
 
+    void DiligentRenderer::CopyTextureSubData(MG_State::GLState::ITextureObject& src,
+                                           MG_State::GLState::ITextureObject& dst) {
+        if (!m_initialized || !m_pContext) {
+            return;
+        }
+        if (SyncTexture(src) == nullptr || SyncTexture(dst) == nullptr) {
+            return;
+        }
+        auto srcIt = m_textureCache.find(src.GetLifetimeId());
+        auto dstIt = m_textureCache.find(dst.GetLifetimeId());
+        if (srcIt == m_textureCache.end() || dstIt == m_textureCache.end() ||
+            !srcIt->second.Texture || !dstIt->second.Texture) {
+            return;
+        }
+        if (srcIt->second.Texture == dstIt->second.Texture) {
+            return;
+        }
+        ::Diligent::CopyTextureAttribs copyAttribs(
+            srcIt->second.Texture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+            dstIt->second.Texture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->CopyTexture(copyAttribs);
+    }
+
     Bool DiligentRenderer::ReadTextureImage(MG_State::GLState::ITextureObject& texture, Uint32 level,
                                          void* pixels) {
         if (!m_initialized || !m_pContext || pixels == nullptr) {
