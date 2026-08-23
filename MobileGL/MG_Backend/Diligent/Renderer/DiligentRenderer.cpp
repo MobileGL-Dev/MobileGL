@@ -1268,6 +1268,37 @@ void main()
             return false;
         }
 
+        // Resolve the current draw-FBO color attachment set so the PSO is created with
+        // matching RTV formats/count.
+        Uint32 rtCount = 1;
+        ::Diligent::TEXTURE_FORMAT rtFormats[8] = {};
+        rtFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+        if (MG_State::pGLContext != nullptr) {
+            auto drawFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+            if (drawFbo && !drawFbo->IsDefaultFramebuffer()) {
+                rtCount = 0;
+                for (const auto attachmentType : drawFbo->GetDrawBuffers()) {
+                    if (attachmentType == FramebufferAttachmentType::None) {
+                        continue;
+                    }
+                    const auto& attachment = drawFbo->GetAttachment(attachmentType);
+                    ::Diligent::TEXTURE_FORMAT fmt = ::Diligent::TEX_FORMAT_UNKNOWN;
+                    if (attachment.IsTexture()) {
+                        fmt = ConvertInternalFormatToDiligent(attachment.GetTexture()->GetFormat());
+                    } else if (attachment.IsRenderbuffer()) {
+                        fmt = ConvertInternalFormatToDiligent(attachment.GetRenderbuffer()->GetInternalFormat());
+                    }
+                    if (fmt != ::Diligent::TEX_FORMAT_UNKNOWN && rtCount < 8) {
+                        rtFormats[rtCount++] = fmt;
+                    }
+                }
+                if (rtCount == 0) {
+                    rtCount = 1;
+                    rtFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+                }
+            }
+        }
+
         // Cheap last-PSO cache: the pipeline depends only on the program, the
         // render-state subset baked into the PSO, the primitive topology and the
         // enabled vertex-attribute layout. Textures/UBOs are bound dynamically, so
@@ -1277,6 +1308,10 @@ void main()
         Uint64 psoKey = program->GetLifetimeId();
         psoKey = psoKey * 1099511628211ull + MG_State::pGLContext->GetPipelineStateVersion();
         psoKey = psoKey * 1099511628211ull + static_cast<Uint64>(mode);
+        psoKey = psoKey * 1099511628211ull + rtCount;
+        for (Uint32 i = 0; i < rtCount; ++i) {
+            psoKey = psoKey * 1099511628211ull + static_cast<Uint64>(rtFormats[i]);
+        }
         for (Uint32 i = 0; i < cachedVao.MAX_VERTEX_ATTRIBS; ++i) {
             const auto& attr = cachedAttributes[i];
             if (!attr.Enabled) {
@@ -1350,8 +1385,10 @@ void main()
         psoDesc.PipelineType = ::Diligent::PIPELINE_TYPE_GRAPHICS;
         psoDesc.Name = "MobileGL Diligent state PSO";
         psoDesc.ResourceLayout.DefaultVariableType = ::Diligent::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
-        graphicsPipeline.NumRenderTargets = 1;
-        graphicsPipeline.RTVFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+        graphicsPipeline.NumRenderTargets = static_cast<::Diligent::Uint8>(rtCount);
+        for (Uint32 i = 0; i < rtCount; ++i) {
+            graphicsPipeline.RTVFormats[i] = rtFormats[i];
+        }
         graphicsPipeline.DSVFormat = ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
         switch (mode) {
         case GL_POINTS:

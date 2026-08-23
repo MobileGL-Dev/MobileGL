@@ -107,6 +107,7 @@ Working tree is clean.
   - `DrawsNamedUniformBlockFromMobileGLState`
   - `DrawsWithStencilTestFromMobileGLState`
   - `DrawsToRenderbufferFramebufferFromMobileGLState`
+  - `DrawsToMultipleColorAttachmentsFromMobileGLState`
 
 ---
 
@@ -162,7 +163,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 14 tests
+[  PASSED  ] 15 tests
 ```
 
 ---
@@ -209,7 +210,7 @@ Notes:
 
 ## 7. Known Limitations / Not Yet Implemented
 
-- User framebuffers now support texture color attachments, renderbuffer color readback, and depth/stencil texture or renderbuffer attachments; multi-target color attachments remain partial.
+- User framebuffers now support texture color attachments, renderbuffer color readback, multiple simultaneous color targets, and depth/stencil texture or renderbuffer attachments.
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
@@ -226,7 +227,7 @@ Notes:
    - [x] Map `MG_State::GLState::FramebufferObject` attachments to Diligent `ITextureView` / `ITexture`.
    - [x] Support default framebuffer as current offscreen target.
    - [x] Support `glBindFramebuffer`, `glFramebufferTexture2D`, renderbuffer color/depth attachments and renderbuffer color readback.
-   - [ ] Multiple simultaneous color attachments (currently single RT resolution).
+   - [x] Multiple simultaneous color attachments.
 
 2. **Texture / Sampler full integration**
    - [x] Translate MobileGL `ITextureObject` to Diligent `ITexture` and cache by `GetLifetimeId()`.

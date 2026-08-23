@@ -957,3 +957,92 @@ void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
     EXPECT_GT(center[0], 200) << "center should be red in the renderbuffer framebuffer";
     EXPECT_LT(center[1], 50) << "center should not be green";
 }
+
+
+TEST(DiligentVulkanBackend, DrawsToMultipleColorAttachmentsFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); }
+)";
+    const char* fsSrc = R"(#version 330 core
+layout(location = 0) out vec4 Color0;
+layout(location = 1) out vec4 Color1;
+void main() {
+    Color0 = vec4(1.0, 0.0, 0.0, 1.0);
+    Color1 = vec4(0.0, 0.0, 1.0, 1.0);
+}
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    UseProgram(program);
+    Viewport(0, 0, 256, 256);
+    Disable(GL_DEPTH_TEST);
+    Disable(GL_BLEND);
+    Disable(GL_SCISSOR_TEST);
+
+    const float vertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    GLuint tex0 = 0, tex1 = 0;
+    GenTextures(1, &tex0);
+    BindTexture(GL_TEXTURE_2D, tex0);
+    TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    GenTextures(1, &tex1);
+    BindTexture(GL_TEXTURE_2D, tex1);
+    TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 256, 256, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    GLuint fbo = 0;
+    GenFramebuffers(1, &fbo);
+    BindFramebuffer(GL_FRAMEBUFFER, fbo);
+    FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex0, 0);
+    FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, tex1, 0);
+    const GLenum bufs[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    DrawBuffers(2, bufs);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping multi-color attachment test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    ReadBuffer(GL_COLOR_ATTACHMENT0);
+    std::uint8_t center0[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center0);
+    EXPECT_GT(center0[0], 200) << "attachment 0 should be red";
+    EXPECT_LT(center0[2], 50) << "attachment 0 should not be blue";
+
+    ReadBuffer(GL_COLOR_ATTACHMENT1);
+    std::uint8_t center1[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center1);
+    EXPECT_LT(center1[0], 50) << "attachment 1 should not be red";
+    EXPECT_GT(center1[2], 200) << "attachment 1 should be blue";
+}
