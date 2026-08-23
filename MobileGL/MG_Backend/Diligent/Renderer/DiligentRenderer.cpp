@@ -1701,6 +1701,46 @@ void main()
         m_pContext->CopyTexture(copyAttribs);
     }
 
+    void DiligentRenderer::CopyReadFramebufferToTexture(MG_State::GLState::ITextureObject& dst) {
+        if (!m_initialized || !m_pContext || !m_pColorTarget) {
+            return;
+        }
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pSrcTexture = m_pColorTarget;
+        if (MG_State::pGLContext != nullptr) {
+            auto readFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+            if (readFbo && !readFbo->IsDefaultFramebuffer()) {
+                auto readBuffer = readFbo->GetReadBuffer();
+                if (readBuffer == FramebufferAttachmentType::None) {
+                    readBuffer = FramebufferAttachmentType::Color0;
+                }
+                const auto& att = readFbo->GetAttachment(readBuffer);
+                if (att.IsTexture() && SyncTexture(*att.GetTexture()) != nullptr) {
+                    auto it = m_textureCache.find(att.GetTexture()->GetLifetimeId());
+                    if (it != m_textureCache.end() && it->second.Texture) {
+                        pSrcTexture = it->second.Texture;
+                    }
+                }
+            }
+        }
+
+        if (SyncTexture(dst) == nullptr) {
+            return;
+        }
+        auto it = m_textureCache.find(dst.GetLifetimeId());
+        if (it == m_textureCache.end() || !it->second.Texture) {
+            return;
+        }
+        auto pDstTexture = it->second.Texture;
+        if (pSrcTexture == pDstTexture) {
+            return;
+        }
+        ::Diligent::CopyTextureAttribs copyAttribs(
+            pSrcTexture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+            pDstTexture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->CopyTexture(copyAttribs);
+    }
+
     void DiligentRenderer::Present() {
         // Offscreen renderer: nothing to present yet.
         if (m_pContext) {

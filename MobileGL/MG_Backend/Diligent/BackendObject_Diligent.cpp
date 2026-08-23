@@ -238,6 +238,46 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y,
+                            GLsizei width, GLsizei height, GLint border) {
+            (void)level;
+            (void)internalformat;
+            (void)x;
+            (void)y;
+            (void)width;
+            (void)height;
+            (void)border;
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || MG_State::pGLContext == nullptr || target != GL_TEXTURE_2D) {
+                return;
+            }
+            auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto texture = unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+            if (texture) {
+                renderer->CopyReadFramebufferToTexture(*texture);
+            }
+        }
+
+        void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                               GLsizei width, GLsizei height) {
+            (void)level;
+            (void)xoffset;
+            (void)yoffset;
+            (void)x;
+            (void)y;
+            (void)width;
+            (void)height;
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || MG_State::pGLContext == nullptr || target != GL_TEXTURE_2D) {
+                return;
+            }
+            auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto texture = unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+            if (texture) {
+                renderer->CopyReadFramebufferToTexture(*texture);
+            }
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -342,6 +382,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.ClearBufferiv = ClearBufferiv;
         m_functions.GL.ClearBufferuiv = ClearBufferuiv;
         m_functions.GL.BlitFramebuffer = BlitFramebuffer;
+        m_functions.GL.CopyTexImage2D = CopyTexImage2D;
+        m_functions.GL.CopyTexSubImage2D = CopyTexSubImage2D;
         m_functions.GL.ReadPixels = ReadPixels;
         m_functions.Present = Present;
 

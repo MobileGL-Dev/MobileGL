@@ -64,6 +64,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                              GLbitfield mask, GLenum filter);
+        void CopyReadFramebufferToTexture(MG_State::GLState::ITextureObject& dst);
         void Present();
 
         ::Diligent::IRenderDevice* GetDevice() const { return m_pDevice; }
