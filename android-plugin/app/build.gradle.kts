@@ -86,7 +86,7 @@ val pluginRendererConfig = buildJsonValue {
             selectable(
                 key = "MOBILEGL_BACKEND_TYPE",
                 title = RendererConfig.MetaString("mobilegl_backend_type_title"),
-                items = RendererConfig.EnvItems("DirectGLES", listOf("DirectVulkan")),
+                items = RendererConfig.EnvItems("DirectGLES", listOf("DirectVulkan", "DiligentVulkan")),
             )
             toggleable("MOBILEGL_DISABLE_TIMERQUERY", "1", false, RendererConfig.MetaString("mobilegl_disable_timerquery_title"))
             toggleable("MOBILEGL_DISABLE_SUBGROUP", "1", false, RendererConfig.MetaString("mobilegl_disable_subgroup_title"))
