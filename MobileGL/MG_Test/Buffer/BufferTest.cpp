@@ -711,6 +711,62 @@ TEST_F(BufferTest, ClearNamedBufferSubDataRepeatsPattern) {
     EXPECT_EQ(actual, (Vector<Uint32>{0, pattern, pattern, pattern, 0}));
     EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
+
+// GL 4.6 core table 8.2 pairs GL_INT with the non-integer base formats as a signed-normalized
+// source, so a GL_R8 clear whose pattern arrives as (GL_RED, GL_INT) is legal. The pair used to be
+// rejected with INVALID_VALUE, which is the first call
+// KHR-GL45.direct_state_access.buffers_functional makes.
+TEST_F(BufferTest, ClearNamedBufferSubDataAcceptsSignedNormalizedIntPattern) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::CreateBuffers(1, &buffer);
+
+    const Vector<Uint8> initial(24, 0x7F);
+    MobileGL::MG_Impl::GLImpl::NamedBufferStorage(
+        buffer, initial.size(), initial.data(),
+        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_DYNAMIC_STORAGE_BIT | GL_MAP_PERSISTENT_BIT);
+    ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const GLint zero = 0;
+    MobileGL::MG_Impl::GLImpl::ClearNamedBufferSubData(buffer, GL_R8, 0, sizeof(GLint), GL_RED, GL_INT, &zero);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Vector<Uint8> actual(initial.size());
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
+    Vector<Uint8> expected(initial);
+    for (SizeT i = 0; i < sizeof(GLint); ++i) expected[i] = 0;
+    EXPECT_EQ(actual, expected);
+
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// The same pair on the bound-target entry point: the DSA and the bound call share
+// ClearBufferRange_State, and a regression in either direction has to show up here too.
+TEST_F(BufferTest, ClearBufferSubDataAcceptsSignedNormalizedIntPattern) {
+    GLuint buffer = 0;
+    MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, buffer);
+
+    const Vector<Uint8> initial(8, 0x7F);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    // GL_INT is signed-normalized against 2^31-1, so the maximum maps to a saturated GL_R8 texel.
+    const GLint one = 2147483647;
+    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(GL_ARRAY_BUFFER, GL_R8, 0, 4, GL_RED, GL_INT, &one);
+    EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Vector<Uint8> actual(initial.size());
+    auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
+    EXPECT_EQ(actual, (Vector<Uint8>{0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x7F, 0x7F, 0x7F}));
+
+    MobileGL::MG_Impl::GLImpl::BindBuffer(GL_ARRAY_BUFFER, 0);
+    MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
 TEST_F(BufferTest, ClearBufferSubDataInitializesIrisStaticSsboRange) {
     GLuint buffer = 0;
     MobileGL::MG_Impl::GLImpl::GenBuffers(1, &buffer);
