@@ -154,7 +154,7 @@ Verified locally on Turnip Adreno 750:
   - `MultiDrawArrays` / `MultiDrawElements` / `MultiDrawElementsBaseVertex`
   - `DrawArraysInstanced` / `DrawElementsInstanced` family
   - Indirect draw CPU fallback: `DrawArraysIndirect`, `DrawElementsIndirect`, `MultiDraw*Indirect`, `*IndirectCount`
-  - `ClearBufferfv` / `ClearBufferiv` / `ClearBufferuiv`
+  - `ClearBufferfv` / `ClearBufferfi` / `ClearBufferiv` / `ClearBufferuiv` (incl. stencil clear)
   - `BlitFramebuffer` (same-size color copy between current read/draw FBOs)
   - `CopyTexImage2D` / `CopyTexSubImage2D` (whole-color copy fallback)
   - `GetTexImage` / `GetTextureImage` (RGBA8 readback)

@@ -376,7 +376,14 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         }
 
         void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
-            if (buffer == GL_STENCIL || value == nullptr) {
+            if (value == nullptr) {
+                return;
+            }
+            if (buffer == GL_STENCIL) {
+                auto* renderer = GetActiveRenderer();
+                if (renderer != nullptr) {
+                    renderer->ClearStencil(static_cast<Uint32>(value[0]));
+                }
                 return;
             }
             Float color[4] = {
@@ -389,7 +396,14 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         }
 
         void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
-            if (buffer == GL_STENCIL || value == nullptr) {
+            if (value == nullptr) {
+                return;
+            }
+            if (buffer == GL_STENCIL) {
+                auto* renderer = GetActiveRenderer();
+                if (renderer != nullptr) {
+                    renderer->ClearStencil(value[0]);
+                }
                 return;
             }
             Float color[4] = {
@@ -399,6 +413,16 @@ namespace MobileGL::MG_Backend::DiligentBackend {
                 static_cast<Float>(value[3]) / 255.0f,
             };
             ClearBufferfv(buffer, drawbuffer, color);
+        }
+
+        void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || buffer != GL_DEPTH_STENCIL) {
+                return;
+            }
+            (void)drawbuffer;
+            renderer->ClearDepth(depth);
+            renderer->ClearStencil(static_cast<Uint32>(stencil));
         }
 
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
@@ -598,6 +622,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.MultiDrawArraysIndirectCount = MultiDrawArraysIndirectCount;
         m_functions.GL.MultiDrawElementsIndirectCount = MultiDrawElementsIndirectCount;
         m_functions.GL.ClearBufferfv = ClearBufferfv;
+        m_functions.GL.ClearBufferfi = ClearBufferfi;
         m_functions.GL.ClearBufferiv = ClearBufferiv;
         m_functions.GL.ClearBufferuiv = ClearBufferuiv;
         m_functions.GL.BlitFramebuffer = BlitFramebuffer;
