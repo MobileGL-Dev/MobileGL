@@ -2349,6 +2349,33 @@ TEST_F(TextureTest, CompressedTexSubImage3DRejectsTheRegionsGLForbids) {
     (void)texture;
 }
 
+// The DSA name rule the CTS's textures_creation pair does not reach for these two entry points: a
+// name handed out by glGenTextures has no object until it is first bound, so a by-name call on it is
+// INVALID_OPERATION - and, unlike the stub these replaced, it has to SAY so rather than return
+// quietly. A glCreateTextures name is a created object and gets past the name check.
+TEST_F(TextureTest, CompressedTextureSubImage3DRejectsAGeneratedButNeverBoundName) {
+    GLuint generated = 0;
+    MG_Impl::GLImpl::GenTextures(1, &generated);
+    ASSERT_NE(generated, 0u);
+    DrainPendingGlErrors();
+
+    Uint8 blocks[kRgtc1Size8x8x8] = {};
+    MG_Impl::GLImpl::CompressedTextureSubImage3D(generated, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RED_RGTC1,
+                                                 kRgtc1Size8x8x8, blocks);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // A created name is past the name check, so whatever it answers is about the IMAGE (this one
+    // holds none yet), never about the name.
+    GLuint created = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &created);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::CompressedTextureSubImage3D(created, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RED_RGTC1,
+                                                 kRgtc1Size8x8x8, blocks);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION)
+        << "a created 3D texture with no compressed image is an image error, not a name error";
+    DrainPendingGlErrors();
+}
+
 // Core GL defines no compressed format for a 1D target, so both the bound and the by-name entry
 // point have to REFUSE the call. The by-name one used to be an exported no-op that raised nothing,
 // which is the one answer an application cannot act on.
