@@ -571,6 +571,35 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        BackendSyncHandle FenceSync() {
+            // CPU fallback fence: always signaled is a valid implementation for a
+            // backend without native sync primitives. The handle still round-trips
+            // through ClientWaitSync/DeleteSync so frontend state stays balanced.
+            return new int(0);
+        }
+
+        GLenum ClientWaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout) {
+            (void)sync;
+            (void)flags;
+            (void)timeout;
+            return GL_ALREADY_SIGNALED;
+        }
+
+        void WaitSync(BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout) {
+            (void)sync;
+            (void)flags;
+            (void)timeout;
+        }
+
+        void DeleteSync(BackendSyncHandle sync) {
+            delete static_cast<int*>(sync);
+        }
+
+        Bool GetSyncStatus(BackendSyncHandle sync) {
+            (void)sync;
+            return true;
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -690,6 +719,11 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.GetTexImage = GetTexImage;
         m_functions.GL.GetTextureImage = GetTextureImage;
         m_functions.GL.ReadPixels = ReadPixels;
+        m_functions.GL.FenceSync = FenceSync;
+        m_functions.GL.ClientWaitSync = ClientWaitSync;
+        m_functions.GL.WaitSync = WaitSync;
+        m_functions.GL.DeleteSync = DeleteSync;
+        m_functions.GL.GetSyncStatus = GetSyncStatus;
         m_functions.Present = Present;
 
         m_initialized = true;
