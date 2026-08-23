@@ -161,6 +161,7 @@ Verified locally on Turnip Adreno 750:
   - `GenerateMipmap` (Diligent GPU mip generation on state textures)
   - `GetTexImage` / `GetTextureImage` (RGBA8 readback)
   - Fence sync entries (`FenceSync` / `ClientWaitSync` / `WaitSync` / `DeleteSync` / `GetSyncStatus`) as CPU always-signaled fallback
+  - Timer query entries (`BeginTimeElapsedQuery` / `EndTimeElapsedQuery` / `QueryCounterTimestamp` / `GetQueryResult64` etc.) as CPU `steady_clock` fallback
   - `ReadPixels` from default and user color attachments
 - Primitive expansion:
   - `GL_TRIANGLE_FAN` expanded to triangle list
@@ -219,7 +220,7 @@ Notes:
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
-- No transform feedback / GPU queries / non-color readback; fence sync is provided as a CPU always-signaled fallback.
+- No transform feedback / GPU-accelerated queries / non-color readback; fence sync and timer queries use CPU fallbacks.
 - Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit, read-pixels, CopyTexImage*, CopyImageSubData, GenerateMipmap, GetTexImage/GetTextureImage and indirect draws are now wired; buffer subdata paths still remain.
 - A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.
 - The `GLFunctionsTable` is only partially populated.

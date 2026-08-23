@@ -17,6 +17,7 @@
 #include <DeviceContext.h>
 
 #include <exception>
+#include <chrono>
 
 namespace MobileGL::MG_Backend::DiligentBackend {
     namespace {
@@ -48,6 +49,12 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             Uint32 FirstIndex = 0;
             Int32 BaseVertex = 0;
             Uint32 BaseInstance = 0;
+        };
+
+        struct CpuTimerQuery {
+            std::chrono::steady_clock::time_point Start;
+            Uint64 TimestampNs = 0;
+            Bool Available = false;
         };
 
         const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
@@ -571,6 +578,57 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        Bool IsTimerQuerySupported() {
+            return true;
+        }
+
+        BackendQueryHandle BeginTimeElapsedQuery() {
+            auto* query = new CpuTimerQuery;
+            query->Start = std::chrono::steady_clock::now();
+            query->Available = false;
+            return query;
+        }
+
+        void EndTimeElapsedQuery(BackendQueryHandle query) {
+            if (query == nullptr) {
+                return;
+            }
+            auto* cpuQuery = static_cast<CpuTimerQuery*>(query);
+            const auto now = std::chrono::steady_clock::now();
+            cpuQuery->TimestampNs = static_cast<Uint64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - cpuQuery->Start).count());
+            cpuQuery->Available = true;
+        }
+
+        BackendQueryHandle QueryCounterTimestamp() {
+            auto* query = new CpuTimerQuery;
+            query->TimestampNs = static_cast<Uint64>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            query->Available = true;
+            return query;
+        }
+
+        Bool IsQueryResultAvailable(BackendQueryHandle query) {
+            return query != nullptr && static_cast<CpuTimerQuery*>(query)->Available;
+        }
+
+        Bool GetQueryResult64(BackendQueryHandle query, Bool wait, Uint64* outNanoseconds) {
+            if (query == nullptr || outNanoseconds == nullptr) {
+                return false;
+            }
+            auto* cpuQuery = static_cast<CpuTimerQuery*>(query);
+            if (!cpuQuery->Available && !wait) {
+                return false;
+            }
+            *outNanoseconds = cpuQuery->TimestampNs;
+            return true;
+        }
+
+        void DeleteBackendQuery(BackendQueryHandle query) {
+            delete static_cast<CpuTimerQuery*>(query);
+        }
+
         BackendSyncHandle FenceSync() {
             // CPU fallback fence: always signaled is a valid implementation for a
             // backend without native sync primitives. The handle still round-trips
@@ -724,6 +782,13 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.WaitSync = WaitSync;
         m_functions.GL.DeleteSync = DeleteSync;
         m_functions.GL.GetSyncStatus = GetSyncStatus;
+        m_functions.GL.IsTimerQuerySupported = IsTimerQuerySupported;
+        m_functions.GL.BeginTimeElapsedQuery = BeginTimeElapsedQuery;
+        m_functions.GL.EndTimeElapsedQuery = EndTimeElapsedQuery;
+        m_functions.GL.QueryCounterTimestamp = QueryCounterTimestamp;
+        m_functions.GL.IsQueryResultAvailable = IsQueryResultAvailable;
+        m_functions.GL.GetQueryResult64 = GetQueryResult64;
+        m_functions.GL.DeleteBackendQuery = DeleteBackendQuery;
         m_functions.Present = Present;
 
         m_initialized = true;
