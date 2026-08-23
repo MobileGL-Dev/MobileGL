@@ -442,14 +442,30 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                 return packed.fieldCount == mapping.channelCount;
             }
 
+            // GL 4.6 core table 8.2: every unpacked component type pairs with every base format,
+            // with only two exclusions - an integer format takes integer types only, and the two
+            // floating types need a non-integer format. This used to be derived from
+            // GetDirectShadowComponentForType, which answers a different question (is the client
+            // layout byte-identical to some shadow layout) and has no SNorm32 to hand back for
+            // (non-integer format, GL_INT). That legal pair was therefore rejected outright, even
+            // though ConvertUnpackRow decodes it through DecodeComponentToFloat like every other
+            // normalized type - which is what glClearBufferData(GL_R8, GL_RED, GL_INT) needs.
             switch (type) {
             case TexturePixelDataType::UnsignedInt5999Rev:
             case TexturePixelDataType::UnsignedInt101111Rev:
                 return !mapping.isInteger && mapping.channelCount == 3;
-            default: {
-                ShadowComponent component{};
-                return GetDirectShadowComponentForType(type, mapping.isInteger, component);
-            }
+            case TexturePixelDataType::UnsignedByte:
+            case TexturePixelDataType::Byte:
+            case TexturePixelDataType::UnsignedShort:
+            case TexturePixelDataType::Short:
+            case TexturePixelDataType::UnsignedInt:
+            case TexturePixelDataType::Int:
+                return true;
+            case TexturePixelDataType::HalfFloat:
+            case TexturePixelDataType::Float:
+                return !mapping.isInteger;
+            default:
+                return false;
             }
         }
 
