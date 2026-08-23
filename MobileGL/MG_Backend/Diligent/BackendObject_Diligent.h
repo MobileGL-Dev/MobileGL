@@ -44,6 +44,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool InitWindowSurface() override;
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
         Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
+        void OnEGLSurfaceReleased(EGLSurface surface) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;

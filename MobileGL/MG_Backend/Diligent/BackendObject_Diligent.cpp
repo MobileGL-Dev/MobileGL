@@ -841,6 +841,13 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         BackendObject::ReleaseEGLResources();
     }
 
+    void BackendObject_Diligent::OnEGLSurfaceReleased(EGLSurface surface) {
+        (void)surface;
+        if (m_pRenderer != nullptr) {
+            m_pRenderer->ReleaseSwapChain();
+        }
+    }
+
     Bool BackendObject_Diligent::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
