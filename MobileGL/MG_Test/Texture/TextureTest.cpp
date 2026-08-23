@@ -2227,6 +2227,148 @@ TEST_F(TextureTest, CompressedTextureSubImage2DModifiesTheNamedTextureOnly) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+namespace {
+    // 8x8x8 RGTC1: 2x2 blocks of 8 bytes per slice, so a slice is 32 bytes and the stack is 256.
+    constexpr GLsizei kRgtc1Size8x8x8 = 256;
+    constexpr GLsizei kRgtc1Slice8x8 = 32;
+
+    GLuint MakeCompressedRgtc1Texture3D() {
+        GLuint texture = 0;
+        MG_Impl::GLImpl::GenTextures(1, &texture);
+        MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+        MG_Impl::GLImpl::CompressedTexImage3D(GL_TEXTURE_3D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 8, 0, kRgtc1Size8x8x8,
+                                              nullptr);
+        return texture;
+    }
+} // namespace
+
+// glCompressedTexImage3D used to answer GL_INVALID_ENUM to every call, which is what threw
+// KHR-GL45.direct_state_access.textures_compressed_subimage out with an InternalError: the CTS
+// asserts no error on it. A 3D compressed image is a stack of per-slice block grids, and the whole
+// stack has to come back byte for byte.
+TEST_F(TextureTest, CompressedTexImage3DShadowsTheWholeStackForReadback) {
+    Uint8 whole[kRgtc1Size8x8x8];
+    for (Int i = 0; i < kRgtc1Size8x8x8; ++i) whole[i] = static_cast<Uint8>(i);
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, texture);
+    MG_Impl::GLImpl::CompressedTexImage3D(GL_TEXTURE_3D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 8, 0, kRgtc1Size8x8x8,
+                                          whole);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 stored[kRgtc1Size8x8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_3D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, whole, sizeof(whole)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // An imageSize that is not the one the format and the three dimensions imply - the depth axis
+    // is the term a 2D-shaped size calculation would drop.
+    MG_Impl::GLImpl::CompressedTexImage3D(GL_TEXTURE_3D, 0, GL_COMPRESSED_RED_RGTC1, 8, 8, 8, 0, kRgtc1Slice8x8,
+                                          whole);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+}
+
+// Where the incoming blocks land. The box below is one block wide, one block high and two slices
+// deep, starting at block (1,1) of slice 3: an implementation that dropped the slice stride, the
+// block-row term or the block-column term puts them somewhere else, and a full-image write would
+// hide all three.
+TEST_F(TextureTest, CompressedTexSubImage3DPlacesBlocksSliceBySlice) {
+    const GLuint texture = MakeCompressedRgtc1Texture3D();
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 zeros[kRgtc1Size8x8x8] = {};
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RED_RGTC1,
+                                             kRgtc1Size8x8x8, zeros);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const Uint8 box[16] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
+                           0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7};
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 4, 4, 3, 4, 4, 2, GL_COMPRESSED_RED_RGTC1,
+                                             static_cast<GLsizei>(sizeof(box)), box);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 expected[kRgtc1Size8x8x8] = {};
+    // slice 3, block row 1, block column 1 -> 3*32 + 1*16 + 1*8, and the same place one slice on.
+    std::memcpy(expected + 3 * kRgtc1Slice8x8 + 16 + 8, box, 8);
+    std::memcpy(expected + 4 * kRgtc1Slice8x8 + 16 + 8, box + 8, 8);
+
+    Uint8 stored[kRgtc1Size8x8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_3D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, expected, sizeof(expected)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// glCompressedTextureSubImage3D was an exported no-op that raised no error at all. It must reach the
+// NAMED texture and leave the binding it borrowed exactly as it found it.
+TEST_F(TextureTest, CompressedTextureSubImage3DModifiesTheNamedTextureOnly) {
+    const GLuint bound = MakeCompressedRgtc1Texture3D();
+    Uint8 boundImage[kRgtc1Size8x8x8];
+    std::memset(boundImage, 0x11, sizeof(boundImage));
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RED_RGTC1,
+                                             kRgtc1Size8x8x8, boundImage);
+
+    const GLuint named = MakeCompressedRgtc1Texture3D();
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, bound); // `named` is NOT the bound texture
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 namedImage[kRgtc1Size8x8x8];
+    std::memset(namedImage, 0x22, sizeof(namedImage));
+    MG_Impl::GLImpl::CompressedTextureSubImage3D(named, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RED_RGTC1,
+                                                 kRgtc1Size8x8x8, namedImage);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 stored[kRgtc1Size8x8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_3D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, boundImage, sizeof(stored)), 0);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, named);
+    std::memset(stored, 0, sizeof(stored));
+    MG_Impl::GLImpl::GetCompressedTexImage(GL_TEXTURE_3D, 0, stored);
+    EXPECT_EQ(std::memcmp(stored, namedImage, sizeof(stored)), 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(TextureTest, CompressedTexSubImage3DRejectsTheRegionsGLForbids) {
+    const GLuint texture = MakeCompressedRgtc1Texture3D();
+    Uint8 blocks[kRgtc1Size8x8x8] = {};
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // A format that is not the one the image is stored in.
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 8, 8, 8, GL_COMPRESSED_RG_RGTC2, 512, blocks);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // A start that is not on a block boundary.
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 2, 0, 0, 4, 8, 8, GL_COMPRESSED_RED_RGTC1, 128, blocks);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // A box that runs past the last slice - the depth bound a 2D-shaped range check never applies.
+    MG_Impl::GLImpl::CompressedTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 6, 8, 8, 4, GL_COMPRESSED_RED_RGTC1, 128, blocks);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    (void)texture;
+}
+
+// Core GL defines no compressed format for a 1D target, so both the bound and the by-name entry
+// point have to REFUSE the call. The by-name one used to be an exported no-op that raised nothing,
+// which is the one answer an application cannot act on.
+TEST_F(TextureTest, CompressedTextureSubImage1DRefusesLikeTheBoundCall) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D, texture);
+    MG_Impl::GLImpl::TexImage1D(GL_TEXTURE_1D, 0, GL_R8, 8, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    Uint8 blocks[16] = {};
+    MG_Impl::GLImpl::CompressedTexSubImage1D(GL_TEXTURE_1D, 0, 0, 8, GL_COMPRESSED_RED_RGTC1,
+                                             static_cast<GLsizei>(sizeof(blocks)), blocks);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::CompressedTextureSubImage1D(texture, 0, 0, 8, GL_COMPRESSED_RED_RGTC1,
+                                                 static_cast<GLsizei>(sizeof(blocks)), blocks);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+}
+
 TEST_F(TextureTest, CompressedTexSubImage2DRejectsTheRegionsGLForbids) {
     const GLuint texture = MakeCompressedRgtc1Texture8x8();
     Uint8 blocks[kRgtc1Size8x8] = {};
