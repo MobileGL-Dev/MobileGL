@@ -668,10 +668,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // view type cannot be created without the imageCubeArray device feature - so the string
         // follows the feature, not the version, exactly as the per-layer attachment bit does.
         //
-        // Worth naming even though cube map arrays are core at the version claimed, because
-        // KHR-GL4*.texture_gather.plain-gather-*-cube-array checks the STRING and has no
-        // core-version fallback - five cases per version list sat NotSupported on a device that
-        // supports the feature.
+        // Named for the application's benefit rather than the suite's: measured on Adreno 830,
+        // KHR-GL43.texture_gather.plain-gather-*-cube-array already passed without the string, so
+        // this unlocks no conformance case. It is advertised because the feature is real and
+        // because an application that feature-detects cube map arrays off the string (rather than
+        // off the 4.0 version) would otherwise decline a path this backend serves.
         if (cubeMapArraySupported) {
             extensions.push_back(E_GL_ARB_texture_cube_map_array);
         }
