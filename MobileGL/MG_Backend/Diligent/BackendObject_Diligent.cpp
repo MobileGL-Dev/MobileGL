@@ -848,6 +848,29 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         }
     }
 
+    Bool BackendObject_Diligent::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_initialized) {
+            MGLOG_E("BackendObject_Diligent::CreateEGLWindowSurface failed: backend not initialized");
+            return false;
+        }
+        if (!handle.Handle || (handle.Backend != WindowBackend::Android && handle.Backend != WindowBackend::X11 &&
+                               handle.Backend != WindowBackend::MetalLayer && handle.Backend != WindowBackend::Win32)) {
+            MGLOG_E("BackendObject_Diligent::CreateEGLWindowSurface failed: unsupported native window backend");
+            return false;
+        }
+        return RegisterEGLWindowSurface(surface, handle);
+    }
+
+    Bool BackendObject_Diligent::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        if (!m_initialized) {
+            MGLOG_E("BackendObject_Diligent::CreateEGLPbufferSurface failed: backend not initialized");
+            return false;
+        }
+        return RegisterEGLPbufferSurface(surface, width, height);
+    }
+
     Bool BackendObject_Diligent::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {

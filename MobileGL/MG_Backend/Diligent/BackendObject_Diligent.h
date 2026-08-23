@@ -43,6 +43,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool InitCapabilities() override;
         Bool InitWindowSurface() override;
         Bool InitPbufferSurface(EGLint width, EGLint height) override;
+        Bool CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) override;
+        Bool CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) override;
         Bool ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) override;
         void OnEGLSurfaceReleased(EGLSurface surface) override;
 
