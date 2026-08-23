@@ -1120,3 +1120,73 @@ void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
     EXPECT_GT(center[0], 200) << "center should be red from baseVertex-selected triangle";
     EXPECT_LT(center[1], 50) << "center should not be green";
 }
+
+
+TEST(DiligentVulkanBackend, DrawsTopHalfTriangleFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); }
+)";
+    const char* fsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    UseProgram(program);
+    Viewport(0, 0, 256, 256);
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    ReadBuffer(GL_BACK);
+    Disable(GL_DEPTH_TEST);
+    Disable(GL_BLEND);
+    Disable(GL_SCISSOR_TEST);
+    Disable(GL_STENCIL_TEST);
+
+    // Triangle occupies the upper half of NDC (positive Y).
+    const float vertices[] = {
+        -0.5f,  0.1f,
+         0.5f,  0.1f,
+         0.0f,  1.0f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping y-orientation test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    std::uint8_t upper[4] = {};
+    renderer->ReadPixels(128, 64, 1, 1, upper);
+    EXPECT_GT(upper[0], 200) << "upper half should be red";
+
+    std::uint8_t lower[4] = {};
+    renderer->ReadPixels(128, 192, 1, 1, lower);
+    EXPECT_GT(lower[1], 200) << "lower half should remain green";
+    EXPECT_LT(lower[0], 50) << "lower half should not be red";
+}

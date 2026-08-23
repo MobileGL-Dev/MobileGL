@@ -1282,9 +1282,12 @@ void main()
         if (glViewport.z() <= 0 || glViewport.w() <= 0) {
             glViewport = IntVec4(0, 0, static_cast<Int32>(m_width), static_cast<Int32>(m_height));
         }
+        // Diligent uses the top-left window origin (Direct3D convention); OpenGL uses
+        // a bottom-left origin. Translate the GL viewport rect into Diligent's space.
+        const Float viewportY = static_cast<Float>(m_height) - (glViewport.w() + glViewport.y());
         ::Diligent::Viewport viewport{
             static_cast<Float>(glViewport.x()),
-            static_cast<Float>(glViewport.y()),
+            viewportY,
             static_cast<Float>(glViewport.z()),
             static_cast<Float>(glViewport.w()),
             0.0f, 1.0f};
@@ -1292,11 +1295,12 @@ void main()
 
         if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
             const auto scissor = MG_State::pGLContext->GetScissorBox();
+            const Int32 scissorTop = static_cast<Int32>(m_height) - (scissor.w() + scissor.y());
             ::Diligent::Rect rect{
                 scissor.x(),
-                scissor.y(),
+                scissorTop,
                 scissor.x() + scissor.z(),
-                scissor.y() + scissor.w()};
+                scissorTop + scissor.w()};
             m_pContext->SetScissorRects(1, &rect, m_width, m_height);
         } else {
             ::Diligent::Rect rect{0, 0, static_cast<::Diligent::Int32>(m_width),
@@ -1508,8 +1512,10 @@ void main()
 
         graphicsPipeline.RasterizerDesc.CullMode = cullEnabled ? ConvertCullMode(MG_State::pGLContext->GetCullFaceMode())
                                                                : ::Diligent::CULL_MODE_NONE;
+        // The viewport Y conversion mirrors GL's bottom-left origin to Diligent's
+        // top-left origin, so the front-face winding must be inverted to match GL.
         graphicsPipeline.RasterizerDesc.FrontCounterClockwise =
-            MG_State::pGLContext->GetFrontFaceMode() == FrontFaceMode::CounterClockwise;
+            MG_State::pGLContext->GetFrontFaceMode() == FrontFaceMode::Clockwise;
         graphicsPipeline.DepthStencilDesc.DepthEnable = depthEnabled;
         graphicsPipeline.DepthStencilDesc.DepthWriteEnable = MG_State::pGLContext->GetDepthMask();
         graphicsPipeline.DepthStencilDesc.DepthFunc = ConvertDepthFunc(MG_State::pGLContext->GetDepthFunc());
