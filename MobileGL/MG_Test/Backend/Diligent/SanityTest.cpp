@@ -718,3 +718,83 @@ void main() { Color = vec4(0.0, 0.0, 1.0, 1.0); }
     EXPECT_GT(center[0], 200) << "center should stay red from the nearer depth draw";
     EXPECT_LT(center[2], 50) << "center should not become blue from the farther draw";
 }
+
+
+TEST(DiligentVulkanBackend, DrawsNamedUniformBlockFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); }
+)";
+    const char* fsSrc = R"(#version 330 core
+layout(std140) uniform TestBlock {
+    vec4 u_color;
+};
+out vec4 Color;
+void main() { Color = u_color; }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &fsSrc, nullptr);
+    CompileShader(fs);
+    const GLuint program = CreateProgram();
+    AttachShader(program, vs);
+    AttachShader(program, fs);
+    LinkProgram(program);
+    GLint linkStatus = 0;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+    const GLuint blockIndex = GetUniformBlockIndex(program, "TestBlock");
+    ASSERT_NE(blockIndex, GL_INVALID_INDEX);
+    UniformBlockBinding(program, blockIndex, 0);
+    UseProgram(program);
+    Viewport(0, 0, 256, 256);
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    Disable(GL_DEPTH_TEST);
+    Disable(GL_BLEND);
+    Disable(GL_SCISSOR_TEST);
+
+    const float vertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    const float blockColor[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    GLuint ubo = 0;
+    GenBuffers(1, &ubo);
+    BindBuffer(GL_UNIFORM_BUFFER, ubo);
+    BufferData(GL_UNIFORM_BUFFER, sizeof(blockColor), blockColor, GL_STATIC_DRAW);
+    BindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping named UBO state test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_LT(center[0], 50) << "center should not be red";
+    EXPECT_LT(center[1], 50) << "center should not be green";
+    EXPECT_GT(center[2], 200) << "center should be blue from the named uniform block";
+}

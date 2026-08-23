@@ -117,6 +117,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         UnorderedMap<Uint64, TextureResource> m_textureCache;
         UnorderedMap<Uint64, SamplerResource> m_samplerCache;
         UnorderedMap<Uint32, TextureResource> m_renderbufferCache;
+        UnorderedMap<Uint64, ::Diligent::RefCntAutoPtr<::Diligent::IBuffer>> m_namedUboCache;
         Uint32 m_width = 256;
         Uint32 m_height = 256;
         Uint32 m_lastDrawVertexCount = 0;

@@ -1064,19 +1064,86 @@ void main()
                         variable->Set(srv);
                     }
                 } else if (binding->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
-                    // MobileGL routes all default-block uniforms into one synthesized
-                    // MGL_GLOBAL_UBO. SPIRV-Reflect may report an empty block name for the
-                    // synthesized block, so always resolve the Diligent variable by the
-                    // frontend's fixed global-UBO name.
-                    if (!UploadUBOFromState(program) || !m_pUBO) {
+                    const char* blockName = binding->block.name != nullptr && binding->block.name[0] != '\0'
+                                                ? binding->block.name
+                                                : (binding->name != nullptr && binding->name[0] != '\0'
+                                                       ? binding->name
+                                                       : (binding->type_description != nullptr &&
+                                                                  binding->type_description->type_name != nullptr
+                                                              ? binding->type_description->type_name
+                                                              : ""));
+                    const Bool isGlobal = blockName == nullptr || blockName[0] == '\0' ||
+                                          std::strstr(blockName, "MGL_GLOBAL_UBO") != nullptr;
+                    if (isGlobal) {
+                        // SPIRV-Reflect may report an empty block name for the synthesized
+                        // global UBO; resolve it by the frontend's fixed name.
+                        if (!UploadUBOFromState(program) || !m_pUBO) {
+                            continue;
+                        }
+                        auto* variable = m_pStateSRB->GetVariableByName(stage, "MGL_GLOBAL_UBO");
+                        if (variable == nullptr && binding->name != nullptr && binding->name[0] != '\0') {
+                            variable = m_pStateSRB->GetVariableByName(stage, binding->name);
+                        }
+                        if (variable != nullptr) {
+                            variable->Set(m_pUBO);
+                        }
                         continue;
                     }
-                    auto* variable = m_pStateSRB->GetVariableByName(stage, "MGL_GLOBAL_UBO");
+
+                    // Named application uniform block: resolve the GL block index, read
+                    // the frontend buffer currently bound at the block's binding point,
+                    // and upload its mapped range to a Diligent uniform buffer.
+                    const Uint blockIndex = program.GetUniformBlockIndex(blockName);
+                    if (blockIndex == 0xFFFFFFFFu) {
+                        continue;
+                    }
+                    const Uint frontendBinding = program.GetUniformBlockBinding(blockIndex);
+                    if (MG_State::pGLContext == nullptr ||
+                        frontendBinding >= MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::Uniform)) {
+                        continue;
+                    }
+                    auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform,
+                                                                                     frontendBinding);
+                    const auto& bufferObject = bindingPoint.GetBoundObject();
+                    if (!bufferObject) {
+                        continue;
+                    }
+                    bufferObject->SyncPersistentMappedRange();
+                    const Uint8* data = bufferObject->MappedData();
+                    if (data == nullptr) {
+                        continue;
+                    }
+                    const auto range = bindingPoint.GetRange();
+                    if (range.end <= range.start) {
+                        continue;
+                    }
+                    const SizeT rangeSize = range.end - range.start;
+                    auto& cached = m_namedUboCache[bufferObject->GetLifetimeId()];
+                    if (!cached) {
+                        ::Diligent::BufferDesc desc;
+                        desc.Name = "MobileGL state named UBO";
+                        desc.BindFlags = ::Diligent::BIND_UNIFORM_BUFFER;
+                        desc.Size = rangeSize;
+                        desc.Usage = ::Diligent::USAGE_DEFAULT;
+                        ::Diligent::BufferData initialData;
+                        initialData.pData = data + range.start;
+                        initialData.DataSize = static_cast<::Diligent::Uint32>(rangeSize);
+                        m_pDevice->CreateBuffer(desc, &initialData, &cached);
+                        if (!cached) {
+                            continue;
+                        }
+                    } else {
+                        const SizeT bufferSize = static_cast<SizeT>(
+                            std::min<::Diligent::Uint64>(cached->GetDesc().Size, static_cast<::Diligent::Uint64>(rangeSize)));
+                        m_pContext->UpdateBuffer(cached, 0, bufferSize, data + range.start,
+                                                 ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+                    }
+                    auto* variable = m_pStateSRB->GetVariableByName(stage, blockName);
                     if (variable == nullptr && binding->name != nullptr && binding->name[0] != '\0') {
                         variable = m_pStateSRB->GetVariableByName(stage, binding->name);
                     }
                     if (variable != nullptr) {
-                        variable->Set(m_pUBO);
+                        variable->Set(cached);
                     }
                 }
             }

@@ -104,6 +104,7 @@ Working tree is clean.
   - `DrawsWithScissorFromMobileGLState`
   - `DrawsWithBlendFromMobileGLState`
   - `DrawsWithDepthTestFromMobileGLState`
+  - `DrawsNamedUniformBlockFromMobileGLState`
 
 ---
 
@@ -155,7 +156,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 11 tests
+[  PASSED  ] 12 tests
 ```
 
 ---
@@ -204,7 +205,7 @@ Notes:
 
 - User framebuffers now support texture color attachments and depth/stencil texture or renderbuffer attachments; renderbuffer readback and multi-target color attachments remain partial.
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
-- Global UBO (default-block `glUniform*`) now uploads and binds; named application UBO blocks and SSBOs are not fed from frontend buffer bindings yet.
+- Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
 - No transform feedback / queries / sync / readback of non-color resources.
 - Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit and read-pixels are now wired; indirect draws, CopyTexImage/GetTexImage and buffer subdata paths still remain.
@@ -228,7 +229,7 @@ Notes:
 3. **Uniform / UBO support**
    - [x] Create Diligent buffer for `ProgramObject::GetUBOData()` / `GetUBOSize()`.
    - [x] Bind the global UBO as a dynamic shader resource.
-   - [ ] Handle per-program uniform block bindings / named UBO blocks.
+   - [x] Handle per-program uniform block bindings / named UBO blocks.
 
 4. **PSO / resource caching**
    - [~] Cache PSOs by program + VAO config + render state + topology (single last-PSO fast path).
