@@ -127,13 +127,27 @@ Verified locally on Turnip Adreno 750:
   - Color write mask
   - Viewport
   - Scissor rect
+- Texture/sampler full integration:
+  - `ITextureObject` → Diligent `ITexture` + SRV with automatic dirty upload
+  - `SamplerObject` / texture-object sampler → Diligent `ISampler`
+  - Real front-end `glTexImage2D` path (not only `CreateTestTexture`) verified
+- Global UBO upload:
+  - Front-end `glUniform*` shadow → Diligent uniform buffer bound as `MGL_GLOBAL_UBO`
+- User framebuffer mapping:
+  - Current draw/read FBO resolves texture attachments to Diligent RTV/DSV
+  - `ReadPixels` can read back from a user FBO color attachment
+- More GL entry points wired:
+  - `DrawRangeElements`
+  - `DrawRangeElementsBaseVertex`
+  - `MultiDrawArrays`
+  - `MultiDrawElements`
 - Primitive expansion:
   - `GL_TRIANGLE_FAN` expanded to triangle list
   - `GL_LINE_LOOP` expanded to line strip
 - Local test result:
 
 ```
-[  PASSED  ] 5 tests
+[  PASSED  ] 8 tests
 ```
 
 ---
@@ -180,9 +194,9 @@ Notes:
 
 ## 7. Known Limitations / Not Yet Implemented
 
-- `DrawArrays`/`DrawElements` draw through real `MG_State`, but only the color offscreen target is used; no user-created framebuffer/renderbuffer mapping yet.
-- Textures: only a test texture path (`CreateTestTexture`) is wired; no automatic sync of `TextureObject` to Diligent resources, no texture unit bindings, no mipmap/sampler state from `MG_State`.
-- Uniforms / UBOs are not uploaded or bound yet.
+- User framebuffers now support texture color attachments and depth/stencil texture or renderbuffer attachments; renderbuffer readback and multi-target color attachments remain partial.
+- Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
+- Global UBO (default-block `glUniform*`) now uploads and binds; named application UBO blocks and SSBOs are not fed from frontend buffer bindings yet.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
 - No transform feedback / queries / sync / readback of non-color resources.
 - Some GL 3.2 entry points are still not implemented in the backend (draw range, multi-draw, blit, buffer subdata paths, etc.).
@@ -194,19 +208,19 @@ Notes:
 ## 8. Recommended Next Steps
 
 1. **Framebuffer / Renderbuffer mapping**
-   - Map `MG_State::GLState::FramebufferObject` attachments to Diligent `ITextureView` / `ITexture`.
-   - Support default framebuffer as current offscreen target.
-   - Support `glBindFramebuffer`, `glFramebufferTexture2D`, renderbuffer color/depth attachments.
+   - [x] Map `MG_State::GLState::FramebufferObject` attachments to Diligent `ITextureView` / `ITexture`.
+   - [x] Support default framebuffer as current offscreen target.
+   - [~] Support `glBindFramebuffer`, `glFramebufferTexture2D`, renderbuffer color/depth attachments (texture color + depth/renderbuffer work; renderbuffer readback and multiple color targets still partial).
 
 2. **Texture / Sampler full integration**
-   - Translate MobileGL `ITextureObject` to Diligent `ITexture` and cache by `GetLifetimeId()`.
-   - Propagate texture unit bindings into the PSO SRB.
-   - Translate `SamplerObject` state into Diligent `SamplerDesc`.
+   - [x] Translate MobileGL `ITextureObject` to Diligent `ITexture` and cache by `GetLifetimeId()`.
+   - [x] Propagate texture unit bindings into the PSO SRB.
+   - [x] Translate `SamplerObject` state into Diligent `SamplerDesc`.
 
 3. **Uniform / UBO support**
-   - Create Diligent buffer for `ProgramObject::GetUBOData()` / `GetUBOSize()`.
-   - Bind the global UBO as a static shader resource.
-   - Handle per-program uniform block bindings.
+   - [x] Create Diligent buffer for `ProgramObject::GetUBOData()` / `GetUBOSize()`.
+   - [x] Bind the global UBO as a dynamic shader resource.
+   - [ ] Handle per-program uniform block bindings / named UBO blocks.
 
 4. **PSO / resource caching**
    - Cache PSOs by program + VAO config + render state + topology.

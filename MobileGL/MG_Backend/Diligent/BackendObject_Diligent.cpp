@@ -63,6 +63,49 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void DrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                               const void* indices) {
+            // The CPU-side UploadVertexDataFromState path already honors the selected index
+            // range. start/end only restrict which indices may be referenced; they do not
+            // change the vertex buffer layout for this backend.
+            (void)start;
+            (void)end;
+            DrawElements(mode, count, type, indices);
+        }
+
+        void DrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                         const void* indices, GLint basevertex) {
+            (void)start;
+            (void)end;
+            (void)basevertex;
+            DrawElements(mode, count, type, indices);
+        }
+
+        void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr) {
+                return;
+            }
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                if (count[i] > 0) {
+                    renderer->DrawFromState(mode, first[i], count[i], 0, nullptr);
+                }
+            }
+        }
+
+        void MultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
+                               GLsizei drawcount) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr) {
+                return;
+            }
+            for (GLsizei i = 0; i < drawcount; ++i) {
+                if (count[i] > 0) {
+                    renderer->DrawFromState(mode, 0, count[i], type, indices[i]);
+                }
+            }
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -151,6 +194,10 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.Clear = Clear;
         m_functions.GL.DrawArrays = DrawArrays;
         m_functions.GL.DrawElements = DrawElements;
+        m_functions.GL.DrawRangeElements = DrawRangeElements;
+        m_functions.GL.DrawRangeElementsBaseVertex = DrawRangeElementsBaseVertex;
+        m_functions.GL.MultiDrawArrays = MultiDrawArrays;
+        m_functions.GL.MultiDrawElements = MultiDrawElements;
         m_functions.Present = Present;
 
         m_initialized = true;

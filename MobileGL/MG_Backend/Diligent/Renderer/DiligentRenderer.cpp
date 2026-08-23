@@ -14,6 +14,8 @@
 #include <PipelineState.h>
 #include <InputLayout.h>
 #include <Sampler.h>
+#include <ShaderResourceBinding.h>
+#include <ShaderResourceVariable.h>
 
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
@@ -180,6 +182,163 @@ void main()
             default: return ::Diligent::STENCIL_OP_KEEP;
             }
         }
+
+        Bool IsDepthFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::DepthComponent:
+            case TextureInternalFormat::DepthComponent16:
+            case TextureInternalFormat::DepthComponent24:
+            case TextureInternalFormat::DepthComponent32:
+            case TextureInternalFormat::DepthComponent32F:
+            case TextureInternalFormat::Depth24Stencil8:
+            case TextureInternalFormat::Depth32FStencil8:
+            case TextureInternalFormat::DepthStencil:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        ::Diligent::TEXTURE_FORMAT ConvertInternalFormatToDiligent(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8: return ::Diligent::TEX_FORMAT_R8_UNORM;
+            case TextureInternalFormat::R8Snorm: return ::Diligent::TEX_FORMAT_R8_SNORM;
+            case TextureInternalFormat::R8I: return ::Diligent::TEX_FORMAT_R8_SINT;
+            case TextureInternalFormat::R8UI: return ::Diligent::TEX_FORMAT_R8_UINT;
+            case TextureInternalFormat::R16: return ::Diligent::TEX_FORMAT_R16_UNORM;
+            case TextureInternalFormat::R16Snorm: return ::Diligent::TEX_FORMAT_R16_SNORM;
+            case TextureInternalFormat::R16I: return ::Diligent::TEX_FORMAT_R16_SINT;
+            case TextureInternalFormat::R16UI: return ::Diligent::TEX_FORMAT_R16_UINT;
+            case TextureInternalFormat::R16F: return ::Diligent::TEX_FORMAT_R16_FLOAT;
+            case TextureInternalFormat::R32I: return ::Diligent::TEX_FORMAT_R32_SINT;
+            case TextureInternalFormat::R32UI: return ::Diligent::TEX_FORMAT_R32_UINT;
+            case TextureInternalFormat::R32F: return ::Diligent::TEX_FORMAT_R32_FLOAT;
+            case TextureInternalFormat::RG8: return ::Diligent::TEX_FORMAT_RG8_UNORM;
+            case TextureInternalFormat::RG8Snorm: return ::Diligent::TEX_FORMAT_RG8_SNORM;
+            case TextureInternalFormat::RG8I: return ::Diligent::TEX_FORMAT_RG8_SINT;
+            case TextureInternalFormat::RG8UI: return ::Diligent::TEX_FORMAT_RG8_UINT;
+            case TextureInternalFormat::RG16: return ::Diligent::TEX_FORMAT_RG16_UNORM;
+            case TextureInternalFormat::RG16Snorm: return ::Diligent::TEX_FORMAT_RG16_SNORM;
+            case TextureInternalFormat::RG16I: return ::Diligent::TEX_FORMAT_RG16_SINT;
+            case TextureInternalFormat::RG16UI: return ::Diligent::TEX_FORMAT_RG16_UINT;
+            case TextureInternalFormat::RG16F: return ::Diligent::TEX_FORMAT_RG16_FLOAT;
+            case TextureInternalFormat::RG32I: return ::Diligent::TEX_FORMAT_RG32_SINT;
+            case TextureInternalFormat::RG32UI: return ::Diligent::TEX_FORMAT_RG32_UINT;
+            case TextureInternalFormat::RG32F: return ::Diligent::TEX_FORMAT_RG32_FLOAT;
+            case TextureInternalFormat::RGB8:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16F:
+                // Diligent does not expose unsized/three-channel non-ETC2 RGB formats.
+                // RGB32 is the only three-channel format available.
+                return ::Diligent::TEX_FORMAT_UNKNOWN;
+            case TextureInternalFormat::RGB32F: return ::Diligent::TEX_FORMAT_RGB32_FLOAT;
+            case TextureInternalFormat::RGBA8: return ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+            case TextureInternalFormat::RGBA8Snorm: return ::Diligent::TEX_FORMAT_RGBA8_SNORM;
+            case TextureInternalFormat::RGBA8I: return ::Diligent::TEX_FORMAT_RGBA8_SINT;
+            case TextureInternalFormat::RGBA8UI: return ::Diligent::TEX_FORMAT_RGBA8_UINT;
+            case TextureInternalFormat::RGBA16: return ::Diligent::TEX_FORMAT_RGBA16_UNORM;
+            case TextureInternalFormat::RGBA16Snorm: return ::Diligent::TEX_FORMAT_RGBA16_SNORM;
+            case TextureInternalFormat::RGBA16I: return ::Diligent::TEX_FORMAT_RGBA16_SINT;
+            case TextureInternalFormat::RGBA16UI: return ::Diligent::TEX_FORMAT_RGBA16_UINT;
+            case TextureInternalFormat::RGBA16F: return ::Diligent::TEX_FORMAT_RGBA16_FLOAT;
+            case TextureInternalFormat::RGBA32I: return ::Diligent::TEX_FORMAT_RGBA32_SINT;
+            case TextureInternalFormat::RGBA32UI: return ::Diligent::TEX_FORMAT_RGBA32_UINT;
+            case TextureInternalFormat::RGBA32F: return ::Diligent::TEX_FORMAT_RGBA32_FLOAT;
+            case TextureInternalFormat::SRGB8: return ::Diligent::TEX_FORMAT_UNKNOWN;
+            case TextureInternalFormat::SRGB8Alpha8: return ::Diligent::TEX_FORMAT_RGBA8_UNORM_SRGB;
+            case TextureInternalFormat::R11FG11FB10F: return ::Diligent::TEX_FORMAT_R11G11B10_FLOAT;
+            case TextureInternalFormat::RGB9E5: return ::Diligent::TEX_FORMAT_RGB9E5_SHAREDEXP;
+            case TextureInternalFormat::RGB10A2: return ::Diligent::TEX_FORMAT_RGB10A2_UNORM;
+            case TextureInternalFormat::RGB10A2UI: return ::Diligent::TEX_FORMAT_RGB10A2_UINT;
+            case TextureInternalFormat::DepthComponent:
+            case TextureInternalFormat::DepthComponent32:
+            case TextureInternalFormat::DepthComponent32F:
+                return ::Diligent::TEX_FORMAT_D32_FLOAT;
+            case TextureInternalFormat::DepthComponent16:
+                return ::Diligent::TEX_FORMAT_D16_UNORM;
+            case TextureInternalFormat::DepthComponent24:
+                return ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
+            case TextureInternalFormat::Depth24Stencil8:
+            case TextureInternalFormat::DepthStencil:
+                return ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
+            case TextureInternalFormat::Depth32FStencil8:
+                return ::Diligent::TEX_FORMAT_D32_FLOAT_S8X24_UINT;
+            case TextureInternalFormat::Red:
+            case TextureInternalFormat::RGBA: // The frontend keeps unsized RGBA as RGBA8 in practice.
+                return ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+            case TextureInternalFormat::RG:
+                return ::Diligent::TEX_FORMAT_RG8_UNORM;
+            case TextureInternalFormat::RGB:
+                return ::Diligent::TEX_FORMAT_UNKNOWN;
+            default:
+                return ::Diligent::TEX_FORMAT_UNKNOWN;
+            }
+        }
+
+        ::Diligent::RESOURCE_DIMENSION ConvertTextureTargetToDiligent(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture1D: return ::Diligent::RESOURCE_DIM_TEX_1D;
+            case TextureTarget::Texture1DArray: return ::Diligent::RESOURCE_DIM_TEX_1D_ARRAY;
+            case TextureTarget::Texture2D:
+            case TextureTarget::TextureRectangle:
+            case TextureTarget::Texture2DMultisample:
+                return ::Diligent::RESOURCE_DIM_TEX_2D;
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::Texture2DMultisampleArray:
+                return ::Diligent::RESOURCE_DIM_TEX_2D_ARRAY;
+            case TextureTarget::Texture3D: return ::Diligent::RESOURCE_DIM_TEX_3D;
+            case TextureTarget::TextureCubeMap: return ::Diligent::RESOURCE_DIM_TEX_CUBE;
+            case TextureTarget::TextureCubeMapArray: return ::Diligent::RESOURCE_DIM_TEX_CUBE_ARRAY;
+            default: return ::Diligent::RESOURCE_DIM_UNDEFINED;
+            }
+        }
+
+        ::Diligent::TEXTURE_ADDRESS_MODE ConvertWrapMode(SamplerWrapMode mode) {
+            switch (mode) {
+            case SamplerWrapMode::ClampToEdge: return ::Diligent::TEXTURE_ADDRESS_CLAMP;
+            case SamplerWrapMode::MirroredRepeat: return ::Diligent::TEXTURE_ADDRESS_MIRROR;
+            case SamplerWrapMode::Repeat: return ::Diligent::TEXTURE_ADDRESS_WRAP;
+            case SamplerWrapMode::ClampToBorder: return ::Diligent::TEXTURE_ADDRESS_BORDER;
+            case SamplerWrapMode::MirrorClampToEdge: return ::Diligent::TEXTURE_ADDRESS_MIRROR_ONCE;
+            default: return ::Diligent::TEXTURE_ADDRESS_WRAP;
+            }
+        }
+
+        ::Diligent::COMPARISON_FUNCTION ConvertCompareFunc(SamplerCompareFunc func) {
+            switch (func) {
+            case SamplerCompareFunc::Never: return ::Diligent::COMPARISON_FUNC_NEVER;
+            case SamplerCompareFunc::Less: return ::Diligent::COMPARISON_FUNC_LESS;
+            case SamplerCompareFunc::Equal: return ::Diligent::COMPARISON_FUNC_EQUAL;
+            case SamplerCompareFunc::LessEqual: return ::Diligent::COMPARISON_FUNC_LESS_EQUAL;
+            case SamplerCompareFunc::Greater: return ::Diligent::COMPARISON_FUNC_GREATER;
+            case SamplerCompareFunc::NotEqual: return ::Diligent::COMPARISON_FUNC_NOT_EQUAL;
+            case SamplerCompareFunc::GreaterEqual: return ::Diligent::COMPARISON_FUNC_GREATER_EQUAL;
+            case SamplerCompareFunc::Always: return ::Diligent::COMPARISON_FUNC_ALWAYS;
+            default: return ::Diligent::COMPARISON_FUNC_ALWAYS;
+            }
+        }
+
+        ::Diligent::FILTER_TYPE ConvertFilterType(SamplerFilterMode filter, SamplerMipmapMode mipmap,
+                                                 Bool comparison, Float maxAnisotropy) {
+            if (maxAnisotropy > 1.0f) {
+                return comparison ? ::Diligent::FILTER_TYPE_COMPARISON_ANISOTROPIC
+                                  : ::Diligent::FILTER_TYPE_ANISOTROPIC;
+            }
+            const Bool linearFilter = filter == SamplerFilterMode::Linear;
+            const Bool linearMip = mipmap == SamplerMipmapMode::Linear;
+            const Bool pointMip = mipmap == SamplerMipmapMode::Nearest || mipmap == SamplerMipmapMode::None;
+            if (!comparison) {
+                if (linearFilter) {
+                    return linearMip ? ::Diligent::FILTER_TYPE_LINEAR : ::Diligent::FILTER_TYPE_POINT;
+                }
+                return pointMip ? ::Diligent::FILTER_TYPE_POINT : ::Diligent::FILTER_TYPE_LINEAR;
+            }
+            if (linearFilter) {
+                return linearMip ? ::Diligent::FILTER_TYPE_COMPARISON_LINEAR : ::Diligent::FILTER_TYPE_COMPARISON_POINT;
+            }
+            return pointMip ? ::Diligent::FILTER_TYPE_COMPARISON_POINT : ::Diligent::FILTER_TYPE_COMPARISON_LINEAR;
+        }
     } // namespace
 
     DiligentRenderer::DiligentRenderer(::Diligent::IRenderDevice* device, ::Diligent::IDeviceContext* context)
@@ -345,22 +504,34 @@ void main()
     }
 
     void DiligentRenderer::Clear(Float r, Float g, Float b, Float a) {
-        if (!m_initialized || !m_pContext || !m_pColorRTV) {
+        if (!m_initialized || !m_pContext) {
             return;
         }
-        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        Vector<::Diligent::ITextureView*> rtvs;
+        ::Diligent::ITextureView* dsv = nullptr;
+        if (!ResolveCurrentRenderTargets(rtvs, dsv) || rtvs.empty()) {
+            return;
+        }
+        m_pContext->SetRenderTargets(static_cast<::Diligent::Uint32>(rtvs.size()), rtvs.data(), dsv,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         const Float clearColor[] = {r, g, b, a};
-        m_pContext->ClearRenderTarget(m_pColorRTV, clearColor, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        for (auto* rtv : rtvs) {
+            m_pContext->ClearRenderTarget(rtv, clearColor, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        }
     }
 
     void DiligentRenderer::ClearDepth(Float depth) {
-        if (!m_initialized || !m_pContext || !m_pDepthDSV) {
+        if (!m_initialized || !m_pContext) {
             return;
         }
-        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-        m_pContext->ClearDepthStencil(m_pDepthDSV, ::Diligent::CLEAR_DEPTH_FLAG, depth, 0,
+        Vector<::Diligent::ITextureView*> rtvs;
+        ::Diligent::ITextureView* dsv = nullptr;
+        if (!ResolveCurrentRenderTargets(rtvs, dsv) || dsv == nullptr) {
+            return;
+        }
+        m_pContext->SetRenderTargets(static_cast<::Diligent::Uint32>(rtvs.size()), rtvs.data(), dsv,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->ClearDepthStencil(dsv, ::Diligent::CLEAR_DEPTH_FLAG, depth, 0,
                                       ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     }
 
@@ -472,6 +643,449 @@ void main()
         return m_pTestSampler != nullptr;
     }
 
+    ::Diligent::ITextureView* DiligentRenderer::SyncTexture(MG_State::GLState::ITextureObject& texture) {
+        if (m_pDevice == nullptr || m_pContext == nullptr || texture.GetFormat() == TextureInternalFormat::Unknown) {
+            return nullptr;
+        }
+
+        const auto format = ConvertInternalFormatToDiligent(texture.GetFormat());
+        const auto dimension = ConvertTextureTargetToDiligent(texture.GetTarget());
+        if (format == ::Diligent::TEX_FORMAT_UNKNOWN || dimension == ::Diligent::RESOURCE_DIM_UNDEFINED) {
+            MGLOG_W_ONCE("DiligentRenderer::SyncTexture: unsupported texture target/format (target=%d format=%d)",
+                         static_cast<Int>(texture.GetTarget()), static_cast<Int>(texture.GetFormat()));
+            return nullptr;
+        }
+
+        const Uint64 lifetimeId = texture.GetLifetimeId();
+        TextureResource* resource = nullptr;
+        auto it = m_textureCache.find(lifetimeId);
+        if (it != m_textureCache.end()) {
+            resource = &it->second;
+        }
+
+        const Bool needCreate = resource == nullptr || !resource->Texture;
+        const Bool needUpload = needCreate || resource->ContentVersion != texture.GetContentVersion();
+        const Bool needViewUpdate = needCreate || resource->ParamsVersion != texture.GetTextureParamsVersion();
+
+        if (needCreate) {
+            TextureResource newResource;
+            newResource.ContentVersion = texture.GetContentVersion();
+            newResource.ParamsVersion = texture.GetTextureParamsVersion();
+            newResource.IsDepth = IsDepthFormat(texture.GetFormat());
+
+            ::Diligent::TextureDesc texDesc;
+            texDesc.Name = "MobileGL state texture";
+            texDesc.Type = dimension;
+            texDesc.Format = format;
+            const IntVec3 baseSize = texture.GetBaseSize();
+            texDesc.Width = static_cast<::Diligent::Uint32>(std::max(baseSize.x(), 1));
+            texDesc.Height = static_cast<::Diligent::Uint32>(std::max(baseSize.y(), 1));
+            texDesc.ArraySize = 1;
+            if (texture.GetTarget() == TextureTarget::TextureCubeMap ||
+                texture.GetTarget() == TextureTarget::TextureCubeMapArray) {
+                texDesc.ArraySize = 6;
+            } else if (texture.GetTarget() == TextureTarget::Texture2DArray ||
+                       texture.GetTarget() == TextureTarget::Texture1DArray) {
+                texDesc.ArraySize = static_cast<::Diligent::Uint32>(std::max(baseSize.z(), 1));
+            }
+            texDesc.MipLevels = 1;
+            if (auto* mip = AsMipmapTexture(&texture)) {
+                texDesc.MipLevels = std::max<::Diligent::Uint32>(mip->GetMipmapLevelCount(), 1);
+            }
+            texDesc.Usage = ::Diligent::USAGE_DEFAULT;
+            texDesc.BindFlags = ::Diligent::BIND_SHADER_RESOURCE;
+            if (newResource.IsDepth) {
+                texDesc.BindFlags |= ::Diligent::BIND_DEPTH_STENCIL;
+            } else {
+                texDesc.BindFlags |= ::Diligent::BIND_RENDER_TARGET;
+            }
+
+            ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pTexture;
+            m_pDevice->CreateTexture(texDesc, nullptr, &pTexture);
+            if (!pTexture) {
+                MGLOG_W_ONCE("DiligentRenderer::SyncTexture: failed to create texture (id=%llu)", lifetimeId);
+                return nullptr;
+            }
+            newResource.Texture = pTexture;
+            newResource.SRV = pTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_SHADER_RESOURCE);
+            if (!newResource.SRV) {
+                MGLOG_W_ONCE("DiligentRenderer::SyncTexture: failed to create SRV (id=%llu)", lifetimeId);
+                return nullptr;
+            }
+            if (newResource.IsDepth) {
+                newResource.DSV = pTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_DEPTH_STENCIL);
+            } else if ((texDesc.BindFlags & ::Diligent::BIND_RENDER_TARGET) != 0) {
+                newResource.RTV = pTexture->GetDefaultView(::Diligent::TEXTURE_VIEW_RENDER_TARGET);
+            }
+
+            auto inserted = m_textureCache.emplace(lifetimeId, std::move(newResource));
+            resource = &inserted.first->second;
+        } else if (needViewUpdate && resource->Texture) {
+            // Recreate views if the texture's parameter/shape version moved. The content
+            // upload below keeps the same ITexture; for now only the default views are used.
+            resource->ParamsVersion = texture.GetTextureParamsVersion();
+        }
+
+        if (needUpload && resource->Texture) {
+            auto* mip = AsMipmapTexture(&texture);
+            if (mip != nullptr) {
+                const auto& uploadTargets = texture.GetUploadTargets();
+                for (const auto uploadTarget : uploadTargets) {
+                    Uint32 slice = 0;
+                    if (texture.GetTarget() == TextureTarget::TextureCubeMap &&
+                        uploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+                        uploadTarget <= TextureUploadTarget::CubeMapNegativeZ) {
+                        slice = static_cast<Uint32>(uploadTarget) -
+                                static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
+                    }
+                    const Uint32 levelCount = mip->GetMipmapLevelCount();
+                    for (Uint32 level = 0; level < levelCount; ++level) {
+                        const IntVec3 levelSize = mip->GetMipmapTexelSize(uploadTarget, level);
+                        if (levelSize.x() <= 0 || levelSize.y() <= 0) {
+                            continue;
+                        }
+                        const SizeT byteSize = mip->GetMipmapByteSize(uploadTarget, level);
+                        if (byteSize == 0) {
+                            continue;
+                        }
+                        const void* data = mip->MapMipmapData(uploadTarget, level);
+                        if (data == nullptr) {
+                            continue;
+                        }
+                        const Uint32 depth = std::max(levelSize.z(), 1);
+                        const Uint32 rowSize = static_cast<Uint32>(
+                            byteSize / static_cast<SizeT>(std::max(levelSize.y(), 1)) / static_cast<SizeT>(depth));
+                        ::Diligent::TextureSubResData subResData;
+                        subResData.pData = data;
+                        subResData.Stride = rowSize;
+                        ::Diligent::Box dstBox{0, static_cast<::Diligent::Uint32>(levelSize.x()),
+                                               0, static_cast<::Diligent::Uint32>(levelSize.y()),
+                                               0, depth};
+                        m_pContext->UpdateTexture(resource->Texture, level, slice, dstBox, subResData,
+                                                  ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+                                                  ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+                        mip->MarkStorageDirty(uploadTarget, level, false);
+                    }
+                }
+            }
+            resource->ContentVersion = texture.GetContentVersion();
+        }
+
+        return resource->SRV;
+    }
+
+    ::Diligent::ITextureView* DiligentRenderer::SyncTextureForAttachment(MG_State::GLState::ITextureObject& texture,
+                                                                          Bool depth) {
+        auto* srvOrView = SyncTexture(texture);
+        if (srvOrView == nullptr) {
+            return nullptr;
+        }
+        auto it = m_textureCache.find(texture.GetLifetimeId());
+        if (it == m_textureCache.end()) {
+            return nullptr;
+        }
+        TextureResource& resource = it->second;
+        if (depth) {
+            return resource.DSV ? resource.DSV.RawPtr() : nullptr;
+        }
+        return resource.RTV ? resource.RTV.RawPtr() : nullptr;
+    }
+
+    ::Diligent::ITextureView* DiligentRenderer::SyncRenderbuffer(
+        MG_State::GLState::RenderbufferObject& renderbuffer) {
+        if (m_pDevice == nullptr || !renderbuffer.IsAllocated()) {
+            return nullptr;
+        }
+
+        const auto format = ConvertInternalFormatToDiligent(renderbuffer.GetInternalFormat());
+        if (format == ::Diligent::TEX_FORMAT_UNKNOWN) {
+            return nullptr;
+        }
+        const Bool depth = IsDepthFormat(renderbuffer.GetInternalFormat());
+
+        ::Diligent::TextureDesc desc;
+        desc.Name = "MobileGL state renderbuffer";
+        desc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
+        desc.Format = format;
+        desc.Width = static_cast<::Diligent::Uint32>(renderbuffer.GetWidth());
+        desc.Height = static_cast<::Diligent::Uint32>(renderbuffer.GetHeight());
+        desc.MipLevels = 1;
+        desc.Usage = ::Diligent::USAGE_DEFAULT;
+        desc.BindFlags = depth ? ::Diligent::BIND_DEPTH_STENCIL : ::Diligent::BIND_RENDER_TARGET;
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pTexture;
+        m_pDevice->CreateTexture(desc, nullptr, &pTexture);
+        if (!pTexture) {
+            return nullptr;
+        }
+
+        const auto viewType = depth ? ::Diligent::TEXTURE_VIEW_DEPTH_STENCIL : ::Diligent::TEXTURE_VIEW_RENDER_TARGET;
+        return pTexture->GetDefaultView(viewType);
+    }
+
+    Bool DiligentRenderer::ResolveCurrentRenderTargets(Vector<::Diligent::ITextureView*>& rtvs,
+                                                       ::Diligent::ITextureView*& dsv) {
+        rtvs.clear();
+        dsv = nullptr;
+        if (!m_initialized) {
+            return false;
+        }
+
+        if (MG_State::pGLContext == nullptr) {
+            if (m_pColorRTV) {
+                rtvs.push_back(m_pColorRTV.RawPtr());
+            }
+            dsv = m_pDepthDSV ? m_pDepthDSV.RawPtr() : nullptr;
+            return !rtvs.empty();
+        }
+
+        auto drawFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        if (!drawFbo || drawFbo->IsDefaultFramebuffer()) {
+            if (m_pColorRTV) {
+                rtvs.push_back(m_pColorRTV.RawPtr());
+            }
+            dsv = m_pDepthDSV ? m_pDepthDSV.RawPtr() : nullptr;
+            return !rtvs.empty();
+        }
+
+        if (!drawFbo->CheckCompleteness()) {
+            return false;
+        }
+
+        const auto& drawBuffers = drawFbo->GetDrawBuffers();
+        for (const auto attachmentType : drawBuffers) {
+            if (attachmentType == FramebufferAttachmentType::None) {
+                continue;
+            }
+            const auto& attachment = drawFbo->GetAttachment(attachmentType);
+            if (attachment.IsEmpty()) {
+                continue;
+            }
+            ::Diligent::ITextureView* view = nullptr;
+            if (attachment.IsTexture()) {
+                view = SyncTextureForAttachment(*attachment.GetTexture(), false);
+            } else if (attachment.IsRenderbuffer()) {
+                view = SyncRenderbuffer(*attachment.GetRenderbuffer());
+            }
+            if (view != nullptr) {
+                rtvs.push_back(view);
+            }
+        }
+
+        const auto& depthAttachment = drawFbo->GetAttachment(FramebufferAttachmentType::Depth);
+        const auto& stencilAttachment = drawFbo->GetAttachment(FramebufferAttachmentType::Stencil);
+        if (depthAttachment.IsTexture()) {
+            dsv = SyncTextureForAttachment(*depthAttachment.GetTexture(), true);
+        } else if (depthAttachment.IsRenderbuffer()) {
+            dsv = SyncRenderbuffer(*depthAttachment.GetRenderbuffer());
+        } else if (stencilAttachment.IsTexture()) {
+            dsv = SyncTextureForAttachment(*stencilAttachment.GetTexture(), true);
+        } else if (stencilAttachment.IsRenderbuffer()) {
+            dsv = SyncRenderbuffer(*stencilAttachment.GetRenderbuffer());
+        }
+        return !rtvs.empty();
+    }
+
+    ::Diligent::ISampler* DiligentRenderer::SyncSampler(const MG_State::GLState::SamplerObject& sampler) {
+        if (m_pDevice == nullptr) {
+            return nullptr;
+        }
+        const Uint64 lifetimeId = sampler.GetLifetimeId();
+        auto it = m_samplerCache.find(lifetimeId);
+        if (it != m_samplerCache.end() && it->second.Sampler && it->second.Version == sampler.GetVersion()) {
+            return it->second.Sampler;
+        }
+
+        const auto& params = sampler.GetAllSamplerParameters();
+        ::Diligent::SamplerDesc desc;
+        desc.AddressU = ConvertWrapMode(params.wrapS);
+        desc.AddressV = ConvertWrapMode(params.wrapT);
+        desc.AddressW = ConvertWrapMode(params.wrapR);
+        desc.MipLODBias = params.lodBias;
+        desc.MaxAnisotropy = static_cast<::Diligent::Uint32>(std::max(0.0f, params.maxAnisotropy));
+        desc.MinLOD = params.minLod;
+        desc.MaxLOD = params.maxLod;
+        desc.ComparisonFunc = ConvertCompareFunc(params.compareFunc);
+        desc.BorderColor[0] = params.borderColor.x();
+        desc.BorderColor[1] = params.borderColor.y();
+        desc.BorderColor[2] = params.borderColor.z();
+        desc.BorderColor[3] = params.borderColor.w();
+        const Bool compare = params.compareMode == SamplerCompareMode::CompareToTexture;
+        desc.MinFilter = ConvertFilterType(params.minFilter, params.mipmapMode, compare, params.maxAnisotropy);
+        desc.MagFilter = ConvertFilterType(params.magFilter, params.mipmapMode, compare, params.maxAnisotropy);
+        desc.MipFilter = ConvertFilterType(params.minFilter, params.mipmapMode, compare, params.maxAnisotropy);
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ISampler> pSampler;
+        m_pDevice->CreateSampler(desc, &pSampler);
+        if (!pSampler) {
+            return nullptr;
+        }
+
+        SamplerResource resource;
+        resource.Sampler = pSampler;
+        resource.Version = sampler.GetVersion();
+        m_samplerCache[lifetimeId] = std::move(resource);
+        return pSampler;
+    }
+
+    Bool DiligentRenderer::UploadUBOFromState(const MG_State::GLState::ProgramObject& program) {
+        if (m_pDevice == nullptr || m_pContext == nullptr) {
+            return false;
+        }
+        const Uint uboSize = program.GetUBOSize();
+        if (uboSize == 0) {
+            m_pUBO.Release();
+            m_uboSize = 0;
+            m_uboContentVersion = 0;
+            m_uboProgramLifetimeId = 0;
+            return true;
+        }
+
+        const Bool recreate = !m_pUBO || m_uboProgramLifetimeId != program.GetLifetimeId() ||
+                              m_uboSize != uboSize;
+        if (recreate) {
+            m_pUBO.Release();
+            ::Diligent::BufferDesc desc;
+            desc.Name = "MobileGL state global UBO";
+            desc.BindFlags = ::Diligent::BIND_UNIFORM_BUFFER;
+            desc.Size = uboSize;
+            desc.Usage = ::Diligent::USAGE_DEFAULT;
+
+            ::Diligent::BufferData initialData;
+            initialData.pData = program.GetUBOData();
+            initialData.DataSize = uboSize;
+            m_pDevice->CreateBuffer(desc, &initialData, &m_pUBO);
+            if (!m_pUBO) {
+                MGLOG_E("DiligentRenderer::UploadUBOFromState: failed to create UBO buffer");
+                return false;
+            }
+            m_uboSize = uboSize;
+            m_uboContentVersion = program.GetUBOContentVersion();
+            m_uboProgramLifetimeId = program.GetLifetimeId();
+        } else if (m_uboContentVersion != program.GetUBOContentVersion()) {
+            m_pContext->UpdateBuffer(m_pUBO, 0, uboSize, program.GetUBOData(),
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+            m_uboContentVersion = program.GetUBOContentVersion();
+        }
+        return m_pUBO != nullptr;
+    }
+
+    Bool DiligentRenderer::BindShaderResourcesFromState(const MG_State::GLState::ProgramObject& program) {
+        if (m_pStateSRB == nullptr) {
+            return false;
+        }
+
+        const auto& spirvs = program.GetGeneratedSpirv();
+        for (const auto& spv : spirvs) {
+            if (spv.empty()) {
+                continue;
+            }
+            SpvReflectShaderModule module{};
+            if (spvReflectCreateShaderModule(spv.size() * sizeof(unsigned), spv.data(), &module) !=
+                SPV_REFLECT_RESULT_SUCCESS) {
+                continue;
+            }
+
+            ::Diligent::SHADER_TYPE stage = ::Diligent::SHADER_TYPE_UNKNOWN;
+            if (!GetSpirvStage(spv, stage)) {
+                spvReflectDestroyShaderModule(&module);
+                continue;
+            }
+
+            Uint32 bindingCount = 0;
+            spvReflectEnumerateDescriptorBindings(&module, &bindingCount, nullptr);
+            Vector<SpvReflectDescriptorBinding*> bindings(static_cast<SizeT>(bindingCount));
+            if (bindingCount > 0) {
+                spvReflectEnumerateDescriptorBindings(&module, &bindingCount, bindings.data());
+            }
+
+            for (Uint32 b = 0; b < bindingCount; ++b) {
+                const auto* binding = bindings[b];
+                if (binding == nullptr || binding->name == nullptr) {
+                    continue;
+                }
+                if (binding->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) {
+                    const Int location = program.GetUniformLocation(binding->name);
+                    if (location < 0) {
+                        continue;
+                    }
+                    const Int unit = program.GetUniformSamplerOrImageUnitIndex(static_cast<Uint>(location));
+                    if (unit < 0 || MG_State::pGLContext == nullptr) {
+                        continue;
+                    }
+                    auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                    TextureTarget target = TextureTarget::Unknown;
+                    switch (binding->image.dim) {
+                    case SpvDim1D: target = TextureTarget::Texture1D; break;
+                    case SpvDim2D: target = binding->image.arrayed ? TextureTarget::Texture2DArray : TextureTarget::Texture2D; break;
+                    case SpvDim3D: target = TextureTarget::Texture3D; break;
+                    case SpvDimCube: target = binding->image.arrayed ? TextureTarget::TextureCubeMapArray : TextureTarget::TextureCubeMap; break;
+                    default: break;
+                    }
+                    if (target == TextureTarget::Unknown) {
+                        continue;
+                    }
+                    auto texture = textureUnit.GetBindingSlot(target).GetBoundObject();
+                    if (!texture || MG_State::GLState::IsUndefinedDefaultTexture(texture.get())) {
+                        // Preserve the legacy test-texture path: when no real front-end
+                        // texture is bound, fall back to CreateTestTexture's SRV.
+                        if (m_pTestSRV) {
+                            if (auto* variable = m_pStateSRB->GetVariableByName(stage, binding->name)) {
+                                variable->Set(m_pTestSRV);
+                            }
+                        }
+                        continue;
+                    }
+                    const MG_State::GLState::SamplerObject* samplerToUse = textureUnit.GetSamplerObject().get();
+                    if (samplerToUse == nullptr) {
+                        samplerToUse = texture->GetSamplerObject().get();
+                    }
+                    const Bool incomplete = samplerToUse == nullptr ||
+                                            MG_State::GLState::SamplesAsIncompleteTexture(texture.get(), samplerToUse);
+                    if (incomplete) {
+                        if (m_pTestSRV) {
+                            if (auto* variable = m_pStateSRB->GetVariableByName(stage, binding->name)) {
+                                variable->Set(m_pTestSRV);
+                            }
+                        }
+                        continue;
+                    }
+                    auto* srv = SyncTexture(*texture);
+                    if (srv == nullptr) {
+                        continue;
+                    }
+                    auto* sampler = SyncSampler(*samplerToUse);
+                    if (sampler == nullptr) {
+                        continue;
+                    }
+                    srv->SetSampler(sampler);
+                    auto* variable = m_pStateSRB->GetVariableByName(stage, binding->name);
+                    if (variable != nullptr) {
+                        variable->Set(srv);
+                    }
+                } else if (binding->descriptor_type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                    // MobileGL routes all default-block uniforms into one synthesized
+                    // MGL_GLOBAL_UBO. SPIRV-Reflect may report an empty block name for the
+                    // synthesized block, so always resolve the Diligent variable by the
+                    // frontend's fixed global-UBO name.
+                    if (!UploadUBOFromState(program) || !m_pUBO) {
+                        continue;
+                    }
+                    auto* variable = m_pStateSRB->GetVariableByName(stage, "MGL_GLOBAL_UBO");
+                    if (variable == nullptr && binding->name != nullptr && binding->name[0] != '\0') {
+                        variable = m_pStateSRB->GetVariableByName(stage, binding->name);
+                    }
+                    if (variable != nullptr) {
+                        variable->Set(m_pUBO);
+                    }
+                }
+            }
+
+            spvReflectDestroyShaderModule(&module);
+        }
+        return true;
+    }
+
     void DiligentRenderer::DrawFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices) {
         if (!m_initialized || !m_pContext || MG_State::pGLContext == nullptr) {
             return;
@@ -483,8 +1097,13 @@ void main()
             return;
         }
 
-        ::Diligent::ITextureView* rtvs[] = {m_pColorRTV};
-        m_pContext->SetRenderTargets(1, rtvs, m_pDepthDSV, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        Vector<::Diligent::ITextureView*> rtvs;
+        ::Diligent::ITextureView* dsv = nullptr;
+        if (!ResolveCurrentRenderTargets(rtvs, dsv)) {
+            return;
+        }
+        m_pContext->SetRenderTargets(static_cast<::Diligent::Uint32>(rtvs.size()), rtvs.data(), dsv,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
         auto glViewport = MG_State::pGLContext->GetViewport();
         if (glViewport.z() <= 0 || glViewport.w() <= 0) {
@@ -517,6 +1136,10 @@ void main()
                                      ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
                                      ::Diligent::SET_VERTEX_BUFFERS_FLAG_RESET);
         m_pContext->SetPipelineState(m_pPSO);
+        const auto& drawProgram = MG_State::pGLContext->GetProgramForDraw();
+        if (drawProgram) {
+            BindShaderResourcesFromState(*drawProgram);
+        }
         if (MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest)) {
             const auto& front = MG_State::pGLContext->GetStencilState(StencilFace::Front);
             m_pContext->SetStencilRef(static_cast<::Diligent::Uint32>(front.Ref));
@@ -599,8 +1222,10 @@ void main()
         auto& graphicsPipeline = psoCI.GraphicsPipeline;
         psoDesc.PipelineType = ::Diligent::PIPELINE_TYPE_GRAPHICS;
         psoDesc.Name = "MobileGL Diligent state PSO";
+        psoDesc.ResourceLayout.DefaultVariableType = ::Diligent::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
         graphicsPipeline.NumRenderTargets = 1;
         graphicsPipeline.RTVFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
+        graphicsPipeline.DSVFormat = ::Diligent::TEX_FORMAT_D32_FLOAT;
         switch (mode) {
         case GL_POINTS:
             graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_POINT_LIST;
@@ -695,16 +1320,12 @@ void main()
         }
 
         m_pStateSRB = nullptr;
-        if (m_pTestSRV) {
-            auto* staticVar = m_pPSO->GetStaticVariableByName(::Diligent::SHADER_TYPE_PIXEL, "g_Texture");
-            if (staticVar != nullptr) {
-                staticVar->Set(m_pTestSRV);
-            }
-            m_pPSO->CreateShaderResourceBinding(&m_pStateSRB, false);
-            if (m_pStateSRB) {
-                m_pPSO->InitializeStaticSRBResources(m_pStateSRB);
-            }
+        m_pPSO->CreateShaderResourceBinding(&m_pStateSRB, true);
+        if (!m_pStateSRB) {
+            MGLOG_E("DiligentRenderer: failed to create state SRB");
+            return false;
         }
+        BindShaderResourcesFromState(*program);
         return true;
     }
 
@@ -842,12 +1463,34 @@ void main()
             return;
         }
 
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pSrcTexture = m_pColorTarget;
+        if (MG_State::pGLContext != nullptr) {
+            auto readFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+            if (readFbo && !readFbo->IsDefaultFramebuffer()) {
+                auto readBuffer = readFbo->GetReadBuffer();
+                if (readBuffer == FramebufferAttachmentType::None) {
+                    readBuffer = FramebufferAttachmentType::Color0;
+                }
+                const auto& attachment = readFbo->GetAttachment(readBuffer);
+                if (attachment.IsTexture()) {
+                    if (SyncTexture(*attachment.GetTexture()) != nullptr) {
+                        auto it = m_textureCache.find(attachment.GetTexture()->GetLifetimeId());
+                        if (it != m_textureCache.end() && it->second.Texture) {
+                            pSrcTexture = it->second.Texture;
+                        }
+                    }
+                }
+                // Renderbuffer readback is not wired yet; fall back to the default target.
+            }
+        }
+
+        const auto& srcDesc = pSrcTexture->GetDesc();
         ::Diligent::TextureDesc stagingDesc;
         stagingDesc.Name = "MobileGL Diligent staging readback";
         stagingDesc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
         stagingDesc.Format = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
-        stagingDesc.Width = m_width;
-        stagingDesc.Height = m_height;
+        stagingDesc.Width = srcDesc.Width;
+        stagingDesc.Height = srcDesc.Height;
         stagingDesc.MipLevels = 1;
         stagingDesc.Usage = ::Diligent::USAGE_STAGING;
         stagingDesc.CPUAccessFlags = ::Diligent::CPU_ACCESS_READ;
@@ -860,7 +1503,7 @@ void main()
         }
 
         ::Diligent::CopyTextureAttribs copyAttribs{
-            m_pColorTarget, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+            pSrcTexture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
             pStaging, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION};
         copyAttribs.SrcMipLevel = 0;
         copyAttribs.DstMipLevel = 0;

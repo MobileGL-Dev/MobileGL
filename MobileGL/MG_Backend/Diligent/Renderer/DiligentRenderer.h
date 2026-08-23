@@ -31,6 +31,13 @@ namespace Diligent {
     struct IShaderResourceBinding;
 }
 
+namespace MobileGL::MG_State::GLState {
+    class ITextureObject;
+    class SamplerObject;
+    class ProgramObject;
+    class RenderbufferObject;
+}
+
 namespace MobileGL::MG_Backend::DiligentBackend {
     // Minimal real Diligent renderer used to prove the GL 3.2 basic path:
     // clear an offscreen color target, draw a hardcoded triangle, and read
@@ -59,11 +66,34 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::IDeviceContext* GetContext() const { return m_pContext; }
 
     private:
+        struct TextureResource {
+            ::Diligent::RefCntAutoPtr<::Diligent::ITexture> Texture;
+            ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> SRV;
+            ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> RTV;
+            ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> DSV;
+            Uint64 ContentVersion = 0;
+            Uint16 ParamsVersion = 0;
+            Bool IsDepth = false;
+        };
+
+        struct SamplerResource {
+            ::Diligent::RefCntAutoPtr<::Diligent::ISampler> Sampler;
+            Uint16 Version = 0;
+        };
+
         Bool CreateOffscreenTargets();
         Bool CreatePipeline();
         Bool CreateVertexBuffer();
         Bool CreatePipelineFromState(GLenum mode);
         Bool UploadVertexDataFromState(GLenum mode, GLint first, GLsizei count, GLenum type, const void* indices);
+        ::Diligent::ITextureView* SyncTexture(MG_State::GLState::ITextureObject& texture);
+        ::Diligent::ITextureView* SyncTextureForAttachment(MG_State::GLState::ITextureObject& texture, Bool depth);
+        ::Diligent::ITextureView* SyncRenderbuffer(MG_State::GLState::RenderbufferObject& renderbuffer);
+        ::Diligent::ISampler* SyncSampler(const MG_State::GLState::SamplerObject& sampler);
+        Bool BindShaderResourcesFromState(const MG_State::GLState::ProgramObject& program);
+        Bool UploadUBOFromState(const MG_State::GLState::ProgramObject& program);
+        Bool ResolveCurrentRenderTargets(Vector<::Diligent::ITextureView*>& rtvs,
+                                         ::Diligent::ITextureView*& dsv);
 
         ::Diligent::IRenderDevice* m_pDevice = nullptr;
         ::Diligent::IDeviceContext* m_pContext = nullptr;
@@ -77,6 +107,13 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::RefCntAutoPtr<::Diligent::IShaderResourceBinding> m_pStateSRB;
         ::Diligent::RefCntAutoPtr<::Diligent::IPipelineState> m_pPSO;
         ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pVertexBuffer;
+        ::Diligent::RefCntAutoPtr<::Diligent::IBuffer> m_pUBO;
+        Uint32 m_uboSize = 0;
+        Uint32 m_uboContentVersion = 0;
+        Uint64 m_uboProgramLifetimeId = 0;
+        UnorderedMap<Uint64, TextureResource> m_textureCache;
+        UnorderedMap<Uint64, SamplerResource> m_samplerCache;
+        UnorderedMap<Uint32, TextureResource> m_renderbufferCache;
         Uint32 m_width = 256;
         Uint32 m_height = 256;
         Uint32 m_lastDrawVertexCount = 0;
