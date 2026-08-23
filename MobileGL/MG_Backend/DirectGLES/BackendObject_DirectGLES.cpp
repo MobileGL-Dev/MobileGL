@@ -1030,6 +1030,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // was simply never emitted, which left KHR-GL4*.draw_elements_base_vertex_tests
             // NotSupported on a feature that works.
             E_GL_ARB_draw_elements_base_vertex,
+            // The whole sync-object family is real and core since 3.2: glFenceSync, glIsSync,
+            // glDeleteSync, glClientWaitSync, glWaitSync and glGetSynciv all live in GLImpl over a
+            // backend fence (a host GLsync here, a VkFence on DirectVulkan), and glGetInteger64v
+            // answers GL_MAX_SERVER_WAIT_TIMEOUT. The string matters for the same reason
+            // ARB_uniform_buffer_object's does: LWJGL builds GLCapabilities from the extension
+            // list, and a caller that finds GL_ARB_sync missing never resolves the entry points -
+            // then calls through null if it uses fences anyway. Nothing in the CTS gates on this
+            // string, so it is advertised on the strength of the implementation, not a test unlock.
+            E_GL_ARB_sync,
+            // Atomic counters, core since 4.2. glGetActiveAtomicCounterBufferiv and the whole
+            // GL_ATOMIC_COUNTER_BUFFER_* query family are real in GLImpl, and SyncAtomicCounterBuffers
+            // re-issues the counter buffer as an SSBO binding in the range reserved at the top of
+            // the ES driver's shader-storage points, so a counter dispatch reads and writes the
+            // buffer the application bound. DirectVulkan reaches the same place through its own
+            // descriptor resolution, so the string is symmetric.
+            E_GL_ARB_shader_atomic_counters,
             // glVertexAttribDivisor, core since 3.3 and real on both backends. Applications
             // (Better Clouds' GLCompat among them) accept the extension string as an
             // ALTERNATIVE to a 3.3 context when deciding whether instanced rendering is
