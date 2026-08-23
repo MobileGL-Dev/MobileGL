@@ -2040,13 +2040,17 @@ void main()
         return true;
     }
 
+    void DiligentRenderer::SetSwapInterval(Uint32 interval) {
+        m_swapInterval = interval;
+    }
+
     void DiligentRenderer::ReleaseSwapChain() {
         m_pSwapChain.Release();
     }
 
     void DiligentRenderer::Present() {
         if (m_pSwapChain) {
-            m_pSwapChain->Present(0);
+            m_pSwapChain->Present(m_swapInterval);
         } else if (m_pContext) {
             // Offscreen renderer: nothing to present yet.
             m_pContext->Flush();

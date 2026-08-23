@@ -659,8 +659,10 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         }
 
         void SetSwapInterval(Int interval) {
-            // No native swapchain yet; the offscreen renderer ignores the interval.
-            (void)interval;
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->SetSwapInterval(interval > 0 ? static_cast<Uint32>(interval) : 0);
+            }
         }
 
         void Present() {

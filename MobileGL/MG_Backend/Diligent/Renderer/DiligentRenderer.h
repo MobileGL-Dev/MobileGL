@@ -65,6 +65,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool CreateSwapChain(::Diligent::IEngineFactoryVk* factory, const WindowHandle& handle,
                              Uint32 width, Uint32 height);
         Bool ResizeSwapChain(Uint32 width, Uint32 height);
+        void SetSwapInterval(Uint32 interval);
         // Creates a simple 2D RGBA8 texture from CPU data and makes it available
         // to state PSOs under the shader variable name "g_Texture".
         Bool CreateTestTexture(const void* data, Uint32 width, Uint32 height);
@@ -143,6 +144,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         UnorderedMap<Uint64, ::Diligent::RefCntAutoPtr<::Diligent::IBuffer>> m_namedUboCache;
         Uint32 m_width = 256;
         Uint32 m_height = 256;
+        Uint32 m_swapInterval = 0;
         Uint32 m_lastDrawVertexCount = 0;
         Uint64 m_lastPSOKey = 0;
         Bool m_hasCachedPSO = false;
