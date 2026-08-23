@@ -626,3 +626,95 @@ void main() { Color = vec4(1.0, 0.0, 0.0, 0.5); }
     EXPECT_LT(center[0], 220) << "center should not be pure red";
     EXPECT_LT(center[1], 220) << "center should not be pure green";
 }
+
+
+TEST(DiligentVulkanBackend, DrawsWithDepthTestFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+uniform float u_depth;
+void main() { gl_Position = vec4(Position, u_depth, 1.0); }
+)";
+    const char* redFsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
+)";
+    const char* blueFsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(0.0, 0.0, 1.0, 1.0); }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+
+    const GLuint redFs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(redFs, 1, &redFsSrc, nullptr);
+    CompileShader(redFs);
+    const GLuint redProgram = CreateProgram();
+    AttachShader(redProgram, vs);
+    AttachShader(redProgram, redFs);
+    LinkProgram(redProgram);
+
+    const GLuint blueFs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(blueFs, 1, &blueFsSrc, nullptr);
+    CompileShader(blueFs);
+    const GLuint blueProgram = CreateProgram();
+    AttachShader(blueProgram, vs);
+    AttachShader(blueProgram, blueFs);
+    LinkProgram(blueProgram);
+
+    const float vertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    // Isolate from state left by earlier tests in the same process.
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    Disable(GL_BLEND);
+    Disable(GL_SCISSOR_TEST);
+    Enable(GL_DEPTH_TEST);
+    DepthFunc(GL_LESS);
+    DepthMask(GL_TRUE);
+    Viewport(0, 0, 256, 256);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping depth state test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->ClearDepth(1.0f);
+
+    UseProgram(redProgram);
+    const GLint redDepth = GetUniformLocation(redProgram, "u_depth");
+    ASSERT_GE(redDepth, 0);
+    Uniform1f(redDepth, 0.0f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+
+    UseProgram(blueProgram);
+    const GLint blueDepth = GetUniformLocation(blueProgram, "u_depth");
+    ASSERT_GE(blueDepth, 0);
+    Uniform1f(blueDepth, 0.5f);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_GT(center[0], 200) << "center should stay red from the nearer depth draw";
+    EXPECT_LT(center[2], 50) << "center should not become blue from the farther draw";
+}

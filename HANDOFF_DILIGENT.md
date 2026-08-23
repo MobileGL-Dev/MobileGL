@@ -103,6 +103,7 @@ Working tree is clean.
   - `DrawsToOffscreenFramebufferFromMobileGLState`
   - `DrawsWithScissorFromMobileGLState`
   - `DrawsWithBlendFromMobileGLState`
+  - `DrawsWithDepthTestFromMobileGLState`
 
 ---
 
@@ -154,7 +155,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 10 tests
+[  PASSED  ] 11 tests
 ```
 
 ---
@@ -245,7 +246,7 @@ Notes:
    - [x] Blend test
    - [x] Texture filtering / sampler state test
    - [x] framebuffer offscreen render-to-texture test
-   - [ ] Depth test visual test
+   - [x] Depth test visual test
    - [ ] Stencil test
 
 ---
