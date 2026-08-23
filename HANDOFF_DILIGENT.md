@@ -219,7 +219,7 @@ Notes:
 - User framebuffers now support texture color attachments, renderbuffer color readback, multiple simultaneous color targets, and depth/stencil texture or renderbuffer attachments.
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
-- No swapchain / EGL window surface presentation yet; `Present()` only flushes.
+- No swapchain / EGL window surface presentation yet; `Present()` only flushes and `SetSwapInterval` is a no-op.
 - No transform feedback / GPU-accelerated queries / non-color readback; fence sync and timer queries use CPU fallbacks.
 - Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit, read-pixels, CopyTexImage*, CopyImageSubData, GenerateMipmap, GetTexImage/GetTextureImage and indirect draws are now wired; buffer subdata paths still remain.
 - A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.

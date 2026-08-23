@@ -658,6 +658,11 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             return true;
         }
 
+        void SetSwapInterval(Int interval) {
+            // No native swapchain yet; the offscreen renderer ignores the interval.
+            (void)interval;
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -790,6 +795,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.GetQueryResult64 = GetQueryResult64;
         m_functions.GL.DeleteBackendQuery = DeleteBackendQuery;
         m_functions.Present = Present;
+        m_functions.SetSwapInterval = SetSwapInterval;
 
         m_initialized = true;
     }
