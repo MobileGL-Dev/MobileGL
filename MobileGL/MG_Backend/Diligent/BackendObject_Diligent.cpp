@@ -278,6 +278,32 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || MG_State::pGLContext == nullptr || target != GL_TEXTURE_2D ||
+                format != GL_RGBA || type != GL_UNSIGNED_BYTE || pixels == nullptr) {
+                return;
+            }
+            auto& unit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
+            auto texture = unit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
+            if (texture) {
+                renderer->ReadTextureImage(*texture, static_cast<Uint32>(level), pixels);
+            }
+        }
+
+        void GetTextureImage(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
+                             TextureUploadTarget uploadTarget, GLint level, GLenum format, GLenum type,
+                             GLsizei bufSize, GLvoid* pixels) {
+            (void)uploadTarget;
+            (void)bufSize;
+            auto* renderer = GetActiveRenderer();
+            if (renderer == nullptr || !texture || format != GL_RGBA || type != GL_UNSIGNED_BYTE ||
+                pixels == nullptr) {
+                return;
+            }
+            renderer->ReadTextureImage(*texture, static_cast<Uint32>(level), pixels);
+        }
+
         void Present() {
             auto* renderer = GetActiveRenderer();
             if (renderer != nullptr) {
@@ -384,6 +410,8 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.BlitFramebuffer = BlitFramebuffer;
         m_functions.GL.CopyTexImage2D = CopyTexImage2D;
         m_functions.GL.CopyTexSubImage2D = CopyTexSubImage2D;
+        m_functions.GL.GetTexImage = GetTexImage;
+        m_functions.GL.GetTextureImage = GetTextureImage;
         m_functions.GL.ReadPixels = ReadPixels;
         m_functions.Present = Present;
 

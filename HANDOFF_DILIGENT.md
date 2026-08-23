@@ -152,6 +152,7 @@ Verified locally on Turnip Adreno 750:
   - `ClearBufferfv` / `ClearBufferiv` / `ClearBufferuiv`
   - `BlitFramebuffer` (same-size color copy between current read/draw FBOs)
   - `CopyTexImage2D` / `CopyTexSubImage2D` (whole-color copy fallback)
+  - `GetTexImage` / `GetTextureImage` (RGBA8 readback)
   - `ReadPixels` from default and user color attachments
 - Primitive expansion:
   - `GL_TRIANGLE_FAN` expanded to triangle list
@@ -211,7 +212,7 @@ Notes:
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
 - No swapchain / EGL window surface presentation yet; `Present()` only flushes.
 - No transform feedback / queries / sync / readback of non-color resources.
-- Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit, read-pixels and CopyTexImage* are now wired; indirect draws, GetTexImage and buffer subdata paths still remain.
+- Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit, read-pixels, CopyTexImage* and GetTexImage/GetTextureImage are now wired; indirect draws and buffer subdata paths still remain.
 - A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.
 - The `GLFunctionsTable` is only partially populated.
 
@@ -243,7 +244,9 @@ Notes:
    - [x] `MultiDraw*`
    - [x] `BlitFramebuffer` (same-size color copy)
    - [x] `ReadPixels` from non-default framebuffer
-   - [~] `CopyTexImage*` wired as whole-color copy; `GetTexImage` / indirect draws remain
+   - [x] `CopyTexImage*` wired as whole-color copy
+   - [x] `GetTexImage` / `GetTextureImage` (RGBA8)
+   - [ ] Indirect draws
 
 6. **Expand local test suite**
    - [x] Scissor test

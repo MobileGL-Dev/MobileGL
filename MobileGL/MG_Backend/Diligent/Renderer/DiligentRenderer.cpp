@@ -1741,6 +1741,68 @@ void main()
         m_pContext->CopyTexture(copyAttribs);
     }
 
+    Bool DiligentRenderer::ReadTextureImage(MG_State::GLState::ITextureObject& texture, Uint32 level,
+                                         void* pixels) {
+        if (!m_initialized || !m_pContext || pixels == nullptr) {
+            return false;
+        }
+        if (SyncTexture(texture) == nullptr) {
+            return false;
+        }
+        auto it = m_textureCache.find(texture.GetLifetimeId());
+        if (it == m_textureCache.end() || !it->second.Texture) {
+            return false;
+        }
+        auto& resource = it->second;
+        const auto& srcDesc = resource.Texture->GetDesc();
+        if (srcDesc.Format != ::Diligent::TEX_FORMAT_RGBA8_UNORM &&
+            srcDesc.Format != ::Diligent::TEX_FORMAT_RGBA8_UNORM_SRGB) {
+            return false;
+        }
+
+        ::Diligent::TextureDesc stagingDesc;
+        stagingDesc.Name = "MobileGL Diligent texture image staging";
+        stagingDesc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
+        stagingDesc.Format = srcDesc.Format;
+        stagingDesc.Width = srcDesc.Width;
+        stagingDesc.Height = srcDesc.Height;
+        stagingDesc.MipLevels = 1;
+        stagingDesc.Usage = ::Diligent::USAGE_STAGING;
+        stagingDesc.CPUAccessFlags = ::Diligent::CPU_ACCESS_READ;
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pStaging;
+        m_pDevice->CreateTexture(stagingDesc, nullptr, &pStaging);
+        if (!pStaging) {
+            return false;
+        }
+
+        ::Diligent::CopyTextureAttribs copyAttribs(
+            resource.Texture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+            pStaging, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        copyAttribs.SrcMipLevel = level;
+        copyAttribs.DstMipLevel = 0;
+        m_pContext->CopyTexture(copyAttribs);
+        m_pContext->WaitForIdle();
+
+        ::Diligent::MappedTextureSubresource mapped;
+        m_pContext->MapTextureSubresource(pStaging, 0, 0, ::Diligent::MAP_READ,
+                                          ::Diligent::MAP_FLAG_DO_NOT_WAIT, nullptr, mapped);
+        if (mapped.pData == nullptr) {
+            return false;
+        }
+
+        const Uint32 width = srcDesc.Width >> level;
+        const Uint32 height = srcDesc.Height >> level;
+        Uint8* dst = static_cast<Uint8*>(pixels);
+        for (Uint32 row = 0; row < height; ++row) {
+            std::memcpy(dst + row * width * 4,
+                        static_cast<const Uint8*>(mapped.pData) + row * mapped.Stride,
+                        width * 4);
+        }
+        m_pContext->UnmapTextureSubresource(pStaging, 0, 0);
+        return true;
+    }
+
     void DiligentRenderer::Present() {
         // Offscreen renderer: nothing to present yet.
         if (m_pContext) {
