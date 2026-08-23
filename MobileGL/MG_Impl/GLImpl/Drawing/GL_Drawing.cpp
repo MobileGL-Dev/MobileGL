@@ -713,7 +713,34 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    namespace {
+        // GL 4.6 core 7.11.2 (and ARB_shader_image_load_store, which introduced the call): the
+        // barrier bitfield is INVALID_VALUE unless every bit is one of the defined ones, with
+        // GL_ALL_BARRIER_BITS - which is 0xFFFFFFFF, not the union of the list - accepted whole.
+        // Forwarding an undefined bit to the host driver let a caller that had computed its mask
+        // wrongly (or reused an ES-only bit) get silence instead of the error the spec promises.
+        constexpr GLbitfield kAllDefinedBarrierBits =
+            GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT |
+            GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_COMMAND_BARRIER_BIT |
+            GL_PIXEL_BUFFER_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT |
+            GL_FRAMEBUFFER_BARRIER_BIT | GL_TRANSFORM_FEEDBACK_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT |
+            GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_QUERY_BUFFER_BARRIER_BIT;
+
+        Bool ValidateMemoryBarrierBits(const char* function, GLbitfield barriers) {
+            if (barriers == GL_ALL_BARRIER_BITS) return true;
+            if ((barriers & ~kAllDefinedBarrierBits) != 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", function,
+                                                 "barriers contains bits that are not defined barrier bits."));
+                return false;
+            }
+            return true;
+        }
+    } // namespace
+
     void MemoryBarrier(GLbitfield barriers) {
+        if (!ValidateMemoryBarrierBits(__func__, barriers)) return;
         auto memoryBarrier = MG_Backend::gBackendFunctionsTable.GL.MemoryBarrier;
         if (!memoryBarrier) {
             MG_State::pGLContext->RecordError(
@@ -725,6 +752,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void MemoryBarrierByRegion(GLbitfield barriers) {
+        if (!ValidateMemoryBarrierBits(__func__, barriers)) return;
         auto memoryBarrierByRegion = MG_Backend::gBackendFunctionsTable.GL.MemoryBarrierByRegion;
         if (!memoryBarrierByRegion) {
             MG_State::pGLContext->RecordError(
