@@ -813,8 +813,32 @@ namespace MobileGL::MG_Backend::DiligentBackend {
     }
 
     Bool BackendObject_Diligent::InitWindowSurface() {
-        // Skeleton: no native swapchain creation yet.
-        return true;
+        if (!m_windowHandle.Handle) {
+            MGLOG_E("BackendObject_Diligent::InitWindowSurface failed: native window handle is null");
+            return false;
+        }
+        if (m_pRenderer == nullptr || m_pFactoryVk == nullptr) {
+            MGLOG_E("BackendObject_Diligent::InitWindowSurface failed: renderer/factory is not ready");
+            return false;
+        }
+        return m_pRenderer->CreateSwapChain(m_pFactoryVk, m_windowHandle,
+                                            m_windowHandle.Width, m_windowHandle.Height);
+    }
+
+    Bool BackendObject_Diligent::InitPbufferSurface(EGLint width, EGLint height) {
+        // The Diligent backend keeps its offscreen target for pbuffer EGL surfaces.
+        // A future enhancement can resize/recreate the offscreen target to match the
+        // pbuffer dimensions.
+        (void)width;
+        (void)height;
+        return m_pRenderer != nullptr;
+    }
+
+    void BackendObject_Diligent::ReleaseEGLResources() {
+        if (m_pRenderer != nullptr) {
+            m_pRenderer->ReleaseSwapChain();
+        }
+        BackendObject::ReleaseEGLResources();
     }
 
     const RendererInfo& BackendObject_Diligent::GetRendererInfo() const {

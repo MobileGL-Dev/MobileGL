@@ -14,8 +14,11 @@
 #include <PipelineState.h>
 #include <InputLayout.h>
 #include <Sampler.h>
+#include <SwapChain.h>
+#include <NativeWindow.h>
 #include <ShaderResourceBinding.h>
 #include <ShaderResourceVariable.h>
+#include <EngineFactoryVk.h>
 
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
@@ -375,6 +378,45 @@ void main()
         }
 
         m_initialized = true;
+        return true;
+    }
+
+    Bool DiligentRenderer::CreateSwapChain(::Diligent::IEngineFactoryVk* factory, const WindowHandle& handle,
+                                        Uint32 width, Uint32 height) {
+        if (factory == nullptr || m_pDevice == nullptr || m_pContext == nullptr || handle.Handle == nullptr) {
+            MGLOG_E("DiligentRenderer::CreateSwapChain: invalid factory/device/context/window");
+            return false;
+        }
+
+        ::Diligent::SwapChainDesc desc;
+        desc.Width = width > 0 ? width : std::max<Uint32>(handle.Width, 1);
+        desc.Height = height > 0 ? height : std::max<Uint32>(handle.Height, 1);
+        desc.ColorBufferFormat = ::Diligent::TEX_FORMAT_RGBA8_UNORM_SRGB;
+        desc.DepthBufferFormat = ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
+        desc.BufferCount = 2;
+
+        ::Diligent::NativeWindow nativeWindow{};
+#if PLATFORM_ANDROID
+        nativeWindow.pAWindow = handle.Handle;
+#elif PLATFORM_LINUX
+        // X11 Window IDs are integers that the frontend stores as a void* handle.
+        // The X11 display/connection could not be plumbed through WindowHandle yet;
+        // swapchain creation on X11 may need those fields filled by a future change.
+        nativeWindow.WindowId = static_cast<::Diligent::Uint32>(
+            reinterpret_cast<uintptr_t>(handle.Handle));
+#else
+        (void)nativeWindow;
+#endif
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ISwapChain> pSwapChain;
+        factory->CreateSwapChainVk(m_pDevice, m_pContext, desc, nativeWindow, &pSwapChain);
+        if (!pSwapChain) {
+            MGLOG_E("DiligentRenderer::CreateSwapChain: failed to create swap chain");
+            return false;
+        }
+        m_pSwapChain = pSwapChain;
+        m_width = desc.Width;
+        m_height = desc.Height;
         return true;
     }
 
@@ -867,7 +909,19 @@ void main()
             return false;
         }
 
+        auto useSwapChainTargets = [&]() -> Bool {
+            if (m_pSwapChain && m_pSwapChain->GetCurrentBackBufferRTV()) {
+                rtvs.push_back(m_pSwapChain->GetCurrentBackBufferRTV());
+                dsv = m_pSwapChain->GetDepthBufferDSV();
+                return true;
+            }
+            return false;
+        };
+
         if (MG_State::pGLContext == nullptr) {
+            if (useSwapChainTargets()) {
+                return true;
+            }
             if (m_pColorRTV) {
                 rtvs.push_back(m_pColorRTV.RawPtr());
             }
@@ -877,6 +931,9 @@ void main()
 
         auto drawFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (!drawFbo || drawFbo->IsDefaultFramebuffer()) {
+            if (useSwapChainTargets()) {
+                return true;
+            }
             if (m_pColorRTV) {
                 rtvs.push_back(m_pColorRTV.RawPtr());
             }
@@ -1641,6 +1698,9 @@ void main()
         }
 
         ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pSrcTexture = m_pColorTarget;
+        if (m_pSwapChain && m_pSwapChain->GetCurrentBackBufferRTV()) {
+            pSrcTexture = m_pSwapChain->GetCurrentBackBufferRTV()->GetTexture();
+        }
         if (MG_State::pGLContext != nullptr) {
             auto readFbo = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (readFbo && !readFbo->IsDefaultFramebuffer()) {
@@ -1970,9 +2030,15 @@ void main()
         return true;
     }
 
+    void DiligentRenderer::ReleaseSwapChain() {
+        m_pSwapChain.Release();
+    }
+
     void DiligentRenderer::Present() {
-        // Offscreen renderer: nothing to present yet.
-        if (m_pContext) {
+        if (m_pSwapChain) {
+            m_pSwapChain->Present(0);
+        } else if (m_pContext) {
+            // Offscreen renderer: nothing to present yet.
             m_pContext->Flush();
         }
     }

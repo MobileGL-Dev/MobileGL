@@ -117,6 +117,7 @@ Working tree is clean.
 Verified locally on Turnip Adreno 750:
 
 - Diligent device/context creation
+- EGL window-surface swapchain creation path through Diligent `ISwapChain` (offscreen tests still use the offscreen target)
 - GL 3.2 / GLSL 1.50 capability advertisement
 - Offscreen color + depth rendering
 - Clear color and depth
@@ -219,7 +220,7 @@ Notes:
 - User framebuffers now support texture color attachments, renderbuffer color readback, multiple simultaneous color targets, and depth/stencil texture or renderbuffer attachments.
 - Textures auto-sync `ITextureObject` → Diligent resources, including mip levels and sampler state; compressed textures and integer/3-channel formats that Diligent lacks are still skipped.
 - Global UBO (default-block `glUniform*`) and named application UBO blocks (through `glBindBufferBase`/`glUniformBlockBinding`) now upload and bind; SSBOs are still not fed from frontend buffer bindings.
-- No swapchain / EGL window surface presentation yet; `Present()` only flushes and `SetSwapInterval` is a no-op.
+- Swapchain creation is now wired for native EGL window surfaces via `Diligent::ISwapChain`; `Present()` presents the active swap chain when present and otherwise flushes the offscreen target. Actual on-screen EGL presentation is still untested in this headless environment, and the X11 display/connection fields are not yet plumbed through `WindowHandle`. `SetSwapInterval` remains a no-op.
 - No transform feedback / GPU-accelerated queries / non-color readback; fence sync and timer queries use CPU fallbacks.
 - Draw range, multi-draw, instanced-draw wrappers, clear-buffer, blit, read-pixels, CopyTexImage*, CopyImageSubData, GenerateMipmap, GetTexImage/GetTextureImage and indirect draws are now wired; buffer subdata paths still remain.
 - A last-PSO cache now avoids recreating the pipeline when program/render-state/topology/VAO layout is unchanged; texture/UBO resources are still rebound dynamically per draw.

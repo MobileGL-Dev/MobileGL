@@ -42,12 +42,14 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void Initialize() override;
         Bool InitCapabilities() override;
         Bool InitWindowSurface() override;
+        Bool InitPbufferSurface(EGLint width, EGLint height) override;
 
         const RendererInfo& GetRendererInfo() const override;
         String GetBackendAPIVersionString() const override;
         const GlobalBackendFunctionsTable& GetBackendFunctions() const override;
         const DynamicBackendParameters& GetDynamicParameters() const override;
         BackendType GetBackendType() const override;
+        void ReleaseEGLResources() override;
 
         DiligentRenderer* GetRenderer();
 

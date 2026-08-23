@@ -20,6 +20,10 @@
 
 #include <RefCntAutoPtr.hpp>
 
+namespace MobileGL::MG_Backend {
+    struct WindowHandle;
+}
+
 namespace Diligent {
     struct IRenderDevice;
     struct IDeviceContext;
@@ -29,6 +33,8 @@ namespace Diligent {
     struct IBuffer;
     struct ISampler;
     struct IShaderResourceBinding;
+    struct ISwapChain;
+    struct IEngineFactoryVk;
 }
 
 namespace MobileGL::MG_State::GLState {
@@ -55,6 +61,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void ClearStencil(Uint32 stencil);
         void DrawTriangle();
         void DrawVertices(const Float* vertices, Uint32 vertexCount);
+        // Creates a real Diligent swap chain for a native EGL window surface.
+        Bool CreateSwapChain(::Diligent::IEngineFactoryVk* factory, const WindowHandle& handle,
+                             Uint32 width, Uint32 height);
         // Creates a simple 2D RGBA8 texture from CPU data and makes it available
         // to state PSOs under the shader variable name "g_Texture".
         Bool CreateTestTexture(const void* data, Uint32 width, Uint32 height);
@@ -73,6 +82,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void CopyTextureSubData(MG_State::GLState::ITextureObject& src, MG_State::GLState::ITextureObject& dst);
         void GenerateMipmap(MG_State::GLState::ITextureObject& texture);
         Bool ReadTextureImage(MG_State::GLState::ITextureObject& texture, Uint32 level, void* pixels);
+        void ReleaseSwapChain();
         void Present();
 
         ::Diligent::IRenderDevice* GetDevice() const { return m_pDevice; }
@@ -115,6 +125,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pColorRTV;
         ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pDepthTarget;
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pDepthDSV;
+        ::Diligent::RefCntAutoPtr<::Diligent::ISwapChain> m_pSwapChain;
         ::Diligent::RefCntAutoPtr<::Diligent::ITexture> m_pTestTexture;
         ::Diligent::RefCntAutoPtr<::Diligent::ITextureView> m_pTestSRV;
         ::Diligent::RefCntAutoPtr<::Diligent::ISampler> m_pTestSampler;
