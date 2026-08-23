@@ -47,6 +47,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             if ((mask & GL_DEPTH_BUFFER_BIT) != 0) {
                 renderer->ClearDepth(MG_State::pGLContext->GetClearDepth());
             }
+            if ((mask & GL_STENCIL_BUFFER_BIT) != 0) {
+                renderer->ClearStencil(MG_State::pGLContext->GetClearStencil());
+            }
         }
 
         void DrawArrays(GLenum mode, GLint first, GLsizei count) {

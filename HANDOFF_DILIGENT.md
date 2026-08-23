@@ -105,6 +105,7 @@ Working tree is clean.
   - `DrawsWithBlendFromMobileGLState`
   - `DrawsWithDepthTestFromMobileGLState`
   - `DrawsNamedUniformBlockFromMobileGLState`
+  - `DrawsWithStencilTestFromMobileGLState`
 
 ---
 
@@ -128,6 +129,7 @@ Verified locally on Turnip Adreno 750:
   - Textured draw test passes
 - Render state:
   - Blend enable/factors/equations
+  - Stencil clear + test enabled on a D24S8 default depth/stencil target
   - Depth test enable/func/write mask
   - Cull face enable/mode/front-face winding
   - Stencil test enable/masks/ops/func/ref
@@ -156,7 +158,7 @@ Verified locally on Turnip Adreno 750:
 - Local test result:
 
 ```
-[  PASSED  ] 12 tests
+[  PASSED  ] 13 tests
 ```
 
 ---
@@ -248,7 +250,7 @@ Notes:
    - [x] Texture filtering / sampler state test
    - [x] framebuffer offscreen render-to-texture test
    - [x] Depth test visual test
-   - [ ] Stencil test
+   - [x] Stencil test
 
 ---
 

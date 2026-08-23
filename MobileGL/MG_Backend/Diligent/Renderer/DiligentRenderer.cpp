@@ -406,7 +406,7 @@ void main()
         ::Diligent::TextureDesc depthDesc;
         depthDesc.Name = "MobileGL Diligent offscreen depth target";
         depthDesc.Type = ::Diligent::RESOURCE_DIM_TEX_2D;
-        depthDesc.Format = ::Diligent::TEX_FORMAT_D32_FLOAT;
+        depthDesc.Format = ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
         depthDesc.Width = m_width;
         depthDesc.Height = m_height;
         depthDesc.MipLevels = 1;
@@ -532,6 +532,21 @@ void main()
         m_pContext->SetRenderTargets(static_cast<::Diligent::Uint32>(rtvs.size()), rtvs.data(), dsv,
                                      ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
         m_pContext->ClearDepthStencil(dsv, ::Diligent::CLEAR_DEPTH_FLAG, depth, 0,
+                                      ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+    }
+
+    void DiligentRenderer::ClearStencil(Uint32 stencil) {
+        if (!m_initialized || !m_pContext) {
+            return;
+        }
+        Vector<::Diligent::ITextureView*> rtvs;
+        ::Diligent::ITextureView* dsv = nullptr;
+        if (!ResolveCurrentRenderTargets(rtvs, dsv) || dsv == nullptr) {
+            return;
+        }
+        m_pContext->SetRenderTargets(static_cast<::Diligent::Uint32>(rtvs.size()), rtvs.data(), dsv,
+                                     ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->ClearDepthStencil(dsv, ::Diligent::CLEAR_STENCIL_FLAG, 0, stencil,
                                       ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
     }
 
@@ -1315,7 +1330,7 @@ void main()
         psoDesc.ResourceLayout.DefaultVariableType = ::Diligent::SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC;
         graphicsPipeline.NumRenderTargets = 1;
         graphicsPipeline.RTVFormats[0] = ::Diligent::TEX_FORMAT_RGBA8_UNORM;
-        graphicsPipeline.DSVFormat = ::Diligent::TEX_FORMAT_D32_FLOAT;
+        graphicsPipeline.DSVFormat = ::Diligent::TEX_FORMAT_D24_UNORM_S8_UINT;
         switch (mode) {
         case GL_POINTS:
             graphicsPipeline.PrimitiveTopology = ::Diligent::PRIMITIVE_TOPOLOGY_POINT_LIST;

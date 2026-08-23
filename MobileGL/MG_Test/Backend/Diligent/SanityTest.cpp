@@ -798,3 +798,90 @@ void main() { Color = u_color; }
     EXPECT_LT(center[1], 50) << "center should not be green";
     EXPECT_GT(center[2], 200) << "center should be blue from the named uniform block";
 }
+
+
+TEST(DiligentVulkanBackend, DrawsWithStencilTestFromMobileGLState) {
+    MobileGL::Initialize();
+
+    const char* vsSrc = R"(#version 330 core
+layout(location = 0) in vec2 Position;
+void main() { gl_Position = vec4(Position, 0.0, 1.0); }
+)";
+    const char* redFsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(1.0, 0.0, 0.0, 1.0); }
+)";
+    const char* blueFsSrc = R"(#version 330 core
+out vec4 Color;
+void main() { Color = vec4(0.0, 0.0, 1.0, 1.0); }
+)";
+
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSrc, nullptr);
+    CompileShader(vs);
+    const GLuint redFs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(redFs, 1, &redFsSrc, nullptr);
+    CompileShader(redFs);
+    const GLuint redProgram = CreateProgram();
+    AttachShader(redProgram, vs);
+    AttachShader(redProgram, redFs);
+    LinkProgram(redProgram);
+    const GLuint blueFs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(blueFs, 1, &blueFsSrc, nullptr);
+    CompileShader(blueFs);
+    const GLuint blueProgram = CreateProgram();
+    AttachShader(blueProgram, vs);
+    AttachShader(blueProgram, blueFs);
+    LinkProgram(blueProgram);
+
+    const float vertices[] = {
+        -0.5f, -0.5f,
+         0.5f, -0.5f,
+         0.0f,  0.5f,
+    };
+    GLuint vbo = 0;
+    GenBuffers(1, &vbo);
+    BindBuffer(GL_ARRAY_BUFFER, vbo);
+    BufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    GLuint vao = 0;
+    GenVertexArrays(1, &vao);
+    BindVertexArray(vao);
+    EnableVertexAttribArray(0);
+    VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    BindFramebuffer(GL_FRAMEBUFFER, 0);
+    Disable(GL_DEPTH_TEST);
+    Disable(GL_BLEND);
+    Disable(GL_SCISSOR_TEST);
+    Viewport(0, 0, 256, 256);
+
+    DiligentBackend::BackendObject_Diligent backend;
+    backend.Initialize();
+    auto* renderer = backend.GetRenderer();
+    if (renderer == nullptr) {
+        GTEST_SKIP() << "No Vulkan adapter available; skipping stencil state test";
+    }
+
+    renderer->Clear(0.0f, 1.0f, 0.0f, 1.0f);
+    renderer->ClearStencil(0);
+
+    Enable(GL_STENCIL_TEST);
+    StencilMask(0xFF);
+    StencilFunc(GL_ALWAYS, 1, 0xFF);
+    StencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);
+    UseProgram(redProgram);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+
+    // Second draw should fail the stencil test (ref 2 != stencil value 1).
+    StencilFunc(GL_EQUAL, 2, 0xFF);
+    StencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    UseProgram(blueProgram);
+    renderer->DrawFromState(GL_TRIANGLES, 0, 3, 0, nullptr);
+    renderer->Present();
+
+    std::uint8_t center[4] = {};
+    renderer->ReadPixels(128, 128, 1, 1, center);
+    EXPECT_GT(center[0], 200) << "center should remain red after failing stencil draw";
+    EXPECT_LT(center[2], 50) << "center should not become blue";
+}

@@ -51,6 +51,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         Bool Initialize(Uint32 width, Uint32 height);
         void Clear(Float r, Float g, Float b, Float a);
         void ClearDepth(Float depth);
+        void ClearStencil(Uint32 stencil);
         void DrawTriangle();
         void DrawVertices(const Float* vertices, Uint32 vertexCount);
         // Creates a simple 2D RGBA8 texture from CPU data and makes it available
