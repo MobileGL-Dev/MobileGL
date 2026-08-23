@@ -155,7 +155,7 @@ Verified locally on Turnip Adreno 750:
   - `DrawArraysInstanced` / `DrawElementsInstanced` family
   - Indirect draw CPU fallback: `DrawArraysIndirect`, `DrawElementsIndirect`, `MultiDraw*Indirect`, `*IndirectCount`
   - `ClearBufferfv` / `ClearBufferfi` / `ClearBufferiv` / `ClearBufferuiv` (incl. stencil clear)
-  - `BlitFramebuffer` (same-size color copy between current read/draw FBOs)
+  - `BlitFramebuffer` / `BlitNamedFramebuffer` (same-size color copy between read/draw FBOs)
   - `CopyTexImage2D` / `CopyTexSubImage2D` (whole-color copy fallback)
   - `CopyImageSubData` (whole-texture copy between two texture objects)
   - `GenerateMipmap` (Diligent GPU mip generation on state textures)

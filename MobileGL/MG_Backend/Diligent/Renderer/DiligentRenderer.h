@@ -36,6 +36,7 @@ namespace MobileGL::MG_State::GLState {
     class SamplerObject;
     class ProgramObject;
     class RenderbufferObject;
+    class FramebufferObject;
 }
 
 namespace MobileGL::MG_Backend::DiligentBackend {
@@ -65,6 +66,9 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                              GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                              GLbitfield mask, GLenum filter);
+        void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFbo,
+                                  const SharedPtr<MG_State::GLState::FramebufferObject>& drawFbo,
+                                  GLbitfield mask);
         void CopyReadFramebufferToTexture(MG_State::GLState::ITextureObject& dst);
         void CopyTextureSubData(MG_State::GLState::ITextureObject& src, MG_State::GLState::ITextureObject& dst);
         void GenerateMipmap(MG_State::GLState::ITextureObject& texture);

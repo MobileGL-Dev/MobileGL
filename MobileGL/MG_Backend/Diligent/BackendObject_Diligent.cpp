@@ -449,6 +449,26 @@ namespace MobileGL::MG_Backend::DiligentBackend {
             }
         }
 
+        void BlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
+                                  const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
+                                  GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                                  GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                                  GLbitfield mask, GLenum filter) {
+            (void)srcX0;
+            (void)srcY0;
+            (void)srcX1;
+            (void)srcY1;
+            (void)dstX0;
+            (void)dstY0;
+            (void)dstX1;
+            (void)dstY1;
+            (void)filter;
+            auto* renderer = GetActiveRenderer();
+            if (renderer != nullptr) {
+                renderer->BlitNamedFramebuffer(readFramebuffer, drawFramebuffer, mask);
+            }
+        }
+
         void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y,
                             GLsizei width, GLsizei height, GLint border) {
             (void)level;
@@ -662,6 +682,7 @@ namespace MobileGL::MG_Backend::DiligentBackend {
         m_functions.GL.ClearBufferiv = ClearBufferiv;
         m_functions.GL.ClearBufferuiv = ClearBufferuiv;
         m_functions.GL.BlitFramebuffer = BlitFramebuffer;
+        m_functions.GL.BlitNamedFramebuffer = BlitNamedFramebuffer;
         m_functions.GL.CopyTexImage2D = CopyTexImage2D;
         m_functions.GL.CopyTexSubImage2D = CopyTexSubImage2D;
         m_functions.GL.CopyImageSubData = CopyImageSubData;

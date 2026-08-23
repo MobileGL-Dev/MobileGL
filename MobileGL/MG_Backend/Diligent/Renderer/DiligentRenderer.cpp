@@ -1712,6 +1712,63 @@ void main()
         m_pContext->UnmapTextureSubresource(pStaging, 0, 0);
     }
 
+    void DiligentRenderer::BlitNamedFramebuffer(
+        const SharedPtr<MG_State::GLState::FramebufferObject>& readFbo,
+        const SharedPtr<MG_State::GLState::FramebufferObject>& drawFbo,
+        GLbitfield mask) {
+        if (!m_initialized || !m_pContext || (mask & GL_COLOR_BUFFER_BIT) == 0) {
+            return;
+        }
+
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pSrcTexture = m_pColorTarget;
+        ::Diligent::RefCntAutoPtr<::Diligent::ITexture> pDstTexture = m_pColorTarget;
+        if (readFbo && !readFbo->IsDefaultFramebuffer()) {
+            auto readBuffer = readFbo->GetReadBuffer();
+            if (readBuffer == FramebufferAttachmentType::None) {
+                readBuffer = FramebufferAttachmentType::Color0;
+            }
+            const auto& att = readFbo->GetAttachment(readBuffer);
+            if (att.IsTexture() && SyncTexture(*att.GetTexture()) != nullptr) {
+                auto it = m_textureCache.find(att.GetTexture()->GetLifetimeId());
+                if (it != m_textureCache.end() && it->second.Texture) {
+                    pSrcTexture = it->second.Texture;
+                }
+            } else if (att.IsRenderbuffer() && SyncRenderbuffer(*att.GetRenderbuffer()) != nullptr) {
+                auto it = m_renderbufferCache.find(att.GetRenderbuffer()->GetExternalIndex());
+                if (it != m_renderbufferCache.end() && it->second.Texture) {
+                    pSrcTexture = it->second.Texture;
+                }
+            }
+        }
+        if (drawFbo && !drawFbo->IsDefaultFramebuffer()) {
+            for (const auto candidate : drawFbo->GetDrawBuffers()) {
+                if (candidate == FramebufferAttachmentType::None) {
+                    continue;
+                }
+                const auto& att = drawFbo->GetAttachment(candidate);
+                if (att.IsTexture() && SyncTexture(*att.GetTexture()) != nullptr) {
+                    auto it = m_textureCache.find(att.GetTexture()->GetLifetimeId());
+                    if (it != m_textureCache.end() && it->second.Texture) {
+                        pDstTexture = it->second.Texture;
+                    }
+                } else if (att.IsRenderbuffer() && SyncRenderbuffer(*att.GetRenderbuffer()) != nullptr) {
+                    auto it = m_renderbufferCache.find(att.GetRenderbuffer()->GetExternalIndex());
+                    if (it != m_renderbufferCache.end() && it->second.Texture) {
+                        pDstTexture = it->second.Texture;
+                    }
+                }
+                break;
+            }
+        }
+        if (!pSrcTexture || !pDstTexture || pSrcTexture == pDstTexture) {
+            return;
+        }
+        ::Diligent::CopyTextureAttribs copyAttribs(
+            pSrcTexture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+            pDstTexture, ::Diligent::RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+        m_pContext->CopyTexture(copyAttribs);
+    }
+
     void DiligentRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                        GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                        GLbitfield mask, GLenum filter) {
