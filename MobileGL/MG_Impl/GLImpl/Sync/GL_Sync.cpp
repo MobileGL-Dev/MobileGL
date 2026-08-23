@@ -69,8 +69,25 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     GLenum ClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {
+        // GL 4.6 core 4.1.1: GL_SYNC_FLUSH_COMMANDS_BIT is the only bit this call accepts, and
+        // any other bit is INVALID_VALUE. Silently ignoring the stray bits used to make a caller
+        // that passed, say, GL_SYNC_GPU_COMMANDS_COMPLETE by mistake think it had asked for a
+        // flush it never got.
+        if ((flags & ~static_cast<GLbitfield>(GL_SYNC_FLUSH_COMMANDS_BIT)) != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "flags must be zero or GL_SYNC_FLUSH_COMMANDS_BIT."));
+            return GL_WAIT_FAILED;
+        }
         const auto* syncObject = FindSyncObject(sync);
         if (!syncObject) {
+            // The spec pairs the GL_WAIT_FAILED return with a recorded INVALID_VALUE; returning
+            // the enum alone left glGetError() clean and the failure indistinguishable from a
+            // genuine wait failure on a live sync.
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "sync is not the name of a sync object."));
             return GL_WAIT_FAILED;
         }
         const auto backendClientWaitSync = MG_Backend::gBackendFunctionsTable.GL.ClientWaitSync;
@@ -95,6 +112,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto* syncObject = FindSyncObject(sync);
         if (!syncObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "sync is not the name of a sync object."));
             return;
         }
         const auto backendWaitSync = MG_Backend::gBackendFunctionsTable.GL.WaitSync;
@@ -125,8 +145,22 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetSynciv(GLsync sync, GLenum pname, GLsizei bufSize, GLsizei* length, GLint* values) {
+        // GL 4.6 core 4.1: a negative bufSize is INVALID_VALUE, an unnamed sync is INVALID_VALUE
+        // and an unrecognised pname is INVALID_ENUM. All three used to leave glGetError() clean
+        // and write a plausible-looking zero, which is the one failure mode a caller cannot tell
+        // apart from a real answer - GL_SYNC_STATUS legitimately answers GL_UNSIGNALED (0x9118),
+        // but a mistyped pname answered a bare 0 that no query ever returns.
+        if (bufSize < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "bufSize must not be negative."));
+            return;
+        }
         const auto* syncObject = FindSyncObject(sync);
         if (!syncObject) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "sync is not the name of a sync object."));
             if (length) {
                 *length = 0;
             }
@@ -152,7 +186,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             value = static_cast<GLint>(syncObject->flags);
             break;
         default:
-            break;
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "pname must be GL_OBJECT_TYPE, GL_SYNC_STATUS, GL_SYNC_CONDITION or "
+                                             "GL_SYNC_FLAGS."));
+            if (length) {
+                *length = 0;
+            }
+            return;
         }
 
         if (length) {

@@ -17,6 +17,7 @@
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include "MG_Util/ShaderTranspiler/Types.h"
 #include <Config.h>
 #include <algorithm>
 #include <cstdio>
@@ -923,22 +924,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Int blockIndex = programObj.storageBlockIndexByBinding[binding];
         MOBILEGL_ASSERT(blockIndex >= 0, "ResolveStorageBufferDescriptor: no SSBO block mapped to binding %u",
                         binding);
+        // An atomic counter is not an SSBO the application ever declared: glslang lowers every
+        // atomic_uint onto a synthesized gl_AtomicCounterBlock_<N> storage block, where N is the
+        // GL ATOMIC-COUNTER binding. That block arrives here auto-mapped to an arbitrary
+        // storage-block slot, so resolving it the SSBO way looked up GL_SHADER_STORAGE_BUFFER
+        // point N' - which is never where glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, N, ...) put
+        // the buffer. The counter therefore never reached the shader (KHR-GL43
+        // shader_atomic_counters.advanced-usage-*), and when the application also bound an SSBO at
+        // the colliding slot the descriptor silently aliased it, so the dispatch wrote over the
+        // application's own buffer. DirectGLES has always taken this branch explicitly
+        // (SyncAtomicCounterBuffers); this is the same rule in Magma's descriptor resolution.
+        //
+        // Only the SOURCE of the handle differs. The per-counter layout(offset=) is already folded
+        // into the block's SPIR-V member offsets on this path (FlattenAtomicCounterBlockPass is
+        // DirectGLES-only), so everything below - residency, the glBindBufferRange window, the
+        // descriptor fill - is target-agnostic and stays exactly as it was.
+        const String& blockName = programObj.storageBlockNameByBinding[binding];
+        const Int atomicCounterBinding = MG_Util::ShaderTranspiler::AtomicCounterBlockGlBinding(blockName);
+        const Bool isAtomicCounterBlock = atomicCounterBinding >= 0;
+        const BufferTarget bufferTarget =
+            isAtomicCounterBlock ? BufferTarget::AtomicCounter : BufferTarget::ShaderStorage;
         // A block instance array declares one block whose elements take consecutive GL binding
         // points from the declared one (GL 4.6 core 7.8), and the reflection collapses the whole
-        // array to that one block - so the element index IS the offset from its binding.
+        // array to that one block - so the element index IS the offset from its binding. glslang
+        // synthesizes one counter block per GL binding, so a counter block is never an instance
+        // array and `element` is always 0 there; the +element rule stays with the SSBO case.
         const GLuint frontendBinding =
-            GetShaderStorageBlockBinding(program, static_cast<GLuint>(blockIndex)) + element;
+            isAtomicCounterBlock
+                ? static_cast<GLuint>(atomicCounterBinding)
+                : GetShaderStorageBlockBinding(program, static_cast<GLuint>(blockIndex)) + element;
         const Uint32 bindingPointCount =
-            static_cast<Uint32>(MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::ShaderStorage));
+            static_cast<Uint32>(MG_State::pGLContext->GetBufferBindingPointCount(bufferTarget));
         MOBILEGL_ASSERT(frontendBinding < bindingPointCount,
-                        "ResolveStorageBufferDescriptor: frontend SSBO binding %u out of range for block '%s'",
-                        frontendBinding, programObj.storageBlockNameByBinding[binding].c_str());
+                        "ResolveStorageBufferDescriptor: frontend binding %u out of range for block '%s'",
+                        frontendBinding, blockName.c_str());
 
-        auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, frontendBinding);
+        auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, frontendBinding);
         const auto& bufferObject = bindingPoint.GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: no SSBO bound at frontend binding %u for block '%s'",
-                    frontendBinding, programObj.storageBlockNameByBinding[binding].c_str());
+            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: no buffer bound at frontend binding %u for block '%s'",
+                    frontendBinding, blockName.c_str());
             return false;
         }
 

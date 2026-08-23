@@ -1269,7 +1269,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 summary.caps.SupportsDisjointTimerQuery, summary.caps.SupportsTextureFilterAnisotropy,
                 summary.caps.SupportsDrawIndirect,
                 summary.caps.SupportsDrawIndirect && summary.caps.SupportsBaseInstance,
-                summary.caps.SupportsTextureView));
+                summary.caps.SupportsTextureView, summary.caps.SupportsTextureCubeMapArray));
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectGLES::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);
@@ -2009,6 +2009,7 @@ namespace MobileGL::MG_Util::SelfTest {
             Bool samplerAnisotropySupported = false;
             Bool drawIndirectFirstInstanceSupported = false;
             Bool shaderDrawParametersSupported = false;
+            Bool imageCubeArraySupported = false;
         };
     } // namespace
 
@@ -2300,6 +2301,7 @@ namespace MobileGL::MG_Util::SelfTest {
         VkPhysicalDeviceFeatures features{};
         vkGetPhysicalDeviceFeaturesFn(physicalDevice, &features);
         summary.samplerAnisotropySupported = features.samplerAnisotropy == VK_TRUE;
+        summary.imageCubeArraySupported = features.imageCubeArray == VK_TRUE;
         summary.drawIndirectFirstInstanceSupported = features.drawIndirectFirstInstance == VK_TRUE;
         if (features.multiDrawIndirect == VK_TRUE) {
             builder.Pass("multiDrawIndirect", "indirect multi-draw batches run as single native commands");
@@ -2721,7 +2723,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 summary.deviceName, summary.apiVersionString, summary.driverVersionString);
             advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(
                 summary.shaderSubgroupUsable, summary.timerQueriesSupported, summary.samplerAnisotropySupported,
-                summary.drawIndirectFirstInstanceSupported && summary.shaderDrawParametersSupported));
+                summary.drawIndirectFirstInstanceSupported && summary.shaderDrawParametersSupported,
+                summary.imageCubeArraySupported));
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectVulkan::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);

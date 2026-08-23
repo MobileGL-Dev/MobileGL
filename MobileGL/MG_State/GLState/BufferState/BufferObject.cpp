@@ -118,7 +118,13 @@ namespace MobileGL::MG_State::GLState {
         // record that so backends skip uploading the stale shadow bytes.
         m_hasDefinedContent = (data != nullptr) || size == 0;
         m_isImmutableStorage = false;
-        m_storageFlags = 0;
+        // GL 4.6 core 6.2 defines glBufferData as glBufferStorage with
+        // DYNAMIC_STORAGE_BIT | MAP_READ_BIT | MAP_WRITE_BIT, so GL_BUFFER_STORAGE_FLAGS has to
+        // report those three afterwards. Reporting 0 - the value that belongs to a buffer whose
+        // store has never been specified - told an application that a perfectly writable
+        // glBufferData buffer accepted neither glBufferSubData nor a map. Only the IMMUTABLE flag
+        // distinguishes the two cases, and it is cleared just above.
+        m_storageFlags = GL_DYNAMIC_STORAGE_BIT | GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
         NotifyRespecify();
     }
 

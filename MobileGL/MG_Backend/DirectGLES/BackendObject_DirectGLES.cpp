@@ -753,7 +753,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no runtime capabilities yet); reconciled once
                         // the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
-                        .Extensions = BuildAdvertisedExtensions(false, false, false, false, false),
+                        .Extensions = BuildAdvertisedExtensions(false, false, false, false, false, false),
                         .IsCompatibilityProfile = false // Is Compatibility Profile
                     },
                 .StaticBackendCapability = {.AllowVSOnlyPrograms = false} // Backend Capability
@@ -778,7 +778,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
                 capabilities.SupportsDrawIndirect,
                 capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
-                capabilities.SupportsTextureView);
+                capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray);
         }
     } // namespace
 
@@ -992,7 +992,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported) {
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,3,0}, and a list that stopped at OpenGL40 told an
@@ -1030,6 +1030,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // was simply never emitted, which left KHR-GL4*.draw_elements_base_vertex_tests
             // NotSupported on a feature that works.
             E_GL_ARB_draw_elements_base_vertex,
+            // The whole sync-object family is real and core since 3.2: glFenceSync, glIsSync,
+            // glDeleteSync, glClientWaitSync, glWaitSync and glGetSynciv all live in GLImpl over a
+            // backend fence (a host GLsync here, a VkFence on DirectVulkan), and glGetInteger64v
+            // answers GL_MAX_SERVER_WAIT_TIMEOUT. The string matters for the same reason
+            // ARB_uniform_buffer_object's does: LWJGL builds GLCapabilities from the extension
+            // list, and a caller that finds GL_ARB_sync missing never resolves the entry points -
+            // then calls through null if it uses fences anyway. Nothing in the CTS gates on this
+            // string, so it is advertised on the strength of the implementation, not a test unlock.
+            E_GL_ARB_sync,
+            // Atomic counters, core since 4.2. glGetActiveAtomicCounterBufferiv and the whole
+            // GL_ATOMIC_COUNTER_BUFFER_* query family are real in GLImpl, and SyncAtomicCounterBuffers
+            // re-issues the counter buffer as an SSBO binding in the range reserved at the top of
+            // the ES driver's shader-storage points, so a counter dispatch reads and writes the
+            // buffer the application bound. DirectVulkan reaches the same place through its own
+            // descriptor resolution, so the string is symmetric.
+            E_GL_ARB_shader_atomic_counters,
             // glVertexAttribDivisor, core since 3.3 and real on both backends. Applications
             // (Better Clouds' GLCompat among them) accept the extension string as an
             // ALTERNATIVE to a 3.3 context when deciding whether instanced rendering is
@@ -1039,6 +1055,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // object-label table are MobileGL's own state, not the host driver's - so it is as
             // available here as it is on DirectVulkan, which has advertised it all along.
             E_GL_KHR_debug,
+            // Core GL 3.0-4.3 plumbing that has been real here for as long as the backend has
+            // existed, and that was simply never named. None of these unlocks a single CTS case -
+            // the conformance suite reaches all of them through the version - so they are
+            // advertised for the OTHER consumer of this list: LWJGL builds GLCapabilities from the
+            // string set, and an application that gates its ENTRY POINTS on the string rather than
+            // on the version never resolves them and then calls through null. Each is backed by
+            // the entry points named beside it.
+            //
+            // glBindVertexArray / glGenVertexArrays / glDeleteVertexArrays / glIsVertexArray.
+            E_GL_ARB_vertex_array_object,
+            // The 14 glSamplerParameter* / glGetSamplerParameter* entry points, including the
+            // integer-valued Iiv/Iuiv forms.
+            E_GL_ARB_sampler_objects,
+            // glMapBufferRange + glFlushMappedBufferRange, which ARB_buffer_storage's persistent
+            // maps are already built on top of.
+            E_GL_ARB_map_buffer_range,
+            // glCopyBufferSubData plus the GL_COPY_READ_BUFFER / GL_COPY_WRITE_BUFFER targets.
+            E_GL_ARB_copy_buffer,
+            // glCopyImageSubData, wired to a real backend hook on both backends.
+            E_GL_ARB_copy_image,
+            // GL_TEXTURE_SWIZZLE_{R,G,B,A,RGBA}, which this backend syncs through to the ES
+            // driver's identical parameters.
+            E_GL_ARB_texture_swizzle,
+            // GL_INT_2_10_10_10_REV / GL_UNSIGNED_INT_2_10_10_10_REV on glVertexAttribPointer plus
+            // the eight glVertexAttribP* entry points.
+            E_GL_ARB_vertex_type_2_10_10_10_rev,
+            // The R/RG internal formats. Named separately from the float ones because an
+            // application may check either.
+            E_GL_ARB_texture_rg,
+            // GL_DEPTH_COMPONENT32F and GL_DEPTH32F_STENCIL8.
+            E_GL_ARB_depth_buffer_float,
+            // The floating-point colour formats. Unlike the rest of this block this string DOES
+            // gate CTS cases - KHR-GL4*.internalformat.texture2d.*{16f,32f} is keyed on it with no
+            // core-version fallback, so eight cases per version list were NotSupported on formats
+            // the backend has always had.
+            E_GL_ARB_texture_float,
+            // glViewportArrayv / glViewportIndexedf{,v} / glScissorArrayv / glScissorIndexed{,v} /
+            // glDepthRangeArrayv / glDepthRangeIndexed / glGetFloati_v / glGetDoublei_v, over the
+            // 16 viewports GL_MAX_VIEWPORTS reports and the per-viewport routing emulation.
+            E_GL_ARB_viewport_array,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
@@ -1086,6 +1142,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // MOBILEGL_DISABLE_TIMERQUERY escape hatch is off.
         if (timerQueriesSupported && !MG_Config::Features.DisableTimerQuery) {
             extensions.push_back(E_GL_ARB_timer_query);
+        }
+        // Cube map arrays are core from GL 4.0 and from ES 3.2, but on a pre-ES-3.2 driver without
+        // EXT/OES_texture_cube_map_array there is nothing underneath: the texture gets no storage
+        // and a samplerCubeArray shader does not even compile, which is exactly what the POST
+        // reports. So the string follows the host capability rather than the version.
+        //
+        // Named for the application's benefit rather than the suite's: measured on Adreno 830,
+        // KHR-GL43.texture_gather.plain-gather-*-cube-array already passed without the string, so
+        // this unlocks no conformance case. It is advertised because the feature is real and
+        // because an application that feature-detects cube map arrays off the string (rather than
+        // off the 4.0 version) would otherwise decline a path this backend serves.
+        if (cubeMapArraySupported) {
+            extensions.push_back(E_GL_ARB_texture_cube_map_array);
         }
         // Only advertised when the host ES driver has EXT/OES_texture_view. ES has no core
         // texture views at any version and no honest emulation exists: a view is a SECOND NAME

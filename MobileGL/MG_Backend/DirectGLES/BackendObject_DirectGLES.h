@@ -83,7 +83,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported);
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported);
 
     // Format: <OpenGL ES Renderer>, OpenGL ES <Major>.<Minor> — the exact string an
     // initialized backend returns from GetBackendAPIVersionString (and that ends up
