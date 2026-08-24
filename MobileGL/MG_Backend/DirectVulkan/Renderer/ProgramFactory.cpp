@@ -2186,6 +2186,49 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
+    SamplerNumericDomain ProgramFactory::UniformTypeToImageNumericDomain(GLenum glType) {
+        switch (glType) {
+        case GL_INT_IMAGE_1D:
+        case GL_INT_IMAGE_2D:
+        case GL_INT_IMAGE_3D:
+        case GL_INT_IMAGE_2D_RECT:
+        case GL_INT_IMAGE_CUBE:
+        case GL_INT_IMAGE_BUFFER:
+        case GL_INT_IMAGE_1D_ARRAY:
+        case GL_INT_IMAGE_2D_ARRAY:
+        case GL_INT_IMAGE_CUBE_MAP_ARRAY:
+        case GL_INT_IMAGE_2D_MULTISAMPLE:
+        case GL_INT_IMAGE_2D_MULTISAMPLE_ARRAY:
+            return SamplerNumericDomain::SignedInteger;
+        case GL_UNSIGNED_INT_IMAGE_1D:
+        case GL_UNSIGNED_INT_IMAGE_2D:
+        case GL_UNSIGNED_INT_IMAGE_3D:
+        case GL_UNSIGNED_INT_IMAGE_2D_RECT:
+        case GL_UNSIGNED_INT_IMAGE_CUBE:
+        case GL_UNSIGNED_INT_IMAGE_BUFFER:
+        case GL_UNSIGNED_INT_IMAGE_1D_ARRAY:
+        case GL_UNSIGNED_INT_IMAGE_2D_ARRAY:
+        case GL_UNSIGNED_INT_IMAGE_CUBE_MAP_ARRAY:
+        case GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE:
+        case GL_UNSIGNED_INT_IMAGE_2D_MULTISAMPLE_ARRAY:
+            return SamplerNumericDomain::UnsignedInteger;
+        case GL_IMAGE_1D:
+        case GL_IMAGE_2D:
+        case GL_IMAGE_3D:
+        case GL_IMAGE_2D_RECT:
+        case GL_IMAGE_CUBE:
+        case GL_IMAGE_BUFFER:
+        case GL_IMAGE_1D_ARRAY:
+        case GL_IMAGE_2D_ARRAY:
+        case GL_IMAGE_CUBE_MAP_ARRAY:
+        case GL_IMAGE_2D_MULTISAMPLE:
+        case GL_IMAGE_2D_MULTISAMPLE_ARRAY:
+            return SamplerNumericDomain::Float;
+        default:
+            return SamplerNumericDomain::Unknown;
+        }
+    }
+
     ProgramFactory::HashType ProgramFactory::ComputeHash(const MG_State::GLState::ProgramObject& program,
                                                          CompileOptionFlags flags) const {
         XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
@@ -2955,6 +2998,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     static_cast<Int>(entry.samplerNumericDomainByBinding[binding]),
                                     static_cast<Int>(numericDomain));
                     entry.samplerNumericDomainByBinding[binding] = numericDomain;
+                }
+                // Every other opaque kind records its domain too. Only the combined-image-sampler
+                // path above needs it to pick a sampled view format; the three below need it to
+                // describe the descriptor a binding gets when its unit is UNBOUND, which is legal
+                // GL and must not lose the draw (see UniformManager's Resolve*Descriptor). Left
+                // Unknown, those placeholders would have no way to tell a `samplerBuffer` from a
+                // `usamplerBuffer` - and a texel buffer view whose numeric type disagrees with the
+                // shader's is invalid Vulkan, not merely wrong data.
+                if (descriptorKind == DescriptorBindingKind::UniformTexelBuffer ||
+                    descriptorKind == DescriptorBindingKind::StorageTexelBuffer ||
+                    descriptorKind == DescriptorBindingKind::StorageImage) {
+                    const SamplerNumericDomain opaqueDomain =
+                        descriptorKind == DescriptorBindingKind::UniformTexelBuffer
+                            ? UniformTypeToSamplerNumericDomain(uniformType)
+                            : UniformTypeToImageNumericDomain(uniformType);
+                    MOBILEGL_ASSERT(opaqueDomain != SamplerNumericDomain::Unknown,
+                                    "ProgramFactory::ReflectLayout: failed to resolve numeric domain for '%s' "
+                                    "(uniformType=0x%x)",
+                                    uniformName.c_str(), uniformType);
+                    MOBILEGL_ASSERT(entry.samplerNumericDomainByBinding[binding] ==
+                                            SamplerNumericDomain::Unknown ||
+                                        entry.samplerNumericDomainByBinding[binding] == opaqueDomain,
+                                    "ProgramFactory::ReflectLayout: binding %u ('%s') has conflicting numeric "
+                                    "domains (%d vs %d)",
+                                    binding, uniformName.c_str(),
+                                    static_cast<Int>(entry.samplerNumericDomainByBinding[binding]),
+                                    static_cast<Int>(opaqueDomain));
+                    entry.samplerNumericDomainByBinding[binding] = opaqueDomain;
                 }
                 MOBILEGL_ASSERT(entry.samplerUniformLocationByBinding[binding] < 0 || location < 0 ||
                                     entry.samplerUniformLocationByBinding[binding] == location,

@@ -19,6 +19,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See VkBufferManager::AcquireUnboundStorageDescriptor. 256 bytes: comfortably past
         // every minStorageBufferOffsetAlignment in the wild, and free.
         constexpr VkDeviceSize kUnboundStorageDescriptorBytes = 256;
+        // See VkBufferManager::AcquireUnboundTexelBufferDescriptor. The same 256 bytes, for the
+        // same reason plus one: a texel buffer view's range must be a whole number of texels of
+        // whatever format the placeholder is asked for, and 256 divides by every texel size in
+        // the GL image-format table (1, 2, 4, 8 and 16 bytes).
+        constexpr VkDeviceSize kUnboundTexelBufferDescriptorBytes = 256;
 
         // A zero-copy persistent buffer is created once and never recreated (the app holds
         // its mapped pointer), and may be bound to any role, so it carries every usage.
@@ -135,6 +140,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         m_transientUploadArena.Shutdown();
         m_unboundStorageBuffer.Destroy();
+        m_unboundTexelBuffer.Destroy();
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
         m_copyProvider = nullptr;
@@ -740,6 +746,39 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         return m_unboundStorageBuffer.GetSlice();
+    }
+
+    BufferSlice VkBufferManager::AcquireUnboundTexelBufferDescriptor() {
+        if (!m_unboundTexelBuffer.IsValid()) {
+            if (m_initInfo.allocator == nullptr) {
+                return {};
+            }
+            // A SECOND placeholder rather than more usage bits on the storage-block one. The two
+            // are independent failure domains: a device that refuses this allocation must not
+            // take the storage-block placeholder - and with it the fix this one is a sibling of -
+            // down with it. Host-visible and zero-filled for the same reason as that one: this is
+            // reached from descriptor resolution, inside an already-open recording, which must
+            // not start a copy of its own.
+            const Bool created = m_unboundTexelBuffer.Create({
+                .allocator = m_initInfo.allocator,
+                .size = kUnboundTexelBufferDescriptorBytes,
+                .usage = VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                   VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            });
+            if (!created) {
+                MGLOG_E_ONCE("VkBufferManager::AcquireUnboundTexelBufferDescriptor: placeholder creation failed");
+                m_unboundTexelBuffer.Destroy();
+                return {};
+            }
+            if (void* mapped = m_unboundTexelBuffer.GetMappedData()) {
+                Memset(mapped, 0, static_cast<SizeT>(kUnboundTexelBufferDescriptorBytes));
+            }
+        }
+        return m_unboundTexelBuffer.GetSlice();
     }
 
     VkBufferUsageFlags VkBufferManager::GetVkBufferUsage(BufferKind kind) {

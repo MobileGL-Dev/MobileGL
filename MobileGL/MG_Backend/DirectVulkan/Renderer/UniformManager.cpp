@@ -11,14 +11,19 @@
 #include "MG_Backend/DirectVulkan/DirectVulkanResourceState.h"
 #include "MG_State/GLState/Core.h"
 #include "MG_State/GLState/ProgramState/ProgramObject.h"
+#include "MG_State/GLState/TextureState/TextureObject1D.h"
 #include "MG_State/GLState/TextureState/TextureObject2D.h"
+#include "MG_State/GLState/TextureState/TextureObject2DCube.h"
+#include "MG_State/GLState/TextureState/TextureObject3D.h"
 #include "MG_State/GLState/TextureState/TextureObjectBuffer.h"
+#include "MG_State/GLState/TextureState/TextureObjectStubs.h"
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
 #include <Config.h>
+#include <vulkan/utility/vk_format_utils.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +33,136 @@
 namespace MobileGL::MG_Backend::DirectVulkan {
     namespace {
         constexpr Uint kFallbackTexture2DExternalIndex = 0xFFFFFF00u;
+        // One id for every storage-image placeholder. They are never reachable through GL - no
+        // glGenTextures ever hands this out, and nothing looks a placeholder up by name - so the
+        // id only has to stay clear of the application's, exactly like the sampled fallback's.
+        constexpr Uint kUnboundStorageImageExternalIndex = 0xFFFFFF01u;
+
+        // The R32 member of each numeric class. Every one of the three is a MANDATORY-support
+        // format for uniform texel buffers, storage texel buffers and storage images alike
+        // (Vulkan 1.0, "Required Format Support"), which is what makes them a fallback that
+        // cannot itself fail for want of device features.
+        VkFormat PlaceholderFormatForNumericDomain(SamplerNumericDomain numericDomain) {
+            switch (numericDomain) {
+            case SamplerNumericDomain::Float:
+                return VK_FORMAT_R32_SFLOAT;
+            case SamplerNumericDomain::SignedInteger:
+                return VK_FORMAT_R32_SINT;
+            case SamplerNumericDomain::UnsignedInteger:
+                return VK_FORMAT_R32_UINT;
+            case SamplerNumericDomain::Unknown:
+                break;
+            }
+            return VK_FORMAT_UNDEFINED;
+        }
+
+        Bool BufferFormatSupportsFeature(VkPhysicalDevice physicalDevice, VkFormat format,
+                                         VkFormatFeatureFlags requiredFeature) {
+            if (physicalDevice == VK_NULL_HANDLE || format == VK_FORMAT_UNDEFINED) {
+                return false;
+            }
+            VkFormatProperties properties{};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &properties);
+            return (properties.bufferFeatures & requiredFeature) == requiredFeature;
+        }
+
+        // Reverse of MG_Util::ConvertTextureInternalFormatToVkEnum. A placeholder texture is
+        // built through the ordinary frontend texture object (that is what gets it an image with
+        // STORAGE usage, a GENERAL transition and a view, for free), and that object is described
+        // by a GL internal format - while everything upstream of here speaks VkFormat. Scanned
+        // rather than tabulated: it runs once per (target, format) placeholder ever created, the
+        // enum is ~70 entries, and a second hand-written table is a second thing to drift.
+        // Ascending order matters: the sized formats precede the unsized aliases, so a scan
+        // answers with the sized one.
+        TextureInternalFormat InternalFormatForVkFormat(VkFormat format) {
+            if (format == VK_FORMAT_UNDEFINED) {
+                return TextureInternalFormat::Unknown;
+            }
+            for (Int index = 0; index < static_cast<Int>(TextureInternalFormat::TextureInternalFormatCount);
+                 ++index) {
+                const auto candidate = static_cast<TextureInternalFormat>(index);
+                if (MG_Util::ConvertTextureInternalFormatToVkEnum(candidate) == format) {
+                    return candidate;
+                }
+            }
+            return TextureInternalFormat::Unknown;
+        }
+
+        // What a 1x1 placeholder of a given target has to allocate for the backend to give it the
+        // Vulkan view type that target's image declaration demands (see
+        // VkTextureManager's TryResolveTextureShapeInfo, which reads exactly these two things).
+        struct PlaceholderShape {
+            Array<TextureUploadTarget, 6> uploadTargets{};
+            Uint32 uploadTargetCount = 0;
+            // The GL depth of the single level: the array length for an array target, the depth
+            // for a 3D one, and 6 for a cube map array (one whole cube).
+            Int depth = 1;
+            Bool valid = false;
+        };
+
+        PlaceholderShape PlaceholderShapeForTarget(TextureTarget target) {
+            PlaceholderShape shape{};
+            switch (target) {
+            case TextureTarget::Texture1D:
+                shape = {{TextureUploadTarget::Texture1D}, 1, 1, true};
+                break;
+            case TextureTarget::Texture2D:
+                shape = {{TextureUploadTarget::Texture2D}, 1, 1, true};
+                break;
+            case TextureTarget::TextureRectangle:
+                shape = {{TextureUploadTarget::TextureRectangle}, 1, 1, true};
+                break;
+            case TextureTarget::Texture3D:
+                shape = {{TextureUploadTarget::Texture3D}, 1, 1, true};
+                break;
+            case TextureTarget::Texture1DArray:
+                shape = {{TextureUploadTarget::Texture1DArray}, 1, 1, true};
+                break;
+            case TextureTarget::Texture2DArray:
+                shape = {{TextureUploadTarget::Texture2DArray}, 1, 1, true};
+                break;
+            case TextureTarget::TextureCubeMap:
+                shape = {{TextureUploadTarget::CubeMapPositiveX, TextureUploadTarget::CubeMapNegativeX,
+                          TextureUploadTarget::CubeMapPositiveY, TextureUploadTarget::CubeMapNegativeY,
+                          TextureUploadTarget::CubeMapPositiveZ, TextureUploadTarget::CubeMapNegativeZ},
+                         6, 1, true};
+                break;
+            case TextureTarget::TextureCubeMapArray:
+                // Layers are cube faces, so the count must be a whole number of cubes.
+                shape = {{TextureUploadTarget::CubeMapArray}, 1, 6, true};
+                break;
+            default:
+                // Multisample targets above all: their descriptor needs a multisample view.
+                break;
+            }
+            return shape;
+        }
+
+        // TextureObjectMipmap, not ITextureObject: AllocateStorage and MarkStorageDirty live
+        // there, and every placeholder shape above is one of its subclasses.
+        SharedPtr<MG_State::GLState::TextureObjectMipmap> MakePlaceholderTextureObject(TextureTarget target,
+                                                                                       Uint index) {
+            switch (target) {
+            case TextureTarget::Texture1D:
+                return MakeShared<MG_State::GLState::TextureObject1D>(index);
+            case TextureTarget::Texture2D:
+                return MakeShared<MG_State::GLState::TextureObject2D>(index);
+            case TextureTarget::TextureRectangle:
+                return MakeShared<MG_State::GLState::TextureObjectRectangle>(index);
+            case TextureTarget::Texture3D:
+                return MakeShared<MG_State::GLState::TextureObject3D>(index);
+            case TextureTarget::Texture1DArray:
+                return MakeShared<MG_State::GLState::TextureObject1DArray>(index);
+            case TextureTarget::Texture2DArray:
+                return MakeShared<MG_State::GLState::TextureObject2DArray>(index);
+            case TextureTarget::TextureCubeMap:
+                return MakeShared<MG_State::GLState::TextureObject2DCube>(index);
+            case TextureTarget::TextureCubeMapArray:
+                return MakeShared<MG_State::GLState::TextureObjectCubeMapArray>(index);
+            default:
+                return nullptr;
+            }
+        }
     }
 
     static Bool FindFramebufferAttachmentForTexture(const MG_State::GLState::FramebufferObject& framebuffer,
@@ -115,7 +250,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return reflectedFormat != VK_FORMAT_UNDEFINED ? reflectedFormat : resourceFormat;
     }
 
-    Bool UniformManager::Initialize(VkDevice device, VkBufferManager* bufferManager,
+    Bool UniformManager::Initialize(VkDevice device, VkPhysicalDevice physicalDevice,
+                                             VkBufferManager* bufferManager,
                                              ProgramFactory* programFactory,
                                              VkDeviceSize minUniformBufferOffsetAlignment, Uint32 frameCount,
                                              Uint32 maxBindings, Uint32 setsPerFrame,
@@ -123,6 +259,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Shutdown();
 
         MOBILEGL_ASSERT(device != VK_NULL_HANDLE, "UniformDescriptorBinder::Initialize requires valid VkDevice");
+        MOBILEGL_ASSERT(physicalDevice != VK_NULL_HANDLE,
+                        "UniformDescriptorBinder::Initialize requires valid VkPhysicalDevice");
         MOBILEGL_ASSERT(bufferManager != nullptr, "UniformDescriptorBinder::Initialize requires valid buffer manager");
         MOBILEGL_ASSERT(programFactory != nullptr,
                         "UniformDescriptorBinder::Initialize requires valid program factory");
@@ -135,6 +273,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "UniformDescriptorBinder::Initialize requires valid sampler manager");
 
         m_device = device;
+        m_physicalDevice = physicalDevice;
         m_bufferManager = bufferManager;
         m_programFactory = programFactory;
         m_minDynamicOffsetAlignment = std::max<VkDeviceSize>(1, minUniformBufferOffsetAlignment);
@@ -173,6 +312,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void UniformManager::Shutdown() {
+        // Before the per-frame loop, because these views are NOT owned by any frame slot (see
+        // m_unboundTexelBufferViews) and the loop below is what clears m_device.
+        if (m_device != VK_NULL_HANDLE) {
+            for (const auto& viewEntry : m_unboundTexelBufferViews) {
+                if (viewEntry.second != VK_NULL_HANDLE) {
+                    vkDestroyBufferView(m_device, viewEntry.second, nullptr);
+                }
+            }
+        }
+        m_unboundTexelBufferViews.clear();
+        m_unboundStorageImageTextures.clear();
         for (auto& frame : m_frames) {
             if (m_device != VK_NULL_HANDLE) {
                 for (auto& view : frame.texelBufferViews) {
@@ -199,6 +349,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_bufferManager = nullptr;
         m_programFactory = nullptr;
         m_device = VK_NULL_HANDLE;
+        m_physicalDevice = VK_NULL_HANDLE;
         m_minDynamicOffsetAlignment = 1;
         m_frameCount = 0;
         m_maxBindings = 0;
@@ -693,11 +844,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveTexelBufferDescriptor: buffer manager is null");
         MOBILEGL_ASSERT(frameIndex < m_frames.size(), "ResolveTexelBufferDescriptor: frame index out of range");
 
+        MOBILEGL_ASSERT(binding < programObj.samplerNumericDomainByBinding.size(),
+                        "ResolveTexelBufferDescriptor: numeric domain binding %u out of range", binding);
+        const SamplerNumericDomain numericDomain = programObj.samplerNumericDomainByBinding[binding];
+
         SharedPtr<MG_State::GLState::ITextureObject> texture;
         if (!ResolveSamplerTexture(program, programObj, binding, texture) || texture == nullptr) {
-            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') is unbound", binding,
-                    programObj.samplerNameByBinding[binding].c_str());
-            return false;
+            // NOT an error, and not a reason to lose the draw. A texture unit with nothing on it
+            // is a legal GL state (4.6 core 8.24): the sampler is incomplete, so a fetch through
+            // it returns undefined values - the same answer the sampled path above gives with its
+            // fallback texture, which a buffer texture simply cannot use because its descriptor is
+            // a VkBufferView. A per-format placeholder view is the equivalent for this kind.
+            const VkBufferView placeholder =
+                AcquireUnboundTexelBufferView(VK_FORMAT_UNDEFINED, numericDomain, false);
+            if (placeholder == VK_NULL_HANDLE) {
+                MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') is unbound, and the "
+                        "placeholder descriptor could not be created", binding,
+                        programObj.samplerNameByBinding[binding].c_str());
+                return false;
+            }
+            MGLOG_D("ResolveTexelBufferDescriptor: binding %u ('%s') is unbound; using the placeholder descriptor",
+                    binding, programObj.samplerNameByBinding[binding].c_str());
+            outBufferView = placeholder;
+            return true;
         }
 
         if (texture->GetStorageType() != TextureStorageType::Buffer ||
@@ -712,9 +881,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
         const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') has no GL buffer bound",
-                    binding, programObj.samplerNameByBinding[binding].c_str());
-            return false;
+            // A buffer texture with no buffer object attached is INCOMPLETE, not illegal (GL 4.6
+            // core 8.9), and sampling an incomplete texture is undefined - so this too keeps the
+            // draw on a placeholder rather than dropping it.
+            const VkBufferView placeholder =
+                AcquireUnboundTexelBufferView(VK_FORMAT_UNDEFINED, numericDomain, false);
+            if (placeholder == VK_NULL_HANDLE) {
+                MGLOG_E_ONCE("ResolveTexelBufferDescriptor: texture buffer binding %u ('%s') has no GL buffer bound, "
+                        "and the placeholder descriptor could not be created", binding,
+                        programObj.samplerNameByBinding[binding].c_str());
+                return false;
+            }
+            MGLOG_D("ResolveTexelBufferDescriptor: binding %u ('%s') has no attached GL buffer; using the "
+                    "placeholder descriptor", binding, programObj.samplerNameByBinding[binding].c_str());
+            outBufferView = placeholder;
+            return true;
         }
 
         BufferSlice slice{};
@@ -804,12 +985,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        MOBILEGL_ASSERT(binding < programObj.storageImageFormatByBinding.size(),
+                        "ResolveStorageTexelBufferDescriptor: binding %u has no reflected format slot", binding);
+        MOBILEGL_ASSERT(binding < programObj.samplerNumericDomainByBinding.size(),
+                        "ResolveStorageTexelBufferDescriptor: numeric domain binding %u out of range", binding);
+
         auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
         const auto& texture = imageBinding.Texture;
         if (texture == nullptr) {
-            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: image unit %d is unbound for binding %u", imageUnit,
-                    binding);
-            return false;
+            // An image unit with no texture on it is legal GL (4.6 core 8.26): loads return zero
+            // and stores are discarded. Declining here took the whole draw or dispatch with it -
+            // the same shape as the unbound storage block fixed alongside this. A placeholder view
+            // in the shader's own declared format lets the work proceed with the stores landing
+            // nowhere anyone can observe, which is what GL asks for.
+            const VkBufferView placeholder =
+                AcquireUnboundTexelBufferView(programObj.storageImageFormatByBinding[binding],
+                                              programObj.samplerNumericDomainByBinding[binding], true);
+            if (placeholder == VK_NULL_HANDLE) {
+                MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: image unit %d is unbound for binding %u, and the "
+                        "placeholder descriptor could not be created", imageUnit, binding);
+                return false;
+            }
+            MGLOG_D("ResolveStorageTexelBufferDescriptor: image unit %d (binding %u) is unbound; using the "
+                    "placeholder descriptor", imageUnit, binding);
+            outBufferView = placeholder;
+            return true;
         }
         if (texture->GetStorageType() != TextureStorageType::Buffer ||
             texture->GetTarget() != TextureTarget::TextureBuffer) {
@@ -824,9 +1024,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* textureBuffer = static_cast<MG_State::GLState::TextureObjectBuffer*>(texture.get());
         const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no GL buffer bound",
-                    imageUnit);
-            return false;
+            // Incomplete buffer texture, same as the sampled path: legal state, undefined data,
+            // and no reason to drop the work.
+            const VkBufferView placeholder =
+                AcquireUnboundTexelBufferView(programObj.storageImageFormatByBinding[binding],
+                                              programObj.samplerNumericDomainByBinding[binding], true);
+            if (placeholder == VK_NULL_HANDLE) {
+                MGLOG_E_ONCE("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no GL buffer "
+                        "bound, and the placeholder descriptor could not be created", imageUnit);
+                return false;
+            }
+            MGLOG_D("ResolveStorageTexelBufferDescriptor: texture buffer on image unit %d has no attached GL buffer; "
+                    "using the placeholder descriptor", imageUnit);
+            outBufferView = placeholder;
+            return true;
         }
 
         // Unlike the sampled texel buffer, the shader MAY write this one, and those writes land
@@ -852,8 +1063,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // policy as a storage image: a typed `layout(r32ui) uniform uimageBuffer` must be read as
         // r32ui whatever the texture's own attachment format says. Falling back, in order:
         // reflected format, then the bind format, then the texture's attached format.
-        MOBILEGL_ASSERT(binding < programObj.storageImageFormatByBinding.size(),
-                        "ResolveStorageTexelBufferDescriptor: binding %u has no reflected format slot", binding);
         const auto internalFormat = textureBuffer->GetFormat();
         const VkFormat resourceFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(internalFormat);
         const VkFormat reflectedFormat = programObj.storageImageFormatByBinding[binding];
@@ -1062,8 +1271,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(imageUnit);
         if (imageBinding.Texture == nullptr) {
-            MGLOG_E_ONCE("ResolveStorageImageDescriptor: image unit %d is unbound for binding %u", imageUnit, binding);
-            return false;
+            // Legal GL: an image unit with no texture bound makes loads return zero and discards
+            // stores (4.6 core 8.26). It is not a reason to lose the draw, which is what returning
+            // false here did - both SetupDraw and DispatchCompute skip everything on it. The
+            // placeholder is a 1x1 image of the target and format the shader's declaration asks
+            // for, so the descriptor is valid and the stores land where nobody can see them.
+            TextureTarget placeholderTarget = TextureTarget::Unknown;
+            VkFormat placeholderFormat = VK_FORMAT_UNDEFINED;
+            SharedPtr<MG_State::GLState::ITextureObject> placeholder;
+            if (ResolveUnboundStorageImagePlaceholder(programObj, binding, placeholderTarget, placeholderFormat)) {
+                placeholder = GetUnboundStorageImageTexture(placeholderTarget, placeholderFormat);
+            }
+            VkImageView placeholderView = VK_NULL_HANDLE;
+            if (placeholder != nullptr &&
+                m_textureManager->TransitionTextureForStorageImage(commandBuffer, *placeholder)) {
+                // layered=true, layer=0: the placeholder's own view type IS the one the shader's
+                // image declaration demands, and that is exactly what the layered form asks for
+                // (see GetOrCreateStorageImageView, which only narrows the view type when a
+                // non-layered binding names a single layer).
+                placeholderView =
+                    m_textureManager->GetOrCreateStorageImageView(*placeholder, 0, placeholderFormat, true, 0);
+            }
+            if (placeholderView == VK_NULL_HANDLE) {
+                MGLOG_E_ONCE("ResolveStorageImageDescriptor: image unit %d is unbound for binding %u, and no "
+                        "placeholder descriptor could be built (target=%d format=%d)",
+                        imageUnit, binding, static_cast<Int>(placeholderTarget),
+                        static_cast<Int>(placeholderFormat));
+                return false;
+            }
+            MGLOG_D("ResolveStorageImageDescriptor: image unit %d (binding %u) is unbound; using the placeholder "
+                    "descriptor", imageUnit, binding);
+            outImageInfo.sampler = VK_NULL_HANDLE;
+            outImageInfo.imageView = placeholderView;
+            outImageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            return true;
         }
 
         const Bool ready = m_textureManager->TransitionTextureForStorageImage(commandBuffer, *imageBinding.Texture);
@@ -1153,6 +1394,138 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         return m_fallbackTexture2D;
+    }
+
+    VkBufferView UniformManager::AcquireUnboundTexelBufferView(VkFormat declaredFormat,
+                                                               SamplerNumericDomain numericDomain, Bool storage) {
+        MOBILEGL_ASSERT(m_bufferManager != nullptr, "AcquireUnboundTexelBufferView: buffer manager is null");
+        const VkFormatFeatureFlags requiredFeature = storage ? VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT
+                                                             : VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT;
+        const VkFormat fallbackFormat = PlaceholderFormatForNumericDomain(numericDomain);
+
+        VkFormat format = declaredFormat;
+        if (format == VK_FORMAT_UNDEFINED || !BufferFormatSupportsFeature(m_physicalDevice, format, requiredFeature)) {
+            // The declared format is what a shader that WRITES through this descriptor is
+            // validated against, so it is tried first and kept whenever the device can use it.
+            // Falling back is for the two cases where it cannot be: a sampled texel buffer, which
+            // declares no format at all, and a device that does not list the declared one as a
+            // texel buffer. The fallback stays inside the shader's numeric class, which is the
+            // part the descriptor is checked on for a formatless declaration - and the R32
+            // members of the three classes are mandatory-support formats, so this cannot fail for
+            // want of device features.
+            format = fallbackFormat;
+        }
+        if (format == VK_FORMAT_UNDEFINED || !BufferFormatSupportsFeature(m_physicalDevice, format, requiredFeature)) {
+            MGLOG_E_ONCE("AcquireUnboundTexelBufferView: no usable placeholder format (declared=%d fallback=%d "
+                         "storage=%s)",
+                         static_cast<Int>(declaredFormat), static_cast<Int>(fallbackFormat),
+                         storage ? "true" : "false");
+            return VK_NULL_HANDLE;
+        }
+
+        const Uint64 key = (static_cast<Uint64>(format) << 1) | (storage ? 1ull : 0ull);
+        const auto cached = m_unboundTexelBufferViews.find(key);
+        if (cached != m_unboundTexelBufferViews.end()) {
+            return cached->second;
+        }
+
+        const BufferSlice placeholder = m_bufferManager->AcquireUnboundTexelBufferDescriptor();
+        if (!placeholder.IsValid()) {
+            MGLOG_E_ONCE("AcquireUnboundTexelBufferView: placeholder buffer unavailable");
+            return VK_NULL_HANDLE;
+        }
+        // A buffer view's range must be a whole number of texels of its own format, and the
+        // placeholder is sized for the largest of them - so floor rather than assume.
+        const VkDeviceSize texelSize = std::max<VkDeviceSize>(1, vkuFormatTexelBlockSize(format));
+        const VkDeviceSize range = (placeholder.size / texelSize) * texelSize;
+        if (range == 0) {
+            MGLOG_E_ONCE("AcquireUnboundTexelBufferView: placeholder holds no whole texel of format=%d",
+                         static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+
+        VkBufferViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO;
+        viewInfo.buffer = placeholder.buffer;
+        viewInfo.format = format;
+        viewInfo.offset = placeholder.offset;
+        viewInfo.range = range;
+
+        VkBufferView view = VK_NULL_HANDLE;
+        const VkResult result = vkCreateBufferView(m_device, &viewInfo, nullptr, &view);
+        if (result != VK_SUCCESS || view == VK_NULL_HANDLE) {
+            MGLOG_E_ONCE("AcquireUnboundTexelBufferView: vkCreateBufferView failed result=%d format=%d", result,
+                         static_cast<Int>(format));
+            return VK_NULL_HANDLE;
+        }
+        m_unboundTexelBufferViews.emplace(key, view);
+        MGLOG_D("AcquireUnboundTexelBufferView: created placeholder view format=%d storage=%s",
+                static_cast<Int>(format), storage ? "true" : "false");
+        return view;
+    }
+
+    Bool UniformManager::ResolveUnboundStorageImagePlaceholder(const ProgramFactory::VkProgramObject& programObj,
+                                                               Uint32 binding, TextureTarget& outTarget,
+                                                               VkFormat& outFormat) const {
+        MOBILEGL_ASSERT(binding < programObj.samplerTextureTargetByBinding.size(),
+                        "ResolveUnboundStorageImagePlaceholder: binding %u out of range", binding);
+        MOBILEGL_ASSERT(binding < programObj.storageImageFormatByBinding.size(),
+                        "ResolveUnboundStorageImagePlaceholder: format binding %u out of range", binding);
+        outTarget = programObj.samplerTextureTargetByBinding[binding];
+        // The shader's own format qualifier, exactly as the bound path prefers it over the one
+        // glBindImageTexture named - there is no binding here to name one. A `writeonly` image
+        // may carry no qualifier at all; its numeric class is then the only constraint, and the
+        // R32 member of that class is what carries it (see AcquireUnboundTexelBufferView).
+        outFormat = programObj.storageImageFormatByBinding[binding];
+        if (outFormat == VK_FORMAT_UNDEFINED) {
+            outFormat = PlaceholderFormatForNumericDomain(programObj.samplerNumericDomainByBinding[binding]);
+        }
+        return outFormat != VK_FORMAT_UNDEFINED && PlaceholderShapeForTarget(outTarget).valid;
+    }
+
+    SharedPtr<MG_State::GLState::ITextureObject> UniformManager::GetUnboundStorageImageTexture(
+        TextureTarget target, VkFormat format) const {
+        const Uint64 key = (static_cast<Uint64>(target) << 32) | static_cast<Uint32>(format);
+        const auto cached = m_unboundStorageImageTextures.find(key);
+        if (cached != m_unboundStorageImageTextures.end()) {
+            return cached->second;
+        }
+
+        const PlaceholderShape shape = PlaceholderShapeForTarget(target);
+        if (!shape.valid) {
+            // A multisample image uniform is the case with no answer here: its descriptor demands
+            // a multisample view, and a single-sampled 1x1 image is invalid Vulkan in that slot,
+            // not a degraded picture. The caller declines the binding exactly as it did before.
+            MGLOG_D("GetUnboundStorageImageTexture: no placeholder shape for target=%d", static_cast<Int>(target));
+            return nullptr;
+        }
+        const TextureInternalFormat internalFormat = InternalFormatForVkFormat(format);
+        if (internalFormat == TextureInternalFormat::Unknown) {
+            MGLOG_E_ONCE("GetUnboundStorageImageTexture: no GL internal format matches VkFormat=%d",
+                         static_cast<Int>(format));
+            return nullptr;
+        }
+
+        auto texture = MakePlaceholderTextureObject(target, kUnboundStorageImageExternalIndex);
+        if (texture == nullptr) {
+            return nullptr;
+        }
+        texture->SetInternalFormat(internalFormat);
+        const SizeT texelBytes = MG_Util::GetSizedInternalFormatSizeInBytes(internalFormat);
+        for (Uint32 index = 0; index < shape.uploadTargetCount; ++index) {
+            texture->AllocateStorage(shape.uploadTargets[index], 0,
+                                     {.texelSize = {1, 1, shape.depth},
+                                      .byteSize = texelBytes * static_cast<SizeT>(shape.depth)});
+            // Not dirty: there is deliberately nothing to upload. The image is created and
+            // transitioned to GENERAL by the storage-image preparation pass like any other, and
+            // its contents are exactly as undefined as GL says a fetch through an unbound image
+            // unit is.
+            texture->MarkStorageDirty(shape.uploadTargets[index], 0, false);
+        }
+        m_unboundStorageImageTextures.emplace(key, texture);
+        MGLOG_D("GetUnboundStorageImageTexture: created placeholder target=%d format=%d", static_cast<Int>(target),
+                static_cast<Int>(format));
+        return texture;
     }
 
     Bool UniformManager::ResolveSampledBinding(const MG_State::GLState::ProgramObject& program,
@@ -1340,9 +1713,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                 auto* texture = MG_State::pGLContext->GetImageTextureBinding(imageUnit).Texture.get();
                 if (texture == nullptr) {
-                    MGLOG_E_ONCE("CollectStorageImageTextures: image unit %d is unbound for binding %u element %u",
-                            imageUnit, binding, element);
-                    return false;
+                    // ResolveStorageImageDescriptor will substitute the placeholder image for this
+                    // binding; include it here for the same reason the sampled walk includes the
+                    // fallback texture - this walk is what gets a storage image created,
+                    // STORAGE-usage-marked and transitioned to GENERAL BEFORE the render pass
+                    // opens, and all three of those are illegal once it has. A target with no
+                    // placeholder shape (multisample) contributes nothing and is declined at
+                    // resolve time exactly as it was.
+                    TextureTarget placeholderTarget = TextureTarget::Unknown;
+                    VkFormat placeholderFormat = VK_FORMAT_UNDEFINED;
+                    if (!ResolveUnboundStorageImagePlaceholder(programObj, binding, placeholderTarget,
+                                                               placeholderFormat)) {
+                        continue;
+                    }
+                    texture = GetUnboundStorageImageTexture(placeholderTarget, placeholderFormat).get();
+                    if (texture == nullptr) {
+                        continue;
+                    }
                 }
                 if (std::find(outTextures.begin(), outTextures.end(), texture) == outTextures.end()) {
                     outTextures.push_back(texture);

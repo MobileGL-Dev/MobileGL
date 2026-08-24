@@ -42,7 +42,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             SamplerNumericDomain numericDomain = SamplerNumericDomain::Unknown;
         };
 
-        Bool Initialize(VkDevice device, VkBufferManager* bufferManager,
+        // `physicalDevice` is only ever asked for format properties: a placeholder descriptor for
+        // an unbound texel-buffer binding has to be built from a format the DEVICE accepts as a
+        // texel buffer, and there is no other route to that answer from here.
+        Bool Initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkBufferManager* bufferManager,
                         ProgramFactory* programFactory,
                         VkDeviceSize minUniformBufferOffsetAlignment, Uint32 frameCount,
                         Uint32 maxBindings = 16, Uint32 setsPerFrame = 64,
@@ -177,6 +180,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 element);
         SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(TextureTarget target) const;
+        // ---- placeholders for UNBOUND image-backed descriptors -------------------------
+        // GL lets a program declare `samplerBuffer`, `imageBuffer` or `image2D` and bind nothing
+        // to the unit it names: the fetch is then undefined (GL 4.6 core 8.9 for an incomplete
+        // buffer texture, 8.26 for an image unit with no texture) - undefined VALUES, not a
+        // dropped draw. Vulkan has no unwritten descriptor, so something valid has to sit in the
+        // set or the whole draw or dispatch is lost, which is what these two build. Same shape as
+        // VkBufferManager::AcquireUnboundStorageDescriptor, one level up: per FORMAT rather than
+        // one shared object, because a descriptor whose format disagrees with the shader's
+        // declaration is invalid Vulkan even when nothing ever reads it.
+        //
+        // `declaredFormat` is the format the SHADER declared (VK_FORMAT_UNDEFINED for a sampled
+        // texel buffer, which never carries one, or for a formatless `writeonly` image);
+        // `numericDomain` decides the format when there is no declaration and is the fallback
+        // class when the device cannot use the declared one as a texel buffer.
+        VkBufferView AcquireUnboundTexelBufferView(VkFormat declaredFormat, SamplerNumericDomain numericDomain,
+                                                   Bool storage);
+        // A 1x1 (x1 layer, or 6 faces for a cube) texture of `format`, shaped for `target` so the
+        // view the descriptor gets has the view type the shader's image declaration demands.
+        // Null for a target with no single-sampled placeholder shape - multisample images, whose
+        // descriptor needs a multisample view that this cannot stand in for.
+        SharedPtr<MG_State::GLState::ITextureObject> GetUnboundStorageImageTexture(TextureTarget target,
+                                                                                    VkFormat format) const;
+        // The (target, format) pair a storage-image binding's placeholder is keyed by, resolved
+        // from reflection alone. False when the binding has no placeholder shape.
+        Bool ResolveUnboundStorageImagePlaceholder(const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                                   TextureTarget& outTarget, VkFormat& outFormat) const;
         // `element` indexes a sampler ARRAY inside one binding; each element carries its own
         // independently assigned GL texture unit, so it selects the texture, the sampler
         // override and the fallback separately from its neighbours.
@@ -251,6 +280,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                       VkDescriptorSet& outDescriptorSet);
 
         VkDevice m_device = VK_NULL_HANDLE;
+        VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
         VkBufferManager* m_bufferManager = nullptr;
         ProgramFactory* m_programFactory = nullptr;
         Vector<FrameResources> m_frames;
@@ -263,6 +293,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkTextureManager* m_textureManager = nullptr;
         VkSamplerManager* m_samplerManager = nullptr;
         mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2D;
+        // See AcquireUnboundTexelBufferView / GetUnboundStorageImageTexture. Both are lazily
+        // populated, never evicted (a program's declared formats are a fixed, tiny set) and torn
+        // down with the manager. The texel views are keyed by format AND by storage-vs-sampled
+        // because the two descriptor kinds demand different format FEATURES of the device, so one
+        // format can be usable for one and not the other. Deliberately NOT the per-frame
+        // texelBufferViews list: those are destroyed at every frame boundary, and these must
+        // outlive it or the placeholder would be rebuilt for every unbound binding every frame.
+        UnorderedMap<Uint64, VkBufferView> m_unboundTexelBufferViews;
+        mutable UnorderedMap<Uint64, SharedPtr<MG_State::GLState::ITextureObject>> m_unboundStorageImageTextures;
 
         // Per-draw scratch buffers for BindProgramUniformBuffers: reused (clear keeps
         // capacity) so the descriptor-write path stops allocating on every draw.

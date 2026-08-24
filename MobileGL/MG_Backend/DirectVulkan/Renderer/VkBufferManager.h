@@ -131,6 +131,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // that indexes past it.
         BufferSlice AcquireUnboundStorageDescriptor();
 
+        // The store a texel-buffer descriptor - `samplerBuffer` or `imageBuffer` - gets when the
+        // unit the program's uniform names has no buffer texture on it, or the buffer texture on
+        // it has no GL buffer attached. Both are legal GL states that make a fetch return
+        // undefined values (GL 4.6 core 8.9: a buffer texture with no attached buffer object is
+        // incomplete, and sampling an incomplete texture is undefined - not a lost draw), and both
+        // used to take the whole draw or dispatch with them. The VIEW over this - one per format,
+        // and the descriptor is a VkBufferView, not a buffer - is built by
+        // UniformManager::AcquireUnboundTexelBufferView.
+        BufferSlice AcquireUnboundTexelBufferDescriptor();
+
         // Draw-time acquire for resident (device-storage) buffers: ensures the
         // resource exists and is fully uploaded, marks it used this frame.
         Bool AcquireResidentSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
@@ -194,6 +204,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See AcquireUnboundStorageDescriptor. Lazily created, never re-created, torn down
         // with the manager.
         VkBufferObject m_unboundStorageBuffer;
+        // See AcquireUnboundTexelBufferDescriptor. Same lifetime rules.
+        VkBufferObject m_unboundTexelBuffer;
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;

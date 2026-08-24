@@ -3136,7 +3136,7 @@ void main() {
         m_uniformManager = MakeUnique<UniformManager>();
         MOBILEGL_ASSERT(m_uniformManager != nullptr, "UniformDescriptorBinder creation failed.");
         succeeded = m_uniformManager->Initialize(
-            m_device, &m_bufferManager, m_programFactory.get(),
+            m_device, m_physicalDevice.handle, &m_bufferManager, m_programFactory.get(),
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");

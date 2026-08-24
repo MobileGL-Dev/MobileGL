@@ -448,6 +448,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static VkShaderStageFlagBits ToVkStage(ShaderStage stage);
         static VkFormat ConvertSpirvImageFormatToVkFormat(SpvImageFormat format);
         static SamplerNumericDomain UniformTypeToSamplerNumericDomain(GLenum glType);
+        // The same question for an IMAGE uniform (`image2D`, `uimageBuffer`, ...), which the
+        // sampler form above deliberately does not answer. Kept separate rather than folded in
+        // because the two are asked in different places for different reasons: a sampler's domain
+        // decides a sampled VIEW format, an image's decides what a placeholder descriptor for an
+        // UNBOUND image unit must be (see UniformManager::AcquireUnboundTexelBufferView and
+        // GetUnboundStorageImageTexture) - a formatless `writeonly` declaration reflects no
+        // format at all, and the numeric domain is then the only thing that constrains it.
+        static SamplerNumericDomain UniformTypeToImageNumericDomain(GLenum glType);
         // True when any entry point declares the DepthReplacing execution mode, i.e. the
         // shader assigns gl_FragDepth. Exposed so the blended depth-write quirk's exemption
         // can be pinned by tests. A false negative loses the exemption, so such a shader is
