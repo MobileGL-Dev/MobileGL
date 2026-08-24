@@ -16,6 +16,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
         constexpr SizeT kLiveResourcePruneThreshold = 256;
 
+        // See VkBufferManager::AcquireUnboundStorageDescriptor. 256 bytes: comfortably past
+        // every minStorageBufferOffsetAlignment in the wild, and free.
+        constexpr VkDeviceSize kUnboundStorageDescriptorBytes = 256;
+
         // A zero-copy persistent buffer is created once and never recreated (the app holds
         // its mapped pointer), and may be bound to any role, so it carries every usage.
         // TRANSFER_DST is added by CreateResidentStorage.
@@ -130,6 +134,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_transientUploadArena.Shutdown();
+        m_unboundStorageBuffer.Destroy();
         DestroyAllDeferredReleases();
         ReleaseAllLiveResources();
         m_copyProvider = nullptr;
@@ -704,6 +709,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         "VkBufferManager::CollectDeferredReleases frame index out of range");
         m_deferredBufferReleases[frameIndex].clear();
         m_deferredResourceReleases[frameIndex].clear();
+    }
+
+    BufferSlice VkBufferManager::AcquireUnboundStorageDescriptor() {
+        if (!m_unboundStorageBuffer.IsValid()) {
+            if (m_initInfo.allocator == nullptr) {
+                return {};
+            }
+            // Host-visible so the zero fill needs no command buffer: this can be reached from
+            // descriptor resolution, which runs inside an already-open recording and must not
+            // start a copy of its own. The size is a whole minStorageBufferOffsetAlignment-safe
+            // block rather than 4 bytes so that a shader which does read the block gets a
+            // plausible unsized-array length instead of one that rounds to zero.
+            const Bool created = m_unboundStorageBuffer.Create({
+                .allocator = m_initInfo.allocator,
+                .size = kUnboundStorageDescriptorBytes,
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                                   VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            });
+            if (!created) {
+                MGLOG_E_ONCE("VkBufferManager::AcquireUnboundStorageDescriptor: placeholder creation failed");
+                m_unboundStorageBuffer.Destroy();
+                return {};
+            }
+            if (void* mapped = m_unboundStorageBuffer.GetMappedData()) {
+                Memset(mapped, 0, static_cast<SizeT>(kUnboundStorageDescriptorBytes));
+            }
+        }
+        return m_unboundStorageBuffer.GetSlice();
     }
 
     VkBufferUsageFlags VkBufferManager::GetVkBufferUsage(BufferKind kind) {

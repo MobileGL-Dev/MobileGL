@@ -120,6 +120,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data, VkDeviceSize size,
                              VkDeviceSize alignment, BufferSlice& outSlice);
 
+        // The descriptor a shader storage block gets when the program declares it and the
+        // application bound no buffer at its GL binding point. GL 4.6 core 7.8 makes that a
+        // legal state - the block simply has no store, so reads are undefined and writes go
+        // nowhere - whereas Vulkan has no such thing as an unwritten descriptor, so something
+        // real has to sit in the set or the whole draw/dispatch is lost. One zero-filled
+        // buffer, created once and shared by every unbound binding: bindings that are only
+        // declared (the case this exists for) never touch it, and one that is actually read
+        // sees zeros, which is inside GL's "undefined". robustBufferAccess bounds anything
+        // that indexes past it.
+        BufferSlice AcquireUnboundStorageDescriptor();
+
         // Draw-time acquire for resident (device-storage) buffers: ensures the
         // resource exists and is fully uploaded, marks it used this frame.
         Bool AcquireResidentSlice(BufferKind kind, const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
@@ -180,6 +191,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkBufferManagerInitInfo m_initInfo{};
         BufferArena m_transientUploadArena;
+        // See AcquireUnboundStorageDescriptor. Lazily created, never re-created, torn down
+        // with the manager.
+        VkBufferObject m_unboundStorageBuffer;
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         Vector<Vector<SharedPtr<VkBufferResource>>> m_deferredResourceReleases;

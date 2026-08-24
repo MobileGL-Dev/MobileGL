@@ -106,6 +106,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/SsboArrayDynamicIndexScenario.cpp
     Scenarios/StorageBufferRegrowScenario.cpp
     Scenarios/RelinkStageSetScenario.cpp
+    Scenarios/GuiBatchScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

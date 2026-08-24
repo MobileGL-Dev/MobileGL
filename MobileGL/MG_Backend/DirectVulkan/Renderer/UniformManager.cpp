@@ -962,9 +962,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(bufferTarget, frontendBinding);
         const auto& bufferObject = bindingPoint.GetBoundObject();
         if (bufferObject == nullptr) {
-            MGLOG_E_ONCE("ResolveStorageBufferDescriptor: no buffer bound at frontend binding %u for block '%s'",
+            // NOT an error, and above all not a reason to lose the draw. GL 4.6 core 7.8 lets a
+            // program declare a shader storage block the application never binds a buffer to:
+            // the block simply has no store, so a read is undefined and a write goes nowhere.
+            // Refusing here used to take the whole draw or dispatch with it (SetupDraw and
+            // DispatchCompute both skip on a false return), which is how AcceleratedRendering's
+            // GUI batch lost its backgrounds: its vertex-transform compute shader declares a
+            // `Meshes` block it only reads when a vertex comes from a cached server mesh, and a
+            // batch of plain GUI blits has no meshes and so binds nothing there. The dispatch
+            // never ran, the transformed vertex buffer stayed as it was, and every hotbar and
+            // container-screen background quad came out degenerate. A shared zero-filled
+            // placeholder puts something legal in the descriptor and lets the draw proceed.
+            const BufferSlice placeholder = m_bufferManager->AcquireUnboundStorageDescriptor();
+            if (!placeholder.IsValid()) {
+                MGLOG_E_ONCE("ResolveStorageBufferDescriptor: no buffer bound at frontend binding %u for block "
+                             "'%s', and the placeholder descriptor could not be created",
+                             frontendBinding, blockName.c_str());
+                return false;
+            }
+            MGLOG_D("ResolveStorageBufferDescriptor: frontend binding %u ('%s') is unbound; using the placeholder "
+                    "descriptor",
                     frontendBinding, blockName.c_str());
-            return false;
+            outBufferInfo.buffer = placeholder.buffer;
+            outBufferInfo.offset = placeholder.offset;
+            outBufferInfo.range = placeholder.size;
+            return true;
         }
 
         // The shader may write this buffer, and those writes land in GPU memory behind the
