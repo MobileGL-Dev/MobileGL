@@ -11,6 +11,7 @@
 #include <MG_Util/SelfTest/DriverBugProbes.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -24,6 +25,8 @@ using MobileGL::MG_Util::SelfTest::ProbeCrossStageImageQualifierMergeDropsWrites
 using MobileGL::MG_Util::SelfTest::ProbeGeometryStageSsboWriteAfterEmitDropped;
 using MobileGL::MG_Util::SelfTest::ProbeImageLocationPerNameBudget;
 using MobileGL::MG_Util::SelfTest::ProbeImageWriteReadCoherencyResidual;
+using MobileGL::MG_Util::SelfTest::ProbeBlitIgnoresDestinationArrayLayer;
+using MobileGL::MG_Util::SelfTest::ProbeExplicitVertexInputLocationCeiling;
 using MobileGL::MG_Util::SelfTest::ProbeR32FMultisampleSwizzleCorruption;
 
 namespace {
@@ -45,6 +48,13 @@ namespace {
     // These tests call the Probe* functions directly rather than through
     // CollectGlesKnownDriverBugs(): the collector goes through the once-per-process memos, and a
     // memo latched by one test would decide the answer for every later one.
+
+    // The exact text an affected Adreno driver puts in the compile log when it refuses a
+    // vertex input's layout(location = N). Quoted rather than paraphrased for the same reason the
+    // link log below is: the report shows it to a human, so a probe that stopped capturing it
+    // would stop being useful long before it stopped detecting.
+    const char* const kAttributeRangeCompileLog =
+        "ERROR: 0:2: '' : the location is not within attribute range [0, MAX_ATTRIBUTES-1] \nERROR: 1 compilation errors.  No code generated.";
 
     // The exact text an affected Adreno driver puts in the info log for this refusal.
     const char* const kImageLocationLinkLog =
@@ -82,6 +92,21 @@ namespace {
         int coherencyEmittedShapeFailedTexels = 0;
         int coherencyControlFailedTexels = 0;
 
+        // Probe 5: GL_MAX_VERTEX_ATTRIBS, and the two separate ceilings the probe has to tell
+        // apart - how high `layout(location = N)` may go in the ESSL compiler, and how high
+        // glBindAttribLocation may go at link. On an unaffected driver both are above the
+        // advertised count.
+        GLint maxVertexAttribs = 32;
+        int explicitLocationCeiling = 1000;
+        int bindAttribLocationCeiling = 1000;
+        // Probe 5's inconclusive path: nothing compiles, including the location-0 control.
+        bool everyCompileFails = false;
+        // Probe 6: a blit writes the destination array layer the framebuffer names, or always
+        // layer 0. The second knob is the inconclusive path - a driver that does not honour the
+        // SOURCE layer either fails the probe's control.
+        bool blitIgnoresDestinationLayer = false;
+        bool blitIgnoresSourceLayer = false;
+
         // ---- object bookkeeping ---------------------------------------------
         GLenum pendingError = GL_NO_ERROR;
         GLuint nextShaderId = 1;
@@ -101,6 +126,19 @@ namespace {
         std::map<GLuint, std::string> programInfoLogs;
         // texture id -> GL_TEXTURE_SWIZZLE_A
         std::map<GLuint, GLenum> multisampleAlphaSwizzle;
+
+        std::map<GLuint, bool> shaderCompiled;
+        std::map<GLuint, std::string> shaderInfoLogs;
+        // program -> (attribute name -> location) as glBindAttribLocation left it.
+        std::map<GLuint, std::map<std::string, GLint>> boundAttribLocations;
+        // 2D array texture id -> the byte every texel of each layer holds. Two layers is all the
+        // layered-blit probe uses, and one byte per layer is all it distinguishes.
+        std::map<GLuint, std::array<GLubyte, 2>> arrayLayerFill;
+        // framebuffer id -> the (2D array texture, layer) glFramebufferTextureLayer attached.
+        std::map<GLuint, std::pair<GLuint, GLint>> framebufferLayerAttachment;
+        GLuint boundArrayTexture = 0;
+        GLuint boundDrawFramebuffer = 0;
+        GLuint boundReadFramebuffer = 0;
 
         GLuint boundMultisampleTexture = 0;
         GLuint currentProgram = 0;
@@ -147,6 +185,22 @@ namespace {
             }
         }
         return names;
+    }
+
+    // The N in `layout(location = N) in ...`, or -1 when the source declares no such input.
+    // Read off the text the probe actually submitted, so a probe that stopped emitting the
+    // qualifier would stop being detected here too.
+    int ExplicitVertexInputLocationIn(const std::string& source) {
+        const std::size_t at = source.find("layout(location = ");
+        if (at == std::string::npos) return -1;
+        const std::size_t start = at + std::strlen("layout(location = ");
+        const std::size_t close = source.find(')', start);
+        if (close == std::string::npos) return -1;
+        // Only a VERTEX INPUT counts: `layout(location = 0) out vec4` is a different declaration
+        // and no driver caps it against GL_MAX_VERTEX_ATTRIBS.
+        const std::size_t declaration = source.find_first_not_of(" \t", close + 1);
+        if (declaration == std::string::npos || source.compare(declaration, 3, "in ") != 0) return -1;
+        return std::atoi(source.c_str() + start);
     }
 
     std::string StageSourceContaining(GLuint program, const char* needle) {
@@ -217,6 +271,9 @@ namespace {
             case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
                 *data = g_fake.maxGeometrySsboBlocks;
                 break;
+            case GL_MAX_VERTEX_ATTRIBS:
+                *data = g_fake.maxVertexAttribs;
+                break;
             default:
                 break;
             }
@@ -252,15 +309,40 @@ namespace {
             }
             g_fake.shaderSources[shader] = std::move(source);
         };
-        funcs.glCompileShader = [](GLuint) {};
-        funcs.glGetShaderiv = [](GLuint, GLenum pname, GLint* params) {
-            if (pname == GL_COMPILE_STATUS) *params = GL_TRUE;
+        funcs.glCompileShader = [](GLuint shader) {
+            const std::string& source = SourceOf(shader);
+            const int location = ExplicitVertexInputLocationIn(source);
+            const bool refused =
+                g_fake.everyCompileFails || (location >= 0 && location >= g_fake.explicitLocationCeiling);
+            g_fake.shaderCompiled[shader] = !refused;
+            g_fake.shaderInfoLogs[shader] = refused ? kAttributeRangeCompileLog : "";
         };
-        funcs.glGetShaderInfoLog = [](GLuint, GLsizei bufSize, GLsizei*, GLchar* infoLog) {
-            if (bufSize > 0) infoLog[0] = '\0';
+        funcs.glGetShaderiv = [](GLuint shader, GLenum pname, GLint* params) {
+            if (pname != GL_COMPILE_STATUS) return;
+            const auto it = g_fake.shaderCompiled.find(shader);
+            *params = (it == g_fake.shaderCompiled.end() || it->second) ? GL_TRUE : GL_FALSE;
+        };
+        funcs.glGetShaderInfoLog = [](GLuint shader, GLsizei bufSize, GLsizei*, GLchar* infoLog) {
+            if (bufSize <= 0) return;
+            const auto it = g_fake.shaderInfoLogs.find(shader);
+            const std::string& log = it == g_fake.shaderInfoLogs.end() ? std::string() : it->second;
+            const GLsizei copied = static_cast<GLsizei>(
+                std::min<std::size_t>(log.size(), static_cast<std::size_t>(bufSize - 1)));
+            std::memcpy(infoLog, log.data(), static_cast<std::size_t>(copied));
+            infoLog[copied] = '\0';
         };
         funcs.glDeleteShader = [](GLuint shader) {
             if (shader != 0) --g_fake.aliveShaders;
+        };
+        funcs.glBindAttribLocation = [](GLuint program, GLuint index, const GLchar* name) {
+            g_fake.boundAttribLocations[program][name] = static_cast<GLint>(index);
+        };
+        funcs.glGetAttribLocation = [](GLuint program, const GLchar* name) -> GLint {
+            const auto programEntry = g_fake.boundAttribLocations.find(program);
+            if (programEntry == g_fake.boundAttribLocations.end()) return -1;
+            const auto nameEntry = programEntry->second.find(name);
+            if (nameEntry == programEntry->second.end()) return -1;
+            return nameEntry->second >= g_fake.bindAttribLocationCeiling ? -1 : nameEntry->second;
         };
         funcs.glCreateProgram = []() -> GLuint {
             ++g_fake.alivePrograms;
@@ -272,7 +354,17 @@ namespace {
         funcs.glLinkProgram = [](GLuint program) {
             const std::vector<std::string> names = DeclaredImageNames(program);
             const bool overBudget = static_cast<int>(names.size()) > g_fake.distinctImageNameBudget;
-            g_fake.programLinked[program] = !overBudget;
+            // A driver whose glBindAttribLocation ceiling is lower than the location asked for
+            // refuses the LINK rather than the compile - which is the half of the vertex-input
+            // probe that decides whether the attribute is reachable another way at all.
+            bool attributeOutOfRange = false;
+            if (const auto it = g_fake.boundAttribLocations.find(program);
+                it != g_fake.boundAttribLocations.end()) {
+                for (const auto& [attributeName, location] : it->second) {
+                    if (location >= g_fake.bindAttribLocationCeiling) attributeOutOfRange = true;
+                }
+            }
+            g_fake.programLinked[program] = !overBudget && !attributeOutOfRange;
             g_fake.programInfoLogs[program] = overBudget ? kImageLocationLinkLog : "";
             if (!overBudget && !StageSourceContaining(program, "texelFetch(mg_probeSampler").empty()) {
                 ++g_fake.sampledMultisampleProgramCount;
@@ -308,6 +400,20 @@ namespace {
         };
         funcs.glBindTexture = [](GLenum target, GLuint texture) {
             if (target == GL_TEXTURE_2D_MULTISAMPLE) g_fake.boundMultisampleTexture = texture;
+            if (target == GL_TEXTURE_2D_ARRAY) g_fake.boundArrayTexture = texture;
+        };
+        funcs.glTexStorage3D = [](GLenum target, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) {
+            if (target == GL_TEXTURE_2D_ARRAY) g_fake.arrayLayerFill[g_fake.boundArrayTexture] = {0, 0};
+        };
+        // One byte per layer: the layered-blit probe fills every texel of a layer with the same
+        // value and only ever asks which layer a value ended up on.
+        funcs.glTexSubImage3D = [](GLenum target, GLint, GLint, GLint, GLint zoffset, GLsizei, GLsizei,
+                                   GLsizei, GLenum, GLenum, const void* pixels) {
+            if (target != GL_TEXTURE_2D_ARRAY || pixels == nullptr) return;
+            auto& fill = g_fake.arrayLayerFill[g_fake.boundArrayTexture];
+            if (zoffset >= 0 && static_cast<std::size_t>(zoffset) < fill.size()) {
+                fill[static_cast<std::size_t>(zoffset)] = static_cast<const GLubyte*>(pixels)[0];
+            }
         };
         funcs.glDeleteTextures = [](GLsizei n, const GLuint* textures) {
             for (GLsizei i = 0; i < n; ++i) {
@@ -332,12 +438,50 @@ namespace {
                 ++g_fake.aliveFramebuffers;
             }
         };
-        funcs.glBindFramebuffer = [](GLenum, GLuint) {};
+        funcs.glBindFramebuffer = [](GLenum target, GLuint framebuffer) {
+            if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) {
+                g_fake.boundDrawFramebuffer = framebuffer;
+            }
+            if (target == GL_FRAMEBUFFER || target == GL_READ_FRAMEBUFFER) {
+                g_fake.boundReadFramebuffer = framebuffer;
+            }
+        };
         funcs.glFramebufferTexture2D = [](GLenum, GLenum, GLenum, GLuint, GLint) {};
+        funcs.glFramebufferTextureLayer = [](GLenum target, GLenum, GLuint texture, GLint, GLint layer) {
+            const GLuint framebuffer = (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer
+                                                                       : g_fake.boundDrawFramebuffer;
+            g_fake.framebufferLayerAttachment[framebuffer] = {texture, layer};
+        };
+        funcs.glReadBuffer = [](GLenum) {};
+        // The defect itself: the source layer is read from where the READ framebuffer says (unless
+        // that knob is on too), and the result is written to the layer the DRAW framebuffer names -
+        // or to layer 0 regardless, which is what an affected driver does.
+        funcs.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+                                     GLenum) {
+            const auto source = g_fake.framebufferLayerAttachment.find(g_fake.boundReadFramebuffer);
+            const auto destination = g_fake.framebufferLayerAttachment.find(g_fake.boundDrawFramebuffer);
+            if (source == g_fake.framebufferLayerAttachment.end() ||
+                destination == g_fake.framebufferLayerAttachment.end()) {
+                return;
+            }
+            const GLint sourceLayer = g_fake.blitIgnoresSourceLayer ? 0 : source->second.second;
+            const GLint destinationLayer =
+                g_fake.blitIgnoresDestinationLayer ? 0 : destination->second.second;
+            auto& sourceFill = g_fake.arrayLayerFill[source->second.first];
+            auto& destinationFill = g_fake.arrayLayerFill[destination->second.first];
+            if (sourceLayer < 0 || static_cast<std::size_t>(sourceLayer) >= sourceFill.size()) return;
+            if (destinationLayer < 0 ||
+                static_cast<std::size_t>(destinationLayer) >= destinationFill.size()) {
+                return;
+            }
+            destinationFill[static_cast<std::size_t>(destinationLayer)] =
+                sourceFill[static_cast<std::size_t>(sourceLayer)];
+        };
         funcs.glCheckFramebufferStatus = [](GLenum) -> GLenum { return GL_FRAMEBUFFER_COMPLETE; };
         funcs.glDeleteFramebuffers = [](GLsizei n, const GLuint* framebuffers) {
             for (GLsizei i = 0; i < n; ++i) {
                 if (framebuffers[i] != 0) --g_fake.aliveFramebuffers;
+                g_fake.framebufferLayerAttachment.erase(framebuffers[i]);
             }
         };
         funcs.glGenVertexArrays = [](GLsizei n, GLuint* arrays) {
@@ -417,6 +561,26 @@ namespace {
         funcs.glReadPixels = [](GLint, GLint, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                 void* pixels) {
             const std::size_t texels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+            // Answered before anything else: a read framebuffer that names an array LAYER is the
+            // layered-blit probe asking what that layer holds, and its bytes have nothing to do
+            // with the pass/fail texel encoding the image probes below share.
+            if (const auto layered = g_fake.framebufferLayerAttachment.find(g_fake.boundReadFramebuffer);
+                layered != g_fake.framebufferLayerAttachment.end()) {
+                const auto& fill = g_fake.arrayLayerFill[layered->second.first];
+                const GLint layer = layered->second.second;
+                const GLubyte value =
+                    (layer >= 0 && static_cast<std::size_t>(layer) < fill.size())
+                        ? fill[static_cast<std::size_t>(layer)]
+                        : 0;
+                GLubyte* out = static_cast<GLubyte*>(pixels);
+                for (std::size_t i = 0; i < texels; ++i) {
+                    out[i * 4 + 0] = value;
+                    out[i * 4 + 1] = value;
+                    out[i * 4 + 2] = value;
+                    out[i * 4 + 3] = 255;
+                }
+                return;
+            }
             if (format == GL_RED && type == GL_FLOAT) {
                 GLfloat* out = static_cast<GLfloat*>(pixels);
                 for (std::size_t i = 0; i < texels; ++i) out[i] = g_fake.lastSampledValue;
@@ -452,6 +616,10 @@ namespace {
 // section would stop meaning "this device has these bugs".
 TEST(DriverBugProbes, AProbeThatCannotRunReportsNoBug) {
     const MG_External::GLESFunctionsTable gl = EmptyFunctionTable();
+    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl))
+        << "a probe with no entry points has measured nothing";
+    EXPECT_FALSE(ProbeExplicitVertexInputLocationCeiling(gl).detected)
+        << "a probe with no entry points has measured nothing";
     EXPECT_FALSE(ProbeGeometryStageSsboWriteAfterEmitDropped(gl))
         << "a probe with no entry points to call must not claim the driver is affected";
     EXPECT_FALSE(ProbeR32FMultisampleSwizzleCorruption(gl));
@@ -649,6 +817,125 @@ TEST(DriverBugProbes, ImageCoherencyReportsNothingWhenTheFinishSeparatedControlI
     g_fake.coherencyControlFailedTexels = 4096;
     const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
     EXPECT_FALSE(ProbeImageWriteReadCoherencyResidual(gl).detected);
+}
+
+// ===================== EXPLICIT VERTEX INPUT LOCATION CEILING =====================
+
+// The clean case, and the one that has to stay cheap: a driver whose compiler accepts the
+// highest location it advertises is measured in a single compile and withdraws nothing.
+TEST(DriverBugProbes, VertexInputLocationCeilingIsCleanWhenTheAdvertisedMaximumCompiles) {
+    ResetFakeDriver();
+    g_fake.maxVertexAttribs = 32;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    const auto measurement = ProbeExplicitVertexInputLocationCeiling(gl);
+    EXPECT_FALSE(measurement.detected);
+    EXPECT_EQ(measurement.advertisedMaxVertexAttribs, 32);
+    EXPECT_EQ(measurement.usableLocations, 32) << "an unaffected driver must be taken at its word";
+    ExpectProbeReleasedEverything();
+}
+
+// The defect: 32 advertised, the qualifier refused from 16 up. The bisection has to land on the
+// boundary exactly - one off in either direction advertises an attribute that cannot be declared,
+// or withdraws one that can.
+TEST(DriverBugProbes, VertexInputLocationCeilingIsMeasuredWhenTheQualifierIsCapped) {
+    ResetFakeDriver();
+    g_fake.maxVertexAttribs = 32;
+    g_fake.explicitLocationCeiling = 16;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    const auto measurement = ProbeExplicitVertexInputLocationCeiling(gl);
+    EXPECT_TRUE(measurement.detected);
+    EXPECT_EQ(measurement.advertisedMaxVertexAttribs, 32);
+    EXPECT_EQ(measurement.usableLocations, 16);
+    EXPECT_TRUE(measurement.bindAttribLocationReachesAdvertisedMax)
+        << "this driver caps only the qualifier, so the report may say the attribute is still reachable";
+    EXPECT_NE(measurement.driverMessage.find("attribute range"), std::string::npos)
+        << "the driver's own wording is what makes the row evidence rather than an assertion";
+    ExpectProbeReleasedEverything();
+}
+
+// A ceiling that is not a power of two, so a bisection that happened to land on 16 by arithmetic
+// rather than by measurement fails here.
+TEST(DriverBugProbes, VertexInputLocationCeilingBisectsToAnAwkwardBoundary) {
+    ResetFakeDriver();
+    g_fake.maxVertexAttribs = 32;
+    g_fake.explicitLocationCeiling = 23;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    const auto measurement = ProbeExplicitVertexInputLocationCeiling(gl);
+    EXPECT_TRUE(measurement.detected);
+    EXPECT_EQ(measurement.usableLocations, 23);
+    ExpectProbeReleasedEverything();
+}
+
+// THE FIRST CONTROL. A compiler that refuses location 0 refuses everything, and a probe that
+// read that as "only one location is usable" would withdraw every vertex attribute the device has.
+TEST(DriverBugProbes, VertexInputLocationCeilingReportsNothingWhenTheLocationZeroControlFails) {
+    ResetFakeDriver();
+    g_fake.maxVertexAttribs = 32;
+    g_fake.everyCompileFails = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    const auto measurement = ProbeExplicitVertexInputLocationCeiling(gl);
+    EXPECT_FALSE(measurement.detected);
+    EXPECT_EQ(measurement.usableLocations, 32)
+        << "an inconclusive probe has to leave the advertised count exactly where it found it";
+    ExpectProbeReleasedEverything();
+}
+
+// THE SECOND CONTROL, which does not change the clamp but does change what the report may claim:
+// a driver that cannot reach the location through glBindAttribLocation either has fewer
+// attributes than it advertises, rather than merely an unspellable half.
+TEST(DriverBugProbes, VertexInputLocationCeilingSaysWhenTheAttributeIsUnreachableAnyWay) {
+    ResetFakeDriver();
+    g_fake.maxVertexAttribs = 32;
+    g_fake.explicitLocationCeiling = 16;
+    g_fake.bindAttribLocationCeiling = 16;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    const auto measurement = ProbeExplicitVertexInputLocationCeiling(gl);
+    EXPECT_TRUE(measurement.detected);
+    EXPECT_EQ(measurement.usableLocations, 16);
+    EXPECT_FALSE(measurement.bindAttribLocationReachesAdvertisedMax);
+    ExpectProbeReleasedEverything();
+}
+
+// ===================== LAYERED BLIT DESTINATION =====================
+
+TEST(DriverBugProbes, LayeredBlitDestinationIsCleanWhenTheLayerIsHonoured) {
+    ResetFakeDriver();
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl));
+    ExpectProbeReleasedEverything();
+}
+
+TEST(DriverBugProbes, LayeredBlitDestinationIsDetectedWhenTheCopyLandsOnLayerZero) {
+    ResetFakeDriver();
+    g_fake.blitIgnoresDestinationLayer = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_TRUE(ProbeBlitIgnoresDestinationArrayLayer(gl));
+    ExpectProbeReleasedEverything();
+}
+
+// THE CONTROL. A driver that ignores the SOURCE layer too cannot address array layers through a
+// framebuffer at all - a bigger defect, and one this probe is not entitled to report as its own.
+// The control blit onto destination layer 0 is what catches it: the value it looks for lives only
+// on the source's layer 1, so a source read pinned to layer 0 never produces it.
+TEST(DriverBugProbes, LayeredBlitDestinationReportsNothingWhenTheSourceLayerIsIgnoredToo) {
+    ResetFakeDriver();
+    g_fake.blitIgnoresDestinationLayer = true;
+    g_fake.blitIgnoresSourceLayer = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(gl));
+    ExpectProbeReleasedEverything();
+}
+
+// And the shape that is not this bug at all: a blit that moves nothing anywhere. The probe's
+// subject then finds its magic byte on no layer, which is "reached no verdict", not "landed on 0".
+TEST(DriverBugProbes, LayeredBlitDestinationReportsNothingWhenTheBlitMovesNothing) {
+    ResetFakeDriver();
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    MG_External::GLESFunctionsTable inert = gl;
+    inert.glBlitFramebuffer = [](GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield,
+                                 GLenum) {};
+    EXPECT_FALSE(ProbeBlitIgnoresDestinationArrayLayer(inert));
+    ExpectProbeReleasedEverything();
 }
 
 TEST(DriverBugProbes, ImageCoherencyNeedsBothHalvesOfTheSplitPairInOneStage) {

@@ -1516,7 +1516,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         // lowers the number, and only on evidence.
         const SelfTest::VertexInputLocationCeilingMeasurement& locationCeiling =
             SelfTest::ExplicitVertexInputLocationCeiling(glesFuncs);
-        caps.MaxVertexAttribs = std::min(maxVertexAttribs, locationCeiling.usableLocations);
+        // Guarded on `detected` rather than on the number alone: a probe that reached no verdict
+        // has measured nothing, and the clamp must be driven by evidence or not applied at all.
+        caps.MaxVertexAttribs = locationCeiling.detected
+                                    ? std::min(maxVertexAttribs, locationCeiling.usableLocations)
+                                    : maxVertexAttribs;
         if (locationCeiling.detected) {
             MGLOG_I("    GL_MAX_VERTEX_ATTRIBS reduced from the driver's %d to %d: "
                     "layout(location = N) on a vertex input is refused from N = %d upward",

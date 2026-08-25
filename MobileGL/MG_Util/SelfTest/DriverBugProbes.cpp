@@ -1515,14 +1515,16 @@ namespace MobileGL::MG_Util::SelfTest {
                 "glBlitFramebuffer ignores the destination array layer",
                 DriverBugVerdict::Fixed,
                 "a glBlitFramebuffer whose DRAW framebuffer attaches a non-zero array layer with "
-                "glFramebufferTextureLayer writes to layer 0 instead, for colour and depth alike, "
-                "and raises no error doing it. The layer is honoured everywhere else on the same "
-                "driver - rendering into it works, glReadPixels off it works, and the blit's own "
-                "SOURCE layer is read correctly - so neither layered attachments nor blitting is "
-                "withdrawn. MobileGL performs such a blit with glCopyImageSubData instead, which "
-                "takes the destination layer explicitly and honours it here; a blit that scales, "
-                "flips, changes format, resolves samples or is clipped by the scissor cannot be "
-                "expressed that way and is still handed to the driver"};
+                "glFramebufferTextureLayer writes to layer 0 instead, and raises no error doing "
+                "it. Measured here on the colour aspect; the depth aspect behaves the same way on "
+                "the device this was characterised on. The layer is honoured everywhere else on "
+                "the same driver - the blit's own SOURCE layer is read correctly, which is this "
+                "probe's control - so neither layered attachments nor blitting is withdrawn. "
+                "MobileGL performs such a blit with glCopyImageSubData instead, which takes the "
+                "destination layer explicitly and honours it here, and applies that substitute to "
+                "the depth and stencil aspects as well; a blit that scales, flips, changes format, "
+                "resolves samples or is clipped by the scissor cannot be expressed as a copy and "
+                "is still handed to the driver"};
         }
 
         // ===================== EXPLICIT VERTEX INPUT LOCATION CEILING =====================
@@ -1690,9 +1692,8 @@ namespace MobileGL::MG_Util::SelfTest {
             if (!measurement.detected) return std::nullopt;
             String detail =
                 format("GL_MAX_VERTEX_ATTRIBS is {} but the ESSL compiler refuses "
-                       "layout(location = N) on a vertex input for every N at or above {}, for float "
-                       "and integer inputs alike - so {} of the {} attributes advertised cannot be "
-                       "declared at all",
+                       "layout(location = N) on a vertex input for every N at or above {} - so {} of "
+                       "the {} attributes advertised cannot be declared at all",
                        measurement.advertisedMaxVertexAttribs, measurement.usableLocations,
                        measurement.advertisedMaxVertexAttribs - measurement.usableLocations,
                        measurement.advertisedMaxVertexAttribs);
