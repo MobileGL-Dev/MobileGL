@@ -552,7 +552,15 @@ namespace MGITest {
         // before the pre-flight forks - the child must measure the same platform
         // the parent will use.
         EnsureHeadlessPlatform();
-        m_backendName = EnvOr("MOBILEGL_BACKEND_TYPE", "<unset>");
+        // The backend that is actually about to come up, which is what every
+        // `BackendName() == "DirectGLES"` gate in the scenarios means by the question.
+        // MG_ConfigLoader::InitBackendType defaults an unset MOBILEGL_BACKEND_TYPE to
+        // DirectGLES, so the same default belongs here; this used to report the literal
+        // "<unset>" instead. Under ctest the variable is always set by the ENVIRONMENT
+        // property, which is why that never showed - but run straight from a device
+        // shell, where nothing sets it, DirectGLES came up and every case gated on the
+        // NAME DirectGLES skipped as though it had not.
+        m_backendName = EnvOr("MOBILEGL_BACKEND_TYPE", "DirectGLES");
         m_usable = BringUp();
     }
 
