@@ -1348,6 +1348,196 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        // ===================== EXPLICIT VERTEX INPUT LOCATION CEILING =====================
+
+        constexpr const char* kAttributeLocationProbeName = "explicit vertex input location";
+
+        // COMPILES ONE VERTEX STAGE and reports nothing else. A link would drag in every other
+        // reason a program can be refused (varying budgets, the fragment stage, the linker's own
+        // location rules), and the defect this measures is in the driver's ESSL COMPILER: it
+        // rejects the declaration itself, before any of that can matter.
+        Bool ExplicitVertexInputLocationCompiles(const GLESFunctionsTable& gl, Int location,
+                                                 String* firstRejectionMessage) {
+            const String source = format("#version 320 es\n"
+                                         "layout(location = {}) in vec4 a_probe;\n"
+                                         "void main() {{ gl_Position = a_probe; }}\n",
+                                         location);
+            Drain(gl);
+            const GLuint shader = gl.glCreateShader(GL_VERTEX_SHADER);
+            if (shader == 0) return false;
+            const char* text = source.c_str();
+            gl.glShaderSource(shader, 1, &text, nullptr);
+            gl.glCompileShader(shader);
+            GLint compiled = GL_FALSE;
+            gl.glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (compiled == GL_FALSE && firstRejectionMessage != nullptr && firstRejectionMessage->empty()) {
+                char log[256] = {0};
+                gl.glGetShaderInfoLog(shader, static_cast<GLsizei>(sizeof(log) - 1), nullptr, log);
+                // One line: the driver's own wording is the report's whole evidential value, and
+                // the rest of the log is the same sentence repeated per declaration.
+                String message = log;
+                if (const SizeT newline = message.find('\n'); newline != String::npos) {
+                    message.resize(newline);
+                }
+                while (!message.empty() && (message.back() == ' ' || message.back() == '\r')) message.pop_back();
+                *firstRejectionMessage = Move(message);
+            }
+            gl.glDeleteShader(shader);
+            Drain(gl);
+            return compiled != GL_FALSE;
+        }
+
+        // THE SECOND CONTROL, and the one that decides whether the cap is about the LAYOUT
+        // QUALIFIER or about the attribute itself. The same input, declared with no qualifier at
+        // all and placed by glBindAttribLocation instead. If this links and glGetAttribLocation
+        // answers with the location asked for, the driver can address that attribute perfectly
+        // well and only the qualifier path is capped - which is what makes clamping the
+        // advertised count the right response rather than a shrug. If it fails too, the driver
+        // genuinely has fewer attributes than it advertises; the clamp is still correct, but the
+        // report must not claim the attribute is reachable another way.
+        Bool BindAttribLocationReaches(const GLESFunctionsTable& gl, Int location) {
+            if (!gl.glCreateProgram || !gl.glAttachShader || !gl.glBindAttribLocation || !gl.glLinkProgram ||
+                !gl.glGetProgramiv || !gl.glGetAttribLocation || !gl.glDeleteProgram) {
+                return false;
+            }
+            constexpr const char* kVertexSource = "#version 320 es\n"
+                                                  "in vec4 a_probe;\n"
+                                                  "void main() { gl_Position = a_probe; }\n";
+            constexpr const char* kFragmentSource = "#version 320 es\n"
+                                                    "precision highp float;\n"
+                                                    "out vec4 o_color;\n"
+                                                    "void main() { o_color = vec4(1.0); }\n";
+            Drain(gl);
+            const GLuint vertexShader =
+                CompileStage(gl, GL_VERTEX_SHADER, kVertexSource, "vertex", kAttributeLocationProbeName);
+            if (vertexShader == 0) return false;
+            const GLuint fragmentShader =
+                CompileStage(gl, GL_FRAGMENT_SHADER, kFragmentSource, "fragment", kAttributeLocationProbeName);
+            if (fragmentShader == 0) {
+                gl.glDeleteShader(vertexShader);
+                return false;
+            }
+            const GLuint program = gl.glCreateProgram();
+            gl.glAttachShader(program, vertexShader);
+            gl.glAttachShader(program, fragmentShader);
+            gl.glBindAttribLocation(program, static_cast<GLuint>(location), "a_probe");
+            gl.glLinkProgram(program);
+            GLint linked = GL_FALSE;
+            gl.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            const Bool reached = linked != GL_FALSE && gl.glGetAttribLocation(program, "a_probe") == location;
+            gl.glDeleteShader(vertexShader);
+            gl.glDeleteShader(fragmentShader);
+            gl.glDeleteProgram(program);
+            Drain(gl);
+            return reached;
+        }
+    } // namespace
+
+    VertexInputLocationCeilingMeasurement ProbeExplicitVertexInputLocationCeiling(const GLESFunctionsTable& gl) {
+        VertexInputLocationCeilingMeasurement measurement;
+        // `usableLocations` is the number a caller clamps to, so it carries the driver's own
+        // answer from the first line onward and every early return below leaves it there. A
+        // probe that cannot run has to withdraw nothing at all, and a zero here would withdraw
+        // every attribute the device has.
+        if (gl.glGetIntegerv != nullptr) {
+            GLint advertisedEarly = 0;
+            gl.glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &advertisedEarly);
+            if (gl.glGetError != nullptr) Drain(gl);
+            measurement.advertisedMaxVertexAttribs = advertisedEarly;
+            measurement.usableLocations = advertisedEarly;
+        }
+        if (!gl.glCreateShader || !gl.glShaderSource || !gl.glCompileShader || !gl.glGetShaderiv ||
+            !gl.glGetShaderInfoLog || !gl.glDeleteShader || !gl.glGetIntegerv || !gl.glGetError) {
+            return measurement;
+        }
+
+        const GLint advertised = measurement.advertisedMaxVertexAttribs;
+        // Nothing to bisect, and nothing a clamp could usefully say.
+        if (advertised < 2) return measurement;
+
+        // THE CONTROL, and the reason a compiler that is simply unavailable cannot be reported as
+        // this bug: location 0 is the one every ES driver in existence accepts, so a probe that
+        // cannot compile even that has measured its own failure, not the driver's.
+        if (!ExplicitVertexInputLocationCompiles(gl, 0, nullptr)) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the location-0 control did not "
+                    "compile, so nothing higher says anything)",
+                    kAttributeLocationProbeName);
+            return measurement;
+        }
+
+        // The common case is one compile: a conforming driver takes the highest location it
+        // advertises and the probe stops there.
+        if (ExplicitVertexInputLocationCompiles(gl, advertised - 1, nullptr)) return measurement;
+
+        // Bisect for the highest location that still compiles. `low` always compiles (the control
+        // proved location 0 does) and `high` never does, so the loop closes on the boundary in
+        // ceil(log2(advertised)) compiles - five for the 32 attributes Adreno advertises.
+        String rejectionMessage;
+        ExplicitVertexInputLocationCompiles(gl, advertised - 1, &rejectionMessage);
+        Int low = 0;
+        Int high = advertised - 1;
+        while (high - low > 1) {
+            const Int middle = low + (high - low) / 2;
+            if (ExplicitVertexInputLocationCompiles(gl, middle, &rejectionMessage)) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+
+        measurement.detected = true;
+        measurement.usableLocations = low + 1;
+        measurement.driverMessage = Move(rejectionMessage);
+        measurement.bindAttribLocationReachesAdvertisedMax = BindAttribLocationReaches(gl, advertised - 1);
+        MGLOG_I("[driver-bug] %s probe: GL_MAX_VERTEX_ATTRIBS is %d but layout(location = N) on a "
+                "vertex input is refused from N = %d upward - only %d location(s) are usable; "
+                "glBindAttribLocation(%d) %s%s%s",
+                kAttributeLocationProbeName, advertised, measurement.usableLocations,
+                measurement.usableLocations, advertised - 1,
+                measurement.bindAttribLocationReachesAdvertisedMax ? "still resolves correctly"
+                                                                   : "does not resolve either",
+                measurement.driverMessage.empty() ? "" : "; the driver says: ",
+                measurement.driverMessage.c_str());
+        return measurement;
+    }
+
+    const VertexInputLocationCeilingMeasurement& ExplicitVertexInputLocationCeiling(const GLESFunctionsTable& gl) {
+        static const VertexInputLocationCeilingMeasurement measurement =
+            ProbeExplicitVertexInputLocationCeiling(gl);
+        return measurement;
+    }
+
+    namespace {
+        Optional<DriverBugFinding> ProbeExplicitVertexInputLocationCeilingBug(const GLESFunctionsTable& gl) {
+            const VertexInputLocationCeilingMeasurement& measurement = ExplicitVertexInputLocationCeiling(gl);
+            if (!measurement.detected) return std::nullopt;
+            String detail =
+                format("GL_MAX_VERTEX_ATTRIBS is {} but the ESSL compiler refuses "
+                       "layout(location = N) on a vertex input for every N at or above {}, for float "
+                       "and integer inputs alike - so {} of the {} attributes advertised cannot be "
+                       "declared at all",
+                       measurement.advertisedMaxVertexAttribs, measurement.usableLocations,
+                       measurement.advertisedMaxVertexAttribs - measurement.usableLocations,
+                       measurement.advertisedMaxVertexAttribs);
+            if (!measurement.driverMessage.empty()) {
+                detail += format(" - the driver says \"{}\"", measurement.driverMessage);
+            }
+            detail += measurement.bindAttribLocationReachesAdvertisedMax
+                          ? format(". The same driver ACCEPTS glBindAttribLocation({}) on an unqualified "
+                                   "input and resolves it correctly, so the attributes are there and only "
+                                   "the layout qualifier is capped",
+                                   measurement.advertisedMaxVertexAttribs - 1)
+                          : ". glBindAttribLocation does not reach those locations either, so the "
+                            "attributes appear genuinely absent rather than merely unspellable";
+            detail += format(". MobileGL emits its vertex inputs as layout qualifiers, so it advertises the "
+                             "{} locations it can actually deliver rather than the {} the driver claims. An "
+                             "application asking for more used to be handed a count it could not build a "
+                             "shader against, which failed at the stage compile with no way back",
+                             measurement.usableLocations, measurement.advertisedMaxVertexAttribs);
+            return DriverBugFinding{"Vertex input layout(location) capped below GL_MAX_VERTEX_ATTRIBS",
+                                    DriverBugVerdict::Fixed, Move(detail)};
+        }
+
         Optional<DriverBugFinding> ProbeGeometryWriteAfterEmitBug(const GLESFunctionsTable& gl) {
             if (!GeometryStageSsboWriteAfterEmitDropped(gl)) return std::nullopt;
             return DriverBugFinding{
@@ -1448,6 +1638,7 @@ namespace MobileGL::MG_Util::SelfTest {
             &ProbeImageLocationPerNameBug,
             &ProbeCrossStageImageQualifierMergeBug,
             &ProbeImageCoherencyResidualBug,
+            &ProbeExplicitVertexInputLocationCeilingBug,
         };
     } // namespace
 

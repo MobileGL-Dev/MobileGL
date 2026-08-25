@@ -55,6 +55,53 @@ namespace MobileGL::MG_Util::SelfTest {
         String detail;
     };
 
+    // What the vertex-input location probe measured. The ceiling is reported rather than
+    // hard-coded: it is a driver property, and a clamp derived from a number measured on some
+    // other device is exactly the hard-coded vendor quirk this file exists to avoid.
+    struct VertexInputLocationCeilingMeasurement {
+        Bool detected = false;
+        // GL_MAX_VERTEX_ATTRIBS as the driver answers it.
+        Int advertisedMaxVertexAttribs = 0;
+        // How many locations `layout(location = N)` on a vertex input actually accepts, i.e. the
+        // highest N that compiles plus one. Equal to advertisedMaxVertexAttribs when the driver
+        // is not affected, and when the probe reached no verdict - so a caller can clamp to it
+        // unconditionally and an inconclusive probe changes nothing.
+        Int usableLocations = 0;
+        // Whether glBindAttribLocation(advertisedMaxVertexAttribs - 1) still links and resolves.
+        // Only measured when `detected`; see the second control in the .cpp for why it decides
+        // what the finding is allowed to claim.
+        Bool bindAttribLocationReachesAdvertisedMax = false;
+        // The first line of the driver's compile log for a refused declaration, so the report
+        // quotes the driver rather than paraphrasing it.
+        String driverMessage;
+    };
+
+    // Compiles `layout(location = N) in vec4` on its own at a series of N and finds the highest
+    // one the driver's ESSL compiler accepts.
+    //
+    // Adreno 830 advertises GL_MAX_VERTEX_ATTRIBS = 32 and then refuses the qualifier for every
+    // N >= 16 ("the location is not within attribute range [0, MAX_ATTRIBUTES-1]"), for float and
+    // integer inputs alike - so half the attributes it advertises cannot be declared. MobileGL
+    // emits vertex inputs as layout qualifiers, which makes the advertised count a promise it
+    // cannot keep; the measured ceiling is what it advertises instead.
+    //
+    // TWO CONTROLS. Location 0 must compile, or the probe has measured its own failure rather
+    // than the driver's. And glBindAttribLocation at the advertised maximum is tried separately,
+    // because that is what separates "only the layout qualifier is capped" (which is what this
+    // driver does) from "the attributes are not there at all" - two findings that justify the
+    // same clamp but very different report text.
+    //
+    // Compile-only, and bisected: one shader compile on a conforming driver, about seven on an
+    // affected one. Returns a measurement with `detected` false and `usableLocations` equal to
+    // the advertised count when an entry point is missing or a control fails, so an
+    // inconclusive probe never withdraws anything.
+    VertexInputLocationCeilingMeasurement ProbeExplicitVertexInputLocationCeiling(
+        const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeExplicitVertexInputLocationCeiling(), evaluated at most once per process.
+    const VertexInputLocationCeilingMeasurement& ExplicitVertexInputLocationCeiling(
+        const MG_External::GLESFunctionsTable& gl);
+
     // Draws one point through VS+GS+FS whose geometry stage writes two storage buffers: one
     // BEFORE its EmitVertex()/EndPrimitive() and one AFTER. Returns true only when the
     // before-emit write lands and the after-emit write does not.

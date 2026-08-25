@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Loader.h"
+#include "MG_Util/SelfTest/DriverBugProbes.h"
 #include "MG_Util/Types.h"
 #include <Config.h>
 #include <cmath>
@@ -1505,7 +1506,22 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxVertexTextureImageUnits = maxVertexTextureImageUnits;
         caps.MaxComputeTextureImageUnits = maxComputeTextureImageUnits;
         caps.MaxCombinedTextureImageUnits = maxCombinedTextureImageUnits;
-        caps.MaxVertexAttribs = maxVertexAttribs;
+        // Not the driver's answer alone: MobileGL emits every vertex input as a
+        // layout(location = N) qualifier, so an attribute the driver counts but its ESSL
+        // compiler will not let anything DECLARE is not an attribute MobileGL can hand to an
+        // application. The probe measures where the qualifier actually stops (see
+        // SelfTest::ProbeExplicitVertexInputLocationCeiling - Adreno 830 advertises 32 and
+        // refuses the qualifier from 16 up) and answers with the advertised count on every
+        // driver that has no such gap and on any run that reaches no verdict, so this only ever
+        // lowers the number, and only on evidence.
+        const SelfTest::VertexInputLocationCeilingMeasurement& locationCeiling =
+            SelfTest::ExplicitVertexInputLocationCeiling(glesFuncs);
+        caps.MaxVertexAttribs = std::min(maxVertexAttribs, locationCeiling.usableLocations);
+        if (locationCeiling.detected) {
+            MGLOG_I("    GL_MAX_VERTEX_ATTRIBS reduced from the driver's %d to %d: "
+                    "layout(location = N) on a vertex input is refused from N = %d upward",
+                    maxVertexAttribs, caps.MaxVertexAttribs, locationCeiling.usableLocations);
+        }
         caps.MaxComputeShaderStorageBlocks = maxComputeShaderStorageBlocks;
         caps.MaxCombinedShaderStorageBlocks = maxCombinedShaderStorageBlocks;
         caps.MaxVertexShaderStorageBlocks = maxVertexShaderStorageBlocks;
