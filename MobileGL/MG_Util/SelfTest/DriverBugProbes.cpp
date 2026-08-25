@@ -154,6 +154,12 @@ namespace MobileGL::MG_Util::SelfTest {
             state.depthTest = gl.glIsEnabled(GL_DEPTH_TEST);
             state.blend = gl.glIsEnabled(GL_BLEND);
             gl.glGetIntegerv(GL_ACTIVE_TEXTURE, &state.activeTexture);
+            // Unit 0 is selected BEFORE the per-unit bindings are read, because Restore puts them
+            // back on unit 0 unconditionally. Reading them off whatever unit happened to be
+            // active and writing them to unit 0 would corrupt unit 0's binding for whoever runs
+            // next - harmless while every probe ran from the POST screen with nothing else using
+            // the context, and not harmless now that one of them runs from a live draw path.
+            if (gl.glActiveTexture != nullptr) gl.glActiveTexture(GL_TEXTURE0);
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D, &state.texture2D);
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &state.texture2DMultisample);
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &state.texture2DArray);
