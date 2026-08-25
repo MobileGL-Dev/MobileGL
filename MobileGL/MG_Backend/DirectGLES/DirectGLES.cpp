@@ -5192,14 +5192,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_NONE is what an unwritten draw-buffer slot holds, and it is a different value from
         // the "no such attachment" one - counting it as enabled made every framebuffer look like
         // it had eight and sent every colour blit to the driver.
+        //
+        // The buffer is found rather than assumed to be slot 0: a blit writes every ENABLED draw
+        // buffer, and glDrawBuffers(GL_NONE, GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT0) leaves slot
+        // 0 empty while still naming exactly one destination.
         Int enabledDrawBuffers = 0;
+        FramebufferAttachmentType colorDestination = FramebufferAttachmentType::None;
         for (const FramebufferAttachmentType buffer : drawBuffers) {
             if (buffer != FramebufferAttachmentType::Unknown && buffer != FramebufferAttachmentType::None) {
                 ++enabledDrawBuffers;
+                if (enabledDrawBuffers == 1) colorDestination = buffer;
             }
         }
         const AspectPlan plans[] = {
-            {GL_COLOR_BUFFER_BIT, readFramebuffer->GetReadBuffer(), drawBuffers[0]},
+            {GL_COLOR_BUFFER_BIT, readFramebuffer->GetReadBuffer(), colorDestination},
             {GL_DEPTH_BUFFER_BIT, FramebufferAttachmentType::Depth, FramebufferAttachmentType::Depth},
             {GL_STENCIL_BUFFER_BIT, FramebufferAttachmentType::Stencil, FramebufferAttachmentType::Stencil},
         };
@@ -5230,6 +5236,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // which is a resolve the driver still owns.
             if (sourceTexture->GetFormat() != destinationTexture->GetFormat()) continue;
             if (sourceTexture->GetSamples() > 0 || destinationTexture->GetSamples() > 0) continue;
+            // Copying an image region onto itself is undefined for glCopyImageSubData, and a blit
+            // whose source and destination overlap is undefined for GL too - so this is not a
+            // shape to substitute FOR, it is one to leave exactly as the application wrote it.
+            if (sourceTexture == destinationTexture &&
+                sourceAttachment.GetTextureLevel() == destinationAttachment.GetTextureLevel() &&
+                sourceAttachment.GetTextureLayer() == destinationAttachment.GetTextureLayer()) {
+                continue;
+            }
 
             // A combined depth-stencil texture is ONE image to glCopyImageSubData: it carries both
             // aspects across whether or not the mask asked for both. Taking only GL_DEPTH_BUFFER_BIT
