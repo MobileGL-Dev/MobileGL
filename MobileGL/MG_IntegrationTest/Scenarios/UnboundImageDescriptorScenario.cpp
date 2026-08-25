@@ -187,16 +187,16 @@ void main() {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
             }
 
-            // Every case needs image or buffer-texture uniforms in a particular stage, and a host
-            // that has none of them would report a failure that is about the host, not the fix.
-            bool StageSupports(GLenum imageUniformLimit, GLenum textureImageUnitLimit) const {
-                GLint images = 0;
-                GLint units = 0;
-                glGetIntegerv(imageUniformLimit, &images);
-                glGetIntegerv(textureImageUnitLimit, &units);
+            // Each case needs exactly one kind of opaque uniform in one stage, and a host with
+            // none of that kind there would report a failure that is about the host, not the fix.
+            // Asked for by the limit that governs the kind under test and no other: a guard that
+            // over-asks turns into a silent skip of the very thing the case exists for.
+            static bool LimitIsAtLeastOne(GLenum limit) {
+                GLint value = 0;
+                glGetIntegerv(limit, &value);
                 while (glGetError() != GL_NO_ERROR) {
                 }
-                return images >= 1 && units >= 1;
+                return value >= 1;
             }
 
             unsigned int MakeComputeProgram(const char* source) {
@@ -302,7 +302,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundSamplerBufferDoesNotLoseTheDispatch) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_COMPUTE_IMAGE_UNIFORMS, GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS)) {
             GTEST_SKIP() << "the compute stage has no texture image units";
         }
         ExpectDispatchStillRuns(kSamplerBufferComputeSource, "samplerBuffer");
@@ -337,7 +337,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, AWriteonlyImageBufferLeftUnboundDoesNotLoseTheDispatch) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_COMPUTE_IMAGE_UNIFORMS, GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_COMPUTE_IMAGE_UNIFORMS)) {
             GTEST_SKIP() << "the compute stage has no image uniforms";
         }
         ExpectDispatchStillRuns(kImageBufferComputeSource, "imageBuffer");
@@ -345,7 +345,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, AWriteonlyImageBufferLeftUnboundDoesNotLoseTheDraw) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, GL_MAX_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_FRAGMENT_IMAGE_UNIFORMS)) {
             GTEST_SKIP() << "the fragment stage has no image uniforms";
         }
         ExpectDrawStillRuns(kImageBufferFragmentSource, "imageBuffer");
@@ -355,7 +355,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, AWriteonlyImage2DLeftUnboundDoesNotLoseTheDispatch) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_COMPUTE_IMAGE_UNIFORMS, GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_COMPUTE_IMAGE_UNIFORMS)) {
             GTEST_SKIP() << "the compute stage has no image uniforms";
         }
         ExpectDispatchStillRuns(kImage2DComputeSource, "image2D");
@@ -363,7 +363,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, AWriteonlyImage2DLeftUnboundDoesNotLoseTheDraw) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, GL_MAX_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_FRAGMENT_IMAGE_UNIFORMS)) {
             GTEST_SKIP() << "the fragment stage has no image uniforms";
         }
         ExpectDrawStillRuns(kImage2DFragmentSource, "image2D");
@@ -371,7 +371,7 @@ void main() {
 
     TEST_F(UnboundImageDescriptorScenario, AFormatlessWriteonlyImage2DLeftUnboundDoesNotLoseTheDispatch) {
         if (!Ready() || IsSkipped()) return;
-        if (!StageSupports(GL_MAX_COMPUTE_IMAGE_UNIFORMS, GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS)) {
+        if (!LimitIsAtLeastOne(GL_MAX_COMPUTE_IMAGE_UNIFORMS)) {
             GTEST_SKIP() << "the compute stage has no image uniforms";
         }
         ExpectDispatchStillRuns(kFormatlessImage2DComputeSource, "format-less image2D");
