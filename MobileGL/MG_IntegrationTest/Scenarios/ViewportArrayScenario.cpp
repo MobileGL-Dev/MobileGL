@@ -55,10 +55,6 @@
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
-// For the emulation switch the negative-control case below flips. Nothing else in this file needs
-// to know which backend it is running on.
-#include <Config.h>
-
 #ifdef GLAPI
 #undef GLAPI
 #endif
@@ -529,7 +525,8 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
         //
         // Everything above is a claim about pixels, and a claim about pixels cannot tell an
         // emulation that works from a backend that was going to be right anyway. This case builds
-        // the SAME program with MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION off and requires case 1's
+        // the SAME program in a process started with MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0
+        // (the NoViewportArrayEmulation. ctest entry) and requires case 1's
         // result to COLLAPSE: with no routing, every geometry invocation rasterizes against
         // viewport 0's rectangle, so the last invocation paints the whole surface and every cell
         // reads 15 instead of its own index. That is the pre-emulation behaviour this backend had
@@ -544,25 +541,31 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
                                 "gl_ViewportIndex natively and ignores it";
             }
 
-            // The feature table is a process-global and this fixture shares its context with every
-            // other scenario in the process, so the restore is not optional.
-            struct ScopedEmulationOff {
-                ScopedEmulationOff(): saved(MobileGL::MG_Config::Features.ViewportArrayEmulation) {
-                    MobileGL::MG_Config::Features.ViewportArrayEmulation =
-                        MobileGL::MG_Config::QuirkOverride::ForceOff;
-                }
-                ~ScopedEmulationOff() { MobileGL::MG_Config::Features.ViewportArrayEmulation = saved; }
-                MobileGL::MG_Config::QuirkOverride saved;
-            };
+            // The switch comes from the ENVIRONMENT, and this case runs only in a process that
+            // was started with it off. It used to write MG_Config::Features directly, which is
+            // not available to it any more: on Android this module links the shipping
+            // libMobileGL.so - so that the on-device run validates the real artifact - and that
+            // library exports no such symbol. The process-wide variable is also the more honest
+            // spelling of the control, since it is the one a developer chasing this failure
+            // would actually set. CMakeLists.txt registers the NoViewportArrayEmulation. ctest
+            // entry for it, so the control still runs in every ctest run; anywhere else - the
+            // ambient ctest entries, or the binary run straight from a device shell - the
+            // emulation is on and this case skips.
+            if (AmbientQuirkFromEnvironment("MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION") != AmbientQuirk::Off) {
+                GTEST_SKIP() << "this is the negative control for the emulation and needs it off for the "
+                                "whole process; the NoViewportArrayEmulation. ctest entry runs it with "
+                                "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0";
+            }
 
             IntTarget target = MakeIntTarget(kSurfaceSide, kSurfaceSide);
             SetupGridViewports(kCellSize, kCellSize);
 
             GLuint unroutedProgram = 0;
             {
-                const ScopedEmulationOff scopedEmulationOff;
-                // A FRESH program: the emitted ESSL is decided at link time and memoized on a key
-                // that carries this flag, so reusing m_program would just replay the routed build.
+                // A program of its own rather than the fixture's, even though in this process
+                // the fixture's was built unrouted too: the emitted ESSL is decided at link
+                // time and memoized on a key that carries this flag, and building it here keeps
+                // what this case measures independent of when SetUp happened to link.
                 unroutedProgram = BuildProgram(kGridGeometrySource, kIntFragmentSource);
                 ASSERT_NE(unroutedProgram, 0u) << "unrouted program failed to build: " << m_buildLog;
                 glUseProgram(unroutedProgram);

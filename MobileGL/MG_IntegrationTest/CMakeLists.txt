@@ -306,6 +306,40 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT
 mgl_itest_join_environment(MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1" ${MGL_ITEST_COMMON_ENV})
 
+# The shader-compiler configurations AsyncCompileScenario needs, and the one
+# ViewportArrayScenario's negative control needs.
+#
+# These used to be poked into MG_Config::Features from inside the test bodies. They
+# cannot be any more - on Android this module links the SHIPPING libMobileGL.so, which
+# exports nothing internal - and they should not have been anyway: half of what each of
+# them decides is latched before the first GL call (the compile pool and its threads;
+# the advertised extension list, which a backend builds once from the configuration in
+# force at its first use), so an in-process write could only ever have moved the other
+# half. Every one of them is a whole-process property, and a whole-process property is
+# spelled with an environment variable and a ctest entry of its own.
+#
+# Note the shape of every list here: it APPENDS to MGL_ITEST_COMMON_ENV /
+# MGL_ITEST_VULKAN_ENV rather than standing alone. A ctest ENVIRONMENT property REPLACES
+# the job environment rather than adding to it, so an entry that lists only its mode
+# variable would silently lose the EGL vendor and Vulkan ICD pinning and run against
+# whatever the loader found first.
+mgl_itest_join_environment(MGL_ITEST_GLES_ASYNC_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ASYNC_SHADER_COMPILE=1" ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_ASYNC_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ASYNC_SHADER_COMPILE=0" ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=1" ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=0" ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_OPTIMISTIC_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ASYNC_SHADER_COMPILE=1"
+    "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1" ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=1"
+    "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1" ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0" ${MGL_ITEST_COMMON_ENV})
+
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
 
@@ -369,4 +403,101 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}"
+)
+
+# AsyncCompileScenario, with asynchronous compilation PINNED ON per backend.
+#
+# Not a duplicate of what the two ambient registrations already run: they run whatever
+# MobileGL's built-in default happens to be, and the day that default flips they would
+# stop covering the asynchronous path without anything going red. These entries are the
+# ones that keep the asynchronous half tested no matter what ships. They are also the
+# only place ExtensionStringMatchesTheConfiguration can assert that the extension IS
+# advertised - the case derives its expectation from this variable and nothing else, and
+# skips where it is unset, precisely so that it is not asserting the implementation
+# against itself.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.AsyncOn."
+    TEST_FILTER "AsyncCompileScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_ASYNC_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.AsyncOn."
+    TEST_FILTER "AsyncCompileScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_ON_ENVIRONMENT}"
+)
+
+# The other side of the same switch: asynchronous compilation OFF, so
+# GL_KHR_parallel_shader_compile must be WITHDRAWN from both spellings of the extension
+# list and GL_MAX_SHADER_COMPILER_THREADS_KHR must read 0. Only that one case is
+# registered here because it is the only one that has anything to say in this
+# configuration - the other four exist to observe worker-built artifacts, and there are
+# none - so registering the whole scenario would buy four guaranteed skips per backend.
+# Together with the AsyncOn. entries above, one ctest run still covers both flag states,
+# which is what the in-process forcing used to be for.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.AsyncOff."
+    TEST_FILTER "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_ASYNC_OFF_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.AsyncOff."
+    TEST_FILTER "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_OFF_ENVIRONMENT}"
+)
+
+# The optimistic-status quirk's end-to-end shape. Its own entries and not part of the
+# AsyncOn. ones because the quirk is not neutral for the rest of the scenario: with it in
+# force glGetShaderiv(GL_COMPILE_STATUS) deliberately answers without joining, which is
+# exactly what CompletionStatusPollingThenForcedJoin asserts must NOT happen. Off by
+# default and never advertised, so - unlike asynchronous compilation, which announces
+# itself through the extension string - the variable is the only thing that can tell the
+# case it is in force.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.OptimisticShaderStatus."
+    TEST_FILTER "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OPTIMISTIC_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.OptimisticShaderStatus."
+    TEST_FILTER "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT}"
+)
+
+# The negative control for the DirectGLES gl_ViewportIndex emulation, in a process that
+# has it switched off. One case, because it is the only one the switch may touch: with
+# the emulation off the three positive cases in the same fixture describe behaviour the
+# backend does not have, so a whole-scenario registration would be three guaranteed reds.
+# DirectGLES only - the flag steers nothing on DirectVulkan, which routes natively.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.NoViewportArrayEmulation."
+    TEST_FILTER "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT}"
 )

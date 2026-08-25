@@ -25,10 +25,12 @@
 //       be able to turn this into a red.
 //   (b) Forcing the join afterwards produces the right answer for every one of them:
 //       GL_COMPILE_STATUS true, an empty info log, and a program that links.
-//   (c) The extension string matches the configuration. This is the half a recorded
-//       trace can never cover - Iris and Sodium change their submission schedule the
-//       moment they see the string - so it is asserted against a real backend's real
-//       GL_EXTENSIONS, through both glGetString and glGetStringi.
+//   (c) The extension string matches the configuration - where "the configuration" is
+//       MOBILEGL_ASYNC_SHADER_COMPILE as this process inherited it, and NOT anything the
+//       implementation says about itself. This is the half a recorded trace can never
+//       cover - Iris and Sodium change their submission schedule the moment they see the
+//       string - so it is asserted against a real backend's real GL_EXTENSIONS, through
+//       both glGetString and glGetStringi.
 //   (d) glMaxShaderCompilerThreadsKHR(0) leaves nothing in flight: every subsequent
 //       GL_COMPLETION_STATUS_KHR reads GL_TRUE immediately, and compilation after it
 //       is synchronous. That is what the extension requires of a zero count.
@@ -40,15 +42,33 @@
 //
 // Backend selection is the module's usual one process, one backend (MOBILEGL_BACKEND_TYPE),
 // so this file runs twice per ctest invocation.
+//
+// COMPILATION MODE IS PER PROCESS TOO. Every case here needs a particular configuration of
+// MobileGL's shader compiler, and takes it from the ENVIRONMENT
+// (MOBILEGL_ASYNC_SHADER_COMPILE, MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS) rather than by
+// writing MG_Config::Features on the way past. Half of what those variables decide is
+// latched before the first GL call - the compile pool and its threads, and the advertised
+// extension list a backend builds once from the configuration in force at its first use -
+// so an in-process poke could only ever have moved the other half; and on Android it could
+// move nothing at all, because this module links against the shipping libMobileGL.so, which
+// exports no such symbol. A case whose process is not in the configuration it needs SKIPS
+// with that as its reason. CMakeLists.txt registers the extra ctest entries that put a
+// process into each configuration (AsyncOn., AsyncOff., OptimisticShaderStatus.), so one
+// ctest run still covers both sides of every switch. Run straight from a shell with nothing
+// set - the on-device shape - the ambient configuration runs and the rest skip cleanly.
+//
+// WITHIN one process, "compiled on a worker" versus "compiled on this thread" is switched
+// through glMaxShaderCompilerThreadsKHR, the extension's own entry point: a zero count joins
+// everything outstanding and compiles inline from then on, any nonzero count lifts that
+// again, and 0xFFFFFFFF asks for the implementation maximum (GL_Program.cpp,
+// MaxShaderCompilerThreadsKHR_State). Doing it through the public call rather than the
+// feature table means the switching is itself part of what these cases exercise.
 
 #include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
-
-#include "Config.h"
-#include "MG_Util/Async/ShaderCompilePool.h"
 
 #ifdef GLAPI
 #undef GLAPI
@@ -75,8 +95,6 @@ extern "C" void glMaxShaderCompilerThreadsKHR(GLuint count);
 
 namespace MGITest {
     namespace {
-
-        using MobileGL::MG_Config::QuirkOverride;
 
         // Same shape as the other scenarios: a two-attribute pass-through, so the only
         // thing that can differ between the two compilation modes is the compilation.
@@ -139,50 +157,40 @@ void main() {
             return source;
         }
 
-        // MOBILEGL_ASYNC_SHADER_COMPILE decides the ambient mode; a scenario that wants
-        // the other one says so here and gets the ambient one back on scope exit. Forcing
-        // it in-process is what lets ONE ctest run compare the two modes against each
-        // other - the whole point of (e).
-        class AsyncModeScope {
-        public:
-            explicit AsyncModeScope(bool async) : m_saved(MobileGL::MG_Config::Features.AsyncShaderCompile) {
-                MobileGL::MG_Config::Features.AsyncShaderCompile =
-                    async ? QuirkOverride::ForceOn : QuirkOverride::ForceOff;
+        // Whether this context advertises GL_KHR_parallel_shader_compile, which is exactly
+        // "MobileGL is configured to compile asynchronously" as an application can see it:
+        // the backends gate the string on AsyncShaderCompileEnabled() and on nothing else
+        // (BackendObject_DirectGLES.cpp / BackendObject_DirectVulkan.cpp), and the string
+        // is the only way MobileGL ever tells anyone. A case that needs asynchronous
+        // compilation checks for it the way an application would, and skips without it.
+        //
+        // The INDEXED form, because that is the one a core-profile application reads.
+        bool HasParallelShaderCompile() {
+            GLint count = 0;
+            glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+            for (GLint i = 0; i < count; ++i) {
+                const char* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, GLuint(i)));
+                if (name != nullptr && std::string(name) == "GL_KHR_parallel_shader_compile") return true;
             }
-            ~AsyncModeScope() { MobileGL::MG_Config::Features.AsyncShaderCompile = m_saved; }
-            AsyncModeScope(const AsyncModeScope&) = delete;
-            AsyncModeScope& operator=(const AsyncModeScope&) = delete;
+            return false;
+        }
 
-        private:
-            const QuirkOverride m_saved;
-        };
-
-        // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS, forced in-process for the same reason
-        // as AsyncModeScope: one ctest run asserts the quirk against the ambient default.
-        class OptimisticStatusScope {
-        public:
-            explicit OptimisticStatusScope(const QuirkOverride mode)
-                : m_saved(MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus) {
-                MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus = mode;
-            }
-            ~OptimisticStatusScope() { MobileGL::MG_Config::Features.AsyncOptimisticShaderStatus = m_saved; }
-            OptimisticStatusScope(const OptimisticStatusScope&) = delete;
-            OptimisticStatusScope& operator=(const OptimisticStatusScope&) = delete;
-
-        private:
-            const QuirkOverride m_saved;
-        };
-
-        // glMaxShaderCompilerThreadsKHR writes process-wide state; a scenario that calls
-        // it has to put the pool back or it changes how every scenario after it compiles.
+        // glMaxShaderCompilerThreadsKHR writes process-wide state; a scenario that calls it
+        // has to put the pool back or it changes how every scenario after it compiles.
+        //
+        // The restore is the extension's own "implementation maximum" spelling rather than a
+        // hand-rolled poke at the pool. glMaxShaderCompilerThreadsKHR(0xFFFFFFFF) is defined
+        // (GL_Program.cpp, MaxShaderCompilerThreadsKHR_State) as precisely the two steps this
+        // used to perform through internal entry points - concurrency := the pool's full
+        // thread count, then lift any suspension a zero count had armed - in the safer order,
+        // since it raises the budget before re-admitting work rather than after. Going through
+        // the public call also puts the restore path itself under test, and it is the only
+        // spelling available on Android, where this module links the shipping shared library
+        // and can reach nothing but the GL entry points.
         class CompilerThreadScope {
         public:
             CompilerThreadScope() = default;
-            ~CompilerThreadScope() {
-                MobileGL::MG_Util::Async::SetAsyncShaderCompileSuspended(false);
-                auto& pool = MobileGL::MG_Util::Async::ShaderCompilePool::Get();
-                pool.SetMaxConcurrency(pool.GetThreadCount());
-            }
+            ~CompilerThreadScope() { glMaxShaderCompilerThreadsKHR(0xFFFFFFFFu); }
             CompilerThreadScope(const CompilerThreadScope&) = delete;
             CompilerThreadScope& operator=(const CompilerThreadScope&) = delete;
         };
@@ -293,7 +301,12 @@ void main() {
         // interesting for shaders that (a) proved were genuinely still outstanding.
         TEST_F(AsyncCompileScenario, CompletionStatusPollingThenForcedJoin) {
             if (!Ready()) return;
-            const AsyncModeScope async(true);
+            if (!HasParallelShaderCompile()) {
+                GTEST_SKIP() << "this process is configured to compile inline "
+                                "(GL_KHR_parallel_shader_compile is not advertised), so no compile can be "
+                                "outstanding; the AsyncOn. ctest entries run this case with "
+                                "MOBILEGL_ASYNC_SHADER_COMPILE=1";
+            }
             const CompilerThreadScope threads;
             // One worker, so the queue behind it is what the poll observes.
             glMaxShaderCompilerThreadsKHR(1);
@@ -341,14 +354,33 @@ void main() {
         }
 
         // ---- (c) ------------------------------------------------------------------
-        // The extension string, read from a real backend that really brought a driver
-        // up. No mode forcing here: a backend builds its advertised list once, from the
-        // configuration in force at its first use, so the meaningful assertion is
-        // against the AMBIENT configuration - which is exactly what makes this case
-        // worth running in both of the suite's flag states.
+        // The extension string, read from a real backend that really brought a driver up.
+        //
+        // The expectation comes from the ENVIRONMENT, never from the implementation. This
+        // case used to derive it by calling AsyncShaderCompileEnabled() - which is the same
+        // function the backends gate the string on, so the two halves could only ever agree
+        // and the case would have passed however wrong both of them were. Asserting an
+        // implementation against itself pins nothing.
+        //
+        // MOBILEGL_ASYNC_SHADER_COMPILE is the whole input: the process inherited it before
+        // any GL call, a backend builds its advertised list once from the configuration in
+        // force at first use, and nothing in this process can move it afterwards. So reading
+        // the variable IS reading the configuration, independently. With the variable unset
+        // the configuration in force is MobileGL's built-in default, which only the
+        // implementation knows - there is nothing independent left to compare against, and
+        // this case says so rather than inventing an expectation. The AsyncOn. and AsyncOff.
+        // ctest entries pin the variable to each of its two values, so one ctest run still
+        // asserts both the advertised and the withdrawn side.
         TEST_F(AsyncCompileScenario, ExtensionStringMatchesTheConfiguration) {
             if (!Ready()) return;
-            const bool expected = MobileGL::MG_Util::Async::AsyncShaderCompileEnabled();
+            const AmbientQuirk configured = AmbientQuirkFromEnvironment("MOBILEGL_ASYNC_SHADER_COMPILE");
+            if (configured == AmbientQuirk::Auto) {
+                GTEST_SKIP() << "MOBILEGL_ASYNC_SHADER_COMPILE is unset, so the configuration in force is "
+                                "MobileGL's built-in default and the only way to learn it would be to ask "
+                                "the implementation this case exists to check; the AsyncOn. and AsyncOff. "
+                                "ctest entries run it with the variable pinned to each of its two values";
+            }
+            const bool expected = configured == AmbientQuirk::On;
 
             const char* extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
             ASSERT_NE(extensions, nullptr);
@@ -385,7 +417,12 @@ void main() {
         // A zero count must leave nothing in flight and keep it that way.
         TEST_F(AsyncCompileScenario, ZeroCompilerThreadsSettlesEverythingImmediately) {
             if (!Ready()) return;
-            const AsyncModeScope async(true);
+            if (!HasParallelShaderCompile()) {
+                GTEST_SKIP() << "this process is configured to compile inline "
+                                "(GL_KHR_parallel_shader_compile is not advertised), so a zero count has "
+                                "nothing to settle; the AsyncOn. ctest entries run this case with "
+                                "MOBILEGL_ASYNC_SHADER_COMPILE=1";
+            }
             const CompilerThreadScope threads;
             glMaxShaderCompilerThreadsKHR(1);
 
@@ -417,12 +454,28 @@ void main() {
         // Compared through the DEFAULT framebuffer deliberately: that is where the
         // backend's orientation and present path live, so the comparison covers the
         // whole pipeline rather than the reflection tables alone.
+        //
+        // The two modes are selected through glMaxShaderCompilerThreadsKHR, the extension's
+        // own entry point, rather than through the feature table: a zero count joins
+        // everything outstanding and makes every later glCompileShader/glLinkProgram run its
+        // body on the calling thread, and 0xFFFFFFFF lifts that again with the pool at its
+        // full thread count (GL_Program.cpp, MaxShaderCompilerThreadsKHR_State; the compile
+        // and link paths both gate on AsyncShaderCompileActive(), which is what the zero
+        // count switches). So this is still one process comparing worker-built artifacts
+        // against inline-built ones - just asked for the way an application asks.
         TEST_F(AsyncCompileScenario, AsyncAndSyncProgramsRenderIdenticalFrames) {
             if (!Ready()) return;
+            if (!HasParallelShaderCompile()) {
+                GTEST_SKIP() << "this process is configured to compile inline "
+                                "(GL_KHR_parallel_shader_compile is not advertised), so both halves would "
+                                "be the same inline build and the comparison would be vacuous; the "
+                                "AsyncOn. ctest entries run this case with MOBILEGL_ASYNC_SHADER_COMPILE=1";
+            }
+            const CompilerThreadScope threads;
 
             Image asyncImage;
             {
-                const AsyncModeScope async(true);
+                glMaxShaderCompilerThreadsKHR(0xFFFFFFFFu);
                 const GLuint program = BuildProgram();
                 ASSERT_NE(program, 0u);
                 asyncImage = DrawFrameWith(program);
@@ -431,7 +484,7 @@ void main() {
 
             Image syncImage;
             {
-                const AsyncModeScope async(false);
+                glMaxShaderCompilerThreadsKHR(0);
                 const GLuint program = BuildProgram();
                 ASSERT_NE(program, 0u);
                 syncImage = DrawFrameWith(program);
@@ -456,11 +509,16 @@ void main() {
         // candidate) shows up here and not in the single-program case above.
         TEST_F(AsyncCompileScenario, ABatchOfAsyncProgramsAllRenderCorrectly) {
             if (!Ready()) return;
+            if (!HasParallelShaderCompile()) {
+                GTEST_SKIP() << "this process is configured to compile inline "
+                                "(GL_KHR_parallel_shader_compile is not advertised), so nothing would be "
+                                "built on a worker and there is no per-worker state to leak; the AsyncOn. "
+                                "ctest entries run this case with MOBILEGL_ASYNC_SHADER_COMPILE=1";
+            }
             constexpr int kPrograms = 12;
 
             std::vector<GLuint> programs;
             {
-                const AsyncModeScope async(true);
                 const CompilerThreadScope threads;
                 glMaxShaderCompilerThreadsKHR(1);
                 // Everything enqueued before anything is read: the only shape in which
@@ -489,6 +547,21 @@ void main() {
         // then mis-renders - shows up here as a wrong quadrant signature.
         TEST_F(AsyncCompileScenario, IrisShapedTwoPhaseBatchRendersCorrectly) {
             if (!Ready()) return;
+            // The quirk is off by default and never advertised, so unlike the cases above
+            // there is no GL observable that says whether it is in force - only the variable
+            // that put it there. It also has to be set BEFORE this process started for the
+            // shape to be the real one: the optimistic answer is latched per compile, and a
+            // quirk switched on mid-process would only cover the compiles after it.
+            if (AmbientQuirkFromEnvironment("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS") != AmbientQuirk::On) {
+                GTEST_SKIP() << "this case is the optimistic-status quirk's end-to-end shape and needs it on "
+                                "for the whole process; the OptimisticShaderStatus. ctest entries run it with "
+                                "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1";
+            }
+            if (!HasParallelShaderCompile()) {
+                GTEST_SKIP() << "the optimistic status only ever applies to a compile that is still in flight "
+                                "(OptimisticShaderStatusActive() requires AsyncShaderCompileActive()), and "
+                                "this process is configured to compile inline";
+            }
             constexpr int kPrograms = 12;
 
             // Distinct per program (so neither the source memo nor the adoption map turns
@@ -508,8 +581,6 @@ void main() {
 
             std::vector<GLuint> programs;
             {
-                const AsyncModeScope async(true);
-                const OptimisticStatusScope quirk(QuirkOverride::ForceOn);
                 const CompilerThreadScope threads;
                 glMaxShaderCompilerThreadsKHR(1);
 

@@ -21,11 +21,48 @@
 
 #pragma once
 
+#include <cctype>
+#include <cstdlib>
+#include <string>
+
 #include <gtest/gtest.h>
 
 #include "HeadlessGL.h"
 
 namespace MGITest {
+
+    // How a MOBILEGL_* quirk variable reads in THIS process's environment.
+    //
+    // A scenario that needs a non-default configuration takes it from here and skips
+    // when the process it was launched into is not in that configuration, rather than
+    // writing MG_Config::Features itself. Two reasons, and the second one decides it:
+    //
+    //   - the feature table is an internal symbol. On Android this module links against
+    //     the SHIPPING libMobileGL.so - deliberately, so the on-device run validates the
+    //     real artifact - and that library is built -fvisibility=hidden, so nothing
+    //     internal is reachable from here at all.
+    //   - a quirk poked in-process is already too late for everything latched at
+    //     initialization: the compile pool and its threads, and the backend's advertised
+    //     extension list, which is built once from the configuration in force at first
+    //     use. The process-wide variable is the only spelling that covers the whole
+    //     configuration instead of the half of it that is still mutable afterwards.
+    //
+    // The reading rule is MG_ConfigLoader's, character for character (ConfigLoader.cpp,
+    // QueryEnvQuirkOverride / IsTruthyValue): unset is Auto - device auto-detection or a
+    // built-in default, i.e. a value only the implementation knows - a truthy value is
+    // On, and anything else that IS set ("0", "false", "") is Off.
+    enum class AmbientQuirk { Auto, On, Off };
+
+    inline AmbientQuirk AmbientQuirkFromEnvironment(const char* name) {
+        const char* value = std::getenv(name);
+        if (value == nullptr) return AmbientQuirk::Auto;
+        std::string lowered(value);
+        for (char& c : lowered) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        if (lowered.empty() || lowered == "0" || lowered == "false") return AmbientQuirk::Off;
+        return AmbientQuirk::On;
+    }
 
     class ScenarioTest : public ::testing::Test {
     protected:
