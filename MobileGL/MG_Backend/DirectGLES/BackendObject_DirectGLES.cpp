@@ -1323,6 +1323,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_GLESCapabilities.UniformBufferOffsetAlignment;
+        m_dynamicParameters.ShaderStorageBufferOffsetAlignment =
+            m_GLESCapabilities.ShaderStorageBufferOffsetAlignment;
         m_dynamicParameters.MaxTextureMaxAnisotropy = m_GLESCapabilities.MaxTextureMaxAnisotropy;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_GLESCapabilities.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_GLESCapabilities.AliasedLineWidthRangeMax;

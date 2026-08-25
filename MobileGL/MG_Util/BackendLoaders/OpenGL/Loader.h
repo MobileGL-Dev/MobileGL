@@ -1231,6 +1231,10 @@ namespace MobileGL {
             // InstanceIndex, which includes firstInstance.
             Bool IndirectDrawInstanceIdIncludesBaseInstance = false;
             Int UniformBufferOffsetAlignment = 256;
+            // Its storage-buffer counterpart, queried separately because it is a separate limit:
+            // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for
+            // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT.
+            Int ShaderStorageBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;
             Float SmoothLineWidthRangeMin = 1.0f;

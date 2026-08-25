@@ -6341,8 +6341,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // neither std430 nor std140") and the stage never reaches the driver. Collapse the
             // block into one uint array at offset 0 and re-index each counter to the element
             // that used to be at its byte offset; the buffer then stays bound whole, which it
-            // has to (GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT is 32 on this device, so an
-            // 8-byte bind offset is not expressible). BEFORE SetAtomicCounterBlockBindings
+            // has to (GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT is 64 on Adreno 830 and 32 or
+            // more everywhere else, so an 8-byte bind offset is not expressible on any of them).
+            // BEFORE SetAtomicCounterBlockBindings
             // below, which only moves the block's BINDING and needs the block intact.
             //
             // NO KEY MATERIAL either, for the same reason - and note where the application's

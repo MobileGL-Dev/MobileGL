@@ -18,6 +18,10 @@ namespace MobileGL {
             // VkPhysicalDeviceProperties::vendorID, for device-quirk vendor gating.
             Uint32 VendorId = 0;
             Int UniformBufferOffsetAlignment = 256;
+            // VkPhysicalDeviceLimits::minStorageBufferOffsetAlignment. A separate limit from
+            // the uniform one on Vulkan too, and the one GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT
+            // has to answer with.
+            Int ShaderStorageBufferOffsetAlignment = 256;
             Float AliasedLineWidthRangeMin = 1.0f;
             Float AliasedLineWidthRangeMax = 1.0f;
             // VkPhysicalDeviceLimits::maxSamplerAnisotropy. Whether it can be used at all depends on

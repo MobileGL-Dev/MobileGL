@@ -44,9 +44,10 @@ namespace MobileGL {
             //
             // Why not simply rebase the offsets to zero and bind the buffer 8 bytes in: because
             // glBindBufferRange's offset must be a multiple of
-            // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, which the target device reports as 32.
-            // A byte offset of 8 cannot be expressed as a binding at all, so the correction has
-            // to live in the shader's indexing, where it costs nothing.
+            // GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, which is 64 on Adreno 830 and no smaller
+            // than 32 on the other targets. A byte offset of 8 cannot be expressed as a binding
+            // on any of them, so the correction has to live in the shader's indexing, where it
+            // costs nothing.
             //
             // A block that is ALREADY laid out naturally - which is every shader that omits the
             // offset qualifier, and so very nearly all of them - is left byte-identical: the

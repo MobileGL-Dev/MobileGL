@@ -855,6 +855,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         static constexpr SizeT kMaxAdvertisedShaderStorageBlockSize = 512ull * 1024ull * 1024ull;
         m_dynamicParameters.UniformBufferOffsetAlignment = m_vulkanCaps.UniformBufferOffsetAlignment;
+        m_dynamicParameters.ShaderStorageBufferOffsetAlignment = m_vulkanCaps.ShaderStorageBufferOffsetAlignment;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_vulkanCaps.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_vulkanCaps.AliasedLineWidthRangeMax;
         // Without the samplerAnisotropy feature the limit is unusable, so report 1.0 (no anisotropy)

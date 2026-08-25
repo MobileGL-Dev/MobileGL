@@ -988,6 +988,49 @@ TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) 
     MG_State::pGLContext = Move(previousContext);
 }
 
+// GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT used to be answered with the UNIFORM buffer
+// alignment. The two are separate limits and the storage one is the larger on real hardware
+// (Adreno 830: 32 uniform, 64 storage), so the substitution under-reported it - and an
+// under-reported alignment is silent all the way down: the frontend validator accepts the
+// offset, the ES driver accepts the glBindBufferRange too without raising an error, and the
+// shader's stores land at an address the application never bound. The two values are
+// deliberately different here so a query that reads the wrong field cannot coincide with the
+// right answer.
+TEST(GetterSanity, StorageAndUniformBufferOffsetAlignmentsAreSeparateLimits) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    MG_Backend::DynamicBackendParameters params;
+    params.UniformBufferOffsetAlignment = 32;
+    params.ShaderStorageBufferOffsetAlignment = 64;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    GLint uniformAlignment = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniformAlignment);
+    EXPECT_EQ(uniformAlignment, 32);
+
+    GLint storageAlignment = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &storageAlignment);
+    EXPECT_EQ(storageAlignment, 64);
+
+    // And the other way round, so the test fails on a getter that simply swapped the two fields.
+    params.UniformBufferOffsetAlignment = 128;
+    params.ShaderStorageBufferOffsetAlignment = 16;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    MG_Impl::GLImpl::GetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniformAlignment);
+    EXPECT_EQ(uniformAlignment, 128);
+    MG_Impl::GLImpl::GetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &storageAlignment);
+    EXPECT_EQ(storageAlignment, 16);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
     using namespace MobileGL;
 

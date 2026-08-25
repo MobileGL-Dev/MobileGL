@@ -1064,6 +1064,16 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("OpenGL ES capabilities:");
         glesFuncs.glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &caps.UniformBufferOffsetAlignment);
         MGLOG_I("    GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: %d", caps.UniformBufferOffsetAlignment);
+        // ES 3.1 core, so no extension gate - but a driver that somehow leaves it at zero would
+        // make every storage-range offset legal, so an unusable answer keeps the 256 default.
+        GLint shaderStorageOffsetAlignment = 0;
+        glesFuncs.glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &shaderStorageOffsetAlignment);
+        while (glesFuncs.glGetError() != GL_NO_ERROR) {
+        }
+        if (shaderStorageOffsetAlignment > 0) {
+            caps.ShaderStorageBufferOffsetAlignment = shaderStorageOffsetAlignment;
+        }
+        MGLOG_I("    GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: %d", caps.ShaderStorageBufferOffsetAlignment);
         GLfloat aliasedLineWidthRange[2] = {1.0f, 1.0f};
         GLfloat smoothLineWidthRange[2] = {1.0f, 1.0f};
         GLfloat smoothLineWidthGranularity = 1.0f;

@@ -2406,7 +2406,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(dynamicParameters.PointSizeGranularity);
             break;
         case GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT:
-            *params = static_cast<GLint>(dynamicParameters.UniformBufferOffsetAlignment);
+            // The STORAGE alignment, which is its own limit - this used to answer with the
+            // uniform one. They differ on real hardware (Adreno 830: 32 uniform, 64 storage), and
+            // under-reporting it is silent: ValidateBindBufferRange accepts the offset, the ES
+            // driver accepts it too without raising an error, and the shader's writes then land
+            // at an address the application never bound.
+            *params = static_cast<GLint>(dynamicParameters.ShaderStorageBufferOffsetAlignment);
             break;
         case GL_SMOOTH_LINE_WIDTH_RANGE:
             params[0] = static_cast<GLint>(dynamicParameters.SmoothLineWidthRangeMin);

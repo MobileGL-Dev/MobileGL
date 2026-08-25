@@ -154,6 +154,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.DriverVersionString = DecodeDriverVersion(p.driverVersion);
         caps.VendorId = p.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(p.limits.minUniformBufferOffsetAlignment);
+        caps.ShaderStorageBufferOffsetAlignment = static_cast<int>(p.limits.minStorageBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = p.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = p.limits.lineWidthRange[1];
         caps.MaxSamplerAnisotropy = p.limits.maxSamplerAnisotropy;
@@ -272,6 +273,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.DriverVersionString = DecodeDriverVersion(properties.driverVersion);
         caps.VendorId = properties.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(properties.limits.minUniformBufferOffsetAlignment);
+        caps.ShaderStorageBufferOffsetAlignment =
+            static_cast<int>(properties.limits.minStorageBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = properties.limits.lineWidthRange[1];
         caps.MaxSamplerAnisotropy = properties.limits.maxSamplerAnisotropy;
