@@ -55,6 +55,27 @@ namespace MobileGL::MG_Util::SelfTest {
         String detail;
     };
 
+    // Blits one layer of an RGBA8 2D array onto another array's layer 1 and reports whether the
+    // copy landed where it was asked to. Returns true only when the destination layer is ignored
+    // while the control lands correctly.
+    //
+    // Adreno 830 writes to layer 0 whatever layer the DRAW framebuffer's
+    // glFramebufferTextureLayer attachment names, for colour and depth alike, and raises no
+    // error. Everything else about the layer works on the same driver, which is what makes this
+    // a blit defect rather than a layered-attachment one.
+    //
+    // THE CONTROL is the same blit onto destination layer 0. It passes on every implementation
+    // that can blit between array layers at all, and because the value it looks for exists only
+    // on the SOURCE's layer 1 it also proves the source layer is honoured - so a driver with no
+    // working glFramebufferTextureLayer reaches no verdict instead of being reported as this.
+    //
+    // Returns false when an entry point is missing, when the probe's own framebuffers come back
+    // incomplete, or when the control fails. Restores every piece of GL state it touches.
+    Bool ProbeBlitIgnoresDestinationArrayLayer(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeBlitIgnoresDestinationArrayLayer(), evaluated at most once per process.
+    Bool BlitIgnoresDestinationArrayLayer(const MG_External::GLESFunctionsTable& gl);
+
     // What the vertex-input location probe measured. The ceiling is reported rather than
     // hard-coded: it is a driver property, and a clamp derived from a number measured on some
     // other device is exactly the hard-coded vendor quirk this file exists to avoid.

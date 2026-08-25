@@ -122,6 +122,7 @@ namespace MobileGL::MG_Util::SelfTest {
             GLint activeTexture = GL_TEXTURE0;
             GLint texture2D = 0;
             GLint texture2DMultisample = 0;
+            GLint texture2DArray = 0;
             GLfloat clearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             GLint packAlignment = 4;
             GLint packRowLength = 0;
@@ -155,6 +156,7 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glGetIntegerv(GL_ACTIVE_TEXTURE, &state.activeTexture);
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D, &state.texture2D);
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_MULTISAMPLE, &state.texture2DMultisample);
+            gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &state.texture2DArray);
             gl.glGetIntegerv(GL_PACK_ALIGNMENT, &state.packAlignment);
             gl.glGetIntegerv(GL_PACK_ROW_LENGTH, &state.packRowLength);
             if (gl.glGetFloatv != nullptr) {
@@ -205,6 +207,7 @@ namespace MobileGL::MG_Util::SelfTest {
                     gl.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(state.texture2D));
                     gl.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE,
                                      static_cast<GLuint>(state.texture2DMultisample));
+                    gl.glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(state.texture2DArray));
                 }
                 gl.glActiveTexture(static_cast<GLenum>(state.activeTexture));
             }
@@ -1348,6 +1351,174 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        // ===================== LAYERED BLIT DESTINATION =====================
+
+        constexpr const char* kLayeredBlitProbeName = "layered blit destination";
+        // Four texels wide: a 1x1 blit is a shape drivers special-case, and a rectangle keeps
+        // the probe on the ordinary path. Two layers is all the question needs.
+        constexpr GLsizei kLayeredBlitSize = 4;
+        constexpr GLsizei kLayeredBlitLayers = 2;
+
+        // One RGBA8 2D array whose every layer is filled with a distinguishable byte.
+        GLuint MakeLayeredBlitTexture(const GLESFunctionsTable& gl, GLubyte layer0, GLubyte layer1) {
+            GLuint texture = 0;
+            gl.glGenTextures(1, &texture);
+            if (texture == 0) return 0;
+            gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+            gl.glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, kLayeredBlitSize, kLayeredBlitSize,
+                              kLayeredBlitLayers);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            const GLubyte fills[kLayeredBlitLayers] = {layer0, layer1};
+            for (GLint layer = 0; layer < kLayeredBlitLayers; ++layer) {
+                GLubyte texels[kLayeredBlitSize * kLayeredBlitSize * 4];
+                for (SizeT i = 0; i < sizeof(texels); i += 4) {
+                    texels[i + 0] = fills[layer];
+                    texels[i + 1] = fills[layer];
+                    texels[i + 2] = fills[layer];
+                    texels[i + 3] = 255;
+                }
+                gl.glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kLayeredBlitSize, kLayeredBlitSize, 1,
+                                   GL_RGBA, GL_UNSIGNED_BYTE, texels);
+            }
+            gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            return texture;
+        }
+
+        // A framebuffer naming exactly one layer of one array texture.
+        GLuint MakeLayeredBlitFramebuffer(const GLESFunctionsTable& gl, GLuint texture, GLint layer) {
+            GLuint framebuffer = 0;
+            gl.glGenFramebuffers(1, &framebuffer);
+            if (framebuffer == 0) return 0;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, layer);
+            if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+                gl.glDeleteFramebuffers(1, &framebuffer);
+                return 0;
+            }
+            return framebuffer;
+        }
+
+        // The red byte of texel (0, 0) of one layer, read through a framebuffer that names it.
+        // 256 is "could not read", which no fill value can be.
+        Int ReadLayeredBlitTexel(const GLESFunctionsTable& gl, GLuint texture, GLint layer) {
+            const GLuint framebuffer = MakeLayeredBlitFramebuffer(gl, texture, layer);
+            if (framebuffer == 0) return 256;
+            gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+            gl.glReadBuffer(GL_COLOR_ATTACHMENT0);
+            gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            GLubyte pixel[4] = {0, 0, 0, 0};
+            gl.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            gl.glDeleteFramebuffers(1, &framebuffer);
+            Drain(gl);
+            return static_cast<Int>(pixel[0]);
+        }
+
+        // Blits source layer 1 onto `destinationLayer` of a freshly filled destination and
+        // reports which layer actually received it, or -1 when the blit could not be issued.
+        Int LayeredBlitLandsOnLayer(const GLESFunctionsTable& gl, GLint destinationLayer, GLubyte magic) {
+            const GLuint source = MakeLayeredBlitTexture(gl, 0x11, magic);
+            const GLuint destination = MakeLayeredBlitTexture(gl, 0x33, 0x44);
+            const GLuint sourceFramebuffer = MakeLayeredBlitFramebuffer(gl, source, 1);
+            const GLuint destinationFramebuffer = MakeLayeredBlitFramebuffer(gl, destination, destinationLayer);
+            Int landedOn = -1;
+            if (source != 0 && destination != 0 && sourceFramebuffer != 0 && destinationFramebuffer != 0) {
+                gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFramebuffer);
+                gl.glReadBuffer(GL_COLOR_ATTACHMENT0);
+                gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destinationFramebuffer);
+                Drain(gl);
+                gl.glBlitFramebuffer(0, 0, kLayeredBlitSize, kLayeredBlitSize, 0, 0, kLayeredBlitSize,
+                                     kLayeredBlitSize, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                if (gl.glGetError() == GL_NO_ERROR) {
+                    landedOn = -2; // issued, but seen on no layer yet
+                    for (GLint layer = 0; layer < kLayeredBlitLayers; ++layer) {
+                        if (ReadLayeredBlitTexel(gl, destination, layer) == static_cast<Int>(magic)) {
+                            landedOn = layer;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (sourceFramebuffer != 0) gl.glDeleteFramebuffers(1, &sourceFramebuffer);
+            if (destinationFramebuffer != 0) gl.glDeleteFramebuffers(1, &destinationFramebuffer);
+            if (source != 0) gl.glDeleteTextures(1, &source);
+            if (destination != 0) gl.glDeleteTextures(1, &destination);
+            Drain(gl);
+            return landedOn;
+        }
+    } // namespace
+
+    Bool ProbeBlitIgnoresDestinationArrayLayer(const GLESFunctionsTable& gl) {
+        if (!gl.glGenTextures || !gl.glBindTexture || !gl.glTexStorage3D || !gl.glTexSubImage3D ||
+            !gl.glTexParameteri || !gl.glDeleteTextures || !gl.glGenFramebuffers || !gl.glBindFramebuffer ||
+            !gl.glFramebufferTextureLayer || !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers ||
+            !gl.glBlitFramebuffer || !gl.glReadBuffer || !gl.glReadPixels || !gl.glPixelStorei || !gl.glGetError ||
+            !gl.glIsEnabled || !gl.glDisable) {
+            return false;
+        }
+
+        SavedState saved;
+        Save(gl, saved);
+        // A scissor left on by whoever ran before would clip the probe's own blit and make a
+        // working driver look broken.
+        gl.glDisable(GL_SCISSOR_TEST);
+        Drain(gl);
+
+        // THE CONTROL: the same blit onto destination layer 0, which is the case no
+        // implementation gets wrong. It also proves the SOURCE layer is honoured, since the
+        // magic byte it looks for only exists on source layer 1 - so a driver that cannot blit
+        // between array layers at all, or that has no working glFramebufferTextureLayer, fails
+        // here and reaches no verdict rather than being reported as having this bug.
+        const Int controlLanded = LayeredBlitLandsOnLayer(gl, 0, 0x5Au);
+        Bool detected = false;
+        if (controlLanded != 0) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the destination-layer-0 control "
+                    "landed on layer %d instead of 0)",
+                    kLayeredBlitProbeName, controlLanded);
+        } else {
+            // THE SUBJECT: the identical blit asking for layer 1. Only the destination layer moved.
+            const Int subjectLanded = LayeredBlitLandsOnLayer(gl, 1, 0x5Au);
+            detected = subjectLanded == 0;
+            if (subjectLanded != 0 && subjectLanded != 1) {
+                MGLOG_I("[driver-bug] %s probe reached no verdict (the subject blit landed on "
+                        "no layer at all: %d)",
+                        kLayeredBlitProbeName, subjectLanded);
+            } else {
+                MGLOG_I("[driver-bug] %s probe: a blit asking for destination layer 1 landed on "
+                        "layer %d%s",
+                        kLayeredBlitProbeName, subjectLanded,
+                        detected ? " - THE DESTINATION LAYER IS IGNORED" : "");
+            }
+        }
+
+        Restore(gl, saved);
+        return detected;
+    }
+
+    Bool BlitIgnoresDestinationArrayLayer(const GLESFunctionsTable& gl) {
+        // One driver per process, and the answer is structural rather than sampled.
+        static const Bool ignored = ProbeBlitIgnoresDestinationArrayLayer(gl);
+        return ignored;
+    }
+
+    namespace {
+        Optional<DriverBugFinding> ProbeLayeredBlitDestinationBug(const GLESFunctionsTable& gl) {
+            if (!BlitIgnoresDestinationArrayLayer(gl)) return std::nullopt;
+            return DriverBugFinding{
+                "glBlitFramebuffer ignores the destination array layer",
+                DriverBugVerdict::Fixed,
+                "a glBlitFramebuffer whose DRAW framebuffer attaches a non-zero array layer with "
+                "glFramebufferTextureLayer writes to layer 0 instead, for colour and depth alike, "
+                "and raises no error doing it. The layer is honoured everywhere else on the same "
+                "driver - rendering into it works, glReadPixels off it works, and the blit's own "
+                "SOURCE layer is read correctly - so neither layered attachments nor blitting is "
+                "withdrawn. MobileGL performs such a blit with glCopyImageSubData instead, which "
+                "takes the destination layer explicitly and honours it here; a blit that scales, "
+                "flips, changes format, resolves samples or is clipped by the scissor cannot be "
+                "expressed that way and is still handed to the driver"};
+        }
+
         // ===================== EXPLICIT VERTEX INPUT LOCATION CEILING =====================
 
         constexpr const char* kAttributeLocationProbeName = "explicit vertex input location";
@@ -1639,6 +1810,7 @@ namespace MobileGL::MG_Util::SelfTest {
             &ProbeCrossStageImageQualifierMergeBug,
             &ProbeImageCoherencyResidualBug,
             &ProbeExplicitVertexInputLocationCeilingBug,
+            &ProbeLayeredBlitDestinationBug,
         };
     } // namespace
 

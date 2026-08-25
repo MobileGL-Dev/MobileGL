@@ -20,6 +20,7 @@
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Util/SelfTest/DriverBugProbes.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/FramebufferEnumConverter.h>
@@ -5141,6 +5142,150 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrainBlitErrors();
     }
 
+    // ---- glBlitFramebuffer onto a non-zero array layer -------------------------------------
+    //
+    // Some drivers write to layer 0 whatever layer the DRAW framebuffer's
+    // glFramebufferTextureLayer attachment names, and raise no error doing it (Adreno 830;
+    // SelfTest::ProbeBlitIgnoresDestinationArrayLayer measures it, with the destination-layer-0
+    // case as the control). glCopyImageSubData takes the destination layer as an argument rather
+    // than reading it off an attachment, and honours it on the same driver - so a blit that is a
+    // plain 1:1 copy is issued that way instead.
+    //
+    // ONLY a plain 1:1 copy. glCopyImageSubData cannot scale, flip, convert format or resolve
+    // samples, and it is not clipped by the scissor, so every one of those is a reason to hand
+    // the call back to the driver rather than quietly perform a different operation. Those blits
+    // still land on the wrong layer; a once-per-process line says so rather than leaving it to be
+    // rediscovered.
+    //
+    // Per aspect, not all-or-nothing: the returned mask is the bits this performed itself, and
+    // the caller passes the rest to the driver. A COLOR|DEPTH blit whose colour half scales and
+    // whose depth half does not still gets its depth half repaired.
+    static GLbitfield BlitLayeredDestinationAspects(
+        const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
+        const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer, GLint srcX0, GLint srcY0,
+        GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask) {
+        if (mask == 0 || !readFramebuffer || !drawFramebuffer) return 0;
+        if (!g_GLESFuncs.glCopyImageSubData) return 0;
+        if (!MG_Util::SelfTest::BlitIgnoresDestinationArrayLayer(g_GLESFuncs)) return 0;
+
+        // The default framebuffer has no layers to get wrong, and a blit between the two halves
+        // of the same framebuffer object is not a shape this substitutes for.
+        const Int width = srcX1 - srcX0;
+        const Int height = srcY1 - srcY0;
+        const Bool oneToOne = width > 0 && height > 0 && (dstX1 - dstX0) == width && (dstY1 - dstY0) == height;
+        // The scissor clips a blit and does not clip a copy, so an enabled scissor makes the two
+        // different operations no matter how the rectangles line up.
+        const Bool scissorEnabled =
+            (RenderStateImpl::g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+
+        using MobileGL::FramebufferAttachmentType;
+        struct AspectPlan {
+            GLbitfield bit;
+            FramebufferAttachmentType source;
+            FramebufferAttachmentType destination;
+        };
+        // The colour aspect follows glReadBuffer on the read side and draw buffer 0 on the write
+        // side, which is the only draw buffer a blit onto a layered destination can be pinned to
+        // here: a blit writes EVERY enabled draw buffer, so a framebuffer with more than one is
+        // left to the driver rather than half-repaired.
+        const auto& drawBuffers = drawFramebuffer->GetDrawBuffers();
+        // GL_NONE is what an unwritten draw-buffer slot holds, and it is a different value from
+        // the "no such attachment" one - counting it as enabled made every framebuffer look like
+        // it had eight and sent every colour blit to the driver.
+        Int enabledDrawBuffers = 0;
+        for (const FramebufferAttachmentType buffer : drawBuffers) {
+            if (buffer != FramebufferAttachmentType::Unknown && buffer != FramebufferAttachmentType::None) {
+                ++enabledDrawBuffers;
+            }
+        }
+        const AspectPlan plans[] = {
+            {GL_COLOR_BUFFER_BIT, readFramebuffer->GetReadBuffer(), drawBuffers[0]},
+            {GL_DEPTH_BUFFER_BIT, FramebufferAttachmentType::Depth, FramebufferAttachmentType::Depth},
+            {GL_STENCIL_BUFFER_BIT, FramebufferAttachmentType::Stencil, FramebufferAttachmentType::Stencil},
+        };
+
+        GLbitfield handled = 0;
+        for (const AspectPlan& plan : plans) {
+            if ((mask & plan.bit) == 0) continue;
+            if (plan.source == FramebufferAttachmentType::Unknown ||
+                plan.destination == FramebufferAttachmentType::Unknown ||
+                plan.source == FramebufferAttachmentType::None ||
+                plan.destination == FramebufferAttachmentType::None) {
+                continue;
+            }
+            const auto& sourceAttachment = readFramebuffer->GetAttachment(plan.source);
+            const auto& destinationAttachment = drawFramebuffer->GetAttachment(plan.destination);
+            // Renderbuffers have no layers, so a destination that is one cannot be hitting this.
+            if (!sourceAttachment.IsTexture() || !destinationAttachment.IsTexture()) continue;
+            // Layer 0 is the case the driver gets right, and a LAYERED attachment (glFramebufferTexture
+            // with no layer) blits its layer 0 by spec - neither is this defect.
+            if (destinationAttachment.GetTextureLayer() == 0) continue;
+            if (destinationAttachment.IsLayered() || sourceAttachment.IsLayered()) continue;
+
+            const auto& sourceTexture = sourceAttachment.GetTexture();
+            const auto& destinationTexture = destinationAttachment.GetTexture();
+            if (!sourceTexture || !destinationTexture) continue;
+            // glCopyImageSubData moves texel blocks: same format both ends, or it is a different
+            // operation. Multisample endpoints would additionally have to agree on sample count,
+            // which is a resolve the driver still owns.
+            if (sourceTexture->GetFormat() != destinationTexture->GetFormat()) continue;
+            if (sourceTexture->GetSamples() > 0 || destinationTexture->GetSamples() > 0) continue;
+
+            // A combined depth-stencil texture is ONE image to glCopyImageSubData: it carries both
+            // aspects across whether or not the mask asked for both. Taking only GL_DEPTH_BUFFER_BIT
+            // on a DEPTH24_STENCIL8 destination would overwrite a stencil the application asked to
+            // keep, so the copy is only allowed when the mask covers everything the format holds.
+            const TextureInternalFormat format = destinationTexture->GetFormat();
+            const Bool hasDepth = MG_Util::IsDepthFormatInternalFormat(format);
+            const Bool hasStencil = MG_Util::IsStencilFormatInternalFormat(format);
+            if (hasDepth && (mask & GL_DEPTH_BUFFER_BIT) == 0) continue;
+            if (hasStencil && (mask & GL_STENCIL_BUFFER_BIT) == 0) continue;
+            // ... and having carried both, it must be credited with both, or the caller hands the
+            // stencil half to the driver and it lands on layer 0 after all.
+            const GLbitfield aspectBits =
+                hasDepth || hasStencil
+                    ? static_cast<GLbitfield>((hasDepth ? GL_DEPTH_BUFFER_BIT : 0) |
+                                              (hasStencil ? GL_STENCIL_BUFFER_BIT : 0))
+                    : static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+            if ((handled & aspectBits) == aspectBits) continue;
+
+            if (!oneToOne || scissorEnabled || (plan.bit == GL_COLOR_BUFFER_BIT && enabledDrawBuffers != 1)) {
+                MGLOG_E_ONCE("BlitFramebuffer: this driver ignores a non-zero destination array layer and this "
+                             "blit cannot be expressed as a copy (%s), so it will land on layer 0",
+                             !oneToOne          ? "it scales or flips"
+                             : scissorEnabled   ? "the scissor test is enabled"
+                                                : "the destination has more than one draw buffer");
+                continue;
+            }
+
+            auto backendSource = TextureImpl::SyncTextureObjectToBackend(sourceTexture);
+            auto backendDestination = TextureImpl::SyncTextureObjectToBackend(destinationTexture);
+            if (!backendSource || !backendDestination) continue;
+            const GLuint sourceName = backendSource->GetBackendTextureId();
+            const GLuint destinationName = backendDestination->GetBackendTextureId();
+            if (sourceName == 0 || destinationName == 0) continue;
+            const GLenum sourceTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(sourceTexture->GetTarget());
+            const GLenum destinationTarget =
+                TextureImpl::ConvertTextureTargetToBackendGLEnum(destinationTexture->GetTarget());
+
+            ClearGLErrors();
+            g_GLESFuncs.glCopyImageSubData(sourceName, sourceTarget, sourceAttachment.GetTextureLevel(), srcX0, srcY0,
+                                           sourceAttachment.GetTextureLayer(), destinationName, destinationTarget,
+                                           destinationAttachment.GetTextureLevel(), dstX0, dstY0,
+                                           destinationAttachment.GetTextureLayer(), width, height, 1);
+            if (const GLenum error = g_GLESFuncs.glGetError(); error != GL_NO_ERROR) {
+                // The driver blit still runs for this aspect - onto the wrong layer, but the
+                // substitute has to leave the call no worse off than it found it.
+                MGLOG_E_ONCE("BlitFramebuffer: the layered-destination copy substitute failed with %s; the "
+                             "driver blit will run instead and land on layer 0",
+                             MG_Util::ConvertGLEnumToString(error).c_str());
+                continue;
+            }
+            handled |= aspectBits;
+        }
+        return handled & mask;
+    }
+
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
@@ -5167,7 +5312,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         });
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
                 dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
-        IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        // A no-op on every driver that honours a non-zero destination array layer, which is all
+        // of them but the probed one. Whatever it performs itself is taken out of the mask.
+        mask &= ~BlitLayeredDestinationAspects(
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject(),
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject(), srcX0, srcY0,
+            srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask);
+        if (mask != 0) {
+            IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        }
         DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__](auto err) {
             MGLOG_D("ES error (%s:%d): %s", file, line, MG_Util::ConvertGLEnumToString(err).c_str());
         });
@@ -5189,7 +5342,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         MGLOG_D("ES %s(%d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)", __func__, srcX0, srcY0, srcX1, srcY1,
                 dstX0, dstY0, dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
-        IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        // See the DSA-free entry point above: only the probed defect makes this do anything.
+        mask &= ~BlitLayeredDestinationAspects(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0,
+                                               dstY0, dstX1, dstY1, mask);
+        if (mask != 0) {
+            IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        }
         // Debug-only diagnostics: which GLES depth texture did this blit write?
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
         if (mask & GL_DEPTH_BUFFER_BIT) {
