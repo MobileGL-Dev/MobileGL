@@ -1550,6 +1550,30 @@ TEST(DirectVulkanSanity, SamplerUniformTypesPreserveTheirNumericDomain) {
               SamplerNumericDomain::Unknown);
 }
 
+// The image half of the same question, which the sampler form above deliberately answers
+// Unknown. It decides the format of the placeholder descriptor an UNBOUND image unit gets, and a
+// `writeonly` declaration carries no format qualifier for it to fall back on - so an Unknown here
+// is a lost draw, not a cosmetic gap.
+TEST(DirectVulkanSanity, ImageUniformTypesPreserveTheirNumericDomain) {
+    using namespace MobileGL::MG_Backend::DirectVulkan;
+
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_2D), SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_BUFFER), SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_IMAGE_CUBE_MAP_ARRAY),
+              SamplerNumericDomain::Float);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_INT_IMAGE_2D_ARRAY),
+              SamplerNumericDomain::SignedInteger);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_INT_IMAGE_BUFFER),
+              SamplerNumericDomain::SignedInteger);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_UNSIGNED_INT_IMAGE_3D),
+              SamplerNumericDomain::UnsignedInteger);
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_UNSIGNED_INT_IMAGE_BUFFER),
+              SamplerNumericDomain::UnsignedInteger);
+    // Samplers are the other function's business, and answering for them here would let a
+    // sampler binding silently take an image binding's placeholder rules.
+    EXPECT_EQ(ProgramFactory::UniformTypeToImageNumericDomain(GL_SAMPLER_2D), SamplerNumericDomain::Unknown);
+}
+
 TEST(DirectVulkanSanity, SampledViewFormatMatchesSamplerNumericDomainWithoutChangingComponentLayout) {
     using namespace MobileGL::MG_Backend::DirectVulkan;
 
