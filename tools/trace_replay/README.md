@@ -17,6 +17,12 @@ The bundled fixtures cover:
   ![Minecraft 1.17 854x480 main menu golden](fixtures/minecraft-1.17-main-menu-854.0000117757.png)
 - minecraft-1.21.4-in-world: captured from Minecraft 1.21.4 after entering a singleplayer world.
   ![Minecraft 1.21.4 in-world golden](fixtures/minecraft-1.21.4-in-world.0000280000.png)
+- minecraft-1.21.4-rd12-odinlite-in-world: captured on an Android device (FCL MobileGL Magma capture, 854x480) from
+  vanilla Minecraft 1.21.4 at render distance 12, drifting down a river valley in a boat. Unlike the other in-world
+  fixtures this one is a 251-frame window (gltrim `-f 1094-1343`) rather than a single frame, so it doubles as the
+  campaign's benchmark scene: benchmark mode replays the whole window and the tail frames measure steady-state
+  in-world frame time. The golden is still the final frame, so it works as an ordinary correctness case too.
+  ![Minecraft 1.21.4 render distance 12 in-world golden](fixtures/minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png)
 - minecraft-1.21.4-fabric-sodium-in-world: captured from Minecraft 1.21.4 Fabric with Sodium after entering a
   singleplayer world with Fancy graphics.
   ![Minecraft 1.21.4 Fabric Sodium in-world golden](fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png)

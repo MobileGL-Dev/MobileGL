@@ -61,6 +61,13 @@
       "target_call": 280000
     },
     {
+      "name": "minecraft-1.21.4-rd12-odinlite-in-world",
+      "trace_archive": "minecraft-1.21.4-rd12-odinlite-in-world.tgz",
+      "golden": "minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png",
+      "target_call": 4660351,
+      "timeout_seconds": 1800
+    },
+    {
       "name": "minecraft-1.21.4-fabric-sodium-in-world",
       "trace_archive": "minecraft-1.21.4-fabric-sodium-in-world.tgz",
       "golden": "minecraft-1.21.4-fabric-sodium-in-world.0000923340.png",
