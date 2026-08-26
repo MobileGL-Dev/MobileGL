@@ -4002,6 +4002,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 dirtyRectCount = textureMipmapObject->GetStorageDirtyRects(
                                     uploadTarget, level, dirtyRects,
                                     MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                                // The scatter refinement pays only on the client-pointer path,
+                                // where fewer bytes mean less driver-side copying. Through the
+                                // unpack ring every glTexSubImage is a GPU copy job (Mali), so
+                                // ~100 sprite rects become ~100 jobs whose fixed cost dwarfs
+                                // the union box's extra bytes - measured +6 ms/frame of GPU
+                                // time in MC's animated-atlas ticks. One box, one job.
+                                if (BufferImpl::UnpackRingAvailable()) {
+                                    dirtyRectCount = 0;
+                                }
                             }
                             const auto rectShadowPtr = [&](const MG_State::GLState::MipmapDirtyRegion& rect) {
                                 return static_cast<const Uint8*>(uploadData) +
