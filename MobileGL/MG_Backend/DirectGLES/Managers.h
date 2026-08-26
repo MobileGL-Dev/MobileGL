@@ -510,6 +510,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Present()-time upkeep: records the frame's high-water mark for reclamation
         // and deletes grown-away ring stores once the GPU is done with them.
         void UboRingOnPresent();
+
+        // --- Texture unpack-PBO ring ----------------------------------------------
+        // The same persistent-mapped bump allocator, staging TEXTURE UPLOADS. A
+        // glTexSubImage from client memory hands the driver a pointer it must read
+        // before the call returns, so the copy has to be ordered against whatever GPU
+        // work still reads the destination texture: Mali resolves that by BLOCKING the
+        // calling thread (osup_sync_object_wait) instead of ghosting, and Minecraft
+        // re-uploads animated atlas sprites and the lightmap every tick into textures
+        // the in-flight frame is still sampling. Staging the bytes into a
+        // GPU-visible unpack PBO and passing an OFFSET instead lets the driver queue
+        // the copy in the command stream with no CPU wait at all.
+        //
+        // Same reclamation contract as the UBO ring: no ring bytes are recycled before
+        // the frame that referenced them completed on the GPU, so a staged block stays
+        // intact for as long as the queued transfer can still be reading it. The store
+        // therefore settles at roughly (bytes staged per frame) x (frames in flight),
+        // which is what to watch if this ring ever shows up in an RSS regression: it
+        // grows on demand from 4 MiB and is capped, not unbounded.
+        //
+        // False when the feature is disabled (MOBILEGL_DISABLE_UNPACK_RING),
+        // EXT_buffer_storage / fences are missing, the ES context is not current, or
+        // ring creation already failed under this context. Callers then upload from
+        // the client pointer exactly as before.
+        Bool UnpackRingAvailable();
+        // Bump-allocate `size` bytes aligned to 64 (a PBO-sourced glTexSubImage only
+        // owes the driver the pixel type's own alignment). Grows the ring when the
+        // in-flight span would be overrun; false when the request exceeds the ring's
+        // size cap or storage (re)creation fails.
+        Bool UnpackRingAllocate(SizeT size, SizeT& outOffset);
+        void* UnpackRingMappedPtr();
+        Uint UnpackRingBufferId();
+        // Largest single staging request the ring can ever satisfy.
+        SizeT UnpackRingMaxBytes();
+        void UnpackRingOnPresent();
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {

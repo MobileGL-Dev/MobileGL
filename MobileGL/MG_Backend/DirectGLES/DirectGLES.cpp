@@ -9985,9 +9985,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_completedFrameSerial.store(completed, std::memory_order_relaxed);
         }
 
-        // After the watermark advanced: retire grown-away UBO-ring stores and record
-        // the frame's ring high-water mark for slot reclamation.
+        // After the watermark advanced: retire grown-away ring stores and record the
+        // frame's ring high-water marks for slot reclamation.
         BufferImpl::UboRingOnPresent();
+        BufferImpl::UnpackRingOnPresent();
         BufferImpl::TrimBufferPool();
     }
 

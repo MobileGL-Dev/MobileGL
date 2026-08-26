@@ -630,11 +630,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return 0;
             }
 
-            // --- Global-UBO ring (see Managers.h) ------------------------------------
+            // --- Persistent-mapped bump rings (see Managers.h) -----------------------
+            // Shared machinery behind BOTH the global-UBO ring and the texture
+            // unpack-PBO ring: one EXT_buffer_storage persistent|coherent map per ring,
+            // monotonic head/tail cursors, and reclamation riding the Present()
+            // frame-fence watermark. The two rings differ only in size cap, offset
+            // alignment and log label - the reclamation, context-loss and
+            // emergency-drain rules are the part that was hard to get right, so they
+            // are shared rather than copied.
             constexpr SizeT kUboRingInitialBytes = 4u * 1024u * 1024u;
             constexpr SizeT kUboRingMaxBytes = 64u * 1024u * 1024u;
+            constexpr SizeT kUnpackRingInitialBytes = 4u * 1024u * 1024u;
+            constexpr SizeT kUnpackRingMaxBytes = 64u * 1024u * 1024u;
+            // A PBO-sourced glTexSubImage constrains the offset only to the pixel
+            // TYPE's size (GL_INVALID_OPERATION otherwise), and no ES client type is
+            // wider than 4 bytes - unlike a UBO bind, which owes the driver
+            // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT. 64 covers every type with room to
+            // spare and keeps consecutive staged blocks off each other's cache lines.
+            constexpr SizeT kUnpackRingAlignment = 64;
 
-            struct UboRingState {
+            struct PersistentRingStore {
                 Uint id = 0;
                 Uint8* mappedPtr = nullptr;
                 SizeT size = 0;
@@ -648,41 +663,64 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint contextGeneration = 0;
                 SizeT alignment = 256;
                 // A hard storage-creation failure under this context; stop retrying
-                // per draw (cleared when the context generation moves on).
+                // per use (cleared when the context generation moves on).
                 Bool creationFailed = false;
             };
-            UboRingState g_uboRing;
 
             // Grown-away ring stores: deletable only once the GPU finished the last
             // frame that could reference them (same watermark as the buffer pool).
-            struct RetiredUboRing {
+            struct RetiredRingStore {
                 Uint id = 0;
                 Uint contextGeneration = 0;
                 Uint64 retireSerial = 0;
             };
-            Vector<RetiredUboRing> g_retiredUboRings;
 
             // Present()-time high-water marks: every byte below headAtPresent was
             // written during frames <= frameSerial, so once frameSerial completes,
             // tail may advance to headAtPresent. FIFO by construction.
-            struct UboRingFrameMark {
+            struct RingFrameMark {
                 Uint64 frameSerial = 0;
                 Uint64 headAtPresent = 0;
             };
-            Vector<UboRingFrameMark> g_uboRingFrameMarks;
+
+            // One ring: its live store, its two reclamation lists, and the immutable
+            // knobs that tell it apart from the other one.
+            struct PersistentRing {
+                PersistentRingStore store;
+                Vector<RetiredRingStore> retired;
+                Vector<RingFrameMark> frameMarks;
+                SizeT initialBytes = 0;
+                SizeT maxBytes = 0;
+                // 0: take the offset alignment from GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT
+                // at store-creation time (the UBO ring's binds require it).
+                SizeT fixedAlignment = 0;
+                const char* label = "";
+            };
+
+            PersistentRing g_uboRing{{}, {}, {}, kUboRingInitialBytes, kUboRingMaxBytes, 0, "Global-UBO ring"};
+            PersistentRing g_unpackRing{{},
+                                        {},
+                                        {},
+                                        kUnpackRingInitialBytes,
+                                        kUnpackRingMaxBytes,
+                                        kUnpackRingAlignment,
+                                        "Texture unpack ring"};
 
             // The ES context the ring's id/map belonged to is gone (or was never
             // seen): drop every handle without GL calls and re-arm creation. The
             // generation counter must survive the reset — frame serials also survive
             // context recreation, so a restarted counter could revalidate a stale
             // per-program slot cache against the new ring.
-            void ResetUboRingForNewContext() {
-                const Uint32 keptGeneration = g_uboRing.generation;
-                g_uboRing = {};
-                g_uboRing.generation = keptGeneration;
-                g_uboRing.contextGeneration = g_bufferContextGeneration;
-                g_retiredUboRings.clear();
-                g_uboRingFrameMarks.clear();
+            void ResetRingForNewContext(PersistentRing& ring) {
+                const Uint32 keptGeneration = ring.store.generation;
+                ring.store = {};
+                ring.store.generation = keptGeneration;
+                ring.store.contextGeneration = g_bufferContextGeneration;
+                // Keep the ring's own alignment across the wipe: the slow path rounds a
+                // request with it BEFORE the store that would set it exists.
+                if (ring.fixedAlignment != 0) ring.store.alignment = ring.fixedAlignment;
+                ring.retired.clear();
+                ring.frameMarks.clear();
             }
 
             GLESBufferResource* ResourceOf(BufferObject& bufferObject) {
@@ -1097,9 +1135,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             InvalidateArrayBufferBindingCache();
             InvalidateIndexedBufferBindingCache();
             InvalidatePixelBufferBindingCaches();
-            // The global-UBO ring's id and persistent map died with the context;
-            // drop the handles (no GL) and let the next draw recreate the ring.
-            ResetUboRingForNewContext();
+            // The rings' ids and persistent maps died with the context; drop the
+            // handles (no GL) and let the next draw / texture upload recreate them.
+            ResetRingForNewContext(g_uboRing);
+            ResetRingForNewContext(g_unpackRing);
         }
 
         void ProcessDeferredBufferReleases() {
@@ -1441,26 +1480,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_pooledBytes = 0;
         }
 
-        // --- Global-UBO ring (see Managers.h) ------------------------------------
+        // --- Persistent-mapped bump rings (see Managers.h) ------------------------
         namespace {
             // (Re)create the ring store with room for at least minBytes. Any live
             // store is retired (deleted once the GPU finished the last frame that
             // could reference its slots), never deleted in place. Returns false and
             // leaves the current store untouched when minBytes cannot fit under the
             // size cap; a GL failure loses the store and latches creationFailed so
-            // draws stop retrying under this context.
-            Bool CreateUboRingStorage(SizeT minBytes) {
-                SizeT newSize = kUboRingInitialBytes;
+            // later uses stop retrying under this context.
+            Bool CreateRingStorage(PersistentRing& ring, SizeT minBytes) {
+                SizeT newSize = ring.initialBytes;
                 while (newSize < minBytes) newSize *= 2;
-                if (newSize > kUboRingMaxBytes) return false;
+                if (newSize > ring.maxBytes) return false;
 
-                if (g_uboRing.id != 0) {
-                    g_retiredUboRings.push_back(
-                        {g_uboRing.id, g_uboRing.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
+                if (ring.store.id != 0) {
+                    ring.retired.push_back(
+                        {ring.store.id, ring.store.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
                 }
-                const Uint32 nextGeneration = g_uboRing.generation + 1;
-                g_uboRing.id = 0;
-                g_uboRing.mappedPtr = nullptr;
+                const Uint32 nextGeneration = ring.store.generation + 1;
+                ring.store.id = 0;
+                ring.store.mappedPtr = nullptr;
 
                 Uint id = 0;
                 g_GLESFuncs.glGenBuffers(1, &id);
@@ -1477,213 +1516,249 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glDeleteBuffers(1, &id);
                         id = 0;
                     } else {
-                        g_uboRing.mappedPtr = static_cast<Uint8*>(ptr);
+                        ring.store.mappedPtr = static_cast<Uint8*>(ptr);
                     }
                 }
                 if (id == 0) {
-                    MGLOG_E_ONCE("Global-UBO ring: persistent storage creation failed (%zu bytes); "
-                            "falling back to glBufferSubData uploads.",
-                            newSize);
-                    g_uboRing.creationFailed = true;
+                    MGLOG_E_ONCE("%s: persistent storage creation failed (%zu bytes); falling back to the "
+                                 "client-memory upload path.",
+                                 ring.label, newSize);
+                    ring.store.creationFailed = true;
                     return false;
                 }
 
-                const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
-                g_uboRing.id = id;
-                g_uboRing.size = newSize;
-                g_uboRing.head = 0;
-                g_uboRing.tail = 0;
-                g_uboRing.generation = nextGeneration;
-                g_uboRing.alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
-                g_uboRingFrameMarks.clear();
-                MGLOG_D("Global-UBO ring: %zu MiB persistent store ready (id %u, gen %u, align %zu).",
-                        newSize / (1024u * 1024u), id, nextGeneration, g_uboRing.alignment);
+                SizeT alignment = ring.fixedAlignment;
+                if (alignment == 0) {
+                    const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
+                    alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
+                }
+                ring.store.id = id;
+                ring.store.size = newSize;
+                ring.store.head = 0;
+                ring.store.tail = 0;
+                ring.store.generation = nextGeneration;
+                ring.store.alignment = alignment;
+                ring.frameMarks.clear();
+                MGLOG_D("%s: %zu MiB persistent store ready (id %u, gen %u, align %zu).", ring.label,
+                        newSize / (1024u * 1024u), id, nextGeneration, alignment);
                 return true;
             }
-        } // namespace
 
-        Bool UboRingAvailable() {
-            if (MG_Config::Features.DisableUboRing) return false;
-            // Reclamation rides the Present fence watermark; without working fences
-            // slots would never be provably GPU-idle (same rule as IsPoolable).
-            if (!g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glGenBuffers ||
-                !g_GLESFuncs.glFenceSync || !g_GLESFuncs.glGetSynciv) {
-                return false;
+            // Shared half of the availability gate (the per-ring kill switch sits in
+            // the exported wrappers). Reclamation rides the Present fence watermark;
+            // without working fences slots would never be provably GPU-idle (same rule
+            // as IsPoolable).
+            Bool RingAvailable(PersistentRing& ring) {
+                if (!g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glGenBuffers ||
+                    !g_GLESFuncs.glFenceSync || !g_GLESFuncs.glGetSynciv) {
+                    return false;
+                }
+                if (!CanTouchGLNow()) return false;
+                if (ring.store.contextGeneration != g_bufferContextGeneration) {
+                    ResetRingForNewContext(ring);
+                }
+                return !ring.store.creationFailed;
             }
-            if (!CanTouchGLNow()) return false;
-            if (g_uboRing.contextGeneration != g_bufferContextGeneration) {
-                ResetUboRingForNewContext();
-            }
-            return !g_uboRing.creationFailed;
-        }
 
-        namespace {
             // Division-based rounding fallback: the spec doesn't promise a power-of-two
             // alignment. Slot offsets stay multiples of the alignment because every
             // slot size is, and wrap padding restarts at ring offset 0.
-            inline SizeT UboRingAlignUp(SizeT size, SizeT alignment) {
+            inline SizeT RingAlignUp(SizeT size, SizeT alignment) {
                 if ((alignment & (alignment - 1)) == 0) {
                     return (size + alignment - 1) & ~(alignment - 1);
                 }
                 return (size + alignment - 1) / alignment * alignment;
             }
-            Bool UboRingAllocateSlow(SizeT size, SizeT& outOffset);
-        } // namespace
+            Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset);
 
-        Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
-            if (size == 0) return false;
-            // Fast path: a live ring under the current context with room before both
+            // Bump-allocate `size` bytes out of `ring`.
+            //
+            // Fast path: a live store under the current context with room before both
             // the wrap boundary and the in-flight tail. Touches no GL and probes no
-            // frame marks - the sole caller sits behind UboRingAvailable() in the
-            // draw preparation, so the context checks have already run this draw.
-            // `tail` may be stale here (marks are only retired on Present and on the
-            // slow path); staleness is conservative - the in-flight span reads too
-            // large, the check fails, and the slow path retires marks and re-tries.
-            auto& ring = g_uboRing;
-            if (ring.id != 0 && ring.contextGeneration == g_bufferContextGeneration) {
-                const SizeT alignedSize = UboRingAlignUp(size, ring.alignment);
-                // Ring sizes are kUboRingInitialBytes (a power of two) doubled some
-                // number of times, so the offset modulo reduces to a mask.
-                static_assert((kUboRingInitialBytes & (kUboRingInitialBytes - 1)) == 0,
-                              "ring offset mask below requires power-of-two ring sizes");
-                const SizeT offset = static_cast<SizeT>(ring.head & (ring.size - 1));
-                if (offset + alignedSize <= ring.size &&
-                    ring.head + alignedSize - ring.tail <= ring.size) {
-                    ring.head += alignedSize;
-                    outOffset = offset;
-                    return true;
-                }
-            }
-            return UboRingAllocateSlow(size, outOffset);
-        }
-
-        namespace {
-        Bool UboRingAllocateSlow(SizeT size, SizeT& outOffset) {
-            if (!UboRingAvailable()) return false;
-            const SizeT alignedSize = UboRingAlignUp(size, g_uboRing.alignment);
-            if (g_uboRing.id == 0 && !CreateUboRingStorage(alignedSize)) {
-                return false;
-            }
-
-            // Advance tail past every frame the GPU provably finished.
-            const Uint64 completed = DirectGLES::CompletedFrameSerial();
-            SizeT retiredMarks = 0;
-            for (const auto& mark : g_uboRingFrameMarks) {
-                if (mark.frameSerial > completed) break;
-                if (mark.headAtPresent > g_uboRing.tail) g_uboRing.tail = mark.headAtPresent;
-                ++retiredMarks;
-            }
-            if (retiredMarks > 0) {
-                g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin(),
-                                          g_uboRingFrameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
-            }
-
-            // A slot may not straddle the ring end; pad the cursor to the boundary.
-            SizeT offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
-            if (offset + alignedSize > g_uboRing.size) {
-                g_uboRing.head += g_uboRing.size - offset;
-                offset = 0;
-            }
-
-            if (g_uboRing.head + alignedSize - g_uboRing.tail > g_uboRing.size) {
-                // In-flight span would overrun live slots: grow instead of overwrite.
-                if (CreateUboRingStorage(std::max(g_uboRing.size * 2, alignedSize))) {
-                    offset = 0;
-                } else if (g_uboRing.creationFailed) {
-                    return false; // store lost; callers fall back to glBufferSubData
-                } else {
-                    // At the size cap (>kUboRingMaxBytes of uniforms in flight). First
-                    // try to free room by waiting for the OLDEST in-flight frames to
-                    // retire - a bounded wait that ends as soon as enough tail space
-                    // exists, instead of draining the entire queue.
-                    constexpr Uint64 kFrameWaitNs = 50ull * 1000 * 1000; // 50ms per frame
-                    while (!g_uboRingFrameMarks.empty() &&
-                           g_uboRing.head + alignedSize - g_uboRing.tail > g_uboRing.size) {
-                        const auto& oldest = g_uboRingFrameMarks.front();
-                        if (!DirectGLES::WaitForFrameSerialCompleted(oldest.frameSerial, kFrameWaitNs)) {
-                            break;
-                        }
-                        if (oldest.headAtPresent > g_uboRing.tail) g_uboRing.tail = oldest.headAtPresent;
-                        g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin());
-                    }
-                    if (g_uboRing.head + alignedSize - g_uboRing.tail <= g_uboRing.size) {
-                        offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
-                        if (offset + alignedSize > g_uboRing.size) {
-                            g_uboRing.head += g_uboRing.size - offset;
-                            offset = 0;
-                        }
-                        g_uboRing.head += alignedSize;
+            // frame marks - callers sit behind the ring's availability gate, so the
+            // context checks have already run for this draw/upload. `tail` may be stale
+            // here (marks are only retired on Present and on the slow path); staleness
+            // is conservative - the in-flight span reads too large, the check fails,
+            // and the slow path retires marks and re-tries.
+            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+                if (size == 0) return false;
+                auto& store = ring.store;
+                if (store.id != 0 && store.contextGeneration == g_bufferContextGeneration) {
+                    const SizeT alignedSize = RingAlignUp(size, store.alignment);
+                    // Ring sizes are the ring's initial size (a power of two) doubled
+                    // some number of times, so the offset modulo reduces to a mask.
+                    static_assert((kUboRingInitialBytes & (kUboRingInitialBytes - 1)) == 0,
+                                  "ring offset mask below requires power-of-two ring sizes");
+                    static_assert((kUnpackRingInitialBytes & (kUnpackRingInitialBytes - 1)) == 0,
+                                  "ring offset mask below requires power-of-two ring sizes");
+                    const SizeT offset = static_cast<SizeT>(store.head & (store.size - 1));
+                    if (offset + alignedSize <= store.size && store.head + alignedSize - store.tail <= store.size) {
+                        store.head += alignedSize;
                         outOffset = offset;
                         return true;
                     }
-                    // No usable fence covers the oldest frames: drain once rather than
-                    // corrupt live slots.
-                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
-                    g_uboRing.tail = g_uboRing.head;
-                    g_uboRingFrameMarks.clear();
-                    // Same-frame slots written before the drain may now be recycled by
-                    // the very next allocations; a generation bump keeps later draws
-                    // from rebinding those cached offsets.
-                    ++g_uboRing.generation;
-                    offset = static_cast<SizeT>(g_uboRing.head % g_uboRing.size);
-                    if (offset + alignedSize > g_uboRing.size) {
-                        g_uboRing.head += g_uboRing.size - offset;
+                }
+                return RingAllocateSlow(ring, size, outOffset);
+            }
+
+            Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+                if (!RingAvailable(ring)) return false;
+                auto& store = ring.store;
+                // Sizing the store first, so the request is rounded with the alignment
+                // the live store actually carries rather than the pre-creation default.
+                if (store.id == 0 && !CreateRingStorage(ring, RingAlignUp(size, store.alignment))) {
+                    return false;
+                }
+                const SizeT alignedSize = RingAlignUp(size, store.alignment);
+
+                // Advance tail past every frame the GPU provably finished.
+                const Uint64 completed = DirectGLES::CompletedFrameSerial();
+                SizeT retiredMarks = 0;
+                for (const auto& mark : ring.frameMarks) {
+                    if (mark.frameSerial > completed) break;
+                    if (mark.headAtPresent > store.tail) store.tail = mark.headAtPresent;
+                    ++retiredMarks;
+                }
+                if (retiredMarks > 0) {
+                    ring.frameMarks.erase(ring.frameMarks.begin(),
+                                          ring.frameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
+                }
+
+                // A slot may not straddle the ring end; pad the cursor to the boundary.
+                SizeT offset = static_cast<SizeT>(store.head % store.size);
+                if (offset + alignedSize > store.size) {
+                    store.head += store.size - offset;
+                    offset = 0;
+                }
+
+                if (store.head + alignedSize - store.tail > store.size) {
+                    // In-flight span would overrun live slots: grow instead of overwrite.
+                    if (CreateRingStorage(ring, std::max(store.size * 2, alignedSize))) {
                         offset = 0;
+                    } else if (store.creationFailed) {
+                        return false; // store lost; callers fall back to their legacy path
+                    } else {
+                        // At the size cap (>maxBytes in flight). First try to free room
+                        // by waiting for the OLDEST in-flight frames to retire - a
+                        // bounded wait that ends as soon as enough tail space exists,
+                        // instead of draining the entire queue.
+                        constexpr Uint64 kFrameWaitNs = 50ull * 1000 * 1000; // 50ms per frame
+                        while (!ring.frameMarks.empty() &&
+                               store.head + alignedSize - store.tail > store.size) {
+                            const auto& oldest = ring.frameMarks.front();
+                            if (!DirectGLES::WaitForFrameSerialCompleted(oldest.frameSerial, kFrameWaitNs)) {
+                                break;
+                            }
+                            if (oldest.headAtPresent > store.tail) store.tail = oldest.headAtPresent;
+                            ring.frameMarks.erase(ring.frameMarks.begin());
+                        }
+                        if (store.head + alignedSize - store.tail <= store.size) {
+                            offset = static_cast<SizeT>(store.head % store.size);
+                            if (offset + alignedSize > store.size) {
+                                store.head += store.size - offset;
+                                offset = 0;
+                            }
+                            store.head += alignedSize;
+                            outOffset = offset;
+                            return true;
+                        }
+                        // No usable fence covers the oldest frames: drain once rather than
+                        // corrupt live slots.
+                        if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                        store.tail = store.head;
+                        ring.frameMarks.clear();
+                        // Same-frame slots written before the drain may now be recycled by
+                        // the very next allocations; a generation bump keeps later draws
+                        // from rebinding those cached offsets.
+                        ++store.generation;
+                        offset = static_cast<SizeT>(store.head % store.size);
+                        if (offset + alignedSize > store.size) {
+                            store.head += store.size - offset;
+                            offset = 0;
+                        }
                     }
                 }
+
+                store.head += alignedSize;
+                outOffset = offset;
+                return true;
             }
 
-            g_uboRing.head += alignedSize;
-            outOffset = offset;
-            return true;
-        }
+            // Present()-time upkeep shared by both rings.
+            void RingOnPresent(PersistentRing& ring) {
+                if (!CanTouchGLNow()) return;
+
+                // Delete grown-away stores the GPU is provably done with.
+                const Uint64 completed = DirectGLES::CompletedFrameSerial();
+                for (SizeT i = ring.retired.size(); i-- > 0;) {
+                    RetiredRingStore& entry = ring.retired[i];
+                    const Bool staleContext = entry.contextGeneration != g_bufferContextGeneration;
+                    if (!staleContext && entry.retireSerial > completed) continue;
+                    if (!staleContext && entry.id != 0) {
+                        ScrubBufferBindingShadowsForId(entry.id);
+                        g_GLESFuncs.glDeleteBuffers(1, &entry.id);
+                    }
+                    ring.retired[i] = ring.retired.back();
+                    ring.retired.pop_back();
+                }
+
+                auto& store = ring.store;
+                if (store.id == 0 || store.contextGeneration != g_bufferContextGeneration) return;
+                // Retire completed marks here too — RingAllocate is the main consumer,
+                // but frames that used the ring for nothing would otherwise let the list
+                // grow one entry per Present, unboundedly.
+                SizeT retiredMarks = 0;
+                for (const auto& mark : ring.frameMarks) {
+                    if (mark.frameSerial > completed) break;
+                    if (mark.headAtPresent > store.tail) store.tail = mark.headAtPresent;
+                    ++retiredMarks;
+                }
+                if (retiredMarks > 0) {
+                    ring.frameMarks.erase(ring.frameMarks.begin(),
+                                          ring.frameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
+                }
+                // Record this frame's high-water mark (Present just fenced the serial now
+                // reported by CurrentFrameSerial()). A fence-less Present repeats the
+                // serial; fold into the existing mark.
+                const Uint64 serial = DirectGLES::CurrentFrameSerial();
+                if (!ring.frameMarks.empty() && ring.frameMarks.back().frameSerial == serial) {
+                    ring.frameMarks.back().headAtPresent = store.head;
+                } else {
+                    ring.frameMarks.push_back({serial, store.head});
+                }
+            }
         } // namespace
 
-        void* UboRingMappedPtr() { return g_uboRing.mappedPtr; }
-        Uint UboRingBufferId() { return g_uboRing.id; }
-        Uint32 UboRingGeneration() { return g_uboRing.generation; }
-
-        void UboRingOnPresent() {
-            if (!CanTouchGLNow()) return;
-
-            // Delete grown-away stores the GPU is provably done with.
-            const Uint64 completed = DirectGLES::CompletedFrameSerial();
-            for (SizeT i = g_retiredUboRings.size(); i-- > 0;) {
-                RetiredUboRing& entry = g_retiredUboRings[i];
-                const Bool staleContext = entry.contextGeneration != g_bufferContextGeneration;
-                if (!staleContext && entry.retireSerial > completed) continue;
-                if (!staleContext && entry.id != 0) {
-                    ScrubBufferBindingShadowsForId(entry.id);
-                    g_GLESFuncs.glDeleteBuffers(1, &entry.id);
-                }
-                g_retiredUboRings[i] = g_retiredUboRings.back();
-                g_retiredUboRings.pop_back();
-            }
-
-            if (g_uboRing.id == 0 || g_uboRing.contextGeneration != g_bufferContextGeneration) return;
-            // Retire completed marks here too — UboRingAllocate is the main consumer,
-            // but frames with no global-UBO draws would otherwise let the list grow
-            // one entry per Present, unboundedly.
-            SizeT retiredMarks = 0;
-            for (const auto& mark : g_uboRingFrameMarks) {
-                if (mark.frameSerial > completed) break;
-                if (mark.headAtPresent > g_uboRing.tail) g_uboRing.tail = mark.headAtPresent;
-                ++retiredMarks;
-            }
-            if (retiredMarks > 0) {
-                g_uboRingFrameMarks.erase(g_uboRingFrameMarks.begin(),
-                                          g_uboRingFrameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
-            }
-            // Record this frame's high-water mark (Present just fenced the serial now
-            // reported by CurrentFrameSerial()). A fence-less Present repeats the
-            // serial; fold into the existing mark.
-            const Uint64 serial = DirectGLES::CurrentFrameSerial();
-            if (!g_uboRingFrameMarks.empty() && g_uboRingFrameMarks.back().frameSerial == serial) {
-                g_uboRingFrameMarks.back().headAtPresent = g_uboRing.head;
-            } else {
-                g_uboRingFrameMarks.push_back({serial, g_uboRing.head});
-            }
+        Bool UboRingAvailable() {
+            if (MG_Config::Features.DisableUboRing) return false;
+            return RingAvailable(g_uboRing);
         }
+
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset) { return RingAllocate(g_uboRing, size, outOffset); }
+
+        void* UboRingMappedPtr() { return g_uboRing.store.mappedPtr; }
+        Uint UboRingBufferId() { return g_uboRing.store.id; }
+        Uint32 UboRingGeneration() { return g_uboRing.store.generation; }
+
+        void UboRingOnPresent() { RingOnPresent(g_uboRing); }
+
+        Bool UnpackRingAvailable() {
+            if (MG_Config::Features.DisableUnpackRing) return false;
+            return RingAvailable(g_unpackRing);
+        }
+
+        Bool UnpackRingAllocate(SizeT size, SizeT& outOffset) {
+            // A request the ring could never satisfy even empty would otherwise walk
+            // the whole grow/drain ladder before failing.
+            if (size > kUnpackRingMaxBytes) return false;
+            return RingAllocate(g_unpackRing, size, outOffset);
+        }
+
+        void* UnpackRingMappedPtr() { return g_unpackRing.store.mappedPtr; }
+        Uint UnpackRingBufferId() { return g_unpackRing.store.id; }
+        SizeT UnpackRingMaxBytes() { return kUnpackRingMaxBytes; }
+
+        void UnpackRingOnPresent() { RingOnPresent(g_unpackRing); }
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {
@@ -2579,6 +2654,93 @@ namespace MobileGL::MG_Backend::DirectGLES {
             static inline GLint s_imageHeight = 0;
             static inline GLint s_skipImages = 0;
         };
+
+        // --- Unpack-ring staging (see BufferImpl::UnpackRingAvailable) ---------------
+        // One rectangular (or whole-level) region of a level shadow, repacked TIGHTLY
+        // into the persistently-mapped unpack PBO. The upload that follows passes the
+        // returned ring offset with UNPACK_ROW_LENGTH / UNPACK_IMAGE_HEIGHT left at the
+        // surrounding ScopedDefaultUnpackState's 0, so the driver reads exactly the
+        // bytes staged here - strictly fewer than the ROW_LENGTH-strided client-pointer
+        // upload it replaces, which made the driver walk the whole level's stride.
+        //
+        // `blocks` describes one or more source regions to stage back-to-back into a
+        // SINGLE ring allocation; the ring offset of block i lands in blocks[i].offset.
+        // Deliberately without default member initializers: call sites declare a
+        // kMaxDirtyRects-sized array of these per dirty level and fill only the entries
+        // they use, so the type stays trivially default-constructible and the
+        // declaration costs nothing on the levels that never reach the ring.
+        struct UnpackStagingBlock {
+            const Uint8* src;      // top-left texel of the region in the level shadow
+            SizeT rowBytes;        // bytes per region row (region width * bpp)
+            SizeT rows;            // region height
+            SizeT slices;          // region depth (1 for 2D)
+            SizeT srcRowStride;    // level row pitch
+            SizeT srcSliceStride;  // level slice pitch
+            SizeT offset;          // out: byte offset into the ring store
+        };
+
+        // False (nothing staged, ring untouched) whenever the caller must keep the
+        // client-pointer path: ring unavailable, a degenerate block, or a total that
+        // overflows / exceeds the ring's cap.
+        static Bool StageBlocksIntoUnpackRing(UnpackStagingBlock* blocks, SizeT blockCount) {
+            if (blocks == nullptr || blockCount == 0) return false;
+            if (!BufferImpl::UnpackRingAvailable()) return false;
+
+            const SizeT maxBytes = BufferImpl::UnpackRingMaxBytes();
+            SizeT total = 0;
+            for (SizeT i = 0; i < blockCount; ++i) {
+                const UnpackStagingBlock& b = blocks[i];
+                if (b.src == nullptr || b.rowBytes == 0 || b.rows == 0 || b.slices == 0) return false;
+                // Every factor is bounded by the level's own byte size, but the
+                // multiplications are on SizeT: check each against the cap instead of
+                // trusting a product that could have wrapped.
+                if (b.rowBytes > maxBytes || b.rows > maxBytes / b.rowBytes) return false;
+                const SizeT sliceBytes = b.rowBytes * b.rows;
+                if (b.slices > maxBytes / sliceBytes) return false;
+                const SizeT blockBytes = sliceBytes * b.slices;
+                if (blockBytes > maxBytes - total) return false;
+                total += blockBytes;
+            }
+
+            SizeT base = 0;
+            if (!BufferImpl::UnpackRingAllocate(total, base)) return false;
+            // AFTER the allocation: growing the ring replaces the store and its map.
+            auto* ringBytes = static_cast<Uint8*>(BufferImpl::UnpackRingMappedPtr());
+            if (ringBytes == nullptr) return false;
+
+            SizeT cursor = base;
+            for (SizeT i = 0; i < blockCount; ++i) {
+                UnpackStagingBlock& b = blocks[i];
+                b.offset = cursor;
+                Uint8* dst = ringBytes + cursor;
+                // Each block's size is a whole number of texels, so consecutive block
+                // offsets stay multiples of the pixel type's size just as `base` is.
+                if (b.rowBytes == b.srcRowStride && b.rowBytes * b.rows == b.srcSliceStride) {
+                    Memcpy(dst, b.src, b.rowBytes * b.rows * b.slices); // region IS the level
+                } else {
+                    for (SizeT z = 0; z < b.slices; ++z) {
+                        const Uint8* srcSlice = b.src + z * b.srcSliceStride;
+                        if (b.rowBytes == b.srcRowStride) {
+                            Memcpy(dst, srcSlice, b.rowBytes * b.rows); // full-width rows
+                            dst += b.rowBytes * b.rows;
+                            continue;
+                        }
+                        for (SizeT y = 0; y < b.rows; ++y) {
+                            Memcpy(dst, srcSlice + y * b.srcRowStride, b.rowBytes);
+                            dst += b.rowBytes;
+                        }
+                    }
+                }
+                cursor += b.rowBytes * b.rows * b.slices;
+            }
+            return true;
+        }
+
+        // The `pixels` argument of a PBO-sourced glTexSubImage: a byte offset dressed
+        // up as a pointer.
+        static const void* UnpackRingPixelOffset(SizeT offset) {
+            return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(offset));
+        }
 
         static Uint GetNormFallbackComponentCount(TextureInternalFormat format) {
             switch (format) {
@@ -3847,34 +4009,111 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        static_cast<SizeT>(rect.lo.y()) * levelRowBytes +
                                        static_cast<SizeT>(rect.lo.x()) * bpp;
                             };
+                            // Unpack-ring staging plan, decided ONCE for whichever branch
+                            // below runs: either every glTexSubImage of this level sources
+                            // from the ring or none does, so the pixel-unpack binding is
+                            // toggled exactly once per level. The plan's three shapes line
+                            // up 1:1 with the switch's three branches.
+                            //
+                            // Regions are repacked TIGHTLY (row length = the region's own
+                            // width), which is why the ring path issues no glPixelStorei at
+                            // all: the surrounding ScopedDefaultUnpackState already holds
+                            // ROW_LENGTH/IMAGE_HEIGHT at 0, which is exactly what a tight
+                            // block wants. It also stages strictly fewer bytes than the
+                            // client-pointer path makes the driver walk, which strides over
+                            // the whole level width.
+                            UnpackStagingBlock
+                                stagingBlocks[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                            SizeT stagingBlockCount = 0;
+                            const Bool ringUsable = BufferImpl::UnpackRingAvailable();
+                            if (!ringUsable) {
+                                // Nothing to plan: every branch below keeps the client
+                                // pointer and its ROW_LENGTH striding, unchanged.
+                            } else if (subRectEligible && dirtyRectCount >= 2) {
+                                for (SizeT r = 0; r < dirtyRectCount; ++r) {
+                                    const auto& rect = dirtyRects[r];
+                                    stagingBlocks[r] = {
+                                        rectShadowPtr(rect),
+                                        static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
+                                        static_cast<SizeT>(rect.hi.y() - rect.lo.y()),
+                                        static_cast<SizeT>(std::max(rect.hi.z() - rect.lo.z(), 1)),
+                                        levelRowBytes,
+                                        levelSliceBytes,
+                                        0};
+                                }
+                                stagingBlockCount = dirtyRectCount;
+                            } else if (subRectEligible) {
+                                stagingBlocks[0] = {regionPtr,
+                                                    static_cast<SizeT>(regionSize.x()) * bpp,
+                                                    static_cast<SizeT>(regionSize.y()),
+                                                    static_cast<SizeT>(std::max(regionSize.z(), 1)),
+                                                    levelRowBytes,
+                                                    levelSliceBytes,
+                                                    0};
+                                stagingBlockCount = 1;
+                            } else if (uploadData == mipData && texelCount > 0 &&
+                                       byteSize % texelCount == 0) {
+                                // Whole level, shadow bytes verbatim: `byteSize` is exactly
+                                // what the driver would have read from the client pointer,
+                                // and the shadow is already tightly packed. A CONVERTED
+                                // level stays on the pointer path - its buffer's length is
+                                // the conversion's, not the shadow's, so nothing here can
+                                // size the driver's read of it. The whole-texels check is
+                                // the same sanity the sub-rect path applies, and it is what
+                                // makes "the shadow's bytes per texel == the transfer's"
+                                // hold. (A 1D array's upload size permutes height and depth,
+                                // but the texel count and the tight byte order are the same,
+                                // so the flat copy still describes what the driver reads.)
+                                stagingBlocks[0] = {static_cast<const Uint8*>(uploadData),
+                                                    static_cast<SizeT>(byteSize),
+                                                    1,
+                                                    1,
+                                                    static_cast<SizeT>(byteSize),
+                                                    static_cast<SizeT>(byteSize),
+                                                    0};
+                                stagingBlockCount = 1;
+                            }
+                            const Bool ringStaged =
+                                stagingBlockCount > 0 &&
+                                StageBlocksIntoUnpackRing(stagingBlocks, stagingBlockCount);
+                            if (ringStaged) {
+                                BufferImpl::BindPixelUnpackBufferId(BufferImpl::UnpackRingBufferId());
+                            }
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
                             case TextureTarget::Texture2D:
                             case TextureTarget::TextureCubeMap:
                                 if (subRectEligible && dirtyRectCount >= 2) {
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
                                     for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                         const auto& rect = dirtyRects[r];
                                         g_GLESFuncs.glTexSubImage2D(
                                             glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
                                             rect.lo.y(), static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
                                             static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat,
-                                            glType, rectShadowPtr(rect));
+                                            glType,
+                                            ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
+                                                       : static_cast<const void*>(rectShadowPtr(rect)));
                                     }
                                     // The surrounding ScopedDefaultUnpackState shadow says 0.
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                    if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                                 } else if (subRectEligible) {
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                    if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
                                     g_GLESFuncs.glTexSubImage2D(
                                         glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
                                         dirtyRegion.lo.y(), static_cast<GLsizei>(regionSize.x()),
-                                        static_cast<GLsizei>(regionSize.y()), glFormat, glType, regionPtr);
+                                        static_cast<GLsizei>(regionSize.y()), glFormat, glType,
+                                        ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset)
+                                                   : static_cast<const void*>(regionPtr));
                                     // The surrounding ScopedDefaultUnpackState shadow says 0.
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                    if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                                 } else {
                                     g_GLESFuncs.glTexSubImage2D(glUploadTarget, static_cast<GLint>(level), 0, 0,
                                                                 static_cast<GLsizei>(uploadSize.x()),
                                                                 static_cast<GLsizei>(uploadSize.y()), glFormat,
-                                                                glType, uploadData);
+                                                                glType,
+                                                                ringStaged
+                                                                    ? UnpackRingPixelOffset(stagingBlocks[0].offset)
+                                                                    : uploadData);
                                 }
                                 break;
                             case TextureTarget::Texture3D:
@@ -3883,8 +4122,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // like a 2D array whose depth is 6 * the cube count.
                             case TextureTarget::TextureCubeMapArray:
                                 if (subRectEligible && dirtyRectCount >= 2) {
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    if (!ringStaged) {
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    }
                                     for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                         const auto& rect = dirtyRects[r];
                                         g_GLESFuncs.glTexSubImage3D(
@@ -3893,33 +4134,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
                                             static_cast<GLsizei>(rect.hi.y() - rect.lo.y()),
                                             static_cast<GLsizei>(rect.hi.z() - rect.lo.z()), glFormat,
-                                            glType, rectShadowPtr(rect));
+                                            glType,
+                                            ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
+                                                       : static_cast<const void*>(rectShadowPtr(rect)));
                                     }
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                    if (!ringStaged) {
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                    }
                                 } else if (subRectEligible) {
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    if (!ringStaged) {
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, texelSize.x());
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, texelSize.y());
+                                    }
                                     g_GLESFuncs.glTexSubImage3D(
                                         glUploadTarget, static_cast<GLint>(level), dirtyRegion.lo.x(),
                                         dirtyRegion.lo.y(), dirtyRegion.lo.z(),
                                         static_cast<GLsizei>(regionSize.x()),
                                         static_cast<GLsizei>(regionSize.y()),
-                                        static_cast<GLsizei>(regionSize.z()), glFormat, glType, regionPtr);
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                        static_cast<GLsizei>(regionSize.z()), glFormat, glType,
+                                        ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset)
+                                                   : static_cast<const void*>(regionPtr));
+                                    if (!ringStaged) {
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                        g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+                                    }
                                 } else {
                                     g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
                                                                 static_cast<GLsizei>(uploadSize.x()),
                                                                 static_cast<GLsizei>(uploadSize.y()),
                                                                 static_cast<GLsizei>(uploadSize.z()), glFormat,
-                                                                glType, uploadData);
+                                                                glType,
+                                                                ringStaged
+                                                                    ? UnpackRingPixelOffset(stagingBlocks[0].offset)
+                                                                    : uploadData);
                                 }
                                 break;
                             default:
                                 MGLOG_E_ONCE("Unhandled texture target %s",
                                         MG_Util::ConvertTextureTargetToString(stateTextureObject->GetTarget()).c_str());
                                 break;
+                            }
+                            if (ringStaged) {
+                                // Back to the resting unbound state every other upload site
+                                // in this file assumes (their BindPixelUnpackBufferId(0) is
+                                // meant to stay a shadow no-op).
+                                BufferImpl::BindPixelUnpackBufferId(0);
                             }
                             textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
                         }

@@ -155,6 +155,11 @@ namespace MobileGL::MG_Config {
         // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
         // (negative control / driver-bug escape hatch).
         Bool DisableUboRing = false;
+        // MOBILEGL_DISABLE_UNPACK_RING: force DirectGLES texture uploads back to
+        // glTexSubImage from the client pointer instead of staging them through the
+        // persistent-mapped unpack-PBO ring (negative control / driver-bug escape
+        // hatch).
+        Bool DisableUnpackRing = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
