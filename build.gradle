@@ -31,6 +31,15 @@ android {
         }
         fordebug {
             debuggable true
+            // Keep the APK debuggable (simpleperf --app, JDWP) but build the
+            // native library like a release: AGP maps debuggable build types to
+            // CMAKE_BUILD_TYPE=Debug, which compiles MobileGL at -O0 and makes
+            // every performance measurement on this flavor meaningless.
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+                }
+            }
         }
     }
     if (standalonePluginBuild) {
