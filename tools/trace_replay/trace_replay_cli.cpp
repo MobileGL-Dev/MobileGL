@@ -29,6 +29,15 @@ void PrintUsage(const char *argv0) {
             << "  --crop-width N            Compare crop width\n"
             << "  --crop-height N           Compare crop height\n"
             << "  --coherent-as-flush       Set MOBILEGL_COHERENT_AS_FLUSH=1 for the replay\n"
+            << "  --benchmark               Frame-timing mode: replay the whole trace, record a\n"
+            << "                            wall-clock timestamp at every frame boundary, and skip\n"
+            << "                            the snapshot and the golden comparison. --target-call is\n"
+            << "                            not required in this mode.\n"
+            << "  --benchmark-tail-frames=N Frames at the end of the run the mean/median/p95 are\n"
+            << "                            computed over (default: 200, clamped to the frame count)\n"
+            << "  --benchmark-finish=0/1    glFinish at every frame boundary so a frame time covers\n"
+            << "                            GPU completion and not just CPU submission (default: 1)\n"
+            << "  --benchmark-result=PATH   Timing JSON output (default: OUTPUT/benchmark.json)\n"
             << "  --dump-fbo-attachments CALL:DIR[:FBO,FBO,...]\n"
             << "                            At CALL, write every colour attachment and the depth\n"
             << "                            attachment of every live framebuffer object into DIR as\n"
@@ -77,6 +86,23 @@ bool ReadEnvFlag(const char *name) {
     return value != nullptr && std::string(value) == "1";
 }
 
+// The benchmark options are documented as --name=VALUE. The space-separated spelling every
+// other option here uses is accepted too, so --benchmark-tail-frames=300 and
+// --benchmark-tail-frames 300 both work; hasInlineValue says which one was given.
+bool MatchOption(const std::string &arg, const char *name, std::string &inlineValue, bool &hasInlineValue) {
+    if (arg == name) {
+        hasInlineValue = false;
+        return true;
+    }
+    const std::string prefix = std::string(name) + "=";
+    if (arg.compare(0, prefix.size(), prefix) == 0) {
+        inlineValue = arg.substr(prefix.size());
+        hasInlineValue = true;
+        return true;
+    }
+    return false;
+}
+
 bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     request.backend = "DirectGLES";
     request.fixIterationRPSubgroupScratch = ReadEnvFlag("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
@@ -85,6 +111,8 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
+        std::string optionValue;
+        bool optionHasValue = false;
         if (arg == "--trace") {
             if (!ReadValue(argc, argv, i, request.tracePath)) return false;
         } else if (arg == "--golden") {
@@ -129,6 +157,17 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
             if (!ReadInt(argc, argv, i, request.cropHeight)) return false;
         } else if (arg == "--coherent-as-flush") {
             request.coherentAsFlush = true;
+        } else if (arg == "--benchmark") {
+            request.benchmark = true;
+        } else if (MatchOption(arg, "--benchmark-tail-frames", optionValue, optionHasValue)) {
+            if (!optionHasValue && !ReadValue(argc, argv, i, optionValue)) return false;
+            request.benchmarkTailFrames = std::atoi(optionValue.c_str());
+        } else if (MatchOption(arg, "--benchmark-finish", optionValue, optionHasValue)) {
+            if (!optionHasValue && !ReadValue(argc, argv, i, optionValue)) return false;
+            request.benchmarkFinish = optionValue != "0";
+        } else if (MatchOption(arg, "--benchmark-result", optionValue, optionHasValue)) {
+            if (!optionHasValue && !ReadValue(argc, argv, i, optionValue)) return false;
+            request.benchmarkResultPath = optionValue;
         } else if (arg == "--dump-fbo-attachments") {
             std::string dumpPoint;
             if (!ReadValue(argc, argv, i, dumpPoint)) return false;
@@ -153,12 +192,16 @@ bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
         std::cerr << "--output is required\n";
         return false;
     }
-    if (request.targetCall < 0) {
+    if (request.targetCall < 0 && !request.benchmark) {
         std::cerr << "--target-call is required\n";
         return false;
     }
     if (request.holdMs < 0) {
         std::cerr << "--hold-ms must be non-negative\n";
+        return false;
+    }
+    if (request.benchmarkTailFrames <= 0) {
+        std::cerr << "--benchmark-tail-frames must be positive\n";
         return false;
     }
     return true;
@@ -181,9 +224,15 @@ int main(int argc, char **argv) {
         mobilegl_trace::WriteResultJson(request, result);
     }
 
-    std::cout << result.message << "\n"
-              << "result: " << result.resultPath << "\n"
-              << "actual: " << result.actualPath << "\n"
-              << "diff: " << result.diffPath << "\n";
+    if (request.benchmark) {
+        std::cout << result.message << "\n"
+                  << "result: " << result.resultPath << "\n"
+                  << "benchmark: " << result.benchmarkResultPath << "\n";
+    } else {
+        std::cout << result.message << "\n"
+                  << "result: " << result.resultPath << "\n"
+                  << "actual: " << result.actualPath << "\n"
+                  << "diff: " << result.diffPath << "\n";
+    }
     return result.passed ? 0 : result.statusCode;
 }

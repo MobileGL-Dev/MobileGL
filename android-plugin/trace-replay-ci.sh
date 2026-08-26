@@ -32,6 +32,10 @@ Usage:
     [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
+    [--benchmark] \
+    [--benchmark-tail-frames N] \
+    [--benchmark-finish 0|1] \
+    [--reuse-fixture] \
     --timeout-seconds N
 
 Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
@@ -50,6 +54,12 @@ sample with an explicit LOD that ANGLE llvmpipe cannot take a LOD bias on
 (MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1).
 Pass --coherent-as-flush for traces whose engine writes persistent
 GL_MAP_FLUSH_EXPLICIT_BIT maps it never flushes (MOBILEGL_COHERENT_AS_FLUSH=1).
+Pass --benchmark to replay the whole trace as a frame-timing benchmark instead of
+snapshotting one frame and comparing it against the golden. The run then also
+copies benchmark.json (per-frame times plus mean/median/p95) out of the app, and
+"passed" only means the replay reached the end of the trace without an error.
+Pass --reuse-fixture to skip re-extracting and re-pushing the trace, for repeat
+runs of a case whose fixture is already in /data/local/tmp.
 EOF
 }
 
@@ -109,6 +119,10 @@ avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
 avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
 texture_2d_dumps=""
+benchmark=0
+benchmark_tail_frames=200
+benchmark_finish=1
+reuse_fixture=0
 timeout_seconds=""
 
 while [ "$#" -gt 0 ]; do
@@ -150,6 +164,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
+    --benchmark) benchmark=1; shift 1 ;;
+    --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
+    --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
+    --reuse-fixture) reuse_fixture=1; shift 1 ;;
     --timeout-seconds) timeout_seconds="$(next_arg "$@")"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -339,7 +357,11 @@ run_retrace() {
   fi
 
   mkdir -p "${result_dir}"
-  "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
+  # A repeat run of a case the previous invocation already installed and pushed only needs
+  # the on-device copy back into a fresh app output directory.
+  if [ "${reuse_fixture}" -eq 0 ]; then
+    "${ADB}" install -r "$(host_path_for_adb "${apk_file}")"
+  fi
   copy_fixture_to_app
   adb_device_path shell am force-stop "${package_name}"
   "${ADB}" logcat -c
@@ -377,6 +399,16 @@ run_retrace() {
   fi
   if [ -n "${texture_2d_dumps}" ]; then
     set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"
+  fi
+  if [ "${benchmark}" -eq 1 ]; then
+    set -- "$@" --ez benchmark true
+    set -- "$@" --ei benchmark_tail_frames "${benchmark_tail_frames}"
+    set -- "$@" --es benchmark_result_path "${app_dir}/output/benchmark.json"
+    if [ "${benchmark_finish}" = "0" ]; then
+      set -- "$@" --ez benchmark_finish false
+    else
+      set -- "$@" --ez benchmark_finish true
+    fi
   fi
   set -- "$@" \
     --es output_dir "${app_dir}/output" \
@@ -434,10 +466,16 @@ run_retrace() {
   fi
   adb_device_path exec-out run-as "${package_name}" cat "${app_dir}/output/result.json" > "${result_dir}/result.json"
   cat "${result_dir}/result.json"
-  copy_app_artifact "${app_dir}/output/actual.png" "${result_dir}/${safe_case}-${backend}-actual.png"
-  copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
+  # A benchmark run takes no snapshot, so there is no actual/diff pair to copy.
+  if [ "${benchmark}" -eq 0 ]; then
+    copy_app_artifact "${app_dir}/output/actual.png" "${result_dir}/${safe_case}-${backend}-actual.png"
+    copy_app_artifact "${app_dir}/output/${safe_case}-diff.png" "${result_dir}/${safe_case}-${backend}-diff.png"
+  fi
   copy_app_artifact "${app_dir}/output/retrace.log" "${result_dir}/retrace.log"
   copy_app_artifact "${app_dir}/output/mobilegl.log" "${result_dir}/mobilegl.log"
+  if [ "${benchmark}" -eq 1 ]; then
+    copy_app_artifact "${app_dir}/output/benchmark.json" "${result_dir}/benchmark.json"
+  fi
   copy_texture_2d_dumps
 
   # A replay that wrote result.json but did not pass used to print nothing but
@@ -468,6 +506,8 @@ run_retrace() {
 }
 
 mkdir -p "${fixture_root}" "${result_root}"
-prepare_fixture
+if [ "${reuse_fixture}" -eq 0 ]; then
+  prepare_fixture
+fi
 
 run_retrace

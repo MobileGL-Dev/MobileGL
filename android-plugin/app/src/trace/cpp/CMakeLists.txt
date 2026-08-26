@@ -218,7 +218,8 @@ add_library(glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_backend_opengl.cpp"
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
-        apitrace_glws_android.cpp)
+        apitrace_glws_android.cpp
+        trace_benchmark.cpp)
 target_include_directories(glretrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"

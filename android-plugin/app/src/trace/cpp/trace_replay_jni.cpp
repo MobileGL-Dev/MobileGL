@@ -125,7 +125,11 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jboolean fixIterationRPSubgroupScratch,
                                                                         jboolean deriveNumSubgroups,
                                                                         jboolean iterationRPFixBarrier,
-                                                                        jstring texture2dDumps) {
+                                                                        jstring texture2dDumps,
+                                                                        jboolean benchmarkMode,
+                                                                        jint benchmarkTailFrames,
+                                                                        jboolean benchmarkFinish,
+                                                                        jstring benchmarkResultPath) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -156,6 +160,12 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     request.fixIterationRPSubgroupScratch = fixIterationRPSubgroupScratch == JNI_TRUE;
     request.deriveNumSubgroups = deriveNumSubgroups == JNI_TRUE;
     request.iterationRPFixBarrier = iterationRPFixBarrier == JNI_TRUE;
+    request.benchmark = benchmarkMode == JNI_TRUE;
+    request.benchmarkTailFrames = benchmarkTailFrames > 0
+                                          ? benchmarkTailFrames
+                                          : mobilegl_trace::kDefaultBenchmarkTailFrames;
+    request.benchmarkFinish = benchmarkFinish == JNI_TRUE;
+    request.benchmarkResultPath = ToString(env, benchmarkResultPath);
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);

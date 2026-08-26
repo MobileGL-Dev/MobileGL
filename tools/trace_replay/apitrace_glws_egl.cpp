@@ -2,6 +2,7 @@
 #include "retrace.hpp"
 
 #include "apitrace_fbo_dump.hpp"
+#include "trace_benchmark.hpp"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -414,6 +415,9 @@ public:
         char callNo[32];
         snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
         gEgl.swapBuffers(gDisplay, surface);
+        // Frame boundary: retrace_eglSwapBuffers() has already run frame_complete() and
+        // handed the frame to us. No-op unless benchmark mode armed the timer.
+        mobilegl_trace::benchmark::OnFrameBoundary();
 #if defined(__APPLE__)
         PumpMacOSEvents();
         if (window && !windowShown) {

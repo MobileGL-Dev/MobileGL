@@ -119,7 +119,7 @@ def render_summary():
     shutil.copyfile(SUMMARY_DIR / SUMMARY_HTML, SUMMARY_DIR / "index.html")
 
 
-def run_case(case, backend):
+def run_case(case, backend, extra_args=None, timeout_seconds=None):
     backend_info = BACKENDS[backend]
     apk = find_trace_apk()
     trace_archive = FIXTURES / case["trace_archive"]
@@ -176,8 +176,9 @@ def run_case(case, backend):
         "--crop-height",
         str(case["crop_height"]),
         "--timeout-seconds",
-        str(case["timeout_seconds"]),
+        str(timeout_seconds if timeout_seconds is not None else case["timeout_seconds"]),
     ]
+    command.extend(extra_args or [])
     if alternate is not None:
         command[command.index("--target-call"):command.index("--target-call")] = ["--alternate-golden", bash_path(alternate)]
     if backend_info["use_pbuffer"]:
@@ -204,12 +205,118 @@ def run_case(case, backend):
     return result.returncode
 
 
+def read_benchmark(case, backend, run_index):
+    """Reads the benchmark.json the run just pulled and files it under the run number."""
+    result_dir = RESULT_ROOT / f"{safe_case(case['name'])}-{backend}"
+    source = result_dir / "benchmark.json"
+    if not source.exists():
+        return None
+    try:
+        report = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        print(f"failed to read {source}: {error}", file=sys.stderr)
+        return None
+    shutil.copyfile(source, result_dir / f"benchmark-run{run_index}.json")
+    return report
+
+
+def format_benchmark(report):
+    return (
+        f"frames={report.get('totalFrames', -1)}"
+        f" total={report.get('totalSeconds', -1):.1f}s"
+        f" tail={report.get('tailFrames', -1)}"
+        f" mean={report.get('meanFrameMs', -1):.3f}ms"
+        f" median={report.get('medianFrameMs', -1):.3f}ms"
+        f" p95={report.get('p95FrameMs', -1):.3f}ms"
+        f" fps={report.get('fps', -1):.1f}"
+    )
+
+
+def run_benchmark_case(case, backend, args):
+    """Runs the case as a frame-timing benchmark `--benchmark-repeats` times.
+
+    Only the first run installs the APK and pushes the trace; the repeats reuse what is
+    already on the device, so the numbers are not paying for an adb push each time.
+    """
+    label = f"{case['name']} / {backend}"
+    reports = []
+    failures = 0
+    for run_index in range(1, args.benchmark_repeats + 1):
+        extra_args = [
+            "--benchmark",
+            "--benchmark-tail-frames",
+            str(args.benchmark_tail_frames),
+            "--benchmark-finish",
+            "0" if args.benchmark_no_finish else "1",
+        ]
+        if run_index > 1:
+            extra_args.append("--reuse-fixture")
+        # The previous repeat's file would otherwise be read back as this run's result.
+        stale = RESULT_ROOT / f"{safe_case(case['name'])}-{backend}" / "benchmark.json"
+        if stale.exists():
+            stale.unlink()
+        rc = run_case(case, backend, extra_args=extra_args, timeout_seconds=args.benchmark_timeout_seconds)
+        report = read_benchmark(case, backend, run_index)
+        if rc != 0 or report is None:
+            print(f"{label} run {run_index}/{args.benchmark_repeats}: FAILED (exit {rc})", flush=True)
+            failures += 1
+            continue
+        reports.append((run_index, report))
+        print(
+            f"{label} run {run_index}/{args.benchmark_repeats}: {format_benchmark(report)}",
+            flush=True,
+        )
+
+    def mean_frame_ms(entry):
+        # A run that recorded no frames reports -1; it must not win "best" by being smallest.
+        mean = entry[1].get("meanFrameMs", -1)
+        return mean if mean > 0 else float("inf")
+
+    if reports:
+        best_index, best = min(reports, key=mean_frame_ms)
+        print(
+            f"{label} best of {args.benchmark_repeats} (run {best_index}): {format_benchmark(best)}",
+            flush=True,
+        )
+    return 1 if failures else 0
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case", action="append", dest="cases", help="Case name to run; may be repeated.")
     parser.add_argument("--backend", action="append", choices=sorted(BACKENDS), help="Backend to run; may be repeated.")
     parser.add_argument("--all", action="store_true", help="Run every case in the APK workflow matrix.")
     parser.add_argument("--keep-results", action="store_true", help="Do not clear the previous result root.")
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Replay each case end to end as a frame-timing benchmark instead of comparing "
+             "one frame against its golden.",
+    )
+    parser.add_argument(
+        "--benchmark-repeats",
+        type=int,
+        default=3,
+        help="Benchmark runs per case/backend; the best (lowest mean frame time) is reported.",
+    )
+    parser.add_argument(
+        "--benchmark-tail-frames",
+        type=int,
+        default=200,
+        help="Frames at the end of the run the statistics are computed over.",
+    )
+    parser.add_argument(
+        "--benchmark-no-finish",
+        action="store_true",
+        help="Do not glFinish at every frame boundary, so frame times measure CPU submission "
+             "only instead of GPU completion.",
+    )
+    parser.add_argument(
+        "--benchmark-timeout-seconds",
+        type=int,
+        default=900,
+        help="Per-run timeout; a benchmark replays the whole trace, not just up to target_call.",
+    )
     return parser.parse_args()
 
 
@@ -221,12 +328,20 @@ def main():
     if not selected_cases:
         print("No cases selected. Use --all or --case NAME.", file=sys.stderr)
         return 2
+    if args.benchmark and args.benchmark_repeats < 1:
+        print("--benchmark-repeats must be at least 1.", file=sys.stderr)
+        return 2
     if not args.keep_results and RESULT_ROOT.exists():
         shutil.rmtree(RESULT_ROOT)
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
     failures = 0
     for case in selected_cases:
         for backend in selected_backends:
+            if args.benchmark:
+                print(f"=== Android benchmark: {case['name']} / {backend} ===", flush=True)
+                # No SSIM verdicts to render here; the summary page is for the correctness lane.
+                failures += run_benchmark_case(case, backend, args)
+                continue
             print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
             rc = run_case(case, backend)
             try:

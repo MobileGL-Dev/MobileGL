@@ -15,6 +15,8 @@ enum StatusCode {
     STATUS_COMPARE_FAILED = 6,
 };
 
+constexpr int kDefaultBenchmarkTailFrames = 200;
+
 struct Request {
     std::string tracePath;
     std::string goldenPath;
@@ -30,6 +32,19 @@ struct Request {
     // Named GL_TEXTURE_2D dump points, each `CALL,TEXTURE,LEVEL,DIR`. Debug-only; the replay
     // behaves exactly as before when this is empty.
     std::vector<std::string> texture2dDumps;
+    // Benchmark (frame-timing) mode. Off by default. When on, the replay runs the whole
+    // trace from start to finish and records a wall-clock timestamp at every frame
+    // boundary; no snapshot is taken and no golden comparison runs.
+    bool benchmark = false;
+    // Number of trailing frames the summary statistics are computed over. Clamped to the
+    // number of frames actually recorded. The tail is what is comparable between runs: the
+    // head of a trace is dominated by shader compiles and first-use uploads.
+    int benchmarkTailFrames = kDefaultBenchmarkTailFrames;
+    // glFinish through the replayed context at every frame boundary, so a frame time
+    // includes GPU completion instead of only CPU submission. See trace_benchmark.hpp.
+    bool benchmarkFinish = true;
+    // Where the timing JSON goes. Defaults to <outputDir>/benchmark.json.
+    std::string benchmarkResultPath;
     int targetFrame = -1;
     long long targetCall = -1;
     int width = 0;
@@ -60,6 +75,16 @@ struct Result {
     std::string matchedGoldenPath;
     double ssim = -1.0;
     long long mismatchPixels = -1;
+    // Benchmark headline numbers. Left at the defaults below unless the request asked for
+    // benchmark mode; benchmarkResultPath then names the JSON with the per-frame array.
+    std::string benchmarkResultPath;
+    long long benchmarkFrames = -1;
+    int benchmarkTailFrames = 0;
+    double benchmarkTotalSeconds = -1.0;
+    double benchmarkMeanMs = -1.0;
+    double benchmarkMedianMs = -1.0;
+    double benchmarkP95Ms = -1.0;
+    double benchmarkFps = -1.0;
 };
 
 Result RunTraceReplay(const Request& request);

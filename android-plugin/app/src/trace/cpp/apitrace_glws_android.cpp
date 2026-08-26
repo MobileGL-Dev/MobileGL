@@ -1,6 +1,7 @@
 #include "apitrace_fbo_dump.hpp"
 #include "glws.hpp"
 #include "retrace.hpp"
+#include "trace_benchmark.hpp"
 
 #include <android/native_window.h>
 #include <EGL/egl.h>
@@ -186,6 +187,9 @@ public:
             char callNo[32];
             snprintf(callNo, sizeof(callNo), "%u", retrace::callNo);
             gEgl.swapBuffers(gDisplay, surface);
+            // Frame boundary: retrace_eglSwapBuffers() has already run frame_complete() and
+            // handed the frame to us. No-op unless benchmark mode armed the timer.
+            mobilegl_trace::benchmark::OnFrameBoundary();
             HoldAfterTargetPresent(callNo);
         }
     }

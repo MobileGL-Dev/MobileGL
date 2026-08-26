@@ -119,7 +119,11 @@ public final class TraceReplayActivity extends Activity {
                 request.fixIterationRPSubgroupScratch,
                 request.deriveNumSubgroups,
                 request.iterationRPFixBarrier,
-                request.texture2dDumps
+                request.texture2dDumps,
+                request.benchmark,
+                request.benchmarkTailFrames,
+                request.benchmarkFinish,
+                request.benchmarkResultPath
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -155,7 +159,11 @@ public final class TraceReplayActivity extends Activity {
             boolean fixIterationRPSubgroupScratch,
             boolean deriveNumSubgroups,
             boolean iterationRPFixBarrier,
-            String texture2dDumps
+            String texture2dDumps,
+            boolean benchmark,
+            int benchmarkTailFrames,
+            boolean benchmarkFinish,
+            String benchmarkResultPath
     );
 
     private static final class TraceReplayRequest {
@@ -184,6 +192,13 @@ public final class TraceReplayActivity extends Activity {
         final boolean deriveNumSubgroups;
         final boolean iterationRPFixBarrier;
         final String texture2dDumps;
+        // Benchmark (frame-timing) mode. Replays the whole trace, times every frame
+        // boundary, and skips the snapshot and the SSIM comparison; "passed" then only
+        // means the replay ran to the end without error.
+        final boolean benchmark;
+        final int benchmarkTailFrames;
+        final boolean benchmarkFinish;
+        final String benchmarkResultPath;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -210,7 +225,11 @@ public final class TraceReplayActivity extends Activity {
                 boolean fixIterationRPSubgroupScratch,
                 boolean deriveNumSubgroups,
                 boolean iterationRPFixBarrier,
-                    String texture2dDumps
+                    String texture2dDumps,
+                boolean benchmark,
+                int benchmarkTailFrames,
+                boolean benchmarkFinish,
+                String benchmarkResultPath
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -237,11 +256,17 @@ public final class TraceReplayActivity extends Activity {
             this.deriveNumSubgroups = deriveNumSubgroups;
             this.iterationRPFixBarrier = iterationRPFixBarrier;
             this.texture2dDumps = texture2dDumps;
+            this.benchmark = benchmark;
+            this.benchmarkTailFrames = benchmarkTailFrames;
+            this.benchmarkFinish = benchmarkFinish;
+            this.benchmarkResultPath = benchmarkResultPath;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
             String outputDir = readString(intent, "output_dir", new File(filesDir, "trace-replay").getAbsolutePath());
             String diffPath = readString(intent, "diff_path", "");
+            String benchmarkResultPath =
+                    readString(intent, "benchmark_result_path", outputDir + "/benchmark.json");
             return new TraceReplayRequest(
                     readString(intent, "trace_path", ""),
                     readString(intent, "golden_path", ""),
@@ -267,7 +292,11 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("fix_iterationrp_subgroup_scratch", false),
                     intent.getBooleanExtra("derive_num_subgroups", false),
                     intent.getBooleanExtra("iterationrp_fix_barrier", false),
-                    readString(intent, "texture_2d_dumps", "")
+                    readString(intent, "texture_2d_dumps", ""),
+                    intent.getBooleanExtra("benchmark", false),
+                    intent.getIntExtra("benchmark_tail_frames", 200),
+                    intent.getBooleanExtra("benchmark_finish", true),
+                    benchmarkResultPath
             );
         }
 

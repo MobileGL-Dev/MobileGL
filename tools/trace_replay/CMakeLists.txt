@@ -225,7 +225,8 @@ add_library(mobilegl_trace_glretrace_common STATIC
         "${APITRACE_ROOT}/retrace/metric_helper.cpp"
         "${APITRACE_ROOT}/retrace/metric_writer.cpp"
         "${MOBILEGL_TRACE_ROOT}/apitrace_fbo_dump.cpp"
-        "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp")
+        "${MOBILEGL_TRACE_ROOT}/apitrace_glws_egl.cpp"
+        "${MOBILEGL_TRACE_SHARED_CPP_DIR}/trace_benchmark.cpp")
 if(APPLE)
     set(MOBILEGL_TRACE_APPLE_FRAMEWORKS
             "-framework Cocoa"
@@ -239,7 +240,8 @@ target_include_directories(mobilegl_trace_glretrace_common PUBLIC
         "${APITRACE_GENERATED_DIR}"
         "${APITRACE_ROOT}/dispatch"
         "${APITRACE_ROOT}/helpers"
-        "${APITRACE_ROOT}/retrace")
+        "${APITRACE_ROOT}/retrace"
+        "${MOBILEGL_TRACE_SHARED_CPP_DIR}")
 target_compile_definitions(mobilegl_trace_glretrace_common PRIVATE
         exit=mobilegl_apitrace_exit
         main=mobilegl_apitrace_main)

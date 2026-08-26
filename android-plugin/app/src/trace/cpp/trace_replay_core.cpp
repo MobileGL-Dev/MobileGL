@@ -3,10 +3,13 @@
 #include <dlfcn.h>
 #include "apitrace_exit.hpp"
 #include "png.h"
+#include "trace_benchmark.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -421,32 +424,30 @@ std::string SnapshotCallSet(const Request& request) {
 }
 
 int RunRetraceMain(const Request& request) {
-    std::string prefix = request.outputDir + "/actual.";
-    std::string callSet = SnapshotCallSet(request);
+    std::vector<std::string> args;
+    args.emplace_back("mobilegl-glretrace");
+    args.emplace_back("-b");
+    args.emplace_back("--singlethread");
+    args.emplace_back("--no-context-check");
+    if (!request.benchmark) {
+        // The snapshot callset is also what stops the replay: apitrace exits once it has
+        // dumped the last call in -S. Benchmark mode wants the whole trace, so the -s/-S
+        // pair is left off entirely, which drops the readback and the PNG encode with it.
+        args.emplace_back("--snapshot-alpha");
+        args.emplace_back("-s");
+        args.emplace_back(request.outputDir + "/actual.");
+        args.emplace_back("-S");
+        args.emplace_back(SnapshotCallSet(request));
+    }
+    args.emplace_back(request.tracePath);
 
-    std::string arg0 = "mobilegl-glretrace";
-    std::string argBenchmark = "-b";
-    std::string argSingleThread = "--singlethread";
-    std::string argNoContextCheck = "--no-context-check";
-    std::string argSnapshotAlpha = "--snapshot-alpha";
-    std::string argSnapshotPrefix = "-s";
-    std::string argSnapshotCall = "-S";
-    std::string tracePath = request.tracePath;
-
-    char* argv[] = {
-            arg0.data(),
-            argBenchmark.data(),
-            argSingleThread.data(),
-            argNoContextCheck.data(),
-            argSnapshotAlpha.data(),
-            argSnapshotPrefix.data(),
-            prefix.data(),
-            argSnapshotCall.data(),
-            callSet.data(),
-            tracePath.data(),
-            nullptr,
-    };
-    return MOBILEGL_APITRACE_RETRACE_MAIN(10, argv);
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (std::string& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+    return MOBILEGL_APITRACE_RETRACE_MAIN(static_cast<int>(args.size()), argv.data());
 }
 
 bool RunRetrace(const Request& request, Result& result) {
@@ -473,6 +474,12 @@ bool RunRetrace(const Request& request, Result& result) {
         result.statusCode = STATUS_RETRACE_FAILED;
         result.message = message.str();
         return false;
+    }
+
+    if (request.benchmark) {
+        // Nothing was snapshotted, so there is nothing to collect or compare here; the
+        // caller turns the recorded frame times into the result instead.
+        return true;
     }
 
     std::string snapshotPath = SnapshotPathForCall(request);
@@ -786,6 +793,82 @@ bool CompareWithGolden(const Request& request, Result& result) {
     return result.passed;
 }
 
+std::string BenchmarkResultPath(const Request& request) {
+    return request.benchmarkResultPath.empty() ? request.outputDir + "/benchmark.json"
+                                               : request.benchmarkResultPath;
+}
+
+// Folds the recorded frame times into the headline numbers. Everything but totalSeconds and
+// the frame count is computed over the trailing benchmarkTailFrames frames only.
+void SummarizeBenchmark(const Request& request, const benchmark::Report& report, Result& result) {
+    result.benchmarkFrames = static_cast<long long>(report.frameMs.size());
+    result.benchmarkTotalSeconds = report.totalSeconds;
+    result.benchmarkTailFrames = 0;
+    if (report.frameMs.empty()) {
+        return;
+    }
+
+    const int requestedTail =
+            request.benchmarkTailFrames > 0 ? request.benchmarkTailFrames : kDefaultBenchmarkTailFrames;
+    const std::size_t tail =
+            std::min(static_cast<std::size_t>(requestedTail), report.frameMs.size());
+    result.benchmarkTailFrames = static_cast<int>(tail);
+
+    std::vector<double> window(report.frameMs.end() - static_cast<std::ptrdiff_t>(tail),
+                               report.frameMs.end());
+    double sum = 0.0;
+    for (double frameMs : window) {
+        sum += frameMs;
+    }
+    result.benchmarkMeanMs = sum / static_cast<double>(tail);
+
+    std::sort(window.begin(), window.end());
+    result.benchmarkMedianMs = (tail % 2 == 1)
+                                       ? window[tail / 2]
+                                       : 0.5 * (window[tail / 2 - 1] + window[tail / 2]);
+    // Nearest-rank p95, so the reported value is always an observed frame time.
+    std::size_t rank = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(tail)));
+    if (rank == 0) {
+        rank = 1;
+    }
+    result.benchmarkP95Ms = window[rank - 1];
+    result.benchmarkFps = result.benchmarkMeanMs > 0.0 ? 1000.0 / result.benchmarkMeanMs : -1.0;
+}
+
+bool WriteBenchmarkJson(const Request& request,
+                        const Result& result,
+                        const benchmark::Report& report) {
+    std::ofstream file(result.benchmarkResultPath, std::ios::out | std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    file << "{\n";
+    file << "  \"tracePath\": \"" << JsonEscape(request.tracePath) << "\",\n";
+    file << "  \"backend\": \"" << JsonEscape(request.backend) << "\",\n";
+    file << "  \"benchmarkFinish\": " << (request.benchmarkFinish ? "true" : "false") << ",\n";
+    file << "  \"width\": " << request.width << ",\n";
+    file << "  \"height\": " << request.height << ",\n";
+    file << "  \"totalFrames\": " << result.benchmarkFrames << ",\n";
+    file << "  \"tailFrames\": " << result.benchmarkTailFrames << ",\n";
+    file << std::fixed << std::setprecision(6);
+    file << "  \"totalSeconds\": " << result.benchmarkTotalSeconds << ",\n";
+    file << std::setprecision(3);
+    file << "  \"meanFrameMs\": " << result.benchmarkMeanMs << ",\n";
+    file << "  \"medianFrameMs\": " << result.benchmarkMedianMs << ",\n";
+    file << "  \"p95FrameMs\": " << result.benchmarkP95Ms << ",\n";
+    file << "  \"fps\": " << result.benchmarkFps << ",\n";
+    file << "  \"frameTimesMs\": [";
+    for (std::size_t i = 0; i < report.frameMs.size(); ++i) {
+        if (i > 0) {
+            file << ", ";
+        }
+        file << report.frameMs[i];
+    }
+    file << "]\n";
+    file << "}\n";
+    return static_cast<bool>(file);
+}
+
 } // namespace
 
 extern "C" [[noreturn]] void mobilegl_apitrace_exit(int status) {
@@ -838,7 +921,25 @@ bool WriteResultJson(const Request& request, const Result& result) {
     file << "  \"deriveNumSubgroups\": " << (request.deriveNumSubgroups ? "true" : "false") << ",\n";
     file << "  \"iterationRPFixBarrier\": " << (request.iterationRPFixBarrier ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
-    file << "  \"mismatchPixels\": " << result.mismatchPixels << "\n";
+    file << "  \"mismatchPixels\": " << result.mismatchPixels;
+    if (request.benchmark) {
+        // Headline numbers only; the per-frame array lives in benchmarkResultPath.
+        file << ",\n";
+        file << "  \"benchmark\": true,\n";
+        file << "  \"benchmarkResultPath\": \"" << JsonEscape(result.benchmarkResultPath) << "\",\n";
+        file << "  \"benchmarkFinish\": " << (request.benchmarkFinish ? "true" : "false") << ",\n";
+        file << "  \"benchmarkFrames\": " << result.benchmarkFrames << ",\n";
+        file << "  \"benchmarkTailFrames\": " << result.benchmarkTailFrames << ",\n";
+        file << std::setprecision(6);
+        file << "  \"benchmarkTotalSeconds\": " << result.benchmarkTotalSeconds << ",\n";
+        file << std::setprecision(3);
+        file << "  \"benchmarkMeanFrameMs\": " << result.benchmarkMeanMs << ",\n";
+        file << "  \"benchmarkMedianFrameMs\": " << result.benchmarkMedianMs << ",\n";
+        file << "  \"benchmarkP95FrameMs\": " << result.benchmarkP95Ms << ",\n";
+        file << "  \"benchmarkFps\": " << result.benchmarkFps << "\n";
+    } else {
+        file << "\n";
+    }
     file << "}\n";
     return true;
 }
@@ -848,6 +949,9 @@ Result RunTraceReplay(const Request& request) {
     result.resultPath = request.outputDir + "/result.json";
     result.actualPath = request.outputDir + "/actual.png";
     result.diffPath = request.diffPath;
+    if (request.benchmark) {
+        result.benchmarkResultPath = BenchmarkResultPath(request);
+    }
     const std::string mobileGlLogPath = request.outputDir + "/mobilegl.log";
 
     if (!EnsureDirectory(request.outputDir)) {
@@ -868,7 +972,8 @@ Result RunTraceReplay(const Request& request) {
         return result;
     }
 
-    if (request.targetCall < 0) {
+    // Benchmark mode never snapshots, so it has no target call to stop at.
+    if (!request.benchmark && request.targetCall < 0) {
         result.statusCode = STATUS_INVALID_ARGUMENT;
         result.message = "target_call must be set for dump-images style replay";
         return result;
@@ -880,6 +985,40 @@ Result RunTraceReplay(const Request& request) {
     if (!LoadMobileGL(request, mobileGlError)) {
         result.statusCode = STATUS_MOBILEGL_LOAD_ERROR;
         result.message = "failed to load MobileGL: " + mobileGlError;
+        return result;
+    }
+
+    if (request.benchmark) {
+        benchmark::Begin(request.benchmarkFinish);
+        const bool retraced = RunRetrace(request, result);
+        const benchmark::Report report = benchmark::End();
+        SummarizeBenchmark(request, report, result);
+        // Written even when the retrace failed: a partial timing series says where the
+        // replay got to, which is exactly what is wanted when triaging one.
+        const bool wroteJson = WriteBenchmarkJson(request, result, report);
+        HoldAfterRetrace(request);
+        if (!retraced) {
+            return result;
+        }
+        if (!wroteJson) {
+            result.statusCode = STATUS_IO_ERROR;
+            result.message = "benchmark completed but failed to write " + result.benchmarkResultPath;
+            return result;
+        }
+        // "Passed" in benchmark mode means the replay ran the trace to the end without
+        // error; there is no golden to be right or wrong about.
+        result.passed = true;
+        result.statusCode = STATUS_OK;
+        std::ostringstream message;
+        message << std::fixed << std::setprecision(3)
+                << "benchmark completed; frames=" << result.benchmarkFrames
+                << ", tailFrames=" << result.benchmarkTailFrames
+                << ", meanMs=" << result.benchmarkMeanMs
+                << ", medianMs=" << result.benchmarkMedianMs
+                << ", p95Ms=" << result.benchmarkP95Ms
+                << ", fps=" << result.benchmarkFps
+                << ", benchmarkResultPath=" << result.benchmarkResultPath;
+        result.message = message.str();
         return result;
     }
 
