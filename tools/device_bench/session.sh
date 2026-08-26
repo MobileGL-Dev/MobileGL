@@ -8,6 +8,11 @@
 # Usage: session.sh --device devices/odinlite.env [--backend magma|espryt|mobileglues]
 #                   [--settle 150] [--retries 3] [--no-pin]
 # Exits 0 with the game in-world (after settle seconds), 1 otherwise.
+# NOTE: leaves the game running AND the frequency pins active (that is the
+# point of a session). When done: am force-stop the game and unpin via
+# `echo <cluster> -1 > /proc/ppm/policy/hard_userlimit_{min,max}_cpu_freq`
+# and `echo 0 > /proc/gpufreq/gpufreq_opp_freq` (or run a bench.sh, whose
+# cleanup unpins).
 
 set -u -o pipefail
 cd "$(dirname "$0")"
