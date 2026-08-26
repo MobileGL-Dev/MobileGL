@@ -133,23 +133,31 @@ log "renderer now: $($ADB shell run-as $PKG grep renderer files/config.json | tr
 # --- 4. Pin frequencies -------------------------------------------------------
 [ "$DO_PIN" = 1 ] && pin_freqs
 
-# --- 5. Launch, wait for world ------------------------------------------------
-$ADB shell am force-stop $PKG
+# --- 5. Launch, wait for world (retry: the JVM occasionally dies with
+# "exited due to signal 34" right after JLI_Launch on this device) -------------
 MCLOG="/storage/emulated/0/FCL/.minecraft/versions/*/logs/latest.log"
-$ADB shell "rm -f $MCLOG /sdcard/MG/latest.log" 2>/dev/null
-$ADB logcat -c 2>/dev/null
-log "launching $ACTIVITY"
-$ADB shell am start -n $ACTIVITY >/dev/null
 WORLD_UP=0
-for i in $(seq 1 $((WORLD_LOAD_TIMEOUT / 5))); do
+for attempt in 1 2 3; do
+  $ADB shell am force-stop $PKG
   sleep 5
-  if ! $ADB shell pidof $PKG >/dev/null; then
-    # process may legitimately restart once (launcher -> game process)
-    :
-  fi
-  if $ADB shell "grep -l -e 'logged in with entity id' -e 'Preparing spawn area: 100' $MCLOG" >/dev/null 2>&1; then
-    WORLD_UP=1; break
-  fi
+  $ADB shell "rm -f $MCLOG /sdcard/MG/latest.log" 2>/dev/null
+  $ADB logcat -c 2>/dev/null
+  log "launching $ACTIVITY (attempt $attempt)"
+  $ADB shell am start -n $ACTIVITY >/dev/null
+  for i in $(seq 1 $((WORLD_LOAD_TIMEOUT / 5))); do
+    sleep 5
+    if $ADB shell "grep -l -e 'logged in with entity id' -e 'Preparing spawn area: 100' $MCLOG" >/dev/null 2>&1; then
+      WORLD_UP=1; break
+    fi
+    if ! $ADB shell pidof $PKG >/dev/null; then
+      sleep 3
+      if ! $ADB shell pidof $PKG >/dev/null; then
+        log "attempt $attempt: game process died; retrying"
+        break
+      fi
+    fi
+  done
+  [ "$WORLD_UP" = 1 ] && break
 done
 if [ "$WORLD_UP" != 1 ]; then
   log "world did not load within ${WORLD_LOAD_TIMEOUT}s"

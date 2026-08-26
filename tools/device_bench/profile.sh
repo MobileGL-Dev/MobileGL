@@ -19,6 +19,8 @@
 
 set -u -o pipefail
 cd "$(dirname "$0")"
+# Git Bash: stop MSYS from rewriting /data/... arguments into C:/Program Files/...
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 PKG=com.tungsten.fcl.mgdebug.debug
 DEVICE_ENV=""
