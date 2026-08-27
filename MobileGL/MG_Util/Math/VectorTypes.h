@@ -10,6 +10,8 @@
 
 #include <Includes.h>
 
+#include <cstring>
+
 namespace MobileGL {
     template <typename Derived, typename T, SizeT N>
     struct VecBase {
@@ -83,6 +85,16 @@ namespace MobileGL {
             return static_cast<const Derived&>(*this);
         }
     };
+
+    // Bit-pattern equality, for a vector used as a cache or staleness KEY rather than as a
+    // number. IEEE `==` - which operator== above is - says a NaN never equals itself, so a single
+    // NaN component makes every comparison answer "changed" and whatever the key guards is
+    // rebuilt on every use, forever. Two zeros of opposite sign compare unequal here, which only
+    // ever costs one extra rebuild.
+    template <typename Derived, typename T, SizeT N>
+    Bool BitwiseEqual(const VecBase<Derived, T, N>& a, const VecBase<Derived, T, N>& b) {
+        return std::memcmp(a.data.data(), b.data.data(), sizeof(T) * N) == 0;
+    }
 
     template <typename T>
     struct Vec2 : public VecBase<Vec2<T>, T, 2> {

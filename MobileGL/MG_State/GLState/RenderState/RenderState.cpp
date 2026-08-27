@@ -220,8 +220,13 @@ namespace MobileGL {
             // BumpVersions(), not just ++m_version, for the same reason SetPatchVertices does it:
             // these levels are compiled INTO the synthesized pass-through tessellation control
             // stage on both backends, so changing one makes an already-built program stale.
+            //
+            // The redundant-write guard compares BIT PATTERNS, not floats: glPatchParameterfv
+            // accepts NaN, and a float compare would let a re-set of the identical NaN tuple fall
+            // through and bump the pipeline-state version - invalidating DirectVulkan's pipeline
+            // memo and DirectGLES's render-state span - on every single call.
             void RenderState::SetPatchDefaultOuterLevel(const FloatVec4& levels) {
-                if (m_parameters.PatchDefaultOuterLevel == levels) return;
+                if (BitwiseEqual(m_parameters.PatchDefaultOuterLevel, levels)) return;
 
                 m_parameters.PatchDefaultOuterLevel = levels;
                 BumpVersions();
@@ -232,7 +237,7 @@ namespace MobileGL {
             }
 
             void RenderState::SetPatchDefaultInnerLevel(const FloatVec2& levels) {
-                if (m_parameters.PatchDefaultInnerLevel == levels) return;
+                if (BitwiseEqual(m_parameters.PatchDefaultInnerLevel, levels)) return;
 
                 m_parameters.PatchDefaultInnerLevel = levels;
                 BumpVersions();
