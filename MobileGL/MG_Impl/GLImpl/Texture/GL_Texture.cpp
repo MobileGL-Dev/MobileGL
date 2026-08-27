@@ -27,6 +27,8 @@
 #include <MG_Util/Converters/MGToStr/TextureEnumConverter.h>
 #include <MG_Impl/GLImpl/Framebuffer/Validators.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Impl/GLImpl/Sampler/Validators.h>
+#include <MG_Util/Math/FixedPointConversion.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -41,13 +43,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureObject->SetBorderColor(FloatVec4(params[0], params[1], params[2], params[3]));
         }
 
+        // glTexParameteriv(GL_TEXTURE_BORDER_COLOR): GL 4.6 core 8.10 sends the components through
+        // equation 2.2 into the floating-point border colour. glGetTexParameteriv reverses it with
+        // equation 2.3; the two live in one header so they cannot drift apart.
         void SetTextureBorderColorFromInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            const GLint* params) {
-            constexpr Float kSignedIntToFloat = 1.0f / 2147483647.0f;
-            textureObject->SetBorderColor(FloatVec4(static_cast<Float>(params[0]) * kSignedIntToFloat,
-                                                    static_cast<Float>(params[1]) * kSignedIntToFloat,
-                                                    static_cast<Float>(params[2]) * kSignedIntToFloat,
-                                                    static_cast<Float>(params[3]) * kSignedIntToFloat));
+            textureObject->SetBorderColor(FloatVec4(MG_Util::SignedNormalizedInt32ToFloat(params[0]),
+                                                    MG_Util::SignedNormalizedInt32ToFloat(params[1]),
+                                                    MG_Util::SignedNormalizedInt32ToFloat(params[2]),
+                                                    MG_Util::SignedNormalizedInt32ToFloat(params[3])));
         }
 
         void SetTextureBorderColorFromIntegerInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -1182,11 +1186,38 @@ namespace MobileGL::MG_Impl::GLImpl {
              pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
              pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR ||
              pname == GL_TEXTURE_MAX_ANISOTROPY_EXT)) {
+            // GL 4.6 core 8.10: a multisample target simply does not ACCEPT these pnames, which is
+            // an INVALID_ENUM - not the INVALID_OPERATION the two BASE_LEVEL gates above report.
+            // Those really are operation errors (the pname is accepted, the value is not), which is
+            // presumably how the wrong class got copied down here.
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
+                ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Sampler state is invalid for multisample textures."));
+                                             "Multisample textures do not accept sampler-state pnames."));
             return false;
+        }
+
+        // The six pnames a texture object shares with a sampler object carry an enum VALUE, and an
+        // unrecognised one is INVALID_ENUM. The texture path used to hand the value straight to
+        // ConvertGLEnumToSamplerWrapMode / ...FilterMode and throw the Unknown away, so
+        // glTexParameteri(GL_TEXTURE_WRAP_S, GL_RED) was silently accepted. Sampler objects have had
+        // exactly this validator all along; calling it here rather than writing a second one is also
+        // what keeps the two spellings of the same state from drifting.
+        //
+        // Called selectively: ValidateSamplerParam's default arm reports InvalidEnum for anything it
+        // does not know, and the texture-only pnames (BASE_LEVEL, SWIZZLE_*, ...) are not in its list.
+        switch (pname) {
+        case GL_TEXTURE_WRAP_S:
+        case GL_TEXTURE_WRAP_T:
+        case GL_TEXTURE_WRAP_R:
+        case GL_TEXTURE_MIN_FILTER:
+        case GL_TEXTURE_MAG_FILTER:
+        case GL_TEXTURE_COMPARE_MODE:
+        case GL_TEXTURE_COMPARE_FUNC:
+            if (!SamplerImpl::ValidateSamplerParam(pname, static_cast<GLenum>(param))) return false;
+            break;
+        default:
+            break;
         }
 
         if (target == TextureTarget::TextureRectangle) {
@@ -1496,6 +1527,61 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!TextureImpl::ValidateTextureObject(textureObject)) return nullTextureObject;
             return textureObject;
         }
+    }
+
+    // The targets glTexParameter* / glGetTexParameter* accept (GL 4.6 core 8.10 and 8.11). This is a
+    // SHORTER list than the one ConvertGLEnumToTextureTarget knows, and deliberately so: that
+    // converter folds the six cube-map FACE targets onto TextureCubeMap because glTexImage2D and
+    // glCopyTexImage2D need exactly that folding, and it maps GL_TEXTURE_BUFFER to a real target
+    // because glTexBuffer needs it. Neither is a legal parameter target, so without a separate
+    // predicate glTexParameteri(GL_TEXTURE_CUBE_MAP_POSITIVE_X, ...) quietly applied the parameter
+    // to the bound cube map and glGetTexParameterIiv(GL_TEXTURE_BUFFER, ...) quietly answered from
+    // the default texture - both GL_NO_ERROR where the spec says GL_INVALID_ENUM.
+    //
+    // An enum the converter does not know at all was equally silent: it produced TextureTarget::
+    // Unknown, GetTextureObjectByTargetForParameter handed back the null object and every caller
+    // returned without recording anything. Rejecting here closes that too, at the entry point rather
+    // than at the lookup, so exactly one error is recorded.
+    //
+    // The proxy targets are accepted because the parameter paths already route them (both
+    // GetTextureObjectByTargetForParameter and the getters resolve a proxy object); narrowing that
+    // is a separate question from the one this predicate answers.
+    static Bool IsLegalTextureParameterTarget(GLenum target) {
+        switch (target) {
+        case GL_TEXTURE_1D:
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_3D:
+        case GL_TEXTURE_1D_ARRAY:
+        case GL_TEXTURE_2D_ARRAY:
+        case GL_TEXTURE_RECTANGLE:
+        case GL_TEXTURE_CUBE_MAP:
+        case GL_TEXTURE_CUBE_MAP_ARRAY:
+        case GL_TEXTURE_2D_MULTISAMPLE:
+        case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+        case GL_PROXY_TEXTURE_1D:
+        case GL_PROXY_TEXTURE_2D:
+        case GL_PROXY_TEXTURE_3D:
+        case GL_PROXY_TEXTURE_1D_ARRAY:
+        case GL_PROXY_TEXTURE_2D_ARRAY:
+        case GL_PROXY_TEXTURE_RECTANGLE:
+        case GL_PROXY_TEXTURE_CUBE_MAP:
+        case GL_PROXY_TEXTURE_CUBE_MAP_ARRAY:
+        case GL_PROXY_TEXTURE_2D_MULTISAMPLE:
+        case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    static Bool ValidateTextureParameterTarget(GLenum target, const char* caller) {
+        if (IsLegalTextureParameterTarget(target)) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>(
+                "MG_Impl/GLImpl", caller,
+                std::format("target {} does not accept texture parameters.", MG_Util::ConvertGLEnumToString(target))));
+        return false;
     }
 
     // Texture-parameter lookups must not raise GL_INVALID_OPERATION when the default texture
@@ -1904,6 +1990,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     // TexParameteriv/TexParameterfv are introduced in OpenGL 4.0, so do not support them for now.
     void TexParameterf_State(GLenum target, GLenum pname, GLfloat param) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
 
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -2001,6 +2088,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TexParameteri_State(GLenum target, GLenum pname, GLint param) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
+
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
@@ -2015,6 +2104,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Quick and dirty TexParameter*v implementation to make NeoForge happy.
     // TODO: implement the missing part
     void TexParameterfv_State(GLenum target, GLenum pname, const GLfloat* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
         switch (pname) {
         case GL_TEXTURE_BORDER_COLOR: {
             // ======================= Converting ================================
@@ -2024,6 +2114,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             // ======================= Processing ================================
             auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
+            // The vector setters reach the border colour without passing through the per-object
+            // validator the scalar ones use, so the multisample gate has to be asked for explicitly -
+            // otherwise glTexParameterfv(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_BORDER_COLOR, ...)
+            // is accepted while the scalar spelling of the same call is not.
+            if (!ValidateTextureParameterForTarget(textureObject, GL_TEXTURE_BORDER_COLOR, 0, __func__)) return;
             SetTextureBorderColorFromFloats(textureObject, params);
             break;
         }
@@ -2046,6 +2141,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TexParameteriv_State(GLenum target, GLenum pname, const GLint* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
         switch (pname) {
         case GL_TEXTURE_BORDER_COLOR: {
             // ======================= Converting ================================
@@ -2055,6 +2151,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // ======================= Processing ================================
             auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
+            if (!ValidateTextureParameterForTarget(textureObject, GL_TEXTURE_BORDER_COLOR, 0, __func__)) return;
             SetTextureBorderColorFromInts(textureObject, params);
             break;
         }
@@ -2075,12 +2172,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TexParameterIiv_State(GLenum target, GLenum pname, const GLint* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
         switch (pname) {
         case GL_TEXTURE_BORDER_COLOR: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
             auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
+            if (!ValidateTextureParameterForTarget(textureObject, GL_TEXTURE_BORDER_COLOR, 0, __func__)) return;
             SetTextureBorderColorFromIntegerInts(textureObject, params);
             break;
         }
@@ -2103,12 +2202,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TexParameterIuiv_State(GLenum target, GLenum pname, const GLuint* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
         switch (pname) {
         case GL_TEXTURE_BORDER_COLOR: {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
             TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
             auto& textureObject = GetTextureObjectByTargetForParameter(textureUploadTarget, textureTarget);
             if (!textureObject) return;
+            if (!ValidateTextureParameterForTarget(textureObject, GL_TEXTURE_BORDER_COLOR, 0, __func__)) return;
             SetTextureBorderColorFromUnsignedInts(textureObject, params);
             break;
         }
@@ -2850,6 +2951,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetTexParameterIuiv_State(GLenum target, GLenum pname, GLuint* params) {
         if (params == nullptr) return;
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
 
         if (pname == GL_TEXTURE_BORDER_COLOR) {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -2881,6 +2983,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetTexParameterIiv_State(GLenum target, GLenum pname, GLint* params) {
         if (params == nullptr) return;
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
 
         if (pname == GL_TEXTURE_BORDER_COLOR) {
             TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -2906,6 +3009,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     Bool GetTexParameteriv_State(GLenum target, GLenum pname, GLint* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return false;
+
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
@@ -2988,11 +3093,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_BORDER_COLOR:
             if (params) {
+                // glGetTexParameteriv is the exact inverse of glTexParameteriv: GL 4.6 core
+                // equation 2.3 against equation 2.2 on the write side (SetTextureBorderColorFromInts).
+                // A bare truncating cast turned the ~4.7e-10 that equation 2.2 makes of a small
+                // integer back into 0, so the legal {0,1,2,4} round trip answered {0,0,0,0}. The raw
+                // integer border colour is what glGetTexParameterIiv returns, not this.
                 const auto& borderColor = textureObject->GetBorderColor();
-                params[0] = static_cast<GLint>(borderColor.x());
-                params[1] = static_cast<GLint>(borderColor.y());
-                params[2] = static_cast<GLint>(borderColor.z());
-                params[3] = static_cast<GLint>(borderColor.w());
+                params[0] = MG_Util::FloatToSignedNormalizedInt32(borderColor.x());
+                params[1] = MG_Util::FloatToSignedNormalizedInt32(borderColor.y());
+                params[2] = MG_Util::FloatToSignedNormalizedInt32(borderColor.z());
+                params[3] = MG_Util::FloatToSignedNormalizedInt32(borderColor.w());
             }
             break;
         case GL_TEXTURE_SWIZZLE_RGBA:
@@ -3086,6 +3196,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetTexParameterfv_State(GLenum target, GLenum pname, GLfloat* params) {
+        if (!ValidateTextureParameterTarget(target, __func__)) return;
+
         // ======================= Converting ================================
         TextureUploadTarget textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
