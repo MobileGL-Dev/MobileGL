@@ -584,6 +584,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
         Bool m_dualSrcBlendFeatureEnabled = false;
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
+        // VK_EXT_custom_border_color. Vulkan's four predefined VkBorderColor values cover only
+        // transparent/opaque black and opaque white; GL_TEXTURE_BORDER_COLOR is an arbitrary vec4 (or
+        // an arbitrary ivec4/uvec4 through the "I" entry points). Without this extension a border
+        // colour outside the palette has to be snapped to the nearest predefined one. Both features
+        // are required together: customBorderColorWithoutFormat is what lets a sampler carry a custom
+        // colour without naming the image format it will be paired with, which GL's sampler objects
+        // cannot know. maxCustomBorderColorSamplers is a real device limit, so the sampler cache has
+        // to be able to fall back to the snapped value once it is reached.
+        Bool m_customBorderColorFeatureEnabled = false;
+        Uint32 m_maxCustomBorderColorSamplers = 0;
         // sampleRateShading gates VkPipelineMultisampleStateCreateInfo::sampleShadingEnable, i.e.
         // glEnable(GL_SAMPLE_SHADING) + glMinSampleShading. Unlike dualSrcBlend this does NOT
         // hard-fail the draw when absent: sample shading is a rate hint, and every sample-rate

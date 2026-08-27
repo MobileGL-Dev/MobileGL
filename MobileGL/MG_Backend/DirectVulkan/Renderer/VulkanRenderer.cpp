@@ -3173,7 +3173,9 @@ void main() {
         m_samplerManager = MakeUnique<VkSamplerManager>();
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "VkSamplerManager creation failed.");
         succeeded = m_samplerManager->Initialize({m_device, &m_config, m_samplerAnisotropyFeatureEnabled,
-                                                  m_physicalDevice.properties.limits.maxSamplerAnisotropy});
+                                                  m_physicalDevice.properties.limits.maxSamplerAnisotropy,
+                                                  m_customBorderColorFeatureEnabled,
+                                                  m_maxCustomBorderColorSamplers});
         MOBILEGL_ASSERT(succeeded, "VkSamplerManager initialization failed.");
         succeeded = InitializeBlitResources();
         MOBILEGL_ASSERT(succeeded, "Blit pipeline resource initialization failed.");
@@ -13177,6 +13179,55 @@ void main() {
                 MGLOG_I("Enabled optional device extension: %s",
                         VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
             }
+        }
+
+        // VK_EXT_custom_border_color: an arbitrary GL_TEXTURE_BORDER_COLOR, in float or integer form,
+        // instead of the four predefined VkBorderColor values. Without it a border outside
+        // transparent black / opaque black / opaque white has to be snapped, which is what made every
+        // border texel of a GL_RGBA8 texture with border (255,255,255,255) sample as 0 and what made
+        // an integer border of -1 come back as 0.
+        //
+        // customBorderColorWithoutFormat is required alongside customBorderColors, not merely
+        // preferred: a GL sampler object carries a border colour with no idea which texture it will
+        // be paired with, so the VkSamplerCustomBorderColorCreateInfoEXT this backend builds has to
+        // leave `format` VK_FORMAT_UNDEFINED.
+        m_customBorderColorFeatureEnabled = false;
+        m_maxCustomBorderColorSamplers = 0;
+        VkPhysicalDeviceCustomBorderColorFeaturesEXT customBorderColorFeatures{};
+        customBorderColorFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &customBorderColorFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (customBorderColorFeatures.customBorderColors == VK_TRUE &&
+                customBorderColorFeatures.customBorderColorWithoutFormat == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
+                                               VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+                }
+                customBorderColorFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &customBorderColorFeatures;
+                m_customBorderColorFeatureEnabled = true;
+
+                if (getPhysicalDeviceProperties2 != nullptr) {
+                    VkPhysicalDeviceCustomBorderColorPropertiesEXT customBorderColorProperties{};
+                    customBorderColorProperties.sType =
+                        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
+                    VkPhysicalDeviceProperties2 propertyQuery{};
+                    propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+                    propertyQuery.pNext = &customBorderColorProperties;
+                    getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+                    m_maxCustomBorderColorSamplers = customBorderColorProperties.maxCustomBorderColorSamplers;
+                }
+                MGLOG_I("Enabled optional device extension: %s (maxCustomBorderColorSamplers=%u)",
+                        VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, m_maxCustomBorderColorSamplers);
+            }
+        }
+        if (!m_customBorderColorFeatureEnabled) {
+            MGLOG_I("%s unavailable; GL_TEXTURE_BORDER_COLOR snaps to the nearest predefined VkBorderColor",
+                    VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
         }
 
         // Native subgroup topology, and VK_EXT_subgroup_size_control's

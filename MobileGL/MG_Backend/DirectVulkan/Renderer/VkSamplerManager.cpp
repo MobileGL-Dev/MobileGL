@@ -21,6 +21,87 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                    sampler.GetWrapR() == SamplerWrapMode::ClampToBorder;
         }
 
+        // The numeric domain the texture is SAMPLED in. Vulkan splits VkBorderColor into a float
+        // family and an integer family and requires the sampler's choice to match the image view's
+        // format (a float border on an integer view, or the reverse, is undefined) - so the domain
+        // comes from the TEXTURE, while the value comes from whichever GL entry point wrote it.
+        enum class BorderColorDomain {
+            Float,
+            SignedInteger,
+            UnsignedInteger
+        };
+
+        BorderColorDomain ResolveBorderColorDomain(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::R32I:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RG32I:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGB32I:
+            case TextureInternalFormat::RGBA8I:
+            case TextureInternalFormat::RGBA16I:
+            case TextureInternalFormat::RGBA32I:
+                return BorderColorDomain::SignedInteger;
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA8UI:
+            case TextureInternalFormat::RGBA16UI:
+            case TextureInternalFormat::RGBA32UI:
+            case TextureInternalFormat::RGB10A2UI:
+                return BorderColorDomain::UnsignedInteger;
+            default:
+                return BorderColorDomain::Float;
+            }
+        }
+
+        Bool IsSignedNormalizedFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R8Snorm:
+            case TextureInternalFormat::R16Snorm:
+            case TextureInternalFormat::RG8Snorm:
+            case TextureInternalFormat::RG16Snorm:
+            case TextureInternalFormat::RGB8Snorm:
+            case TextureInternalFormat::RGB16Snorm:
+            case TextureInternalFormat::RGBA8Snorm:
+            case TextureInternalFormat::RGBA16Snorm:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // Float and half-float colour formats hold values outside [0,1] perfectly well, so their
+        // border colour must NOT be clamped - the RGBA32F conformance rows use a border of 1.0 and
+        // would be unaffected either way, but an HDR border of 4.0 must survive.
+        Bool IsUnclampedColorFormat(TextureInternalFormat format) {
+            switch (format) {
+            case TextureInternalFormat::R16F:
+            case TextureInternalFormat::RG16F:
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGBA16F:
+            case TextureInternalFormat::R32F:
+            case TextureInternalFormat::RG32F:
+            case TextureInternalFormat::RGB32F:
+            case TextureInternalFormat::RGBA32F:
+            case TextureInternalFormat::R11FG11FB10F:
+            case TextureInternalFormat::RGB9E5:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         Bool IsDepthTextureFormat(TextureInternalFormat format) {
             switch (format) {
             case TextureInternalFormat::DepthComponent:
@@ -72,6 +153,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_config = initInfo.config;
         m_samplerAnisotropySupported = initInfo.samplerAnisotropySupported;
         m_maxSamplerAnisotropy = std::max(initInfo.maxSamplerAnisotropy, 1.0f);
+        m_customBorderColorSupported = initInfo.customBorderColorSupported;
+        m_maxCustomBorderColorSamplers = initInfo.maxCustomBorderColorSamplers;
+        m_customBorderColorSamplerCount = 0;
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_config != nullptr,
                         "VkSamplerManager::Initialize failed: invalid initialization info");
         return true;
@@ -102,6 +186,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_device = VK_NULL_HANDLE;
         m_config = nullptr;
         m_frameBoundaryCounter = 0;
+        m_customBorderColorSupported = false;
+        m_maxCustomBorderColorSamplers = 0;
+        m_customBorderColorSamplerCount = 0;
     }
 
     void VkSamplerManager::OnFrameBoundary() {
@@ -123,6 +210,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_device != VK_NULL_HANDLE && entry.handle != VK_NULL_HANDLE) {
                     vkDestroySampler(m_device, entry.handle, nullptr);
                 }
+                if (entry.usesCustomBorderColor && m_customBorderColorSamplerCount > 0) {
+                    --m_customBorderColorSamplerCount;
+                }
                 it = m_samplers.erase(it);
             } else {
                 ++it;
@@ -131,8 +221,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Uint64 VkSamplerManager::BuildSamplerKey(const MG_State::GLState::SamplerObject& sampler,
-                                             const MG_State::GLState::ITextureObject& texture,
-                                             Bool forceNearestFiltering, Bool singleLevelView) const {
+                                             Bool forceNearestFiltering, Bool singleLevelView,
+                                             const ResolvedBorderColor& borderColor) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
         XXHASH_VERIFY(XXH64_reset(m_hashState, m_config->CacheVersion));
 
@@ -166,8 +256,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
         const auto compareFunc = sampler.GetSamplerCompareFunc();
         XXHASH_VERIFY(XXH64_update(m_hashState, &compareFunc, sizeof(compareFunc)));
-        const auto borderColor = ResolveVkBorderColor(sampler, texture);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor, sizeof(borderColor)));
+        // The resolved enum AND, when it is one of the *_CUSTOM_EXT values, the sixteen bytes of the
+        // colour itself: two samplers that differ only in a custom border colour carry the same enum
+        // and would otherwise collide onto whichever one was created first.
+        XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor.color, sizeof(borderColor.color)));
+        if (borderColor.isCustom) {
+            XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor.customValue, sizeof(borderColor.customValue)));
+        }
         return XXH64_digest(m_hashState);
     }
 
@@ -183,7 +278,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // allocation for a genuinely single-level image) and faults the GPU - the same failure
         // the default-framebuffer blit shader had to work around with an explicit-LOD sample.
         const Bool singleLevelView = viewLevelCount == 1;
-        const Uint64 key = BuildSamplerKey(sampler, texture, forceNearestFiltering, singleLevelView);
+        // Resolved once and used for both the key and the create-info; see ResolvedBorderColor.
+        const ResolvedBorderColor borderColor = ResolveBorderColor(sampler, texture);
+        const Uint64 key = BuildSamplerKey(sampler, forceNearestFiltering, singleLevelView, borderColor);
         auto it = m_samplers.find(key);
         if (it != m_samplers.end()) {
             it->second.lastUsedFrameBoundary = m_frameBoundaryCounter;
@@ -211,8 +308,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Must match BuildSamplerKey's resolution exactly.
         samplerInfo.maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         samplerInfo.minLod = ResolveEffectiveMinLod(sampler, samplerInfo.maxLod);
-        samplerInfo.borderColor = ResolveVkBorderColor(sampler, texture);
+        samplerInfo.borderColor = borderColor.color;
         samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+        // VK_EXT_custom_border_color. `format` stays UNDEFINED, which is legal only because
+        // customBorderColorWithoutFormat was required alongside customBorderColors at device
+        // creation - a GL sampler object has no idea which texture it will be paired with.
+        VkSamplerCustomBorderColorCreateInfoEXT customBorderColorInfo{};
+        if (borderColor.isCustom) {
+            customBorderColorInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT;
+            customBorderColorInfo.customBorderColor = borderColor.customValue;
+            customBorderColorInfo.format = VK_FORMAT_UNDEFINED;
+            customBorderColorInfo.pNext = samplerInfo.pNext;
+            samplerInfo.pNext = &customBorderColorInfo;
+        }
 
         VkSampler vkSampler = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateSampler(m_device, &samplerInfo, nullptr, &vkSampler), "vkCreateSampler(texture)");
@@ -222,6 +331,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         entry.externalIndex = sampler.GetExternalIndex();
         entry.version = sampler.GetVersion();
         entry.lastUsedFrameBoundary = m_frameBoundaryCounter;
+        entry.usesCustomBorderColor = borderColor.isCustom;
+        if (entry.usesCustomBorderColor) {
+            ++m_customBorderColorSamplerCount;
+        }
         m_samplers[key] = entry;
         return vkSampler;
     }
@@ -281,39 +394,124 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    VkBorderColor VkSamplerManager::ResolveVkBorderColor(const MG_State::GLState::SamplerObject& sampler,
-                                                         const MG_State::GLState::ITextureObject& texture) {
+    VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(
+        const MG_State::GLState::SamplerObject& sampler, const MG_State::GLState::ITextureObject& texture) const {
+        ResolvedBorderColor resolved{};
         if (!UsesBorderColor(sampler)) {
-            return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+            return resolved; // FLOAT_TRANSPARENT_BLACK, never sampled
         }
 
         // Border colour is sampler state: a bound sampler object supplies its own, and a texture
         // with none reaches the very same value through the sampler object it owns.
-        const auto& borderColor = sampler.GetBorderColor();
-        const Bool isDepthTexture = IsDepthTextureFormat(texture.GetFormat());
+        const auto format = texture.GetFormat();
+        const auto domain = ResolveBorderColorDomain(format);
+        const Bool canUseCustom = m_customBorderColorSupported && m_maxCustomBorderColorSamplers > 0 &&
+                                  m_customBorderColorSamplerCount < m_maxCustomBorderColorSamplers;
 
-        if (isDepthTexture) {
+        if (domain != BorderColorDomain::Float) {
+            // An integer image view REQUIRES an integer border colour, whatever the value is - even
+            // (0,0,0,1). The value itself is whichever integer form the application wrote; a float
+            // border on an integer texture is nonsense GL leaves undefined, so the derived integer
+            // representation (a plain cast) is as good an answer as any.
+            const auto& borderColorI = sampler.GetBorderColorI();
+            const Bool allZeroRgb = borderColorI.x() == 0 && borderColorI.y() == 0 && borderColorI.z() == 0;
+            if (allZeroRgb && borderColorI.w() == 0) {
+                resolved.color = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+                return resolved;
+            }
+            if (allZeroRgb && borderColorI.w() == 1) {
+                resolved.color = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+                return resolved;
+            }
+            if (borderColorI.x() == 1 && borderColorI.y() == 1 && borderColorI.z() == 1 && borderColorI.w() == 1) {
+                resolved.color = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
+                return resolved;
+            }
+            if (canUseCustom) {
+                resolved.color = VK_BORDER_COLOR_INT_CUSTOM_EXT;
+                resolved.isCustom = true;
+                if (domain == BorderColorDomain::UnsignedInteger) {
+                    const auto& borderColorUI = sampler.GetBorderColorUI();
+                    resolved.customValue.uint32[0] = borderColorUI.x();
+                    resolved.customValue.uint32[1] = borderColorUI.y();
+                    resolved.customValue.uint32[2] = borderColorUI.z();
+                    resolved.customValue.uint32[3] = borderColorUI.w();
+                } else {
+                    resolved.customValue.int32[0] = borderColorI.x();
+                    resolved.customValue.int32[1] = borderColorI.y();
+                    resolved.customValue.int32[2] = borderColorI.z();
+                    resolved.customValue.int32[3] = borderColorI.w();
+                }
+                return resolved;
+            }
+            // No custom colour available: pick the nearest of the three integer palette entries
+            // rather than always answering transparent black, which is what turned an integer border
+            // of (-1,-1,-1,-1) into 0 and broke the CTS's clamped-texel detection outright.
+            const Bool opaque = borderColorI.w() != 0;
+            const Bool bright = borderColorI.x() != 0 || borderColorI.y() != 0 || borderColorI.z() != 0;
+            resolved.color = !opaque ? VK_BORDER_COLOR_INT_TRANSPARENT_BLACK
+                                     : (bright ? VK_BORDER_COLOR_INT_OPAQUE_WHITE : VK_BORDER_COLOR_INT_OPAQUE_BLACK);
+            return resolved;
+        }
+
+        // Float domain. GL 4.6 core 8.14.2/8.23: the border colour is interpreted in the texture's
+        // format, so a fixed-point or depth texture clamps it to that format's representable range
+        // first. Without the clamp the CTS's border of (255,255,255,255) on a GL_RGBA8 texture
+        // matched none of the palette entries and fell through to transparent black - every border
+        // texel sampled 0 where the test wanted 255.
+        FloatVec4 borderColor = sampler.GetBorderColor();
+        if (!IsUnclampedColorFormat(format)) {
+            const Float lowerBound = IsSignedNormalizedFormat(format) ? -1.0f : 0.0f;
+            borderColor = FloatVec4(std::clamp(borderColor.x(), lowerBound, 1.0f),
+                                    std::clamp(borderColor.y(), lowerBound, 1.0f),
+                                    std::clamp(borderColor.z(), lowerBound, 1.0f),
+                                    std::clamp(borderColor.w(), lowerBound, 1.0f));
+        }
+
+        // A depth texture samples one component, so only x decides - and its alpha reads as 1.
+        if (IsDepthTextureFormat(format)) {
             if (NearlyEqual(borderColor.x(), 1.0f)) {
-                return VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+                resolved.color = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+                return resolved;
             }
             if (NearlyEqual(borderColor.x(), 0.0f)) {
-                return VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+                resolved.color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+                return resolved;
             }
         }
 
         const Bool rgbZero = NearlyEqual(borderColor.x(), 0.0f) && NearlyEqual(borderColor.y(), 0.0f) &&
                              NearlyEqual(borderColor.z(), 0.0f);
         if (rgbZero && NearlyEqual(borderColor.w(), 0.0f)) {
-            return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+            resolved.color = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+            return resolved;
         }
         if (rgbZero && NearlyEqual(borderColor.w(), 1.0f)) {
-            return VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            resolved.color = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+            return resolved;
         }
         if (NearlyEqual(borderColor.x(), 1.0f) && NearlyEqual(borderColor.y(), 1.0f) &&
             NearlyEqual(borderColor.z(), 1.0f) && NearlyEqual(borderColor.w(), 1.0f)) {
-            return VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            resolved.color = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            return resolved;
         }
 
-        return VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+        if (canUseCustom) {
+            resolved.color = VK_BORDER_COLOR_FLOAT_CUSTOM_EXT;
+            resolved.isCustom = true;
+            resolved.customValue.float32[0] = borderColor.x();
+            resolved.customValue.float32[1] = borderColor.y();
+            resolved.customValue.float32[2] = borderColor.z();
+            resolved.customValue.float32[3] = borderColor.w();
+            return resolved;
+        }
+
+        // Nearest of the three float palette entries. Transparent black stays the answer for a
+        // transparent border, which is what the old unconditional fallback got right by accident.
+        const Bool opaque = borderColor.w() >= 0.5f;
+        const Bool bright = (borderColor.x() + borderColor.y() + borderColor.z()) >= 1.5f;
+        resolved.color = !opaque ? VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK
+                                 : (bright ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE : VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK);
+        return resolved;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan
