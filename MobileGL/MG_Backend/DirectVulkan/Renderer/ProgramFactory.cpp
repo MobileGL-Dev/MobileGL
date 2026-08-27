@@ -381,9 +381,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return used;
         }
 
-        void ValidateTransformedSpirv(const Vector<Uint>& spirv, ShaderStage shaderStage, Uint programExternalIndex) {
+        // Returns whether the module validates. The result used to be discarded everywhere: the
+        // call was DEBUG-or-env gated and only logged, so an invalid module produced by a backend
+        // transform went straight to vkCreateShaderModule. That is not a survivable outcome on
+        // this hardware - Mali r54 SIGSEGVs building the pipeline instead of returning an error,
+        // the same "not a validating entry point" behaviour PipelineFactory already documents for
+        // vkCreateGraphicsPipelines - so the one caller that feeds the driver now acts on it.
+        Bool ValidateTransformedSpirv(const Vector<Uint>& spirv, ShaderStage shaderStage, Uint programExternalIndex) {
             if (spirv.empty()) {
-                return;
+                return true;
             }
 
             spv_const_binary_t binary = {spirv.data(), spirv.size()};
@@ -432,6 +438,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             spvDiagnosticDestroy(diagnostic);
             spvValidatorOptionsDestroy(options);
             spvContextDestroy(context);
+            return result == SPV_SUCCESS;
         }
 
         void ReflectStageInterfaceVariable(const SpvReflectInterfaceVariable& variable,
@@ -832,6 +839,98 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
+        // Put `variableId` back on `entryPoint`'s interface list if it is not already there.
+        //
+        // SPIR-V requires every Input/Output global an entry point statically uses to be listed on
+        // its OpEntryPoint, and spirv-val enforces it ("Interface variable id <N> is used by entry
+        // point 'main' id <M>, but is not listed as an interface"). The link-time sanitize chain
+        // DELISTS a variable nothing referenced yet - ShaderCompiler::SanitizeAndOptimizeBinary
+        // runs CreateAggressiveDCEPass(false), which may never delete an Output, followed by
+        // CreateRemoveUnusedInterfaceVariablesPass, which rebuilds the operand list from the
+        // variables actually referenced. A TES that redeclares `out gl_PerVertex { vec4
+        // gl_Position; }` and never writes it therefore reaches the backend with the OpVariable
+        // and its BuiltIn Position decoration intact and its interface slot gone. Any pass that
+        // then injects a reference has to put the slot back, or it hands the driver a module no
+        // validator accepts - and Mali r54 answers that with a SIGSEGV inside pipeline creation
+        // rather than an error return.
+        //
+        // No SPIR-V version gate here, unlike GlFragCoordYFlipPass's identical call for its
+        // injected PRIVATE global: Input and Output belong on the interface in every version,
+        // and only 1.4 widened it to the other storage classes.
+        Bool EnsureEntryPointInterface(spvtools::opt::IRContext* context, spvtools::opt::Instruction& entryPoint,
+                                       Uint32 variableId) {
+            // In-operands: 0 = execution model, 1 = entry function id, 2 = name, 3.. = interface.
+            constexpr Uint32 kFirstInterfaceOperand = 3;
+            if (variableId == 0) return false;
+            for (Uint32 operand = kFirstInterfaceOperand; operand < entryPoint.NumInOperands(); ++operand) {
+                if (entryPoint.GetSingleWordInOperand(operand) == variableId) return false;
+            }
+            entryPoint.AddOperand({SPV_OPERAND_TYPE_ID, {variableId}});
+            context->AnalyzeUses(&entryPoint);
+            return true;
+        }
+
+        // Is `pointerId` the position target itself, or an access chain rooted at it?
+        Bool PointerReachesPositionTarget(spvtools::opt::IRContext* context, Uint32 pointerId,
+                                          const PositionTargetInfo& target) {
+            auto* defUse = context->get_def_use_mgr();
+            for (Uint32 current = pointerId; current != 0;) {
+                if (current == target.variableId) return true;
+                const auto* inst = defUse->GetDef(current);
+                if (inst == nullptr) return false;
+                switch (inst->opcode()) {
+                case spv::Op::OpAccessChain:
+                case spv::Op::OpInBoundsAccessChain:
+                case spv::Op::OpPtrAccessChain:
+                case spv::Op::OpInBoundsPtrAccessChain:
+                case spv::Op::OpCopyObject:
+                    current = inst->GetSingleWordInOperand(0);
+                    break;
+                default:
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        // Does anything in the module write the position target?
+        //
+        // Deliberately conservative - it answers "assume yes" for every shape it cannot read
+        // exactly, because a false "no" would silently drop the clip-space fixup from a shader
+        // that does write gl_Position, while a false "yes" only reinstates the behaviour this
+        // pass has always had. Scans every function rather than just the entry point's: a shader
+        // that assigns gl_Position inside a helper is still a shader that writes it, and passing
+        // the pointer to a call is a write as far as this can tell.
+        Bool ModuleWritesPositionTarget(spvtools::opt::IRContext* context, const PositionTargetInfo& target) {
+            for (auto& function : *context->module()) {
+                for (auto& block : function) {
+                    for (const auto& inst : block) {
+                        switch (inst.opcode()) {
+                        case spv::Op::OpStore:
+                        case spv::Op::OpCopyMemory:
+                        case spv::Op::OpCopyMemorySized:
+                            if (PointerReachesPositionTarget(context, inst.GetSingleWordInOperand(0), target)) {
+                                return true;
+                            }
+                            break;
+                        case spv::Op::OpFunctionCall:
+                            // In-operand 0 is the callee; the rest are arguments.
+                            for (Uint32 argument = 1; argument < inst.NumInOperands(); ++argument) {
+                                if (PointerReachesPositionTarget(context, inst.GetSingleWordInOperand(argument),
+                                                                 target)) {
+                                    return true;
+                                }
+                            }
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         Bool InsertPositionFixup(spvtools::opt::IRContext* context, spvtools::opt::Instruction* insertBefore,
                                  const PositionTargetInfo& target, Uint32 halfConstId, Bool doYFlip, Bool doZRemap,
                                  Bool doSurfaceRotate90, Bool doSurfaceRotate180, Bool doSurfaceRotate270) {
@@ -914,6 +1013,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 PositionTargetInfo target{};
                 if (!FindPositionTarget(context(), &target)) return Status::SuccessWithoutChange;
 
+                // Nothing to remap in a Position the shader never writes. Declining is not just
+                // an optimisation: the fixup is load-modify-store, so on an unwritten Position it
+                // converts "undefined, never written" into "written with whatever the load
+                // returned", and the store is a reference to a variable the link-time sanitize
+                // chain has already delisted from the entry-point interface. glslang emits the
+                // OpVariable for every DECLARED interface block, so a redeclared-but-unwritten
+                // `out gl_PerVertex` is a shape real shaders have.
+                if (!ModuleWritesPositionTarget(context(), target)) {
+                    MGLOG_D("gl-to-vulkan-position-fix: the shader never writes gl_Position; leaving it alone");
+                    return Status::SuccessWithoutChange;
+                }
+
                 auto* floatType = context()->get_type_mgr()->GetType(target.floatTypeId);
                 if (!floatType) return Status::SuccessWithoutChange;
 
@@ -945,6 +1056,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     auto* function = context()->GetFunction(entryPoint.GetSingleWordInOperand(1));
                     if (!function) continue;
 
+                    Bool modifiedThisEntryPoint = false;
                     for (auto& bb : *function) {
                         for (auto instIter = bb.begin(); instIter != bb.end(); ++instIter) {
                             auto* inst = &*instIter;
@@ -953,10 +1065,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                 (model != spv::ExecutionModel::Geometry && inst->opcode() == spv::Op::OpReturn);
                             if (!needsFixup) continue;
 
-                            modified |= InsertPositionFixup(context(), inst, target, halfConstId, doYFlip, doZRemap,
-                                                             doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
+                            modifiedThisEntryPoint |=
+                                InsertPositionFixup(context(), inst, target, halfConstId, doYFlip, doZRemap,
+                                                    doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
                         }
                     }
+                    // Per entry point, and only for one this pass actually injected into: the
+                    // injected load/store is a static use of the position variable, so the
+                    // variable has to be on THIS entry point's interface list.
+                    if (modifiedThisEntryPoint) {
+                        EnsureEntryPointInterface(context(), entryPoint, target.variableId);
+                    }
+                    modified |= modifiedThisEntryPoint;
                 }
 
                 if (!modified) return Status::SuccessWithoutChange;
@@ -1358,8 +1478,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     return false;
                 }
                 if (!target.isMember) {
-                    // Standalone gl_Position variable: decorate it directly.
+                    // Standalone gl_Position variable: decorate it directly. It still has to be
+                    // on the interface - a transform-feedback decoration on a variable the entry
+                    // point does not list captures nothing, and the sanitize chain delists an
+                    // unwritten one (see EnsureEntryPointInterface).
                     decorateForXfb(target.variableId, bufferIndex, offsetBytes);
+                    EnsureEntryPointInterface(context(), entryPoint, target.variableId);
                     return true;
                 }
 
@@ -1412,6 +1536,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         builder.AddStore(mirrorVariableId, value->result_id());
                         injected = true;
                     }
+                }
+                // The mirror was listed on the entry point above, but the loop just added a READ
+                // of the SOURCE block through an access chain, and the interface rule covers
+                // reads exactly as it covers writes. A gl_Position capture on a shader whose
+                // block the sanitize chain delisted - a TES that redeclares `out gl_PerVertex`
+                // and never writes it, which is what the tessellation_control_to_tessellation_
+                // evaluation.gl_MaxPatchVertices_Position_PointSize bodies do - produced an
+                // invalid module here for the same reason the position fixup did.
+                if (injected) {
+                    EnsureEntryPointInterface(context(), entryPoint, target.variableId);
                 }
                 return injected;
             }
@@ -3238,9 +3372,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& spirv = program.GetGeneratedSpirv();
         Vector<Vector<Uint>> moduleSpirvs(spirv.size());
         const Bool enableSpirvValidation = program.GetSpirvValidationEnabled();
-        if (enableSpirvValidation) {
-            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
-        }
+        // Unconditional now: the two ValidateTransformedSpirv calls below run in every build,
+        // not only when the switch is armed, so the validator's static tables have to be pinned
+        // against process exit in every build too.
+        MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
 
         const ShaderStage fixupStage = PickClipFixupStage(stages);
 
@@ -3264,6 +3399,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 TransformSpirvForVulkanPositionFix(*fixupInput, moduleSpirvs[i], flags);
+                // These two passes INJECT references - a store for the clip fixup, an access
+                // chain and a load for the gl_Position capture mirror - and a reference to a
+                // variable the link-time sanitize chain delisted from the entry-point interface
+                // is invalid SPIR-V that Mali r54 turns into a SIGSEGV inside pipeline creation
+                // rather than an error return. EnsureEntryPointInterface keeps them honest; this
+                // is the backstop, and the one place in this function where the fallback is
+                // still consistent with everything downstream, because `spv` is the input to
+                // both passes and the descriptor remap has not run yet.
+                //
+                // Once per program on a cache miss, and only for the single stage that carries
+                // the fixups - not per draw and not per module.
+                if (!ValidateTransformedSpirv(moduleSpirvs[i], stages[i], program.GetExternalIndex())) {
+                    MGLOG_E_ONCE("ProgramFactory: the clip/XFB fixups produced an invalid module for program %u "
+                                 "stage %d; keeping the untransformed one",
+                                 program.GetExternalIndex(), static_cast<Int>(stages[i]));
+                    moduleSpirvs[i] = spv;
+                }
             } else {
                 moduleSpirvs[i] = spv;
             }
@@ -3472,15 +3624,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto& moduleSpv = moduleSpirvs[i];
             if (moduleSpv.empty()) continue;
 
-#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-            ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex());
-#else
-            // Final module the driver receives; also checked in the INFO-level CI/test
-            // lanes, where the DEBUG gate above is compiled out.
-            if (enableSpirvValidation) {
-                ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex());
+            // Last look at the exact bytes the driver receives, in EVERY build rather than only
+            // in DEBUG or with MOBILEGL_ENABLE_SPIRV_VALIDATION armed. This one only reports:
+            // by here the descriptor bindings have been remapped and the layout about to be
+            // reflected describes the remapped module, so there is no module left that is both
+            // valid and consistent with it to fall back to. The recovery lives one step earlier,
+            // at the clip/XFB fixups (see the revert there) - which is where a transform can
+            // introduce a reference to a delisted interface variable, the failure this whole
+            // guard exists for. Anything that reaches this line names itself in the log of a
+            // shipping build instead of dying anonymously inside the driver.
+            if (!ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex())) {
+                MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d - "
+                             "a backend transform after the clip/XFB fixups broke it",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]));
             }
-#endif
 
             VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             smci.codeSize = moduleSpv.size() * sizeof(Uint);
