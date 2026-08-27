@@ -1633,6 +1633,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const UnorderedMap<String, Int>& storageBlockBindingOverrides,
                                       const std::map<String, String>& inputBlockRenames,
                                       const std::map<String, String>& outputBlockRenames,
+                                      Bool stripInputBlockLocations, Bool stripOutputBlockLocations,
                                       Int atomicCounterEsslBindingTop, Bool enableSpirvValidation,
                                       String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,

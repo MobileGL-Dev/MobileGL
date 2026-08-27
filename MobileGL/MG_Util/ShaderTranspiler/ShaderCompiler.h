@@ -154,6 +154,20 @@ namespace MobileGL {
                                                         std::set<String>& renamedBlockNames,
                                                         Vector<uint32_t>& outputBinary,
                                                         bool enableSpirvValidation = false);
+                // Drops the Location (and Component) decoration from inter-stage interface
+                // BLOCK variables, so SPIRV-Cross emits them unqualified and ES matches them
+                // by block name plus member sequence. `stripInputBlocks` covers the blocks
+                // this stage consumes and `stripOutputBlocks` the ones it produces - armed
+                // separately because an interface whose other end is in a DIFFERENT program
+                // must keep the location that matches it there. `strippedAny` reports whether
+                // this stage actually had one. The Mali ES driver loses the payload of a
+                // located block across any tessellation or geometry boundary; only for the
+                // DirectGLES transpile path, and only when the driver POST says so. See
+                // StripIoBlockLocationsPass.
+                static bool StripIoBlockLocationsForEssl(const Vector<Uint32>& inputBinary,
+                                                         bool stripInputBlocks, bool stripOutputBlocks,
+                                                         bool& strippedAny, Vector<uint32_t>& outputBinary,
+                                                         bool enableSpirvValidation = false);
                 // Drops RelaxedPrecision member decorations from uniform-block structs so
                 // SPIRV-Cross prints the same (highp) member precision in every stage; ES
                 // drivers reject cross-stage uniform blocks whose member precisions differ.

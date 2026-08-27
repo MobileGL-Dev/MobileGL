@@ -1247,6 +1247,17 @@ namespace MobileGL {
             // straight to vkCmdDraw*Indirect and compiles gl_InstanceID to SPIR-V
             // InstanceIndex, which includes firstInstance.
             Bool IndirectDrawInstanceIdIncludesBaseInstance = false;
+            // True when an inter-stage interface BLOCK carrying an explicit layout(location=)
+            // actually delivers its payload across a tessellation or geometry boundary. The
+            // Mali-G1-Ultra ES driver links such a program with an empty info log and then
+            // hands the consuming stage zeroes; DirectGLES answers by emitting those blocks
+            // with no location qualifier at all (StripIoBlockLocationsPass), which ES matches
+            // by block name and member sequence instead.
+            //
+            // Defaults TRUE and stays true when the probe cannot run, because that is the
+            // behaviour every driver had before the probe existed - a capability like this
+            // must never be assumed broken on a driver nobody measured.
+            Bool SupportsLocatedInterStageIoBlocks = true;
             Int UniformBufferOffsetAlignment = 256;
             // Its storage-buffer counterpart, queried separately because it is a separate limit:
             // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for
@@ -1349,6 +1360,12 @@ namespace MobileGL {
         // so MG_Test can drive it against a fake GLES functions table.
         Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
                                                          const MG_External::GLESFunctionsTable& glesFuncs);
+        // Detects whether an inter-stage interface block that carries an explicit
+        // layout(location=) actually transports its payload across a geometry boundary (see
+        // Loader.cpp). Called by FillInGLESCapabilities; exposed so MG_Test can drive it
+        // against a fake GLES functions table.
+        Bool ProbeLocatedInterStageIoBlocksTransportPayload(const MG_External::GLESCapabilities& caps,
+                                                            const MG_External::GLESFunctionsTable& glesFuncs);
     } // namespace MG_Util::BackendLoader
 } // namespace MobileGL
 #undef MOBILEGL_EXTERNAL_GLES

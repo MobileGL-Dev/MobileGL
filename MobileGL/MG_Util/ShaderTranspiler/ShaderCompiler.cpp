@@ -45,6 +45,7 @@
 #include "SpirvPasses/ClampMultisampleFetchPass.h"
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
+#include "SpirvPasses/StripIoBlockLocationsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
@@ -1224,6 +1225,23 @@ namespace MobileGL {
                     inputBlockRenames, outputBlockRenames, &renamedBlockNames));
 
                 return RunOptimizerChecked("UniquifyIoBlockNamesForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::StripIoBlockLocationsForEssl(const Vector<Uint32>& inputBinary,
+                                                              const bool stripInputBlocks,
+                                                              const bool stripOutputBlocks,
+                                                              bool& strippedAny,
+                                                              Vector<uint32_t>& outputBinary,
+                                                              const bool enableSpirvValidation) {
+                using namespace spvtools;
+                strippedAny = false;
+                if (!stripInputBlocks && !stripOutputBlocks) return false;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(StripIoBlockLocationsPass::CreateStripIoBlockLocationsPass(
+                    stripInputBlocks, stripOutputBlocks, &strippedAny));
+
+                return RunOptimizerChecked("StripIoBlockLocationsForEssl", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
             }
 

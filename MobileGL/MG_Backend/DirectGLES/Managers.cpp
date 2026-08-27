@@ -6301,7 +6301,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const std::set<String>& xfbCaptureBlockNames, const ImageFormatBakeInputs& imageFormatBake,
             const UnorderedMap<String, Int>& storageBlockBindingOverrides,
             const std::map<String, String>& inputBlockRenames,
-            const std::map<String, String>& outputBlockRenames,
+            const std::map<String, String>& outputBlockRenames, const Bool stripInputBlockLocations,
+            const Bool stripOutputBlockLocations,
             const Int atomicCounterEsslBindingTop, const Bool enableSpirvValidation, String& outSource,
             std::set<String>& outFlattenedXfbBlockNames, Vector<Int>& outAtomicCounterGlBindings,
             String& outError) const {
@@ -6484,6 +6485,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "block name in both directions and the ES driver may alias the two.",
                             m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
                             stageRenamedIoBlockNames.size());
+                }
+            }
+
+            // The second half of the inter-stage interface-block repair, and the one that
+            // actually closes the 420pack group: this driver drops the payload of a block that
+            // carries an explicit layout(location=) whenever a tessellation or geometry stage
+            // is in the pipeline, so the qualifier comes off and ES matches the block by name
+            // and member sequence instead. The names those two sides agree on are the ones the
+            // rename above just fixed, which is why this runs AFTER it and not before.
+            //
+            // The caller arms the two directions; both are false unless the driver POST
+            // measured the defect AND this program has a stage that can hit it. Adopted only
+            // when this stage really had a located block, for the reason the array-input split
+            // documents: the optimizer hands back a re-serialised copy either way.
+            Vector<unsigned int> strippedIoBlockLocationSpirv;
+            if (stripInputBlockLocations || stripOutputBlockLocations) {
+                Bool strippedAny = false;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::StripIoBlockLocationsForEssl(
+                        *effectiveSpirv, stripInputBlockLocations, stripOutputBlockLocations,
+                        strippedAny, strippedIoBlockLocationSpirv, enableSpirvValidation) &&
+                    !strippedIoBlockLocationSpirv.empty() && strippedAny) {
+                    effectiveSpirv = &strippedIoBlockLocationSpirv;
+                    MGLOG_D("Program %u stage %s: interface-block location qualifiers dropped "
+                            "(%s), because this driver loses a located block's payload across a "
+                            "tessellation or geometry boundary.",
+                            m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            stripInputBlockLocations
+                                ? (stripOutputBlockLocations ? "consumed and produced" : "consumed")
+                                : "produced");
                 }
             }
 
@@ -7087,6 +7117,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 stagePipelineIndices[index] = InterStagePipelineIndex(stage);
                 if (CanDeclareBlocksInBothDirections(stage)) anyStageCanDeclareBlocksInBothDirections = true;
             }
+            // A SECOND, INDEPENDENT interface-block repair riding the same gate, because it
+            // needs the same question answered: "does this program have a stage where an
+            // inter-stage block can go wrong?". CanDeclareBlocksInBothDirections is true for
+            // exactly the tessellation and geometry stages, which is also exactly the set of
+            // stages whose presence makes this driver drop a LOCATED block's payload (a
+            // vertex-to-fragment located block is fine on the same driver, measured). The two
+            // repairs are otherwise unrelated: the rename fixes a name collision inside ONE
+            // stage, this drops a qualifier from EVERY block of the program - so it does not
+            // wait for the collision probe to find anything.
+            const Bool ioBlockLocationStripArmed =
+                !g_GLESCapabilities.SupportsLocatedInterStageIoBlocks &&
+                anyStageCanDeclareBlocksInBothDirections;
             if (anyStageCanDeclareBlocksInBothDirections) {
                 for (SizeT index = 0; index < shaderSpirvs.size(); ++index) {
                     MG_Util::ShaderTranspiler::ShaderCompiler::ProbeIoBlockNamesForEssl(
@@ -7281,6 +7323,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 esslKeyInputs.inputBlockRenames = &inputBlockRenames;
                 esslKeyInputs.outputBlockRenames = &outputBlockRenames;
+
+                // ...and THIS STAGE's share of the interface-block LOCATION strip, planned the
+                // same way and for the same reason. The gate has three parts, all of which have
+                // to hold before a single block loses its qualifier:
+                //   * the driver POST measured the defect (never a renderer-string quirk list);
+                //   * this program has a stage that can hit it - a located block between a
+                //     vertex and a fragment stage works on the affected driver, so a program
+                //     with neither tessellation nor geometry keeps its ESSL byte for byte;
+                //   * for THIS stage and THIS direction, the other end of the interface is in
+                //     this same program. In a separate-shader-objects pipeline it is not, and
+                //     the location is the only thing matching the two programs across - the
+                //     identical reason the rename plan above tests producer/consumer presence.
+                // The direction tests reuse that plan's answers rather than recomputing them.
+                Bool stripInputBlockLocations = false;
+                Bool stripOutputBlockLocations = false;
+                if (ioBlockLocationStripArmed && stagePipelineIndices[index] >= 0) {
+                    const Int myPipelineIndex = stagePipelineIndices[index];
+                    for (const Int otherPipelineIndex : stagePipelineIndices) {
+                        if (otherPipelineIndex < 0) continue;
+                        if (otherPipelineIndex < myPipelineIndex) stripInputBlockLocations = true;
+                        if (otherPipelineIndex > myPipelineIndex) stripOutputBlockLocations = true;
+                    }
+                }
+                esslKeyInputs.stripInputBlockLocations = stripInputBlockLocations;
+                esslKeyInputs.stripOutputBlockLocations = stripOutputBlockLocations;
                 esslKeyInputs.enableSpirvValidation = enableSpirvValidation;
 
                 auto& esslCache = MG_Util::ShaderTranspiler::GetEsslTranslationCache();
@@ -7307,6 +7374,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames,
                                               imageFormatBake, storageBlockBindingOverrides,
                                               inputBlockRenames, outputBlockRenames,
+                                              stripInputBlockLocations, stripOutputBlockLocations,
                                               m_atomicCounterEsslBindingTop,
                                               enableSpirvValidation, source,
                                               stageFlattenedXfbBlockNames,

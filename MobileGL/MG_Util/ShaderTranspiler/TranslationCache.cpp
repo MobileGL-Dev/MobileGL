@@ -194,6 +194,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         static const std::map<String, String> kEmptyRenames;
         builder.StringMap(inputs.inputBlockRenames ? *inputs.inputBlockRenames : kEmptyRenames);
         builder.StringMap(inputs.outputBlockRenames ? *inputs.outputBlockRenames : kEmptyRenames);
+        builder.Value(static_cast<Uint8>(inputs.stripInputBlockLocations));
+        builder.Value(static_cast<Uint8>(inputs.stripOutputBlockLocations));
         static const Vector<Uint32> kEmptyWords;
         builder.Words(inputs.spirv ? *inputs.spirv : kEmptyWords);
         return MakeTranslationCacheKey(builder);

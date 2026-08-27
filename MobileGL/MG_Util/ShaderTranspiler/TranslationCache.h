@@ -658,6 +658,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // arguments, so they are exactly as fine as its behaviour and no finer.
         const std::map<String, String>* inputBlockRenames = nullptr;
         const std::map<String, String>* outputBlockRenames = nullptr;
+        // THIS STAGE's share of the interface-block LOCATION strip - the two arguments
+        // StripIoBlockLocationsForEssl is called with, which decide whether the emitted ESSL
+        // prints `layout(location = N)` on a block at all. False for every program on a
+        // driver whose POST said located blocks work, and for every program without a
+        // tessellation or geometry stage. Armed per direction because an interface whose
+        // other end is in a different program must keep its location.
+        Bool stripInputBlockLocations = false;
+        Bool stripOutputBlockLocations = false;
 
         // The top of the reserved storage-block window atomic-counter blocks are moved into
         // (`top - N` for GL binding N). Derived from the driver's
