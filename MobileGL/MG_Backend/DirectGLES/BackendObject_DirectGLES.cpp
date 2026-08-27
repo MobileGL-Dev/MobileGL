@@ -749,7 +749,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 .ExtraVendor = Nullopt,              // Extra vendor
                 .RendererGLInfo =
                     {
-                        .TargetGLVersion = {4, 3, 0},   // GL target version
+                        .TargetGLVersion = {4, 6, 0},   // GL target version
                         .TargetGLSLVersion = {4, 6, 0}, // Target Shading Language Version
                         // Baseline advertisement (no runtime capabilities yet); reconciled once
                         // the ES capabilities exist, see UpdateAdvertisedCapabilityExtensions.
@@ -995,10 +995,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   Bool textureViewSupported, Bool cubeMapArraySupported) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
-            // TargetGLVersion is {4,3,0}, and a list that stopped at OpenGL40 told an
+            // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
             // application feature-detecting off these tokens the opposite of what
             // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
             V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
+            V_OpenGL44, V_OpenGL45, V_OpenGL46,
             E_GL_ARB_draw_buffers_blend,
             E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
             E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object,

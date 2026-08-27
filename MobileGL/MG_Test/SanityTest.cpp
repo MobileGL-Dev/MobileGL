@@ -240,7 +240,7 @@ TEST(DirectGLESSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     const auto& extensions = rendererInfo.Extensions;
 
     EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
@@ -587,7 +587,7 @@ TEST(DirectVulkanSanity, AdvertisesVoxyRequiredRenderingExtensions) {
     const auto& extensions = rendererInfo.Extensions;
 
     EXPECT_EQ(rendererInfo.TargetGLVersion.Major, 4);
-    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 3);
+    EXPECT_EQ(rendererInfo.TargetGLVersion.Minor, 6);
     EXPECT_EQ(rendererInfo.TargetGLVersion.Patch, 0);
 
     EXPECT_NE(std::find(extensions.begin(), extensions.end(), MobileGL::E_GL_ARB_compute_shader),
