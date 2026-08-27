@@ -217,6 +217,31 @@ namespace MobileGL {
                 return m_parameters.PatchVertices;
             }
 
+            // BumpVersions(), not just ++m_version, for the same reason SetPatchVertices does it:
+            // these levels are compiled INTO the synthesized pass-through tessellation control
+            // stage on both backends, so changing one makes an already-built program stale.
+            void RenderState::SetPatchDefaultOuterLevel(const FloatVec4& levels) {
+                if (m_parameters.PatchDefaultOuterLevel == levels) return;
+
+                m_parameters.PatchDefaultOuterLevel = levels;
+                BumpVersions();
+            }
+
+            const FloatVec4& RenderState::GetPatchDefaultOuterLevel() const {
+                return m_parameters.PatchDefaultOuterLevel;
+            }
+
+            void RenderState::SetPatchDefaultInnerLevel(const FloatVec2& levels) {
+                if (m_parameters.PatchDefaultInnerLevel == levels) return;
+
+                m_parameters.PatchDefaultInnerLevel = levels;
+                BumpVersions();
+            }
+
+            const FloatVec2& RenderState::GetPatchDefaultInnerLevel() const {
+                return m_parameters.PatchDefaultInnerLevel;
+            }
+
             void RenderState::SetPolygonOffset(Float factor, Float units) {
                 if (m_parameters.PolygonOffsetFactor == factor && m_parameters.PolygonOffsetUnits == units) return;
 

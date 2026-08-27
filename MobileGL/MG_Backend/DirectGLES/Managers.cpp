@@ -6730,6 +6730,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                            ? MG_State::pGLContext->GetPatchVertices()
                                            : 3u;
             m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
+            // PATCH_DEFAULT_{OUTER,INNER}_LEVEL are the same kind of dynamic state and are baked
+            // into the same stage (ES has no such state and no entry point to forward them to), so
+            // they are recorded and compared alongside the patch size - the two move together, as
+            // BuildPassthroughTessControlEssl's contract says.
+            m_passthroughTessControlOuterLevel = MG_State::pGLContext != nullptr
+                                                     ? MG_State::pGLContext->GetPatchDefaultOuterLevel()
+                                                     : FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            m_passthroughTessControlInnerLevel = MG_State::pGLContext != nullptr
+                                                     ? MG_State::pGLContext->GetPatchDefaultInnerLevel()
+                                                     : FloatVec2(1.0f, 1.0f);
 
             if (tessEvalShaderIndex < 0 ||
                 static_cast<SizeT>(tessEvalShaderIndex) >= shaderSpirvs.size()) {
@@ -6770,8 +6780,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const String outMembers =
                 ExtractPerVertexBlockMembers(tessEvalStageEssl, /*input=*/true).value_or(String());
 
-            const String source =
-                BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices, inMembers, outMembers);
+            const String source = BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices,
+                                                                  inMembers, outMembers,
+                                                                  m_passthroughTessControlOuterLevel,
+                                                                  m_passthroughTessControlInnerLevel);
 
             const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
             if (backendShaderId == 0) {
@@ -6861,8 +6873,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_atomicCounterEsslBindingTop = AtomicCounterEsslBindingTop();
             // Re-established by AttachPassthroughTessControlStage below when this program needs
             // one; cleared first so a program that stops needing one (a relink that now attaches
-            // a real control stage) does not keep comparing against a stale patch size.
+            // a real control stage) does not keep comparing against a stale patch size. The
+            // default levels are re-established from the same call and gated on the same -1.
             m_passthroughTessControlPatchVertices = -1;
+            m_passthroughTessControlOuterLevel = FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            m_passthroughTessControlInnerLevel = FloatVec2(1.0f, 1.0f);
             // The same shape again for image FORMATS: what a format-less image declaration
             // compiles to depends on live glBindImageTexture state, so the pairs it was built
             // against are recorded here and compared per draw (ImageUnitFormatsStillMatch).

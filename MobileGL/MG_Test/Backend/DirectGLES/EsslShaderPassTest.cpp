@@ -15,6 +15,8 @@
 
 #include <MG_Backend/DirectGLES/Utils.h>
 
+#include <limits>
+
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
@@ -1296,8 +1298,13 @@ void main() { gl_ViewportIndex = 1; imageStore(uni_image, ivec2(0), uvec4(1u)); 
 // rather than pick a shape, because a redeclaration that disagrees with the stage it feeds is an
 // ES link error against a program that has nothing else wrong with it.
 
+namespace {
+    const FloatVec4 kDefaultOuter(1.0f, 1.0f, 1.0f, 1.0f);
+    const FloatVec2 kDefaultInner(1.0f, 1.0f);
+} // namespace
+
 TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "");
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", kDefaultOuter, kDefaultInner);
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "layout(vertices = 4) out;")) << out;
     EXPECT_TRUE(Contains(out,
@@ -1307,17 +1314,56 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
     // legal and ignored, and it saves the generator from having to know the domain.
     for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
                               "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
-        EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
+        EXPECT_TRUE(Contains(out, String(level) + " = 1.000000;")) << level << "\n" << out;
     }
     // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
     // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
     EXPECT_FALSE(Contains(out, "gl_PerVertex")) << out;
 }
 
+// glPatchParameterfv's state is compiled INTO this stage: ES has no PATCH_DEFAULT_*_LEVEL and no
+// entry point to forward it to, so a generator that ignored these arguments would tessellate every
+// control-stage-less program at level 1 whatever the application asked for.
+TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f),
+                                                       FloatVec2(6.5f, 7.25f));
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 2.000000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 3.000000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[2] = 4.000000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[3] = 5.000000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[0] = 6.500000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[1] = 7.250000;")) << out;
+}
+
+// Every level literal carries a decimal point even when the value is integral: ESSL reads
+// `gl_TessLevelOuter[0] = 1;` as an int assigned to a float and refuses to compile the stage,
+// which would take the whole program down with it.
+TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 2.0f, 2.0f, 2.0f),
+                                                       FloatVec2(2.0f, 2.0f));
+    EXPECT_FALSE(Contains(out, "= 2;")) << out;
+}
+
+// glPatchParameterfv accepts any float, NaN and infinity included. Emitting "nan" would make the
+// synthesized stage fail to compile; 0.0 is the honest stand-in, because a level that is not a
+// positive number discards the patch in GL too.
+TEST(PassthroughTessControlEsslTest, NonFiniteLevelsBecomeZero) {
+    const Float notANumber = std::numeric_limits<Float>::quiet_NaN();
+    const Float infinity = std::numeric_limits<Float>::infinity();
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
+                                                       FloatVec4(notANumber, infinity, 1.0f, 1.0f),
+                                                       FloatVec2(notANumber, 1.0f));
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 0.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[0] = 0.0;")) << out;
+    EXPECT_FALSE(Contains(out, "nan")) << out;
+    EXPECT_FALSE(Contains(out, "inf")) << out;
+}
+
 // ES 3.1 reaches tessellation only through the extension; the caller has already established
 // that the driver runs the evaluation stage at all, so the only question is the spelling.
 TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
-    const String out = BuildPassthroughTessControlEssl(310, 3, "", "");
+    const String out = BuildPassthroughTessControlEssl(310, 3, "", "", kDefaultOuter, kDefaultInner);
     EXPECT_EQ(out.find("#version 310 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_shader : require")) << out;
 }
@@ -1325,7 +1371,7 @@ TEST(PassthroughTessControlEsslTest, RequestsTheExtensionBelowEs32) {
 TEST(PassthroughTessControlEsslTest, MirrorsTheNeighboursPerVertexBlocks) {
     const String inMembers = " highp vec4 gl_Position; highp float gl_PointSize; ";
     const String outMembers = " highp vec4 gl_Position; ";
-    const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers);
+    const String out = BuildPassthroughTessControlEssl(320, 4, inMembers, outMembers, kDefaultOuter, kDefaultInner);
     EXPECT_TRUE(Contains(out, "in gl_PerVertex {" + inMembers + "} gl_in[gl_MaxPatchVertices];")) << out;
     EXPECT_TRUE(Contains(out, "out gl_PerVertex {" + outMembers + "} gl_out[];")) << out;
 }

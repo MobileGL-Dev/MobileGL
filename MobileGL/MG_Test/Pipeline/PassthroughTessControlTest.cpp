@@ -101,9 +101,13 @@ namespace {
         return builtIns;
     }
 
+    const FloatVec4 kDefaultOuter(1.0f, 1.0f, 1.0f, 1.0f);
+    const FloatVec2 kDefaultInner(1.0f, 1.0f);
+
     Vector<Uint32> CompileGeneratedSource(Uint32 patchVertices) {
         using namespace MG_Util::ShaderTranspiler;
-        const String source = ProgramFactory::BuildPassthroughTessControlSource(patchVertices);
+        const String source =
+            ProgramFactory::BuildPassthroughTessControlSource(patchVertices, kDefaultOuter, kDefaultInner);
 
         ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER, .sourceStr = source};
         auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
@@ -162,9 +166,42 @@ TEST_F(PassthroughTessControlTest, ForwardsPositionAndWritesBothLevelArrays) {
 // user-defined varying, ReflectPassthroughTessControlNeed's "built-ins only" refusal stops being
 // the right gate and both have to move together.
 TEST_F(PassthroughTessControlTest, InterfaceIsBuiltInsOnly) {
-    const String source = ProgramFactory::BuildPassthroughTessControlSource(4);
+    const String source = ProgramFactory::BuildPassthroughTessControlSource(4, kDefaultOuter, kDefaultInner);
     EXPECT_EQ(source.find("layout(location"), String::npos) << source;
     EXPECT_NE(source.find("layout(vertices = 4) out;"), String::npos) << source;
+}
+
+// glPatchParameterfv's levels are compiled into this stage - Vulkan has no dynamic state for them -
+// so two different level sets must produce two different sources AND two different cache keys.
+// Without the second half a pipeline memoised at one set of levels would be handed back after the
+// application changed them, and the tessellation would silently stay at the old levels.
+TEST_F(PassthroughTessControlTest, BakesTheDefaultTessLevelsInAndKeysOnThem) {
+    const FloatVec4 outer(2.0f, 3.0f, 4.0f, 5.0f);
+    const FloatVec2 inner(6.5f, 7.25f);
+    const String source = ProgramFactory::BuildPassthroughTessControlSource(4, outer, inner);
+    EXPECT_NE(source.find("gl_TessLevelOuter[0] = 2.000000;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelOuter[3] = 5.000000;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelInner[0] = 6.500000;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelInner[1] = 7.250000;"), String::npos) << source;
+
+    const Uint64 defaultKey =
+        ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, outer, inner), defaultKey);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, inner), defaultKey);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(3, kDefaultOuter, kDefaultInner), defaultKey);
+    EXPECT_EQ(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner), defaultKey);
+}
+
+// The generated stage still has to COMPILE with non-default levels: an integral level spelled
+// without a decimal point is an int literal, and `gl_TessLevelOuter[0] = 2;` does not compile.
+TEST_F(PassthroughTessControlTest, CompilesWithNonDefaultLevels) {
+    using namespace MG_Util::ShaderTranspiler;
+    const String source =
+        ProgramFactory::BuildPassthroughTessControlSource(4, FloatVec4(2.0f, 2.0f, 2.0f, 2.0f),
+                                                          FloatVec2(2.0f, 2.0f));
+    ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER, .sourceStr = source};
+    auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
+    EXPECT_TRUE(shaderResult) << (shaderResult ? String{} : shaderResult.error().log) << source;
 }
 
 // THE load-bearing test. Vulkan matches built-in interface blocks by their whole shape, and this

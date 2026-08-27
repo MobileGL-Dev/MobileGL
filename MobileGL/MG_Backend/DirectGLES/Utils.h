@@ -368,11 +368,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // All four outer levels and both inner levels are written unconditionally: writing a
         // level the evaluation stage's domain does not use is legal and ignored, and it saves
-        // this from having to know the domain. They are literal 1.0 because that is the GL
-        // default and glPatchParameterfv - their only setter - is a stub in this frontend
-        // (MG_Impl/GLImpl/Exporting/Definitions.cpp). Implementing that entry point means making
-        // the levels a parameter here AND part of what makes a built program stale, exactly as
-        // PATCH_VERTICES already is; the two must move together, so they are named together.
+        // this from having to know the domain. They are the GL_PATCH_DEFAULT_OUTER_LEVEL /
+        // GL_PATCH_DEFAULT_INNER_LEVEL state, baked in as literals - ES has no such state and no
+        // glPatchParameterfv to forward to, so compiling them in is the only way to honour them.
+        // That makes them part of what a built program is stale against, exactly as PATCH_VERTICES
+        // is: see the staleness clause in DirectGLES.cpp's SyncCurrentProgram, which compares both.
         //
         // The same stage, for the same reason, that DirectVulkan synthesizes in
         // ProgramFactory::BuildPassthroughTessControlSource - Vulkan likewise requires both
@@ -382,7 +382,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // VkShaderModule against a driver shader object.
         String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices,
                                                const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers);
+                                               const String& outPerVertexMembers,
+                                               const FloatVec4& defaultOuterLevel,
+                                               const FloatVec2& defaultInnerLevel);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own (already access-tagged) name.
         constexpr const char* IMAGE_WRITE_ALIAS_PREFIX = "mg_imageWrite_";

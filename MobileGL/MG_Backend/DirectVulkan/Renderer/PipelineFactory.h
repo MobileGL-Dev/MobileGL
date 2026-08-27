@@ -42,6 +42,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool primitiveRestartEnable = false;
             // GL_PATCH_VERTICES; only read for a PATCH_LIST topology.
             Uint32 patchControlPoints = 3;
+            // ProgramFactory::ComputePassthroughTessControlKey of the synthesized pass-through
+            // tessellation control stage below, or 0 when this pipeline has none. Hashed, because
+            // the levels glPatchParameterfv set are compiled INTO that module and are not a
+            // function of the program or of patchControlPoints - see the note on
+            // passthroughTessControlStage.
+            Uint64 passthroughTessControlKey = 0;
             // How many of ARB_viewport_array's viewports this pipeline rasterizes into. 1 for
             // every program that never assigns gl_ViewportIndex, which is all of them outside the
             // conformance suite - the wide shape costs a longer vkCmdSetViewport/Scissor per state
@@ -87,8 +93,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // renderer could not build one, and CreatePipeline refuses the pipeline - the same
             // refusal it applies when `stages` itself is half-tessellated.
             //
-            // NOT hashed: it is a pure function of the program and of patchControlPoints, both
-            // of which ComputeHash already mixes in.
+            // NOT hashed directly: it is a pure function of the program, of patchControlPoints and
+            // of the default tessellation levels - the first two of which ComputeHash already
+            // mixes in, and the third of which arrives through passthroughTessControlKey above.
             VkPipelineShaderStageCreateInfo passthroughTessControlStage{};
             const VkPipelineVertexInputStateCreateInfo* vertexInputState = nullptr;
             // Diagnostic only; may be null. Read solely from the pipeline-creation failure path.

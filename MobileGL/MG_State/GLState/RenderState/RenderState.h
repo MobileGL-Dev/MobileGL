@@ -240,6 +240,13 @@ namespace MobileGL {
         Float PointSize = 1.0f;
         // GL_PATCH_VERTICES: how many vertices one tessellation patch consumes.
         Uint PatchVertices = 3;
+        // GL_PATCH_DEFAULT_OUTER_LEVEL / GL_PATCH_DEFAULT_INNER_LEVEL (glPatchParameterfv). The
+        // tessellation levels used when a program has an evaluation stage and NO control stage -
+        // GL's fixed-function pass-through (4.6 core 11.2.2). Both backends have to synthesize
+        // that stage, and they bake these numbers into it, so a change here makes an already-built
+        // one stale exactly as PATCH_VERTICES does. Default 1.0, per table 23.44.
+        FloatVec4 PatchDefaultOuterLevel = FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
+        FloatVec2 PatchDefaultInnerLevel = FloatVec2(1.0f, 1.0f);
         Float PolygonOffsetFactor = 0.0f;
         Float PolygonOffsetUnits = 0.0f;
 
@@ -374,6 +381,10 @@ namespace MobileGL {
                 Float GetPointSize() const;
                 void SetPatchVertices(Uint vertices);
                 Uint GetPatchVertices() const;
+                void SetPatchDefaultOuterLevel(const FloatVec4& levels);
+                const FloatVec4& GetPatchDefaultOuterLevel() const;
+                void SetPatchDefaultInnerLevel(const FloatVec2& levels);
+                const FloatVec2& GetPatchDefaultInnerLevel() const;
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;

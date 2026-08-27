@@ -26,6 +26,7 @@
 #include "Includes.h"
 #include "Init.h"
 
+#include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_State/GLState/Core.h>
@@ -631,4 +632,129 @@ TEST_F(RenderStateTest, TheFirstScissorWriteBumpsTheVersionEvenWhenTheValueDoesN
     const Uint indexedSettled = indexed.GetVersion();
     indexed.SetScissorBoxIndexed(3, IntVec4(0, 0, 0, 0));
     EXPECT_EQ(indexed.GetVersion(), indexedSettled);
+}
+
+// --- glPatchParameterfv (GL 4.6 core 11.2.2) ---------------------------------------------------
+//
+// GL_PATCH_DEFAULT_OUTER_LEVEL / GL_PATCH_DEFAULT_INNER_LEVEL are the tessellation levels a
+// program with an evaluation stage and NO control stage runs at. glPatchParameterfv was a stub
+// that stored nothing and raised nothing, so the state could never move off its 1.0 default and
+// both backends hardcoded 1.0 into the pass-through control stage they synthesize. The getters
+// were absent too, which is what KHR-GL4x.tessellation_shader.single.
+// default_values_of_context_wide_properties dies on.
+
+TEST_F(RenderStateTest, PatchDefaultLevelsStartAtTheGLDefault) {
+    GLfloat outer[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
+    ExpectSingleGlError(GL_NO_ERROR);
+    for (const GLfloat level : outer) EXPECT_FLOAT_EQ(level, 1.0f);
+
+    GLfloat inner[2] = {-1.0f, -1.0f};
+    MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
+    ExpectSingleGlError(GL_NO_ERROR);
+    for (const GLfloat level : inner) EXPECT_FLOAT_EQ(level, 1.0f);
+}
+
+TEST_F(RenderStateTest, PatchDefaultLevelsRoundTripThroughEveryGetter) {
+    const GLfloat outerIn[4] = {2.0f, 3.5f, 4.0f, 5.25f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_OUTER_LEVEL, outerIn);
+    ExpectSingleGlError(GL_NO_ERROR);
+    const GLfloat innerIn[2] = {6.5f, 7.0f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_INNER_LEVEL, innerIn);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    GLfloat outer[4] = {};
+    MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
+    EXPECT_FLOAT_EQ(outer[0], 2.0f);
+    EXPECT_FLOAT_EQ(outer[1], 3.5f);
+    EXPECT_FLOAT_EQ(outer[2], 4.0f);
+    EXPECT_FLOAT_EQ(outer[3], 5.25f);
+    GLfloat inner[2] = {};
+    MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
+    EXPECT_FLOAT_EQ(inner[0], 6.5f);
+    EXPECT_FLOAT_EQ(inner[1], 7.0f);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    // Float state read through the integer and boolean getters: glGetIntegerv rounds (GL 4.6 core
+    // 2.2.2) and glGetBooleanv delegates to it, so both must ANSWER rather than report
+    // INVALID_ENUM - which is exactly what the conformance suite asks them first.
+    GLint outerInts[4] = {};
+    MG_Impl::GLImpl::GetIntegerv(GL_PATCH_DEFAULT_OUTER_LEVEL, outerInts);
+    EXPECT_EQ(outerInts[0], 2);
+    EXPECT_EQ(outerInts[1], 4) << "3.5 rounds away from zero";
+    EXPECT_EQ(outerInts[3], 5);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    GLboolean outerBools[4] = {};
+    MG_Impl::GLImpl::GetBooleanv(GL_PATCH_DEFAULT_OUTER_LEVEL, outerBools);
+    EXPECT_EQ(outerBools[0], GL_TRUE);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    GLdouble outerDoubles[4] = {};
+    MG_Impl::GLImpl::GetDoublev(GL_PATCH_DEFAULT_OUTER_LEVEL, outerDoubles);
+    EXPECT_DOUBLE_EQ(outerDoubles[3], 5.25) << "glGetDoublev must widen all four, not just the first";
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    // Put the context back where the rest of the binary expects it.
+    const GLfloat defaults4[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const GLfloat defaults2[2] = {1.0f, 1.0f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_OUTER_LEVEL, defaults4);
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_INNER_LEVEL, defaults2);
+    DrainPendingGlErrors();
+}
+
+TEST_F(RenderStateTest, PatchParameterfvRejectsEveryOtherPname) {
+    const GLfloat levels[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_VERTICES, levels);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::PatchParameterfv(GL_MAX_PATCH_VERTICES, levels);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    // The integer setter keeps its own, disjoint, accepted pname.
+    MG_Impl::GLImpl::PatchParameteri(GL_PATCH_DEFAULT_OUTER_LEVEL, 4);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+}
+
+TEST_F(RenderStateTest, PatchDefaultLevelsAreTreatedAsPipelineState) {
+    // Load-bearing: both backends compile these numbers into the pass-through tessellation control
+    // stage they synthesize, so a change has to invalidate an already-built program the same way a
+    // glPatchParameteri does. Bumping only the all-state version would leave DirectVulkan's
+    // pipeline memo - which keys on the PIPELINE-state version - handing back a pipeline built
+    // with the old levels.
+    MG_State::GLState::RenderState state;
+    const Uint initialPipelineVersion = state.GetPipelineStateVersion();
+    state.SetPatchDefaultOuterLevel(FloatVec4(2.0f, 2.0f, 2.0f, 2.0f));
+    EXPECT_GT(state.GetPipelineStateVersion(), initialPipelineVersion);
+
+    const Uint settled = state.GetPipelineStateVersion();
+    state.SetPatchDefaultOuterLevel(FloatVec4(2.0f, 2.0f, 2.0f, 2.0f));
+    EXPECT_EQ(state.GetPipelineStateVersion(), settled) << "a redundant write is free";
+
+    state.SetPatchDefaultInnerLevel(FloatVec2(3.0f, 3.0f));
+    EXPECT_GT(state.GetPipelineStateVersion(), settled);
+}
+
+// --- desktop GL_PRIMITIVE_RESTART state --------------------------------------------------------
+//
+// The cap and its index are what a desktop application enables instead of ES's
+// GL_PRIMITIVE_RESTART_FIXED_INDEX. Both halves have to be answerable, because the backends read
+// them on every indexed draw to decide whether the index data needs rewriting.
+TEST_F(RenderStateTest, PrimitiveRestartCapAndIndexAreBothQueryable) {
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_PRIMITIVE_RESTART), GL_FALSE);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    MG_Impl::GLImpl::Enable(GL_PRIMITIVE_RESTART);
+    MG_Impl::GLImpl::PrimitiveRestartIndex(1026u);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_PRIMITIVE_RESTART), GL_TRUE);
+    GLint index = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_PRIMITIVE_RESTART_INDEX, &index);
+    EXPECT_EQ(index, 1026);
+    // The fixed-index cap is a separate piece of state and must not have moved.
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_PRIMITIVE_RESTART_FIXED_INDEX), GL_FALSE);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    MG_Impl::GLImpl::Disable(GL_PRIMITIVE_RESTART);
+    MG_Impl::GLImpl::PrimitiveRestartIndex(0u);
+    DrainPendingGlErrors();
 }

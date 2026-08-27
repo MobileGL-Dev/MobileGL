@@ -485,18 +485,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the caller then has no control stage to inject, and CreatePipeline refuses the
         // pipeline rather than handing the driver a half-tessellated one.
         //
-        // Keyed on the patch size because GL takes the output patch size from PATCH_VERTICES,
-        // which is draw state, not link state - the CTS case that motivated this links at the
-        // default 3 and draws at 4. The pipeline cache already re-keys on patchControlPoints,
-        // so the module a pipeline was built with is part of that pipeline's identity.
-        // Compiling is bounded by the number of distinct patch sizes a program draws with
-        // (MAX_PATCH_VERTICES = 32 in the worst case, one or two in practice) and only ever
-        // happens for the rare program that has no control stage at all.
-        VkPipelineShaderStageCreateInfo GetOrCreatePassthroughTessControlStage(Uint32 patchVertices);
+        // Keyed on the patch size AND the six default tessellation levels, because GL takes the
+        // output patch size from PATCH_VERTICES and the levels from PATCH_DEFAULT_OUTER_LEVEL /
+        // PATCH_DEFAULT_INNER_LEVEL, all of which are draw state rather than link state - the CTS
+        // case that motivated this links at the default 3 and draws at 4. The pipeline cache
+        // re-keys on the same three inputs, so the module a pipeline was built with is part of
+        // that pipeline's identity. Compiling is bounded by the number of distinct
+        // (size, levels) combinations a program draws with - one or two in practice - and only
+        // ever happens for the rare program that has no control stage at all.
+        VkPipelineShaderStageCreateInfo GetOrCreatePassthroughTessControlStage(Uint32 patchVertices,
+                                                                              const FloatVec4& defaultOuterLevel,
+                                                                              const FloatVec2& defaultInnerLevel);
 
         // Source of the module above. Exposed for tests: the generated GLSL is the whole
         // contract with the evaluation stage, so it is worth pinning independently of a device.
-        static String BuildPassthroughTessControlSource(Uint32 patchVertices);
+        static String BuildPassthroughTessControlSource(Uint32 patchVertices, const FloatVec4& defaultOuterLevel,
+                                                        const FloatVec2& defaultInnerLevel);
+
+        // The identity of one such module: everything the generator bakes in, folded into a
+        // 64-bit key over the raw bits (so -0.0 and +0.0 key apart, which is harmless, and NaN
+        // keys to itself, which is what matters). Shared with PipelineFactory, which mixes the
+        // same value into the pipeline hash so a pipeline can never be handed a module built for
+        // different levels.
+        static Uint64 ComputePassthroughTessControlKey(Uint32 patchVertices, const FloatVec4& defaultOuterLevel,
+                                                       const FloatVec2& defaultInnerLevel);
 
     private:
         struct ProgramLookupCache {
@@ -556,11 +568,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // See GetCacheStructureEpoch(). Starts at 1 so a zero-initialized memo can never match.
         Uint64 m_cacheStructureEpoch = 1;
         IEvictionObserver* m_evictionObserver = nullptr;
-        // Pass-through tessellation control stages by input patch size. Never evicted: at most
-        // MAX_PATCH_VERTICES entries exist for the lifetime of the device, and every pipeline
-        // ever built from one keeps referencing its module. A failed build is cached as
-        // VK_NULL_HANDLE so a broken generator costs one compile, not one per draw.
-        UnorderedMap<Uint32, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
+        // Pass-through tessellation control stages by the identity of what was compiled into
+        // them - the input patch size and the six default tessellation levels, folded into one
+        // 64-bit key by PassthroughTessControlKey below (the levels are float state, so the map
+        // cannot simply be keyed on the patch size any more). Never evicted: a handful of entries
+        // exist for the lifetime of the device, and every pipeline ever built from one keeps
+        // referencing its module. A failed build is cached as VK_NULL_HANDLE so a broken generator
+        // costs one compile, not one per draw.
+        UnorderedMap<Uint64, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan

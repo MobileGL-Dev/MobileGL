@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cctype>
 #include <cstring>
+#include <format>
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
@@ -834,9 +835,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return std::nullopt;
         }
 
+        namespace {
+            // A GLSL float literal for a tessellation level. Always spelled with a decimal point,
+            // because an integral value written without one is an INT literal and
+            // `gl_TessLevelOuter[0] = 1;` does not compile. A non-finite value is baked as 0.0:
+            // glPatchParameterfv accepts any float, and a level that is not a positive number
+            // discards the patch - which is what a NaN level does in GL too - whereas emitting
+            // "nan" would make the synthesized stage fail to compile and take the whole program
+            // down with it.
+            String TessLevelLiteral(Float value) {
+                if (!std::isfinite(value)) return "0.0";
+                return std::format("{:.6f}", value);
+            }
+        } // namespace
+
         String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
                                                const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers) {
+                                               const String& outPerVertexMembers,
+                                               const FloatVec4& defaultOuterLevel,
+                                               const FloatVec2& defaultInnerLevel) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -866,12 +883,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // was declined before this was ever called (ModuleReadsLocatedInput), and gl_PointSize
             // from a tessellation stage is a separate capability on both targets.
             source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
-            source += "    gl_TessLevelOuter[0] = 1.0;\n";
-            source += "    gl_TessLevelOuter[1] = 1.0;\n";
-            source += "    gl_TessLevelOuter[2] = 1.0;\n";
-            source += "    gl_TessLevelOuter[3] = 1.0;\n";
-            source += "    gl_TessLevelInner[0] = 1.0;\n";
-            source += "    gl_TessLevelInner[1] = 1.0;\n";
+            for (Uint i = 0; i < 4; ++i) {
+                source += "    gl_TessLevelOuter[" + std::to_string(i) +
+                          "] = " + TessLevelLiteral(defaultOuterLevel[i]) + ";\n";
+            }
+            for (Uint i = 0; i < 2; ++i) {
+                source += "    gl_TessLevelInner[" + std::to_string(i) +
+                          "] = " + TessLevelLiteral(defaultInnerLevel[i]) + ";\n";
+            }
             source += "}\n";
             return source;
         }

@@ -30,6 +30,7 @@
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <vulkan/utility/vk_format_utils.h>
@@ -4735,6 +4736,20 @@ void main() {
         capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
         Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
+        // The default tessellation levels belong here for the same reason PatchVertices does:
+        // when a program has an evaluation stage and no control stage, both are compiled into the
+        // synthesized pass-through control stage, so two draws that differ only in a level need
+        // different pipelines. Hashed over the RAW BITS so a NaN level - which glPatchParameterfv
+        // accepts - keys to itself. Six extra words on a path that only recomputes when the
+        // pipeline-state version moved.
+        for (Uint32 i = 0; i < 4; ++i) {
+            hash = CombinePipelineStateWord(hash,
+                                            static_cast<Uint64>(std::bit_cast<Uint32>(p.PatchDefaultOuterLevel[i])));
+        }
+        for (Uint32 i = 0; i < 2; ++i) {
+            hash = CombinePipelineStateWord(hash,
+                                            static_cast<Uint64>(std::bit_cast<Uint32>(p.PatchDefaultInnerLevel[i])));
+        }
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PolygonModeFront));
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.CullFaceModeSetting));
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.DepthFunc));
@@ -5116,10 +5131,19 @@ void main() {
         // program with a tessellation stage may only be drawn with GL_PATCHES), so nothing legal
         // loses its pass-through here; what it does lose is the pipeline, because the refusal
         // below then sees an evaluation stage with no control stage and declines.
+        //
+        // The default tessellation levels (glPatchParameterfv) are draw state for the same reason
+        // and are compiled into the same module, so they are read here too and their key is mixed
+        // into the pipeline hash - without that a pipeline memoised at one set of levels would be
+        // handed back after the application changed them.
         if (programObj.needsPassthroughTessControl && programObj.passthroughTessControlEmulatable &&
             vkTopology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
-            payload.passthroughTessControlStage =
-                m_programFactory->GetOrCreatePassthroughTessControlStage(payload.patchControlPoints);
+            const FloatVec4& defaultOuterLevel = MG_State::pGLContext->GetPatchDefaultOuterLevel();
+            const FloatVec2& defaultInnerLevel = MG_State::pGLContext->GetPatchDefaultInnerLevel();
+            payload.passthroughTessControlKey = ProgramFactory::ComputePassthroughTessControlKey(
+                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel);
+            payload.passthroughTessControlStage = m_programFactory->GetOrCreatePassthroughTessControlStage(
+                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel);
         }
         if (!payload.stencilTestEnable) {
             payload.frontStencilFailOp = VK_STENCIL_OP_KEEP;

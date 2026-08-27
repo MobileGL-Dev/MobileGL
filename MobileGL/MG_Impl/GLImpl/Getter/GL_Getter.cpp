@@ -695,7 +695,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         switch (pname) {
         case GL_COLOR_WRITEMASK:
         case GL_SCISSOR_BOX:
+        case GL_PATCH_DEFAULT_OUTER_LEVEL:
             CopyIntsToBooleans(ints, 4, params);
+            return;
+        case GL_PATCH_DEFAULT_INNER_LEVEL:
+            CopyIntsToBooleans(ints, 2, params);
             return;
         default:
             *params = ints[0] ? GL_TRUE : GL_FALSE;
@@ -733,6 +737,22 @@ namespace MobileGL::MG_Impl::GLImpl {
             const FloatVec2& depthRange = MG_State::pGLContext->GetDepthRange();
             params[0] = depthRange.x();
             params[1] = depthRange.y();
+            return;
+        }
+        // glPatchParameterfv's two states. Float-native, so they are answered here rather than
+        // through the integer fallback below - which rounds, and would report 0 for a level of 0.5.
+        case GL_PATCH_DEFAULT_OUTER_LEVEL: {
+            const FloatVec4& outer = MG_State::pGLContext->GetPatchDefaultOuterLevel();
+            params[0] = outer.x();
+            params[1] = outer.y();
+            params[2] = outer.z();
+            params[3] = outer.w();
+            return;
+        }
+        case GL_PATCH_DEFAULT_INNER_LEVEL: {
+            const FloatVec2& inner = MG_State::pGLContext->GetPatchDefaultInnerLevel();
+            params[0] = inner.x();
+            params[1] = inner.y();
             return;
         }
         case GL_VIEWPORT_BOUNDS_RANGE: {
@@ -1268,6 +1288,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_POINT_SIZE_RANGE:
         case GL_SMOOTH_LINE_WIDTH_RANGE:
         case GL_MAX_VIEWPORT_DIMS:
+        case GL_PATCH_DEFAULT_INNER_LEVEL:
             count = 2;
             break;
         case GL_BLEND_COLOR:
@@ -1275,6 +1296,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_VIEWPORT:
         case GL_SCISSOR_BOX:
         case GL_COLOR_WRITEMASK:
+        case GL_PATCH_DEFAULT_OUTER_LEVEL:
             count = 4;
             break;
         default:
@@ -2287,6 +2309,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_PATCH_VERTICES:
             *params = static_cast<GLint>(MG_State::pGLContext->GetPatchVertices());
             break;
+        // Float state, so glGetIntegerv rounds it (GL 4.6 core 2.2.2) - the exact values come back
+        // through glGetFloatv. Answered here so glGetBooleanv, which delegates to this getter for
+        // everything its own switch does not handle, does not report INVALID_ENUM for them.
+        case GL_PATCH_DEFAULT_OUTER_LEVEL: {
+            const FloatVec4& outer = MG_State::pGLContext->GetPatchDefaultOuterLevel();
+            for (Uint i = 0; i < 4; ++i) params[i] = static_cast<GLint>(std::lround(outer[i]));
+            break;
+        }
+        case GL_PATCH_DEFAULT_INNER_LEVEL: {
+            const FloatVec2& inner = MG_State::pGLContext->GetPatchDefaultInnerLevel();
+            for (Uint i = 0; i < 2; ++i) params[i] = static_cast<GLint>(std::lround(inner[i]));
+            break;
+        }
         case GL_MAX_PATCH_VERTICES:
             *params = dynamicParameters.MaxPatchVertices;
             break;

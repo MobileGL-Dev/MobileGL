@@ -812,6 +812,22 @@ namespace MobileGL::MG_State {
             m_renderState.SetPatchVertices(vertices);
         }
 
+        void GLContext::SetPatchDefaultOuterLevel(const FloatVec4& levels) {
+            m_renderState.SetPatchDefaultOuterLevel(levels);
+        }
+
+        const FloatVec4& GLContext::GetPatchDefaultOuterLevel() const {
+            return m_renderState.GetPatchDefaultOuterLevel();
+        }
+
+        void GLContext::SetPatchDefaultInnerLevel(const FloatVec2& levels) {
+            m_renderState.SetPatchDefaultInnerLevel(levels);
+        }
+
+        const FloatVec2& GLContext::GetPatchDefaultInnerLevel() const {
+            return m_renderState.GetPatchDefaultInnerLevel();
+        }
+
         Uint GLContext::GetPatchVertices() const {
             return m_renderState.GetPatchVertices();
         }

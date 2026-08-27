@@ -713,6 +713,37 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL 4.6 core 11.2.2. The default tessellation levels a program with an evaluation stage and
+    // NO control stage tessellates at; both backends have to synthesize that control stage
+    // themselves (ES 3.2 and Vulkan both require one), and they compile these numbers into it, so
+    // there is no backend entry point to forward to - ES has none at all. INVALID_ENUM on a bad
+    // pname is the only error the spec lists: any float values are accepted, negatives and NaN
+    // included, and it is the tessellator that clamps them.
+    //
+    // This used to be a stub, which is why the two synthesizers hardcoded 1.0.
+    void PatchParameterfv(GLenum pname, const GLfloat* values) {
+        if (pname != GL_PATCH_DEFAULT_OUTER_LEVEL && pname != GL_PATCH_DEFAULT_INNER_LEVEL) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "pname must be GL_PATCH_DEFAULT_OUTER_LEVEL or GL_PATCH_DEFAULT_INNER_LEVEL."));
+            return;
+        }
+        if (!values) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "values pointer cannot be null"));
+            return;
+        }
+        if (pname == GL_PATCH_DEFAULT_OUTER_LEVEL) {
+            MG_State::pGLContext->SetPatchDefaultOuterLevel(
+                FloatVec4(values[0], values[1], values[2], values[3]));
+        } else {
+            MG_State::pGLContext->SetPatchDefaultInnerLevel(FloatVec2(values[0], values[1]));
+        }
+    }
+
     namespace {
         // GL 4.6 core 7.11.2 (and ARB_shader_image_load_store, which introduced the call): the
         // barrier bitfield is INVALID_VALUE unless every bit is one of the defined ones, with

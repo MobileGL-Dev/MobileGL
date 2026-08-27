@@ -1490,6 +1490,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int GetPassthroughTessControlPatchVertices() const {
                 return m_passthroughTessControlPatchVertices;
             }
+            // GL_PATCH_DEFAULT_{OUTER,INNER}_LEVEL the same synthesized stage was built with, for
+            // the same reason: ES has neither the state nor an entry point to forward it to, so
+            // glPatchParameterfv's values are compiled in as literals and a program built with one
+            // set is stale for another. Meaningless (and never read) when the patch-vertices field
+            // above is -1, which is the gate the draw path tests first.
+            const FloatVec4& GetPassthroughTessControlOuterLevel() const {
+                return m_passthroughTessControlOuterLevel;
+            }
+            const FloatVec2& GetPassthroughTessControlInnerLevel() const {
+                return m_passthroughTessControlInnerLevel;
+            }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -1590,6 +1601,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // all); otherwise the GL_PATCH_VERTICES the synthesized pass-through stage was built
             // with. See GetPassthroughTessControlPatchVertices.
             Int m_passthroughTessControlPatchVertices = -1;
+            // The default tessellation levels baked into that same stage. Only meaningful while
+            // the field above is not -1.
+            FloatVec4 m_passthroughTessControlOuterLevel = FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            FloatVec2 m_passthroughTessControlInnerLevel = FloatVec2(1.0f, 1.0f);
             Bool m_isInitialized = false;
             Bool m_backendProgramUsable = false;
             // Set by SyncToBackend every time it relinks the driver program, cleared by the

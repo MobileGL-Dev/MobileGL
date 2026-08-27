@@ -206,6 +206,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(
             XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.passthroughTessControlKey,
+                                   sizeof(payload.passthroughTessControlKey)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));

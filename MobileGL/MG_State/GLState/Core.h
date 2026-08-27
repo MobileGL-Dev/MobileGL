@@ -213,6 +213,10 @@ namespace MobileGL {
                 Float GetPointSize() const;
                 void SetPatchVertices(Uint vertices);
                 Uint GetPatchVertices() const;
+                void SetPatchDefaultOuterLevel(const FloatVec4& levels);
+                const FloatVec4& GetPatchDefaultOuterLevel() const;
+                void SetPatchDefaultInnerLevel(const FloatVec2& levels);
+                const FloatVec2& GetPatchDefaultInnerLevel() const;
                 void SetPolygonOffset(Float factor, Float units);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;

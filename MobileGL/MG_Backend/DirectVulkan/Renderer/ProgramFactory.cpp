@@ -13,7 +13,10 @@
 #include "MG_Util/ShaderTranspiler/SpvcSession.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
 #include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstring>
+#include <format>
 #include <map>
 #include <utility>
 #include <spirv-tools/libspirv.h>
@@ -3594,18 +3597,48 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices) {
+    namespace {
+        // A GLSL float literal for a tessellation level. Always spelled with a decimal point,
+        // because an integral value written without one is an INT literal and
+        // `gl_TessLevelOuter[0] = 1;` does not compile. A non-finite value is baked as 0.0:
+        // glPatchParameterfv accepts any float, and a level that is not a positive number
+        // discards the patch - which is what a NaN level does in GL too - whereas emitting "nan"
+        // would make the synthesized stage fail to compile and take the whole program down.
+        String TessLevelLiteral(Float value) {
+            if (!std::isfinite(value)) return "0.0";
+            return std::format("{:.6f}", value);
+        }
+    } // namespace
+
+    Uint64 ProgramFactory::ComputePassthroughTessControlKey(Uint32 patchVertices,
+                                                            const FloatVec4& defaultOuterLevel,
+                                                            const FloatVec2& defaultInnerLevel) {
+        // A plain 28-byte blob of exactly what the generator reads, hashed once. Deliberately over
+        // the RAW BITS rather than the values: two levels that compare unequal must key apart, and
+        // a NaN level - which glPatchParameterfv accepts - compares unequal to itself.
+        struct Blob {
+            Uint32 patchVertices;
+            Uint32 outerBits[4];
+            Uint32 innerBits[2];
+        } blob{};
+        blob.patchVertices = patchVertices;
+        for (Uint32 i = 0; i < 4; ++i) blob.outerBits[i] = std::bit_cast<Uint32>(defaultOuterLevel[i]);
+        for (Uint32 i = 0; i < 2; ++i) blob.innerBits[i] = std::bit_cast<Uint32>(defaultInnerLevel[i]);
+        return XXH64(&blob, sizeof(blob), 0);
+    }
+
+    String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices,
+                                                             const FloatVec4& defaultOuterLevel,
+                                                             const FloatVec2& defaultInnerLevel) {
         // The stage GL 4.6 core 11.2.2 describes when a program has an evaluation shader and no
         // control shader: "the input patch is passed through unmodified", the output patch has
         // as many vertices as the input one (PATCH_VERTICES), and the levels come from the
         // PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.
         //
-        // Those two levels default to 1.0 and are baked here as literals because
-        // glPatchParameterfv - their only setter - is not implemented in this frontend (it is a
-        // stub in MG_Impl/GLImpl/Exporting/Definitions.cpp). Implementing that entry point means
-        // making the levels a parameter of this source AND of the cache key in
-        // GetOrCreatePassthroughTessControlStage; the two must move together, so they are named
-        // together here.
+        // Those two levels are baked in as literals - Vulkan has no equivalent dynamic state, so
+        // compiling them in is the only way to honour glPatchParameterfv. That makes them part of
+        // this module's identity: GetOrCreatePassthroughTessControlStage keys its cache on them,
+        // and PipelineFactory hashes them into the pipeline key. The three must move together.
         //
         // gl_out carries gl_Position and nothing else on purpose. The evaluation stage that
         // reads it was linked against the VERTEX stage directly, so its input gl_PerVertex holds
@@ -3648,20 +3681,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "} gl_out[];\n";
         source += "void main() {\n";
         source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
-        source += "    gl_TessLevelOuter[0] = 1.0;\n";
-        source += "    gl_TessLevelOuter[1] = 1.0;\n";
-        source += "    gl_TessLevelOuter[2] = 1.0;\n";
-        source += "    gl_TessLevelOuter[3] = 1.0;\n";
-        source += "    gl_TessLevelInner[0] = 1.0;\n";
-        source += "    gl_TessLevelInner[1] = 1.0;\n";
+        for (Uint32 i = 0; i < 4; ++i) {
+            source += "    gl_TessLevelOuter[" + std::to_string(i) +
+                      "] = " + TessLevelLiteral(defaultOuterLevel[i]) + ";\n";
+        }
+        for (Uint32 i = 0; i < 2; ++i) {
+            source += "    gl_TessLevelInner[" + std::to_string(i) +
+                      "] = " + TessLevelLiteral(defaultInnerLevel[i]) + ";\n";
+        }
         source += "}\n";
         return source;
     }
 
-    VkPipelineShaderStageCreateInfo ProgramFactory::GetOrCreatePassthroughTessControlStage(Uint32 patchVertices) {
+    VkPipelineShaderStageCreateInfo ProgramFactory::GetOrCreatePassthroughTessControlStage(
+        Uint32 patchVertices, const FloatVec4& defaultOuterLevel, const FloatVec2& defaultInnerLevel) {
+        // Everything compiled into the stage, folded into one key. The patch size alone stopped
+        // being enough once glPatchParameterfv could change the levels: two modules that differ
+        // only in a baked-in level are different modules, and pipelines built from either may be
+        // alive at the same time.
+        const Uint64 key = ComputePassthroughTessControlKey(patchVertices, defaultOuterLevel, defaultInnerLevel);
         // A cached VK_NULL_HANDLE is a remembered failure, not a miss: returning it keeps a
         // generator that cannot compile from re-running glslang on every draw.
-        const auto cached = m_passthroughTessControlStages.find(patchVertices);
+        const auto cached = m_passthroughTessControlStages.find(key);
         if (cached != m_passthroughTessControlStages.end()) {
             return cached->second;
         }
@@ -3672,7 +3713,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         stage.pName = "main";
 
         using namespace MG_Util::ShaderTranspiler;
-        const String source = BuildPassthroughTessControlSource(patchVertices);
+        const String source = BuildPassthroughTessControlSource(patchVertices, defaultOuterLevel, defaultInnerLevel);
         // Same compile configuration as every other stage of every other program: this runs on
         // the GL thread (the draw path), so the live compile env is the right one, and flags=0
         // is the Vulkan-targeting form (CompileForOpenGL is what the GLES backend adds).
@@ -3686,7 +3727,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E("ProgramFactory: could not compile the pass-through tessellation control stage for "
                     "patchVertices=%u; a program with an evaluation stage and no control stage cannot draw. %s",
                     patchVertices, compiled.error().log.c_str());
-            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
 
@@ -3696,7 +3737,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!linked) {
             MGLOG_E("ProgramFactory: could not link the pass-through tessellation control stage for "
                     "patchVertices=%u. %s", patchVertices, linked.error().log.c_str());
-            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
 
@@ -3705,7 +3746,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!binary || binary.value().empty() || binary.value().front().empty()) {
             MGLOG_E("ProgramFactory: could not generate SPIR-V for the pass-through tessellation control stage "
                     "for patchVertices=%u", patchVertices);
-            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
 
@@ -3727,14 +3768,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (result != VK_SUCCESS) {
             MGLOG_E("ProgramFactory: vkCreateShaderModule failed (%d) for the pass-through tessellation control "
                     "stage for patchVertices=%u", static_cast<Int>(result), patchVertices);
-            m_passthroughTessControlStages.emplace(patchVertices, stage);
+            m_passthroughTessControlStages.emplace(key, stage);
             return stage;
         }
 
         stage.module = module;
         MGLOG_D("ProgramFactory: built the pass-through tessellation control stage for patchVertices=%u "
                 "(GL 4.6 11.2.2; Vulkan has no fixed-function equivalent)", patchVertices);
-        m_passthroughTessControlStages.emplace(patchVertices, stage);
+        m_passthroughTessControlStages.emplace(key, stage);
         return stage;
     }
 

@@ -2461,9 +2461,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // `layout(vertices = N) out` - so a glPatchParameteri between two draws makes the
                 // built program wrong. -1 is "this program needed no such stage", which compares
                 // equal to itself and costs every other program one integer test.
+                //
+                // GL_PATCH_DEFAULT_{OUTER,INNER}_LEVEL are baked into the same stage for the same
+                // reason (ES has neither the state nor an entry point), so glPatchParameterfv
+                // makes it stale too. Both level comparisons sit INSIDE the >= 0 guard: a program
+                // with a control stage of its own - which is nearly all of them - still pays only
+                // the one integer test.
                 (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
-                 twin->GetPassthroughTessControlPatchVertices() !=
-                     static_cast<Int>(MG_State::pGLContext->GetPatchVertices()))) {
+                 (twin->GetPassthroughTessControlPatchVertices() !=
+                      static_cast<Int>(MG_State::pGLContext->GetPatchVertices()) ||
+                  twin->GetPassthroughTessControlOuterLevel() !=
+                      MG_State::pGLContext->GetPatchDefaultOuterLevel() ||
+                  twin->GetPassthroughTessControlInnerLevel() !=
+                      MG_State::pGLContext->GetPatchDefaultInnerLevel()))) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();
