@@ -4776,7 +4776,34 @@ void main() {
     //     when the device lacks independentBlend - the same read the payload does)
     // FBO-derived payload inputs (attachment presence/formats/draw-buffer gating) are
     // pinned by the render-pass hash key, exactly as the version-keyed memo relied on.
-    Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount) const {
+    // The fixed-function sample mask this draw actually gets, and the ONE place that decides it.
+    //
+    // GL 4.6 core 17.3.3 puts SAMPLE_MASK/SAMPLE_MASK_VALUE among the multisample fragment
+    // operations and says they make no change "if MULTISAMPLE is disabled, or if the value of
+    // SAMPLE_BUFFERS is not one" - so on a single-sample draw framebuffer the mask is a no-op.
+    // Vulkan has no such rule: pSampleMask is ANDed with coverage at every rasterizationSamples,
+    // and at one sample that coverage is bit 0 alone. Handing the raw GL word straight through
+    // therefore turned `glEnable(GL_SAMPLE_MASK); glSampleMaski(0, 0x2);` followed by a draw to
+    // the default framebuffer - the ordinary MSAA-render-then-present shape, and what dEQP's
+    // multisample cases leave enabled - into a fully discarded, black draw. All-ones restores
+    // the null-pSampleMask meaning the pipeline had before the mask was plumbed at all.
+    //
+    // SAMPLE_BUFFERS is the load-bearing half: MultisampleEnabled defaults to TRUE, so the
+    // capability check alone would gate nothing. It is here for spec completeness - GL lets
+    // glDisable(GL_MULTISAMPLE) switch the whole step off on a multisample target too.
+    //
+    // Both callers - the payload and ComputePipelineStateHash's memo word - go through this, so
+    // the memo key cannot describe a different mask than the pipeline was built with.
+    Uint32 VulkanRenderer::ResolveEffectiveSampleMask(VkSampleCountFlagBits rasterizationSamples) const {
+        constexpr Uint32 kFullCoverage = 0xffffffffu;
+        if (rasterizationSamples == VK_SAMPLE_COUNT_1_BIT) return kFullCoverage;
+        if (!MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Multisample)) return kFullCoverage;
+        if (!MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask)) return kFullCoverage;
+        return MG_State::pGLContext->GetRenderStateParameters().SampleMaskValue;
+    }
+
+    Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount,
+                                                    VkSampleCountFlagBits rasterizationSamples) const {
         // One bulk fetch instead of ~17 per-field accessor calls into MG_State: every
         // input below is a plain field of RenderStateParameters, and each accessor this
         // replaces (IsCapabilityEnabled / Get*) is a verified pure read of that same
@@ -4795,7 +4822,13 @@ void main() {
         capabilityBits |= p.PrimitiveRestartFixedIndexEnabled ? 1ull << 7 : 0;
         capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
         capabilityBits |= p.SampleShadingEnabled ? 1ull << 9 : 0;
-        capabilityBits |= p.SampleMaskEnabled ? 1ull << 10 : 0;
+        // The EFFECTIVE mask enable, not the raw GL bit: at one sample GL says the whole
+        // multisample fragment-operations step makes no change, so the pipeline is built with
+        // full coverage and the memo word has to say so too. Keying on the raw bit here while
+        // the payload gates on the sample count would let one FBO's cached pipeline answer for
+        // another whose sample count reads the mask differently.
+        const Bool sampleMaskEffective = ResolveEffectiveSampleMask(rasterizationSamples) != 0xffffffffu;
+        capabilityBits |= sampleMaskEffective ? 1ull << 10 : 0;
         Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
         // glMinSampleShading. Hashed by BITS, not by value: this memo compares hashes rather than
         // versions, so an unhashed float would let a pipeline built at one rate be handed back
@@ -4811,7 +4844,7 @@ void main() {
         // while GL_SAMPLE_MASK is enabled - the enable bit is already in capabilityBits, and
         // folding one more word costs nothing on a path that only recomputes when the
         // pipeline-state version moved.
-        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.SampleMaskValue));
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(ResolveEffectiveSampleMask(rasterizationSamples)));
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
         // The default tessellation levels belong here for the same reason PatchVertices does:
         // when a program has an evaluation stage and no control stage, both are compiled into the
@@ -4935,10 +4968,13 @@ void main() {
         // The version only guards recomputing the hash - unchanged version, unchanged bytes.
         const Uint renderStateVersion = MG_State::pGLContext->GetPipelineStateVersion();
         if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount) {
-            m_pipelineStateHash = ComputePipelineStateHash(renderPassEntry.colorAttachmentCount);
+            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
+            m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
+            m_pipelineStateHash =
+                ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
             m_pipelineStateHashVersion = renderStateVersion;
             m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
+            m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
             m_pipelineStateHashValid = true;
         }
         const Uint64 pipelineStateHash = m_pipelineStateHash;
@@ -5207,12 +5243,8 @@ void main() {
             .sampleShadingEnable = m_sampleRateShadingFeatureEnabled &&
                                    MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleShading),
             .minSampleShading = MG_State::pGLContext->GetMinSampleShadingValue(),
-            // GL_SAMPLE_MASK off means full coverage, which is what an all-ones mask says and what
-            // a null pSampleMask used to say by omission. One word: MaxSampleMaskWords is clamped
-            // to 1 on both backends, so glSampleMaski only ever writes index 0.
-            .sampleMask = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask)
-                              ? MG_State::pGLContext->GetRenderStateParameters().SampleMaskValue
-                              : 0xffffffffu,
+            // Word 1 keeps its all-ones initialiser: GL has no state for samples 32..63.
+            .sampleMask = {ResolveEffectiveSampleMask(renderPassEntry.sampleCount), 0xffffffffu},
             .subpass = 0,
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
@@ -6075,6 +6107,10 @@ void main() {
             snap.programFactoryEpoch = m_programFactory->GetCacheStructureEpoch();
         }
         const auto& programObj = *programObjPtr;
+        // Pinned for BeginXfbCaptureForDraw, which otherwise decides from GL state alone and has
+        // no way to know the bound pipeline's last pre-rasterization module lost (or never got)
+        // its Xfb execution mode. See VkProgramObject::xfbCaptureDeclined.
+        m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
 
         // The pipeline and the vertex-input pre-flight depend on the VAO only through
         // its resolved LAYOUT (layoutHash folds the attribute formats, bindings and the
@@ -6237,10 +6273,13 @@ void main() {
             // instead of missing forever on a monotonic version. A miss falls through
             // to the full lookup.
             if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-                m_pipelineStateHashColorCount != snap.renderPassColorCount) {
-                m_pipelineStateHash = ComputePipelineStateHash(snap.renderPassColorCount);
+                m_pipelineStateHashColorCount != snap.renderPassColorCount ||
+                m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
+                m_pipelineStateHash =
+                    ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
                 m_pipelineStateHashVersion = renderStateVersion;
                 m_pipelineStateHashColorCount = snap.renderPassColorCount;
+                m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
                 m_pipelineStateHashValid = true;
             }
             const auto memoTransformFlags =
@@ -6475,6 +6514,10 @@ void main() {
             }
         }
         const auto& programObj = *resolvedProgramObj;
+        // Pinned for BeginXfbCaptureForDraw, which otherwise decides from GL state alone and has
+        // no way to know the bound pipeline's last pre-rasterization module lost (or never got)
+        // its Xfb execution mode. See VkProgramObject::xfbCaptureDeclined.
+        m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
         // For the snapshot's memoised entry pointer: if anything below inserts into the
         // program cache (blit/aux program compiles), the epoch moves and the snapshot
         // stores no pointer for this draw - the fast path then re-looks-up once.
@@ -6513,11 +6556,31 @@ void main() {
             const Uint64 programLifetimeId = program.GetLifetimeId();
             const Uint32 programVersion = program.GetBackendStateVersion();
             const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            // The bind generation alone stopped covering this set the moment ResolveSampledBinding
+            // started asking SamplesAsIncompleteTexture: membership now depends on the effective
+            // sampler PARAMETERS (MIN_FILTER decides whether the mip chain is read at all) and on
+            // the texture SHAPE, and neither moves the bind generation. A texture that flips
+            // incomplete -> complete under a fixed binding - one glTexParameteri, one
+            // glSamplerParameteri, a BASE_LEVEL/MAX_LEVEL change, or an upload that fills the
+            // chain - would keep replaying the FALLBACK out of this memo, so the real texture
+            // never got its pre-pass sync, its pending-clear materialisation or its sampled-layout
+            // transition, and the descriptor path would then transition it from INSIDE the open
+            // render pass, which the subpass declares no self-dependency for.
+            //
+            // The sampling-resolution generation is exactly the counter for that family and is
+            // deliberately coarse (any texture, any sampler), so this one term covers every input
+            // the predicate reads that the bind generation does not: TextureObjectBase::
+            // BumpShapeVersion and SamplerObject::BumpVersion both bump it, while WHICH sampler
+            // object a unit carries goes through TextureUnit::SetSamplerObject and moves the bind
+            // generation instead. Same term the SetupDrawSnapshot fast path and the LOD memo
+            // already carry.
+            const Uint64 samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
             const Bool sampledSetUnchanged =
                 m_lastSampledSetValid && m_lastSampledSetProgramLifetimeId == programLifetimeId &&
                 m_lastSampledSetProgramVersion == programVersion &&
                 m_lastSampledSetTransformFlags == transformFlags &&
-                m_lastSampledSetBindGeneration == bindGeneration;
+                m_lastSampledSetBindGeneration == bindGeneration &&
+                m_lastSampledSetSamplingGeneration == samplingGeneration;
             if (!sampledSetUnchanged) {
                 const Bool hasSampledTextures = m_uniformManager->CollectSampledTextures(
                     program, programObj, sampledTextures, &m_sampledBindingRecordsScratch);
@@ -6527,6 +6590,7 @@ void main() {
                 m_lastSampledSetProgramVersion = programVersion;
                 m_lastSampledSetTransformFlags = transformFlags;
                 m_lastSampledSetBindGeneration = bindGeneration;
+                m_lastSampledSetSamplingGeneration = samplingGeneration;
             }
             // Complete a freshly-made LOD decision (see above): its params sum
             // can only be taken once the sampled set is known. A genuine
@@ -6825,6 +6889,7 @@ void main() {
                 snap.drawUsesDepthStencil = drawUsesDepthStencil;
                 snap.renderPassExtent = renderPassEntry->extent;
                 snap.renderPassColorCount = renderPassEntry->colorAttachmentCount;
+                snap.renderPassSampleCount = renderPassEntry->sampleCount;
                 snap.pipeline = pipeline;
                 // The layout identity the fast path's aux-memo compare answers against.
                 // A memo hit here, not a rebuild: the pre-flight above resolved this
@@ -11055,6 +11120,19 @@ void main() {
         }
         const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
         if (!program || program->GetTransformFeedbackVaryingCount() == 0) {
+            return false;
+        }
+        // The bound pipeline's last pre-rasterization stage has to have been declared with Xfb
+        // (VUID-vkCmdBeginTransformFeedbackEXT-None-04128). Everything above this line reads GL
+        // state, which cannot answer that: a program can be built as a capture variant and still
+        // end up with a module carrying no Xfb mode - the clip/XFB validation backstop rewinding
+        // past the decoration, or XfbCaptureDecoratePass resolving none of the requested varyings
+        // and changing nothing. Declining the span leaves the capture buffers untouched, which is
+        // the same nothing the driver would have written, without the undefined behaviour.
+        if (m_currentDrawXfbCaptureDeclined) {
+            MGLOG_E_ONCE("BeginXfbCaptureForDraw: declining the capture span - the bound program's last "
+                         "pre-rasterization stage carries no Xfb execution mode, so recording one would be "
+                         "undefined behaviour rather than a capture");
             return false;
         }
         const SizeT bufferCount = std::min<SizeT>(program->GetTransformFeedbackBufferCount(), 4);

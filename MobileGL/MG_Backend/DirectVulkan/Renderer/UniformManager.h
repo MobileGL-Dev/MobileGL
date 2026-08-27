@@ -179,11 +179,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static MG_State::GLState::ITextureObject* ResolveSamplerTextureRaw(
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Uint32 element);
-        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(TextureTarget target) const;
-        // The multisample arm of GetFallbackTexture. Separate object per target and no upload
-        // path: a multisample image cannot be written by a transfer, so its texels stay undefined
-        // - which is what GL promises for a texelFetch on an incomplete multisample texture.
-        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackMultisampleTexture(TextureTarget target) const;
+        // `numericDomain` is the sampler's class, and it matters only for the multisample arm -
+        // see GetFallbackMultisampleTexture for why the single-sampled fallback can ignore it.
+        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackTexture(
+            TextureTarget target, SamplerNumericDomain numericDomain) const;
+        // The multisample arm of GetFallbackTexture. One object per (target, numeric domain) and
+        // no upload path: a multisample image cannot be written by a transfer, so its texels stay
+        // undefined - which is what GL promises for a texelFetch on an incomplete multisample
+        // texture - and it cannot carry MUTABLE_FORMAT, so its format has to match the sampler's
+        // class outright rather than being reinterpreted at view time.
+        SharedPtr<MG_State::GLState::ITextureObject> GetFallbackMultisampleTexture(
+            TextureTarget target, SamplerNumericDomain numericDomain) const;
         // ---- placeholders for UNBOUND image-backed descriptors -------------------------
         // GL lets a program declare `samplerBuffer`, `imageBuffer` or `image2D` and bind nothing
         // to the unit it names: the fetch is then undefined (GL 4.6 core 8.9 for an incomplete
@@ -297,8 +303,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkTextureManager* m_textureManager = nullptr;
         VkSamplerManager* m_samplerManager = nullptr;
         mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2D;
-        mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2DMultisample;
-        mutable SharedPtr<MG_State::GLState::ITextureObject> m_fallbackTexture2DMultisampleArray;
+        // Keyed by (arrayed, numeric domain); see GetFallbackMultisampleTexture. Lazily populated,
+        // never evicted - at most six tiny 1x1 images - and torn down with the manager.
+        mutable UnorderedMap<Uint32, SharedPtr<MG_State::GLState::ITextureObject>> m_fallbackMultisampleTextures;
         // See AcquireUnboundTexelBufferView / GetUnboundStorageImageTexture. Both are lazily
         // populated, never evicted (a program's declared formats are a fixed, tiny set) and torn
         // down with the manager. The texel views are keyed by format AND by storage-vs-sampled

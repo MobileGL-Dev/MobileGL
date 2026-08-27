@@ -9,6 +9,7 @@
 #include "Loader.h"
 
 #include <Config.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -177,7 +178,15 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxFramebufferSamples = ResolveConservativeFramebufferSampleLimit(p.limits);
         caps.MaxIntegerSamples = MaxSampleCountFromFlags(p.limits.sampledImageIntegerSampleCounts);
         caps.MaxSamples = caps.MaxFramebufferSamples;
-        caps.MaxSampleMaskWords = SaturateToInt(p.limits.maxSampleMaskWords);
+        // Clamped to one word, exactly as the GLES loader clamps the driver's value and for the
+        // same reason: MobileGL's sample-mask state IS a single 32-bit word
+        // (RenderState::SampleMaskValue) and SampleMaski_State() raises GL_INVALID_VALUE for any
+        // maskNumber other than 0. dEQP's per-case gluStateReset issues glSampleMaski up to
+        // GL_MAX_SAMPLE_MASK_WORDS, so advertising a device's real 2 would abort the whole glcts
+        // process after every single case - the failure da6f75dbd added the GLES clamp to stop,
+        // reproduced on this backend. One word is the spec minimum and therefore always legal.
+        // It is also what PipelineCreatePayload::sampleMask is sized for.
+        caps.MaxSampleMaskWords = std::min(SaturateToInt(p.limits.maxSampleMaskWords), 1);
         caps.MaxTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
@@ -300,7 +309,15 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxFramebufferSamples = ResolveConservativeFramebufferSampleLimit(properties.limits);
         caps.MaxIntegerSamples = MaxSampleCountFromFlags(properties.limits.sampledImageIntegerSampleCounts);
         caps.MaxSamples = caps.MaxFramebufferSamples;
-        caps.MaxSampleMaskWords = SaturateToInt(properties.limits.maxSampleMaskWords);
+        // Clamped to one word, exactly as the GLES loader clamps the driver's value and for the
+        // same reason: MobileGL's sample-mask state IS a single 32-bit word
+        // (RenderState::SampleMaskValue) and SampleMaski_State() raises GL_INVALID_VALUE for any
+        // maskNumber other than 0. dEQP's per-case gluStateReset issues glSampleMaski up to
+        // GL_MAX_SAMPLE_MASK_WORDS, so advertising a device's real 2 would abort the whole glcts
+        // process after every single case - the failure da6f75dbd added the GLES clamp to stop,
+        // reproduced on this backend. One word is the spec minimum and therefore always legal.
+        // It is also what PipelineCreatePayload::sampleMask is sized for.
+        caps.MaxSampleMaskWords = std::min(SaturateToInt(properties.limits.maxSampleMaskWords), 1);
         caps.MaxTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);

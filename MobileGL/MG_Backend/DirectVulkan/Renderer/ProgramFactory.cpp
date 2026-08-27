@@ -381,13 +381,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return used;
         }
 
+        // What a failed validation says, for a caller that wants to put it in its own message.
+        struct SpirvValidationFailure {
+            String message;
+            Int result = 0;
+            SizeT index = 0;
+        };
+
         // Returns whether the module validates. The result used to be discarded everywhere: the
         // call was DEBUG-or-env gated and only logged, so an invalid module produced by a backend
         // transform went straight to vkCreateShaderModule. That is not a survivable outcome on
         // this hardware - Mali r54 SIGSEGVs building the pipeline instead of returning an error,
         // the same "not a validating entry point" behaviour PipelineFactory already documents for
-        // vkCreateGraphicsPipelines - so the one caller that feeds the driver now acts on it.
-        Bool ValidateTransformedSpirv(const Vector<Uint>& spirv, ShaderStage shaderStage, Uint programExternalIndex) {
+        // vkCreateGraphicsPipelines - so the callers that feed the driver now act on it.
+        //
+        // This function does NOT log the failure at E any more. It used to, unlatched, on the
+        // stated grounds that "reaching here already requires the validation switch to be armed,
+        // which bounds the volume" - and that premise died when the two GetOrCreateProgram call
+        // sites became unconditional: MGLOG_E is live at the production INFO level, and Log.h's
+        // own rule is that anything at W or E on a repeatable path must be latched or demoted.
+        // The failure text now travels back through `outFailure` so the LATCHED call-site
+        // messages carry the VUID instead of an unlatched inner one repeating it; what stays here
+        // is the D-level detail and the process-wide counter the test lanes assert on.
+        Bool ValidateTransformedSpirv(const Vector<Uint>& spirv, ShaderStage shaderStage, Uint programExternalIndex,
+                                      SpirvValidationFailure* outFailure = nullptr) {
+            if (outFailure != nullptr) *outFailure = {};
             if (spirv.empty()) {
                 return true;
             }
@@ -411,18 +429,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             spv_diagnostic diagnostic = nullptr;
             const spv_result_t result = spvValidateWithOptions(context, options, &binary, &diagnostic);
             if (result != SPV_SUCCESS) {
-                // MGLOG_E, unlatched: reaching here already requires the validation switch to
-                // be armed, which bounds the volume, and each VUID names a different defect.
-                // (Parked at MGLOG_I until the Log.h level ordering was fixed, when E was
-                // compiled out of every INFO build.) The latch is what a test harness asserts on.
+                const char* message =
+                    diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<null>";
+                const SizeT index = diagnostic != nullptr ? diagnostic->position.index : 0;
+                // The test-lane signal (ShaderCompiler.h documents harnesses snapshotting it and
+                // asserting on the delta). Bumped for every failed validation, including one a
+                // caller goes on to recover from: a transform that produced an invalid module is
+                // a real defect whether or not this run survived it.
                 MG_Util::ShaderTranspiler::ShaderCompiler::NoteSpirvValidationFailure();
-                MGLOG_E(
+                if (outFailure != nullptr) {
+                    *outFailure = {String(message), static_cast<Int>(result), index};
+                }
+                MGLOG_D(
                     "ProgramFactory::ValidateTransformedSpirv: validation failed for stage=%d program=%u result=%d index=%zu msg=%s",
                     static_cast<Int>(shaderStage),
                     programExternalIndex,
                     static_cast<Int>(result),
-                    diagnostic != nullptr ? diagnostic->position.index : 0,
-                    diagnostic != nullptr && diagnostic->error != nullptr ? diagnostic->error : "<null>");
+                    index,
+                    message);
             }
             MOBILEGL_ASSERT(
                 result == SPV_SUCCESS,
@@ -3404,17 +3428,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // variable the link-time sanitize chain delisted from the entry-point interface
                 // is invalid SPIR-V that Mali r54 turns into a SIGSEGV inside pipeline creation
                 // rather than an error return. EnsureEntryPointInterface keeps them honest; this
-                // is the backstop, and the one place in this function where the fallback is
-                // still consistent with everything downstream, because `spv` is the input to
-                // both passes and the descriptor remap has not run yet.
+                // is the backstop.
                 //
-                // Once per program on a cache miss, and only for the single stage that carries
-                // the fixups - not per draw and not per module.
-                if (!ValidateTransformedSpirv(moduleSpirvs[i], stages[i], program.GetExternalIndex())) {
-                    MGLOG_E_ONCE("ProgramFactory: the clip/XFB fixups produced an invalid module for program %u "
-                                 "stage %d; keeping the untransformed one",
-                                 program.GetExternalIndex(), static_cast<Int>(stages[i]));
-                    moduleSpirvs[i] = spv;
+                // The fallback UNWINDS ONE PASS AT A TIME, which matters because the two passes
+                // are not equally optional. Rewinding straight to `spv` would also throw away the
+                // XfbBuffer/XfbStride/Offset decorations, the TransformFeedback capability and the
+                // Xfb execution mode - while the renderer decides to call
+                // vkCmdBeginTransformFeedbackEXT purely from GL state and never looks at the
+                // module. That ships a pipeline whose last pre-rasterization stage has no Xfb mode
+                // into a transform-feedback span, violating
+                // VUID-vkCmdBeginTransformFeedbackEXT-None-04128 on exactly the driver class this
+                // guard exists for. So: try the post-XFB, pre-clip-fixup module first, which keeps
+                // capture working and costs only the clip-space remap.
+                //
+                // Once per program on a cache miss, and only for the single stage that carries the
+                // fixups - not per draw and not per module.
+                SpirvValidationFailure fixupFailure{};
+                if (!ValidateTransformedSpirv(moduleSpirvs[i], stages[i], program.GetExternalIndex(),
+                                              &fixupFailure)) {
+                    SpirvValidationFailure xfbFailure{};
+                    if (fixupInput != &spv &&
+                        ValidateTransformedSpirv(*fixupInput, stages[i], program.GetExternalIndex(), &xfbFailure)) {
+                        MGLOG_E_ONCE("ProgramFactory: the clip fixup produced an invalid module for program %u "
+                                     "stage %d (%s); keeping the capture-decorated one, so this program draws "
+                                     "without the clip-space remap",
+                                     program.GetExternalIndex(), static_cast<Int>(stages[i]),
+                                     fixupFailure.message.c_str());
+                        moduleSpirvs[i] = *fixupInput;
+                    } else {
+                        MGLOG_E_ONCE("ProgramFactory: the clip/XFB fixups produced an invalid module for program %u "
+                                     "stage %d (%s); keeping the untransformed one",
+                                     program.GetExternalIndex(), static_cast<Int>(stages[i]),
+                                     fixupFailure.message.c_str());
+                        moduleSpirvs[i] = spv;
+                    }
                 }
             } else {
                 moduleSpirvs[i] = spv;
@@ -3633,10 +3680,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // introduce a reference to a delisted interface variable, the failure this whole
             // guard exists for. Anything that reaches this line names itself in the log of a
             // shipping build instead of dying anonymously inside the driver.
-            if (!ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex())) {
+            SpirvValidationFailure finalFailure{};
+            if (!ValidateTransformedSpirv(moduleSpv, stages[i], program.GetExternalIndex(), &finalFailure)) {
                 MGLOG_E_ONCE("ProgramFactory: handing vkCreateShaderModule an INVALID module for program %u stage %d - "
-                             "a backend transform after the clip/XFB fixups broke it",
+                             "a backend transform after the clip/XFB fixups broke it (%s)",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]),
+                             finalFailure.message.c_str());
+            }
+
+            // Does the stage the driver will treat as the last pre-rasterization one actually
+            // carry Xfb? Asked of the FINAL bytes, so it answers for whatever the whole transform
+            // chain produced - a rewound clip/XFB backstop, a capture pass that resolved no
+            // varying and changed nothing, anything later that might strip it. The renderer picks
+            // its capture commands from GL state alone and would otherwise open a span against a
+            // pipeline that cannot feed it.
+            if (stages[i] == fixupStage && (flags & ProgramFactory::CompileOptionBit::XfbCapture) &&
+                program.GetTransformFeedbackVaryingCount() > 0 &&
+                !MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresTransformFeedback(moduleSpv)) {
+                MGLOG_E_ONCE("ProgramFactory: program %u was built as a transform-feedback capture variant but its "
+                             "stage %d carries no Xfb execution mode; its capture spans will be declined rather "
+                             "than recorded against a pipeline that cannot feed them",
                              program.GetExternalIndex(), static_cast<Int>(stages[i]));
+                entry.xfbCaptureDeclined = true;
             }
 
             VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -4019,14 +4084,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Vector<Uint>& spirv = binary.value().front();
+        {
+            // Still switch-gated, unlike the two in GetOrCreateProgram: this stage is synthesized
+            // by MobileGL from a fixed template rather than transformed from application SPIR-V,
+            // so a failure here is a MobileGL bug to catch in a validating lane, not something a
+            // shipping build can be handed by an application. The message is latched all the same
+            // - the pass-through cache is keyed on patchVertices, so a broken template would
+            // otherwise re-report once per distinct patch size.
+            Bool validateThisOne = false;
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-        ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
+            validateThisOne = true;
 #else
-        if (m_enableSpirvValidation) {
-            MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
-            ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0);
-        }
+            validateThisOne = m_enableSpirvValidation;
+            if (validateThisOne) MG_Util::ShaderTranspiler::ShaderCompiler::PrepareSpirvValidation();
 #endif
+            SpirvValidationFailure passthroughFailure{};
+            if (validateThisOne &&
+                !ValidateTransformedSpirv(spirv, ShaderStage::TessControl, 0, &passthroughFailure)) {
+                MGLOG_E_ONCE("ProgramFactory: the synthesized pass-through tessellation control stage for "
+                             "patchVertices=%u does not validate (%s)",
+                             patchVertices, passthroughFailure.message.c_str());
+            }
+        }
 
         VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
         smci.codeSize = spirv.size() * sizeof(Uint);

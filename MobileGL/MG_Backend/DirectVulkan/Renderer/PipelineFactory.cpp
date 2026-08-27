@@ -447,7 +447,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GL_SAMPLE_MASK / glSampleMaski. Left at nullptr - which Vulkan reads as all-ones - until
         // now, so glSampleMaski was a silent no-op on this backend while DirectGLES forwarded it.
         // The pointer has to outlive the vkCreateGraphicsPipelines call, which the payload does.
-        ms.pSampleMask = &payload.sampleMask;
+        ms.pSampleMask = payload.sampleMask;
 
         VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depthStencil.depthTestEnable = payload.depthTestEnable ? VK_TRUE : VK_FALSE;

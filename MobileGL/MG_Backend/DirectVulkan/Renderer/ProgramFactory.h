@@ -202,6 +202,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // tessellation stages are present or neither
             // (VUID-VkGraphicsPipelineCreateInfo-pStages-00730). So the draw path has to supply
             // the pass-through stage GL describes; see GetOrCreatePassthroughTessControlStage.
+            // True when this program was built AS a transform-feedback capture variant but its
+            // last pre-rasterization module does NOT carry the Xfb execution mode - so the
+            // renderer must decline the capture span instead of issuing
+            // vkCmdBeginTransformFeedbackEXT against it
+            // (VUID-vkCmdBeginTransformFeedbackEXT-None-04128).
+            //
+            // Two ways to get here, and neither is visible from GL state, which is all
+            // BeginXfbCaptureForDraw otherwise consults: the clip/XFB validation backstop had to
+            // rewind past the capture decoration, or XfbCaptureDecoratePass resolved none of the
+            // requested varyings and returned without changing anything (its own MGLOG_E path)
+            // while its runner still reported success. Both used to ship a non-Xfb module under
+            // an Xfb-flagged cache entry - the flag and the layout are part of the program cache
+            // key, so it was sticky for every later captured draw of the program, not a glitch.
+            Bool xfbCaptureDeclined = false;
             Bool needsPassthroughTessControl = false;
             // ...and the pass-through this renderer can synthesize carries gl_Position and
             // nothing else, so it is only correct when the evaluation stage's inputs are

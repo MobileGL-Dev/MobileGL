@@ -758,6 +758,33 @@ namespace MobileGL {
                 return false;
             }
 
+            Bool ShaderCompiler::ModuleDeclaresTransformFeedback(const Vector<Uint32>& spirv) {
+                if (spirv.empty()) {
+                    return false;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresTransformFeedback"),
+                    spirv.data(), spirv.size());
+                if (!context) {
+                    // Unparseable is not a capture verdict; say no, which makes the caller decline
+                    // the span rather than issue transform-feedback commands against it.
+                    return false;
+                }
+                // The exact question VUID-vkCmdBeginTransformFeedbackEXT-None-04128 asks of the
+                // bound pipeline's last pre-rasterization stage: was it declared with the Xfb
+                // execution mode. Reading the execution modes rather than the TransformFeedback
+                // capability because the capability can legally be declared by a module that has
+                // no Xfb entry point, and the VUID is about the mode.
+                for (const spvtools::opt::Instruction& mode : context->module()->execution_modes()) {
+                    if (mode.NumInOperands() >= 2 &&
+                        static_cast<spv::ExecutionMode>(mode.GetSingleWordInOperand(1)) ==
+                            spv::ExecutionMode::Xfb) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             Bool ShaderCompiler::ModuleDeclaresFloat64(const Vector<Uint32>& spirv) {
                 if (spirv.empty()) {
                     // Same reasoning as ModuleDeclaresBufferTextureSampler: a stage that produced

@@ -532,6 +532,12 @@ namespace MobileGL {
                 // check exists so that failure can be reported as the missing capability it is,
                 // naming the shader, rather than as a driver info log nobody sees.
                 static Bool ModuleDeclaresBufferTextureSampler(const Vector<Uint32>& spirv);
+                // Does this module carry the Xfb execution mode - i.e. would a
+                // vkCmdBeginTransformFeedbackEXT against a pipeline whose last pre-rasterization
+                // stage is this module satisfy VUID-vkCmdBeginTransformFeedbackEXT-None-04128?
+                // Asked of the FINAL bytes, so it answers for whatever the backend transform
+                // chain actually produced rather than for what it was asked to produce.
+                static Bool ModuleDeclaresTransformFeedback(const Vector<Uint32>& spirv);
 
                 // True when the module still declares a 64-bit float type. After
                 // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the

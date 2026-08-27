@@ -99,9 +99,14 @@ namespace MobileGL::MG_State::GLState {
         // is deliberately left unbound so it samples as (0,0,0,1)). Deliberately coarse - ANY
         // texture, ANY sampler - so that no mutation can slip past a per-unit binding memo; the
         // setters that feed it all early-out when the value is unchanged, so the redundant
-        // glTexParameteri calls applications issue every frame do not churn it. Kept separate
-        // from the bind generation because the sampled texture SET is unaffected by these, and
-        // the Vulkan backend's set memo keys on that one.
+        // glTexParameteri calls applications issue every frame do not churn it.
+        //
+        // Kept separate from the bind generation because the two answer different questions, NOT
+        // because the sampled texture SET is immune to this one - it is not, and the claim that
+        // it was is what this comment used to say. DirectVulkan leaves an incomplete texture out
+        // of the set entirely and substitutes a fallback, so completeness decides membership, and
+        // its sampled-set memo carries THIS generation alongside the bind one. Any memo of a
+        // resolved per-unit binding - or of which textures a draw samples at all - needs both.
         Uint64 GetSamplingResolutionGeneration() const { return m_samplingResolutionGeneration; }
         void BumpSamplingResolutionGeneration() { ++m_samplingResolutionGeneration; }
 

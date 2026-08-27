@@ -768,9 +768,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // version: the version is monotonic and bumps on every pipeline-state
         // change, so an unchanged (version, colorAttachmentCount) proves the state
         // bytes are unchanged and the hash can be reused without re-reading them.
-        Uint64 ComputePipelineStateHash(Uint32 colorAttachmentCount) const;
+        Uint64 ComputePipelineStateHash(Uint32 colorAttachmentCount,
+                                        VkSampleCountFlagBits rasterizationSamples) const;
+        // The effective GL_SAMPLE_MASK word for a draw at this rasterization sample count; see
+        // the definition for the GL-vs-Vulkan rule it reconciles. Shared by the pipeline payload
+        // and the pipeline-state memo word so the two cannot disagree.
+        Uint32 ResolveEffectiveSampleMask(VkSampleCountFlagBits rasterizationSamples) const;
         Uint m_pipelineStateHashVersion = 0;
         Uint32 m_pipelineStateHashColorCount = 0;
+        // The sample count the cached hash was computed at. A pipeline-state input now depends on
+        // it (the effective sample mask), so a draw that changes only the target's sample count
+        // has to recompute rather than reuse.
+        VkSampleCountFlagBits m_pipelineStateHashSampleCount = VK_SAMPLE_COUNT_1_BIT;
         Uint64 m_pipelineStateHash = 0;
         Bool m_pipelineStateHashValid = false;
         // GetShaderTransformFlags memo. NOT pure in the pre-transform alone: the
@@ -812,7 +821,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Skip the per-draw CollectSampledTextures walk (~5% of the render thread) when the sampled
         // texture SET is provably unchanged from the previous draw: same program (lifetime id +
         // backend-state version, which covers sampler-uniform reassignment / relink) and transform
-        // flags, and no texture bind/unbind/delete since (GetTextureBindGeneration). On a hit,
+        // flags, no texture bind/unbind/delete since (GetTextureBindGeneration), and nothing that
+        // moves a texture's shape or a sampler's parameters since (GetSamplingResolutionGeneration
+        // - membership depends on mipmap-completeness, which both of those decide). On a hit,
         // m_sampledTexturesScratch still holds the previous draw's list and steps 2-4 (feedback /
         // layout probe / transition) re-run on it, so layout correctness is unaffected - only the GL
         // walk is skipped. The program lifetime id (never reused, unlike the GL name) and the
@@ -823,6 +834,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_lastSampledSetProgramVersion = 0;
         ProgramFactory::CompileOptionFlags m_lastSampledSetTransformFlags = {};
         Uint64 m_lastSampledSetBindGeneration = 0;
+        Uint64 m_lastSampledSetSamplingGeneration = 0;
+        // Set from the draw's resolved VkProgramObject on both the full and the fast setup paths;
+        // read by BeginXfbCaptureForDraw, which has only GL state otherwise. See
+        // VkProgramObject::xfbCaptureDeclined.
+        Bool m_currentDrawXfbCaptureDeclined = false;
 
         // Memo for the per-draw explicit-LOD-0 eligibility probe
         // (ProgramSamplesOnlySingleLevelTextures): same key family as the
@@ -921,6 +937,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // probe the pipeline memo after a state change without re-fetching the
             // render-pass entry (the pass itself is pinned by renderPassHash above).
             Uint32 renderPassColorCount = 0;
+            // Pinned with the colour count and for the same reason: the fast path recomputes the
+            // pipeline-state value hash from the snapshot, and that hash reads the sample count.
+            VkSampleCountFlagBits renderPassSampleCount = VK_SAMPLE_COUNT_1_BIT;
             VkPipeline pipeline = VK_NULL_HANDLE;
             // layoutHash of the snapshotting draw's vertex-input state. The pipeline and
             // the vertex-input pre-flight depend on the VAO only through this (plus the

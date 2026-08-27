@@ -37,10 +37,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // glGenTextures ever hands this out, and nothing looks a placeholder up by name - so the
         // id only has to stay clear of the application's, exactly like the sampled fallback's.
         constexpr Uint kUnboundStorageImageExternalIndex = 0xFFFFFF01u;
-        // The multisample sampled fallbacks. Separate ids for the same reason as the two above:
-        // they must not collide with anything glGenTextures can hand out.
-        constexpr Uint kFallbackTexture2DMultisampleExternalIndex = 0xFFFFFF02u;
-        constexpr Uint kFallbackTexture2DMultisampleArrayExternalIndex = 0xFFFFFF03u;
+        // The multisample sampled fallbacks: one per (target, numeric domain), because unlike the
+        // single-sampled fallback they cannot be reinterpreted into another domain at view time
+        // (see GetFallbackMultisampleTexture). Six reserved ids, contiguous from this base for the
+        // same reason as the two above - they must not collide with anything glGenTextures can
+        // hand out.
+        constexpr Uint kFallbackMultisampleExternalIndexBase = 0xFFFFFF02u;
+        constexpr Uint kFallbackMultisampleExternalIndexCount = 6u;
 
         // MobileGL's own stand-in textures, by the reserved ids above. Nothing an application can
         // do reaches one, so anything keyed on the GL object an application bound - image-unit
@@ -49,8 +52,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (texture == nullptr) return false;
             const Uint index = static_cast<Uint>(texture->GetExternalIndex());
             return index == kFallbackTexture2DExternalIndex || index == kUnboundStorageImageExternalIndex ||
-                   index == kFallbackTexture2DMultisampleExternalIndex ||
-                   index == kFallbackTexture2DMultisampleArrayExternalIndex;
+                   (index >= kFallbackMultisampleExternalIndexBase &&
+                    index < kFallbackMultisampleExternalIndexBase + kFallbackMultisampleExternalIndexCount);
         }
 
         // The R32 member of each numeric class. Every one of the three is a MANDATORY-support
@@ -375,8 +378,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_textureManager = nullptr;
         m_samplerManager = nullptr;
         m_fallbackTexture2D.reset();
-        m_fallbackTexture2DMultisample.reset();
-        m_fallbackTexture2DMultisampleArray.reset();
+        m_fallbackMultisampleTextures.clear();
     }
 
     void UniformManager::BeginFrame(Uint32 frameIndex) {
@@ -513,7 +515,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             texture = nullptr;
         }
         if (texture == nullptr) {
-            fallbackHolder = GetFallbackTexture(preferredTarget);
+            // The binding's sampler class, read here rather than through the `numericDomain`
+            // local further down (it is declared after this point): the multisample placeholder
+            // has to be built in the class the shader will read it in.
+            fallbackHolder = GetFallbackTexture(preferredTarget, programObj.samplerNumericDomainByBinding[binding]);
             texture = fallbackHolder.get();
             if (texture == nullptr) {
                 MGLOG_E_ONCE("ResolveSamplerDescriptor: no fallback texture available for binding=%u ('%s') "
@@ -1384,7 +1389,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return outImageInfo.imageView != VK_NULL_HANDLE;
     }
 
-    SharedPtr<MG_State::GLState::ITextureObject> UniformManager::GetFallbackTexture(TextureTarget target) const {
+    SharedPtr<MG_State::GLState::ITextureObject> UniformManager::GetFallbackTexture(
+        TextureTarget target, SamplerNumericDomain numericDomain) const {
         // A multisample sampler cannot be served by the single-sampled 2D image below - its
         // descriptor demands a multisample view - so it gets its own placeholder rather than no
         // placeholder at all. Without one, ResolveSamplerDescriptor declined and
@@ -1395,7 +1401,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // incomplete texture is undefined, not fatal, so the draw has to happen.
         if (target == TextureTarget::Texture2DMultisample ||
             target == TextureTarget::Texture2DMultisampleArray) {
-            return GetFallbackMultisampleTexture(target);
+            return GetFallbackMultisampleTexture(target, numericDomain);
         }
         if (target != TextureTarget::Texture2D && target != TextureTarget::TextureRectangle) {
             MGLOG_E_ONCE("UniformManager::GetFallbackTexture: no fallback exists for target=%d",
@@ -1403,6 +1409,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return nullptr;
         }
 
+        // The single-sampled fallback stays domain-agnostic: it is storage-image capable, so its
+        // image carries VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT and ResolveSampledImageViewFormat can
+        // hand an integer sampler an R8G8B8A8_UINT view of these same RGBA8 texels. A multisample
+        // image can never carry that bit, which is why the arm above needs one object per domain.
         if (m_fallbackTexture2D == nullptr) {
             auto fallbackTexture = MakeShared<MG_State::GLState::TextureObject2D>(kFallbackTexture2DExternalIndex);
             fallbackTexture->SetInternalFormat(TextureInternalFormat::RGBA8);
@@ -1421,24 +1431,56 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     SharedPtr<MG_State::GLState::ITextureObject> UniformManager::GetFallbackMultisampleTexture(
-        TextureTarget target) const {
+        TextureTarget target, SamplerNumericDomain numericDomain) const {
+        // ONE PLACEHOLDER PER NUMERIC DOMAIN, unlike the single-sampled fallback.
+        //
+        // A descriptor whose image format is in a different numeric class than the sampler that
+        // reads it needs a format-reinterpreting view, and building one needs
+        // VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT on the image. A multisample image can never have it:
+        // SyncTextureResource computes storageImageCapable as `!isMultisampleTexture && ...`, and
+        // the only other source of the bit is the sRGB twin, which RGBA8 is not. So an RGBA8
+        // placeholder handed to a usampler2DMS made GetOrCreateSampledImageView bail with "needs
+        // mutable image format", ResolveSamplerDescriptor return false, and the draw be dropped -
+        // the exact outcome the placeholder exists to prevent, just reached later. Matching the
+        // image's own format to the sampler's class instead means no reinterpreting view is
+        // needed at all.
         const Bool arrayed = target == TextureTarget::Texture2DMultisampleArray;
-        auto& slot = arrayed ? m_fallbackTexture2DMultisampleArray : m_fallbackTexture2DMultisample;
-        if (slot != nullptr) {
-            return slot;
+        TextureInternalFormat internalFormat = TextureInternalFormat::RGBA8;
+        Uint32 domainSlot = 0;
+        switch (numericDomain) {
+        case SamplerNumericDomain::SignedInteger:
+            internalFormat = TextureInternalFormat::RGBA8I;
+            domainSlot = 1;
+            break;
+        case SamplerNumericDomain::UnsignedInteger:
+            internalFormat = TextureInternalFormat::RGBA8UI;
+            domainSlot = 2;
+            break;
+        case SamplerNumericDomain::Float:
+        case SamplerNumericDomain::Unknown:
+        default:
+            // Unknown reads as float, matching PlaceholderFormatForNumericDomain's own default:
+            // a shader whose sampler class could not be reflected is far likelier to be a plain
+            // sampler2DMS than an integer one, and a float view is the only one buildable without
+            // the mutable bit anyway.
+            break;
+        }
+        const Uint32 key = (arrayed ? kFallbackMultisampleExternalIndexCount / 2 : 0u) + domainSlot;
+        auto cached = m_fallbackMultisampleTextures.find(key);
+        if (cached != m_fallbackMultisampleTextures.end()) {
+            return cached->second;
         }
 
         const TextureUploadTarget uploadTarget = arrayed ? TextureUploadTarget::Texture2DMultisampleArray
                                                          : TextureUploadTarget::Texture2DMultisample;
+        const Uint externalIndex = kFallbackMultisampleExternalIndexBase + key;
         SharedPtr<MG_State::GLState::TextureObjectMipmap> texture;
         if (arrayed) {
-            texture = MakeShared<MG_State::GLState::TextureObject2DMultisampleArray>(
-                kFallbackTexture2DMultisampleArrayExternalIndex);
+            texture = MakeShared<MG_State::GLState::TextureObject2DMultisampleArray>(externalIndex);
         } else {
-            texture = MakeShared<MG_State::GLState::TextureObject2DMultisample>(
-                kFallbackTexture2DMultisampleExternalIndex);
+            texture = MakeShared<MG_State::GLState::TextureObject2DMultisample>(externalIndex);
         }
-        texture->SetInternalFormat(TextureInternalFormat::RGBA8);
+        texture->SetInternalFormat(internalFormat);
         // TWO samples, never one. VUID-RuntimeSpirv-samples-08726 forbids an OpTypeImage with
         // MS = 1 from reading a VK_SAMPLE_COUNT_1_BIT image, which is exactly the hazard
         // VkTextureManager::SyncTextureResource's one-sample floor exists to avoid; a placeholder
@@ -1453,10 +1495,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         texture->AllocateStorage(uploadTarget, 0, {.texelSize = {1, 1, 1}, .byteSize = 0});
         texture->TruncateMipmapLevels(uploadTarget, 1);
         texture->MarkStorageDirty(uploadTarget, 0, false);
-        slot = texture;
-        MGLOG_D("UniformManager::GetFallbackMultisampleTexture: created placeholder target=%d",
-                static_cast<Int>(target));
-        return slot;
+        // Worth knowing if it ever fires: an integer multisample format can legitimately support
+        // no count above one on a device (framebufferIntegerColorSampleCounts is allowed to be
+        // VK_SAMPLE_COUNT_1_BIT), and SyncTextureResource's round-down would then hand this
+        // placeholder a single-sampled image, which is the samples-08726 shape the SetSamples(2)
+        // above exists to avoid. It already warns from there; nothing better is available - a
+        // one-sample integer image is still a draw, and declining is the outcome this whole
+        // placeholder replaced.
+        MGLOG_D("UniformManager::GetFallbackMultisampleTexture: created placeholder target=%d domain=%d format=%d",
+                static_cast<Int>(target), static_cast<Int>(numericDomain), static_cast<Int>(internalFormat));
+        return m_fallbackMultisampleTextures.emplace(key, Move(texture)).first->second;
     }
 
     VkBufferView UniformManager::AcquireUnboundTexelBufferView(VkFormat declaredFormat,
@@ -1645,7 +1693,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // its first use instead of leaving that work to happen inside an active pass.
             // Ask GetFallbackTexture rather than re-listing the targets it serves: that list grew
             // a multisample arm and the two must not drift apart.
-            texture = GetFallbackTexture(preferredTarget).get();
+            texture = GetFallbackTexture(preferredTarget, programObj.samplerNumericDomainByBinding[binding]).get();
             if (texture == nullptr) {
                 return false;
             }

@@ -157,6 +157,37 @@ void main() {
 }
 )";
 
+        // The integer spellings of the same thing. These are the ones a plain RGBA8 multisample
+        // placeholder cannot serve: a multisample image can never carry MUTABLE_FORMAT, so the
+        // reinterpreting view an integer sampler would need over UNORM texels is unbuildable and
+        // the descriptor resolve used to fail, losing the draw after the placeholder had already
+        // been created.
+        constexpr const char* kUsampler2DMSFragmentSource = R"(#version 430 core
+uniform usampler2DMS u_unbound;
+uniform int u_readUnbound;
+out vec4 o_color;
+void main() {
+    vec4 color = vec4(0.0, 1.0, 0.0, 1.0);
+    if (u_readUnbound != 0) {
+        color = vec4(texelFetch(u_unbound, ivec2(0), 0));
+    }
+    o_color = color;
+}
+)";
+
+        constexpr const char* kIsampler2DMSFragmentSource = R"(#version 430 core
+uniform isampler2DMS u_unbound;
+uniform int u_readUnbound;
+out vec4 o_color;
+void main() {
+    vec4 color = vec4(0.0, 1.0, 0.0, 1.0);
+    if (u_readUnbound != 0) {
+        color = vec4(texelFetch(u_unbound, ivec2(0), 0));
+    }
+    o_color = color;
+}
+)";
+
         constexpr const char* kImage2DFragmentSource = R"(#version 430 core
 layout(binding = 0, rgba8) uniform writeonly image2D u_unbound;
 out vec4 o_color;
@@ -452,6 +483,16 @@ void main() {
     TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundSampler2DMSDoesNotLoseTheDraw) {
         if (!Ready() || IsSkipped()) return;
         ExpectDrawStillRuns(kSampler2DMSFragmentSource, "sampler2DMS");
+    }
+
+    TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundUnsignedSampler2DMSDoesNotLoseTheDraw) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectDrawStillRuns(kUsampler2DMSFragmentSource, "usampler2DMS");
+    }
+
+    TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundSignedSampler2DMSDoesNotLoseTheDraw) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectDrawStillRuns(kIsampler2DMSFragmentSource, "isampler2DMS");
     }
 
     TEST_F(UnboundImageDescriptorScenario, AFormatlessWriteonlyImage2DLeftUnboundDoesNotLoseTheDispatch) {

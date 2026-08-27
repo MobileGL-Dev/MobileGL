@@ -44,13 +44,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // (VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784).
             Bool sampleShadingEnable = false;
             Float minSampleShading = 0.0f;
-            // glEnable(GL_SAMPLE_MASK) + glSampleMaski, the fixed-function coverage mask. One
-            // word is the whole mask: GL_MAX_SAMPLE_MASK_WORDS is 1 on both backends, and Vulkan
-            // reads ceil(rasterizationSamples / 32) words. Pipeline state like the two above -
-            // Vulkan has no dynamic sample mask before VK_EXT_extended_dynamic_state3 - so it is
-            // hashed with them, and 0xffffffff (the GL default, and what a null pSampleMask
-            // means) has to keep producing the pipeline it always did.
-            Uint32 sampleMask = 0xffffffffu;
+            // glEnable(GL_SAMPLE_MASK) + glSampleMaski, the fixed-function coverage mask, already
+            // reduced to what GL says this draw gets (VulkanRenderer::ResolveEffectiveSampleMask:
+            // all-ones unless the target is genuinely multisampled). Pipeline state like the two
+            // above - Vulkan has no dynamic sample mask before VK_EXT_extended_dynamic_state3 -
+            // so it is hashed with them, and all-ones has to keep producing the pipeline a null
+            // pSampleMask always did.
+            //
+            // TWO words, though GL only ever fills the first. GL_MAX_SAMPLE_MASK_WORDS is clamped
+            // to 1 on both backends, so glSampleMaski writes index 0 and nothing else - but the
+            // count Vulkan READS is ceil(rasterizationSamples / 32), which is 2 on a 64-sample
+            // target, and GetAdvertisedMaxSamples does not cap the driver's sample count. A
+            // single Uint32 here let such a pipeline read one word past the member (the next
+            // struct field). The second word is all-ones: full coverage for samples 32..63, which
+            // is the only honest answer when GL has no state describing them.
+            Uint32 sampleMask[2] = {0xffffffffu, 0xffffffffu};
             Uint32 subpass = 0;
             VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             Bool primitiveRestartEnable = false;
