@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <spirv_reflect.h>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "Includes.h"
@@ -31,6 +32,13 @@ protected:
     void SetUp() override { MobileGL::Initialize(); }
 
     void TearDown() override {}
+
+    // GL error flags are sticky per code and the context outlives an individual test in this
+    // binary, so a pending error would be handed to whoever runs next.
+    static void DrainProgramTestErrors() {
+        for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+        }
+    }
 };
 
 TEST_F(ProgramTest, Sanity) {
@@ -3808,4 +3816,78 @@ TEST_F(ProgramTest, ImplicitLocationStaysInRangeWhenABufferBlockSharesTheProgram
         runCase(maxLocations - implicitCount, implicitCount);
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// --- `layout(vertices = N) out` against GL_MAX_PATCH_VERTICES -----------------------------------
+//
+// GL 4.6 core 11.2.1.1 makes N > MAX_PATCH_VERTICES a LINK failure. Nothing enforced it: glslang
+// only rejects N <= 0, and carries maxPatchVertices in TBuiltInResource purely so
+// gl_MaxPatchVertices can expand from it. The check deliberately lives at link and not at compile,
+// because KHR-GL4x.tessellation_shader.compilation_and_linking_errors.
+// tc_invalid_output_patch_vertex_count requires the shader to COMPILE ("Compilation passed as
+// allowed") and only the program to fail.
+TEST_F(ProgramTest, TessControlOutputPatchSizePastTheLimitFailsToLinkButStillCompiles) {
+    GLint maxPatchVertices = 0;
+    GetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
+    ASSERT_GT(maxPatchVertices, 0);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const char* kVs = R"(#version 460 core
+void main() { gl_Position = vec4(0.0); }
+)";
+    const char* kTes = R"(#version 460 core
+layout(triangles, equal_spacing, cw) in;
+void main() { gl_Position = gl_in[0].gl_Position; }
+)";
+
+    const char* kTcsPrologue = R"(#version 460 core
+layout(vertices = )";
+    const char* kTcsEpilogue = R"() out;
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    gl_TessLevelOuter[0] = 1.0;
+}
+)";
+
+    const auto buildWith = [&](const GLint vertices) {
+        const String tcs = String(kTcsPrologue) + std::to_string(vertices) + kTcsEpilogue;
+        const char* tcsSource = tcs.c_str();
+
+        const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(vs, 1, &kVs, nullptr);
+        CompileShader(vs);
+        const GLuint tc = CreateShader(GL_TESS_CONTROL_SHADER);
+        ShaderSource(tc, 1, &tcsSource, nullptr);
+        CompileShader(tc);
+        const GLuint te = CreateShader(GL_TESS_EVALUATION_SHADER);
+        ShaderSource(te, 1, &kTes, nullptr);
+        CompileShader(te);
+
+        // The offending stage COMPILES; only the link is allowed to notice.
+        GLint tcCompiled = GL_FALSE;
+        GetShaderiv(tc, GL_COMPILE_STATUS, &tcCompiled);
+        EXPECT_EQ(tcCompiled, GL_TRUE) << "vertices=" << vertices << " must still compile";
+
+        const GLuint program = CreateProgram();
+        AttachShader(program, vs);
+        AttachShader(program, tc);
+        AttachShader(program, te);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        char infoLog[1024] = "";
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        return std::pair<GLint, String>{linkStatus, String(infoLog)};
+    };
+
+    const auto atTheLimit = buildWith(maxPatchVertices);
+    EXPECT_EQ(atTheLimit.first, GL_TRUE)
+        << "exactly GL_MAX_PATCH_VERTICES is legal: " << atTheLimit.second;
+
+    const auto pastTheLimit = buildWith(maxPatchVertices + 1);
+    EXPECT_EQ(pastTheLimit.first, GL_FALSE) << "one past GL_MAX_PATCH_VERTICES must not link";
+    EXPECT_NE(pastTheLimit.second.find("GL_MAX_PATCH_VERTICES"), String::npos)
+        << "the info log must name the limit it broke: " << pastTheLimit.second;
+
+    DrainProgramTestErrors();
 }

@@ -686,6 +686,38 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
+        // GL_TESS_CONTROL_OUTPUT_VERTICES, i.e. the `layout(vertices = N) out` the control stage
+        // declared, and the limit that goes with it.
+        //
+        // GL 4.6 core 11.2.1.1: the LINK fails when N is greater than MAX_PATCH_VERTICES. Nothing
+        // enforced it - glslang's layout handling only rejects N <= 0 (ParseHelper.cpp "must be
+        // greater than 0") and carries maxPatchVertices in TBuiltInResource purely so
+        // gl_MaxPatchVertices can expand from it, exactly the gap ValidateImageUniformLimits
+        // documents for image uniforms. Checked at LINK rather than at compile on purpose: the CTS
+        // requires the offending shader to COMPILE ("Compilation passed as allowed") and only the
+        // link to fail, and turning it into a parse error would newly break an application that
+        // compiles such a shader and never links it.
+        //
+        // The limit is the one glGetIntegerv answers (GL_Getter.cpp reads the same
+        // DynamicBackendParameters field), so the advertised number and the enforced number cannot
+        // drift apart.
+        artifacts.tcsOutputVertices = 0;
+        if (const glslang::TIntermediate* tcs = artifacts.program->getIntermediate(EShLangTessControl)) {
+            artifacts.tcsOutputVertices = static_cast<Int>(tcs->getVertices());
+            if (artifacts.tcsOutputVertices > env.params.MaxPatchVertices) {
+                artifacts.linkStatus = false;
+                // Same invariant as the compute local-size gate above: a rejected link leaves no
+                // TProgram behind for a query surface to find.
+                artifacts.program.reset();
+                artifacts.infoLog = std::format(
+                    "Tessellation control shader declares an output patch of {} vertices, more than the {} "
+                    "GL_MAX_PATCH_VERTICES allows.",
+                    artifacts.tcsOutputVertices, env.params.MaxPatchVertices);
+                DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+                return;
+            }
+        }
+
         // ---- everything below this line up to GenerateSpirv() is the GL query surface ----
         //
         // ORDERING NOTE (rewritten 2026-08-10; the constraint it records was RETESTED, not

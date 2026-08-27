@@ -1317,6 +1317,10 @@ namespace MobileGL::MG_State::GLState {
             Vector<Uint32> gsStripTriangles;
             Bool gsStripCaptureFixup = false;
             GLenum gsInputPrimitive = GL_NONE;
+            // GL_TESS_CONTROL_OUTPUT_VERTICES: the `layout(vertices = N) out` of the linked
+            // tessellation control stage, or 0 when the program has none. Checked against
+            // GL_MAX_PATCH_VERTICES at link (GL 4.6 core 11.2.1.1).
+            Int tcsOutputVertices = 0;
             GLenum xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
             Int xfbVaryingNameMaxLength = 0;
             Bool xfbNeedsScatteredCapture = false;
@@ -1501,6 +1505,10 @@ namespace MobileGL::MG_State::GLState {
         // GL_LINES_ADJACENCY, GL_TRIANGLES or GL_TRIANGLES_ADJACENCY), or GL_NONE when the
         // program has no geometry stage. Draws must present a compatible primitive type.
         GLenum GetGeometryInputType() const { return Artifacts().gsInputPrimitive; }
+        // GL_TESS_CONTROL_OUTPUT_VERTICES of the linked tessellation control stage, or 0 when
+        // the program has no such stage. Never greater than GL_MAX_PATCH_VERTICES: a program
+        // that declared more does not link at all (GL 4.6 core 11.2.1.1).
+        Int GetTessControlOutputVertices() const { return Artifacts().tcsOutputVertices; }
 
         Uint GetExternalIndex() const { return m_externalIndex; }
         // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL
