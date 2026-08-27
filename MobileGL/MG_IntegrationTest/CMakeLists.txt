@@ -114,6 +114,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/UnboundImageDescriptorScenario.cpp
     Scenarios/IntegerBorderColorScenario.cpp
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
+    Scenarios/RenderbufferBlendFormatScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE

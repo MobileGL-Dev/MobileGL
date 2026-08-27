@@ -135,6 +135,26 @@ namespace MGITest {
                                          << offenders << " of " << pixels.size() << " texels wrong)";
             }
 
+            // Level 0 defined, a GAP, then `level` defined. GL keeps the intervening levels at a zero
+            // extent, so the backend's mip walk stops at the gap and the VkImage ends up with FEWER
+            // mip levels than the GL level count - which is a different shape from "no image at all"
+            // and is why the readback has to bound the level against the IMAGE.
+            void MakeTextureWithAGapBefore(GLint level) {
+                if (m_texture != 0) glDeleteTextures(1, &m_texture);
+                glGenTextures(1, &m_texture);
+                glBindTexture(GL_TEXTURE_2D, m_texture);
+                const std::vector<Texel8> base(static_cast<std::size_t>(kLevelExtent) * kLevelExtent, kInitialValue);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kLevelExtent, kLevelExtent, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             base.data());
+                const std::vector<Texel8> gapped(static_cast<std::size_t>(kLevelExtent) * kLevelExtent, kInitialValue);
+                glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, kLevelExtent, kLevelExtent, 0, GL_RGBA,
+                             GL_UNSIGNED_BYTE, gapped.data());
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, level);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                ASSERT_EQ(FirstGLError(), 0u) << "texture setup with a gap before level " << level;
+            }
+
             GLuint m_texture = 0;
         };
 
@@ -198,6 +218,32 @@ namespace MGITest {
                 ASSERT_EQ(actual, expected) << "at (" << x << "," << y << ")";
             }
         }
+        Gl().EndFrame();
+    }
+
+    // The adjacent shape the first fix did NOT cover: level 0 defined, a gap, then the level being
+    // read. This one DOES get a VkImage - just one with fewer mip levels than GL thinks the texture
+    // has - so the "no VkImage" test passes and the GL level was written straight into
+    // imageSubresource.mipLevel and into a VkImageMemoryBarrier's baseMipLevel. An out-of-range
+    // subresource is a promise the driver takes at face value; the glCopyImageSubData path two
+    // functions away grew the same guard after it SIGSEGV'd inside the Adreno driver.
+    //
+    // The level being read really does hold its own data (the shadow is its only copy, since nothing
+    // ever uploaded it), so the correct answer is the uploaded bytes - not a decline.
+    TEST_F(ClearTexImageUndefinedLevelZeroScenario, ReadBackALevelSeparatedFromLevelZeroByAGap) {
+        if (!Ready()) GTEST_SKIP();
+        MakeTextureWithAGapBefore(kDefinedLevel);
+
+        ExpectAllTexels("before the clear", ReadLevel(kDefinedLevel), kInitialValue);
+
+        glClearTexImage(m_texture, kDefinedLevel, GL_RGBA, GL_UNSIGNED_BYTE, &kClearValue);
+        EXPECT_EQ(FirstGLError(), 0u) << "glClearTexImage was rejected";
+
+        ExpectAllTexels("after the clear", ReadLevel(kDefinedLevel), kClearValue);
+
+        // Level 0 is backed by the real image and must still read back from it, so the level bound is
+        // about the level and not about the texture.
+        ExpectAllTexels("level 0 after clearing level 3", ReadLevel(0), kInitialValue);
         Gl().EndFrame();
     }
 

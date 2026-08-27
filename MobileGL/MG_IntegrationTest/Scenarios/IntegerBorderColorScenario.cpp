@@ -130,6 +130,7 @@ void main()
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
                 if (m_outputTexture != 0) glDeleteTextures(1, &m_outputTexture);
                 if (m_sourceTexture != 0) glDeleteTextures(1, &m_sourceTexture);
+                if (m_narrowTexture != 0) glDeleteTextures(1, &m_narrowTexture);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
             }
 
@@ -195,11 +196,69 @@ void main()
                 }
             }
 
+            // A narrow-format source built on demand, for the clamp cases. Returns the texture, which
+            // the caller owns until TearDown deletes it through m_narrowTexture.
+            void MakeNarrowSource(GLenum internalFormat, GLenum clientFormat, const void* texels,
+                                  const GLint* border, bool borderIsUnsigned) {
+                glGenTextures(1, &m_narrowTexture);
+                glBindTexture(GL_TEXTURE_2D, m_narrowTexture);
+                glTexStorage2D(GL_TEXTURE_2D, 1, internalFormat, 2, 2);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, clientFormat,
+                                internalFormat == GL_R8UI ? GL_UNSIGNED_BYTE : GL_BYTE, texels);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+                if (borderIsUnsigned) {
+                    const GLuint asUnsigned[4] = {static_cast<GLuint>(border[0]), static_cast<GLuint>(border[1]),
+                                                  static_cast<GLuint>(border[2]), static_cast<GLuint>(border[3])};
+                    glTexParameterIuiv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, asUnsigned);
+                } else {
+                    glTexParameterIiv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border);
+                }
+                ASSERT_EQ(FirstGLError(), 0u) << "narrow source setup left a GL error behind";
+            }
+
+            // The narrow sources are single-channel, so only component 0 carries anything, and the
+            // sampler declaration has to match the format's signedness.
+            std::vector<std::int32_t> RenderNarrowBorder(bool isUnsignedSampler) {
+                const std::string fragment =
+                    std::string("#version 330 core\n\nuniform ") + (isUnsignedSampler ? "usampler2D" : "isampler2D") +
+                    " smp;\nuniform vec2 uCoord;\n\nout int out_color;\n\nvoid main()\n{\n"
+                    "    out_color = int(texture(smp, uCoord).x);\n}\n";
+                std::string error;
+                const unsigned int program = CompileProgram(kVertexSource, fragment.c_str(), &error);
+                if (program == 0) {
+                    ADD_FAILURE() << "narrow-border program did not build: " << error;
+                    return {};
+                }
+                glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+                glViewport(0, 0, kOutputWidth, kOutputHeight);
+                glDisable(GL_SCISSOR_TEST);
+                glDisable(GL_DEPTH_TEST);
+                const GLint clearValue[4] = {-559038737, 0, 0, 0};
+                glClearBufferiv(GL_COLOR, 0, clearValue);
+                glUseProgram(program);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, m_narrowTexture);
+                glUniform1i(glGetUniformLocation(program, "smp"), 0);
+                glUniform2f(glGetUniformLocation(program, "uCoord"), -0.5f, -0.5f);
+                glBindVertexArray(m_vao);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                glBindVertexArray(0);
+                std::vector<std::int32_t> texels(static_cast<std::size_t>(kOutputWidth) * kOutputHeight, 0);
+                glReadPixels(0, 0, kOutputWidth, kOutputHeight, GL_RED_INTEGER, GL_INT, texels.data());
+                glUseProgram(0);
+                glDeleteProgram(program);
+                return texels;
+            }
+
             GLuint m_sourceTexture = 0;
             GLuint m_outputTexture = 0;
             GLuint m_fbo = 0;
             GLuint m_vao = 0;
             GLuint m_sampler = 0;
+            GLuint m_narrowTexture = 0;
         };
 
     } // namespace
@@ -262,6 +321,70 @@ void main()
 
         ExpectBorderIsDelivered("glSamplerParameterIiv");
         glBindSampler(0, 0);
+        Gl().EndFrame();
+    }
+
+    // GL 4.6 core 8.14.2: "For floating-point and integer formats, border values are clamped to the
+    // representable range of the format." A border of 300 on a GL_R8I texture is 127, not 300 - and
+    // VK_BORDER_COLOR_INT_CUSTOM_EXT delivers whatever it is handed, with format VK_FORMAT_UNDEFINED
+    // there is nothing for the driver to clamp against, so the clamp has to happen before the value
+    // leaves MobileGL. DirectGLES gets it right for free (the ES driver knows the texture format),
+    // which is what makes this a cross-backend divergence and not only a spec one.
+    TEST_F(IntegerBorderColorScenario, ASignedIntegerBorderIsClampedToTheFormatsRepresentableRange) {
+        if (!Ready()) GTEST_SKIP();
+
+        const std::int8_t texels[4] = {1, 1, 1, 1};
+        const GLint border[4] = {300, 0, 0, 1};
+        MakeNarrowSource(GL_R8I, GL_RED_INTEGER, texels, border, /*borderIsUnsigned=*/false);
+
+        const std::vector<std::int32_t> sampled = RenderNarrowBorder(/*isUnsignedSampler=*/false);
+        EXPECT_EQ(FirstGLError(), 0u) << "the clamped-border draw left a GL error behind";
+        ExpectAllTexels("R8I border 300", 0, 127, sampled);
+        Gl().EndFrame();
+    }
+
+    // The reciprocal half, and the one that decides how the two integer forms relate: -1 written
+    // through glTexParameterIiv against an UNSIGNED format. GL 4.6 core 8.10 stores an "I"-form
+    // border unmodified with an integer internal data type and defines no sign conversion between
+    // the two integer forms, so the stored bits are reinterpreted in the sampled format's own
+    // signedness: 0xFFFFFFFF, clamped to the format's maximum of 255.
+    //
+    // That is the DRIVER's answer, established by running this case rather than by reading the spec:
+    // clamping to 0 is an equally defensible reading of the same paragraph, and DirectVulkan can be
+    // made to produce either - but DirectGLES forwards the value to the ES driver verbatim and cannot
+    // deviate, so choosing 0 would mean the same program sampling 0 on Magma and 255 on Espryt. The
+    // whole point of carrying the border colour's form is to stop that class of divergence, so the
+    // backends agree on the driver's answer.
+    //
+    // The clamp itself is still doing the work: without it the value reaches the driver as
+    // 0xFFFFFFFF against a format whose maximum is 255, with format VK_FORMAT_UNDEFINED and so
+    // nothing for the driver to clamp against.
+    TEST_F(IntegerBorderColorScenario, ANegativeBorderOnAnUnsignedFormatClampsToTheFormatsMaximum) {
+        if (!Ready()) GTEST_SKIP();
+
+        const std::uint8_t texels[4] = {1, 1, 1, 1};
+        const GLint border[4] = {-1, 0, 0, 1};
+        MakeNarrowSource(GL_R8UI, GL_RED_INTEGER, texels, border, /*borderIsUnsigned=*/false);
+
+        const std::vector<std::int32_t> sampled = RenderNarrowBorder(/*isUnsignedSampler=*/true);
+        EXPECT_EQ(FirstGLError(), 0u) << "the clamped-border draw left a GL error behind";
+        ExpectAllTexels("R8UI border -1", 0, 255, sampled);
+        Gl().EndFrame();
+    }
+
+    // The same clamp from the unambiguous side: a value written through the UNSIGNED form that is
+    // simply too large for the format. No sign reinterpretation is involved, so both backends and
+    // the spec agree that 5000 on a GL_R8UI texture is 255.
+    TEST_F(IntegerBorderColorScenario, AnOversizedUnsignedBorderIsClampedToTheFormatsMaximum) {
+        if (!Ready()) GTEST_SKIP();
+
+        const std::uint8_t texels[4] = {1, 1, 1, 1};
+        const GLint border[4] = {5000, 0, 0, 1};
+        MakeNarrowSource(GL_R8UI, GL_RED_INTEGER, texels, border, /*borderIsUnsigned=*/true);
+
+        const std::vector<std::int32_t> sampled = RenderNarrowBorder(/*isUnsignedSampler=*/true);
+        EXPECT_EQ(FirstGLError(), 0u) << "the clamped-border draw left a GL error behind";
+        ExpectAllTexels("R8UI border 5000", 0, 255, sampled);
         Gl().EndFrame();
     }
 
