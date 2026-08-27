@@ -112,6 +112,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/RelinkStageSetScenario.cpp
     Scenarios/GuiBatchScenario.cpp
     Scenarios/UnboundImageDescriptorScenario.cpp
+    Scenarios/IntegerBorderColorScenario.cpp
+    Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
