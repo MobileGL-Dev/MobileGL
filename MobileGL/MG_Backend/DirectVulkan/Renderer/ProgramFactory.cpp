@@ -3764,6 +3764,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 entry.xfbCaptureDeclined = true;
             }
 
+            // Does this stage need a device feature the device did not give us? Asked ONLY when
+            // the feature is off, so a device that has it - the common case - pays nothing: the
+            // whole test is short-circuited before the module is parsed.
+            //
+            // gl_PointSize is an ordinary per-vertex output in desktop GL and any
+            // vertex-processing stage may write it, but Vulkan puts the built-in behind
+            // shaderTessellationAndGeometryPointSize in the tessellation and geometry stages
+            // (VUID-RuntimeSpirv-PointSize-06439). glslang emits TessellationPointSize /
+            // GeometryPointSize from the application's own access, so this program is legal GL
+            // that this device cannot run - the same shape the DirectGLES arm reports when a
+            // driver advertises neither EXT nor OES point-size extension, and it deserves the
+            // same named message rather than a pipeline the driver may fault on.
+            if (!m_tessellationAndGeometryPointSizeEnabled &&
+                (stages[i] == ShaderStage::TessControl || stages[i] == ShaderStage::TessEval ||
+                 stages[i] == ShaderStage::Geometry) &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(
+                    moduleSpv)) {
+                MGLOG_E_ONCE("ProgramFactory: program %u stage %d accesses gl_PointSize, but this device does not "
+                             "support shaderTessellationAndGeometryPointSize; its draws are refused rather than "
+                             "built into a pipeline the driver may fault on. Point size from a non-vertex stage "
+                             "is not available on this device.",
+                             program.GetExternalIndex(), static_cast<Int>(stages[i]));
+                entry.pointSizeCapabilityUnsupported = true;
+            }
+
             VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             smci.codeSize = moduleSpv.size() * sizeof(Uint);
             smci.pCode = moduleSpv.data();
@@ -4040,11 +4065,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // PassthroughTessControlTest.MatchesTheFrontendPerVertexBlock is the latch, and it now
         // links the program at both 430 and 460.
         //
-        // Only gl_Position is written. gl_PointSize is declared but left alone deliberately:
-        // writing it from a tessellation stage requires the shaderTessellationAndGeometryPointSize
-        // feature, which this renderer does not enable, so a program whose evaluation stage reads
-        // gl_in[].gl_PointSize gets an undefined point size instead of the vertex stage's - a gap
-        // this trades for not making every tessellated pipeline depend on an optional feature.
+        // Only gl_Position is written, and gl_PointSize is declared without being forwarded. That
+        // is a KNOWN GAP, not a design: GL 4.6 core 11.2.2 says the fixed-function pass-through
+        // hands the input patch to the evaluation stage unmodified, so an evaluation stage
+        // reading gl_in[].gl_PointSize should see the vertex stage's value and instead sees
+        // whatever this stage left in gl_out[] - which is nothing. A capture of it (the mirror in
+        // XfbCaptureDecoratePass) faithfully records that nothing.
+        //
+        // The reason this comment used to give - "the renderer does not enable
+        // shaderTessellationAndGeometryPointSize" - stopped being true when
+        // VulkanRenderer::CreateLogicalDeviceAndQueues started taking the feature wherever the
+        // device advertises it. Closing the gap is therefore possible now, but it is not free:
+        // the forwarding store has to be gated on that feature, because on a device without it
+        // the store is exactly the invalid usage the build-time refusal
+        // (VkProgramObject::pointSizeCapabilityUnsupported) exists to keep away from the driver -
+        // and this synthesized stage is not the application's, so refusing the program because
+        // MobileGL's own pass-through named a built-in would be the wrong trade. Nothing pins
+        // the shape either: every case in TessellationXfbCaptureScenario builds an explicit
+        // control stage, so a TES-without-TCS test has to come with the fix.
         const String perVertexBody = BuildPerVertexMemberDeclarations(perVertexMembers);
         source += "in gl_PerVertex {\n" + perVertexBody + "} gl_in[gl_MaxPatchVertices];\n";
         source += "out gl_PerVertex {\n" + perVertexBody + "} gl_out[];\n";

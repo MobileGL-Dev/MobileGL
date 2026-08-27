@@ -785,6 +785,36 @@ namespace MobileGL {
                 return false;
             }
 
+            Bool ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(const Vector<Uint32>& spirv) {
+                if (spirv.empty()) {
+                    return false;
+                }
+                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                    SPV_ENV_VULKAN_1_1,
+                    MakeSpirvMessageConsumer("ModuleDeclaresTessellationOrGeometryPointSize"), spirv.data(),
+                    spirv.size());
+                if (!context) {
+                    // Unparseable is not a verdict about point size. Say no, so the caller keeps
+                    // building the program: the module is already broken for other reasons and
+                    // the diagnostics that own that failure are better placed than this one.
+                    return false;
+                }
+                // The CAPABILITY, not the BuiltIn decoration, because the capability is exactly
+                // what the feature gates: a module may declare gl_PerVertex with a PointSize
+                // member and never access it, and glslang then emits no capability
+                // (GlslangToSpv defers it to actual use) - such a module is legal without the
+                // feature and must not be declined.
+                for (const spvtools::opt::Instruction& capability : context->capabilities()) {
+                    if (capability.NumInOperands() < 1) continue;
+                    const auto declared = static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                    if (declared == spv::Capability::TessellationPointSize ||
+                        declared == spv::Capability::GeometryPointSize) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             Bool ShaderCompiler::ModuleDeclaresFloat64(const Vector<Uint32>& spirv) {
                 if (spirv.empty()) {
                     // Same reasoning as ModuleDeclaresBufferTextureSampler: a stage that produced

@@ -216,6 +216,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // an Xfb-flagged cache entry - the flag and the layout are part of the program cache
             // key, so it was sticky for every later captured draw of the program, not a glitch.
             Bool xfbCaptureDeclined = false;
+            // The program has a tessellation or geometry module declaring TessellationPointSize /
+            // GeometryPointSize on a device whose shaderTessellationAndGeometryPointSize feature
+            // is off, so a pipeline built from it is invalid usage
+            // (VUID-RuntimeSpirv-PointSize-06439). Its draws are refused in SetupDraw rather than
+            // handed to the driver - the same contract PipelineFactory's half-tessellated refusal
+            // implements one level up, and the counterpart of the DirectGLES arm that reports a
+            // driver with neither point-size extension by name.
+            //
+            // Sticky by construction, which is what makes ONE log line honest: the flag lives on
+            // the cache entry, so every later draw of the same program variant reads the same
+            // answer instead of re-deciding it.
+            Bool pointSizeCapabilityUnsupported = false;
             Bool needsPassthroughTessControl = false;
             // ...and the pass-through this renderer can synthesize carries gl_Position and
             // nothing else, so it is only correct when the evaluation stage's inputs are
@@ -440,12 +452,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
                                 Bool shaderDrawParametersEnabled,
                                 Bool unformattedFloatStorageImagesEnabled,
+                                Bool tessellationAndGeometryPointSizeEnabled,
                                 Bool enableSpirvValidation,
                                 UpdateAfterBindLimits updateAfterBindLimits,
                                 SubgroupLoweringPolicy subgroupPolicy)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
+              m_tessellationAndGeometryPointSizeEnabled(tessellationAndGeometryPointSizeEnabled),
               m_enableSpirvValidation(enableSpirvValidation),
               m_updateAfterBindLimits(updateAfterBindLimits),
               m_subgroupPolicy(subgroupPolicy) {
@@ -605,6 +619,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // True only when the logical device enabled both
         // shaderStorageImageReadWithoutFormat and shaderStorageImageWriteWithoutFormat.
         Bool m_unformattedFloatStorageImagesEnabled = false;
+        // True when the logical device enabled shaderTessellationAndGeometryPointSize. When it is
+        // FALSE a program whose tessellation or geometry module declares TessellationPointSize /
+        // GeometryPointSize is refused at build time (see VkProgramObject::
+        // pointSizeCapabilityUnsupported) instead of being handed to the driver as invalid usage.
+        Bool m_tessellationAndGeometryPointSizeEnabled = false;
         // Startup snapshot used only by internally synthesized shader modules, which do not
         // originate from a ProgramLinkTask.
         Bool m_enableSpirvValidation = false;

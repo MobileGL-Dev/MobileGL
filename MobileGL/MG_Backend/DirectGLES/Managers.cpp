@@ -7539,18 +7539,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // carried 294 INFO lines and zero ERROR lines while two generated shaders
                     // were being rejected outright, and the lane could not say why it was
                     // rendering an empty translucent layer. A shader the driver refuses is
-                    // never noise, and one line per refused shader is bounded by program count.
+                    // never noise.
                     //
-                    // The SOURCE goes with it, the way the synthesized pass-through control
-                    // stage's failure already prints its own: the driver log names a line and a
-                    // column in text that exists nowhere but here, and without it the only way
-                    // to read "`gl_PointSize' undeclared" is to rebuild the whole library at
-                    // DEBUG. Still one line per refused shader.
+                    // A BOUNDED EXCERPT of the source goes with it. The driver log names a line
+                    // and a column in text that exists nowhere but here, so without any source at
+                    // all the only way to read "`gl_PointSize' undeclared" is to rebuild the whole
+                    // library at DEBUG - but the full dump cannot go at E either. This is not
+                    // "one line per refused shader": SyncToBackend's rebuild gate keys on
+                    // per-draw state (the enabled-draw-buffer count among it), so a program used
+                    // across passes with different draw-buffer counts re-transpiles, re-compiles
+                    // and re-fails on every alternation, i.e. per frame. At E - live at the
+                    // production INFO level - each of those records would push the whole
+                    // post-SPIRV-Cross ESSL through the global log mutex with a forced flush onto
+                    // /sdcard/MG/latest.log, the file users are asked to share. The excerpt keeps
+                    // the record O(1); the full text is still there at D, printed against this
+                    // same backend shader id by the "Setting shader source" line above, so
+                    // nothing needs to be dumped twice.
+                    constexpr SizeT kMaxLoggedSourceBytes = 2048;
+                    String truncatedSource;
+                    const char* sourceForLog = source.c_str();
+                    if (source.size() > kMaxLoggedSourceBytes) {
+                        // Back up to a line boundary when there is one inside the window, so the
+                        // excerpt ends on a whole statement rather than mid-token. Built only on
+                        // this branch: a stage that fits keeps its own buffer and is not copied.
+                        SizeT cut = kMaxLoggedSourceBytes;
+                        if (const SizeT lastNewline = source.rfind('\n', cut);
+                            lastNewline != String::npos && lastNewline > 0) {
+                            cut = lastNewline + 1;
+                        }
+                        truncatedSource = source.substr(0, cut);
+                        truncatedSource += "... [" + std::to_string(source.size() - cut) +
+                                           " more bytes; the whole stage is printed at the DEBUG level]\n";
+                        sourceForLog = truncatedSource.c_str();
+                    }
                     MGLOG_E("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
                             "%u, driver log: %s\nSource:\n%s",
                             stateProgramObject->GetExternalIndex(),
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
-                            log.data(), source.c_str());
+                            log.data(), sourceForLog);
                     m_backendProgramUsable = false;
                     // Nothing will ever attach this one, so nothing else can free it.
                     g_GLESFuncs.glDeleteShader(backendShaderId);

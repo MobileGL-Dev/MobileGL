@@ -538,6 +538,15 @@ namespace MobileGL {
                 // Asked of the FINAL bytes, so it answers for whatever the backend transform
                 // chain actually produced rather than for what it was asked to produce.
                 static Bool ModuleDeclaresTransformFeedback(const Vector<Uint32>& spirv);
+                // Does this module declare TessellationPointSize or GeometryPointSize - i.e. does
+                // it need VkPhysicalDeviceFeatures::shaderTessellationAndGeometryPointSize before
+                // a pipeline built from it is legal usage (VUID-RuntimeSpirv-PointSize-06439)?
+                // glslang emits either capability from any access to the PointSize built-in in a
+                // tessellation or geometry stage, which desktop GL treats as an ordinary
+                // per-vertex output, so a program that is perfectly legal in GL can need a Vulkan
+                // feature the device does not have. Callers only ask when the feature is OFF, so
+                // the module parse costs nothing on a device that has it.
+                static Bool ModuleDeclaresTessellationOrGeometryPointSize(const Vector<Uint32>& spirv);
 
                 // True when the module still declares a 64-bit float type. After
                 // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the

@@ -586,8 +586,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
         // shaderTessellationAndGeometryPointSize gates the PointSize built-in in a tessellation
         // or geometry stage, which desktop GL treats as an ordinary per-vertex output (writable,
-        // and capturable by name through transform feedback). Cached at device creation so the
-        // program build can say so when a program asks for something the device will not run.
+        // and capturable by name through transform feedback). Cached at device creation and
+        // handed to ProgramFactory, which refuses a program whose tessellation or geometry module
+        // declares the matching SPIR-V capability while this is false - SetupDraw then skips its
+        // draws (VkProgramObject::pointSizeCapabilityUnsupported) rather than building a pipeline
+        // that is invalid usage.
         Bool m_tessellationAndGeometryPointSizeFeatureEnabled = false;
         // VK_EXT_custom_border_color. Vulkan's four predefined VkBorderColor values cover only
         // transparent/opaque black and opaque white; GL_TEXTURE_BORDER_COLOR is an arbitrary vec4 (or

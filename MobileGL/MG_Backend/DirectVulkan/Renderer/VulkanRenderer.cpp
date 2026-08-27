@@ -3159,6 +3159,7 @@ void main() {
         m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
                                                       m_shaderDrawParametersFeatureEnabled,
                                                       m_unformattedFloatStorageImagesEnabled,
+                                                      m_tessellationAndGeometryPointSizeFeatureEnabled,
                                                       MG_Config::Features.EnableSpirvValidation,
                                                       m_updateAfterBindLimits, subgroupPolicy);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
@@ -6111,6 +6112,12 @@ void main() {
         // no way to know the bound pipeline's last pre-rasterization module lost (or never got)
         // its Xfb execution mode. See VkProgramObject::xfbCaptureDeclined.
         m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
+        // A refused program cannot reach here today - the full path refuses before it ever
+        // records a snapshot - but declining the fast path costs one compare and means the
+        // refusal does not depend on that ordering staying true.
+        if (programObj.pointSizeCapabilityUnsupported) {
+            return false;
+        }
 
         // The pipeline and the vertex-input pre-flight depend on the VAO only through
         // its resolved LAYOUT (layoutHash folds the attribute formats, bindings and the
@@ -6518,6 +6525,12 @@ void main() {
         // no way to know the bound pipeline's last pre-rasterization module lost (or never got)
         // its Xfb execution mode. See VkProgramObject::xfbCaptureDeclined.
         m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
+        // The build already said why, once, naming the program and the stage. Refusing here -
+        // before any pipeline is built from it - is what makes that message a decline rather
+        // than a note attached to invalid usage the driver still receives.
+        if (programObj.pointSizeCapabilityUnsupported) {
+            return false;
+        }
         // For the snapshot's memoised entry pointer: if anything below inserts into the
         // program cache (blit/aux program compiles), the epoch moves and the snapshot
         // stores no pointer for this draw - the fast path then re-looks-up once.
