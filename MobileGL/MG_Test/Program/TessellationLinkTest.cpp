@@ -23,7 +23,8 @@
 //      desktop-GL-only at the search site).
 //
 //  (2) `patch out T name[N]` against `patch in T name[N]`. Legal, identically spelled on both
-//      sides, and rejected - see the last case, which carries the diagnosis.
+//      sides, and rejected until the glslang fork was re-pinned at d89cf443 - see the last case,
+//      which carries the diagnosis and now guards the pin.
 
 #include <gtest/gtest.h>
 
@@ -232,22 +233,23 @@ void main() {
         EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
     }
 
-    // `patch out int a[N]` against `patch in int a[N]`: legal GLSL, identical spellings, and
-    // currently refused by the VENDORED glslang with "Array sizes must be compatible" while
-    // printing the two sides as the same type. This is what fails
+    // `patch out int a[N]` against `patch in int a[N]`: legal GLSL, identical spellings, and until
+    // the glslang fork was re-pinned at d89cf443 refused with "Array sizes must be compatible"
+    // while printing the two sides as the same type. That is what failed
     // KHR-GL4x.tessellation_shader.tessellation_shader_tc_barriers.* on all three API versions.
     //
-    // The defect is one asymmetric clause in glslang, not in MobileGL:
+    // The defect was one asymmetric clause in glslang, never in MobileGL:
     // 3rdparty/glslang/glslang/MachineIndependent/linkValidate.cpp, TIntermediate::isIoResizeArray.
     // The TessControl arm is guarded with `&& ! type.getQualifier().patch`; the TessEvaluation arm
-    // is not. A patch-qualified array therefore answers false on the control side and true on the
-    // evaluation side, and the caller's dimension arithmetic (linkValidate.cpp:1200-1218) computes
-    // (numDim - firstDim) == (unitNumDim - unitFirstDim) as (1 - 0) == (1 - 1), i.e. false. The fix
-    // is to mirror the control arm - add `&& ! type.getQualifier().patch` to the TessEvaluation
-    // clause - which belongs in the fork (and upstream), so it is deliberately not made here.
+    // was not. A patch-qualified array therefore answered false on the control side and true on the
+    // evaluation side, and the caller's dimension arithmetic (linkValidate.cpp:1200-1218) computed
+    // (numDim - firstDim) == (unitNumDim - unitFirstDim) as (1 - 0) == (1 - 1), i.e. false. The
+    // fork now mirrors the control arm, so both sides answer false, the comparison falls to
+    // sameArrayness, and identical int[16] declarations match.
     //
-    // Written to flip from skip to assertion the moment that lands: the skip is allowed ONLY for
-    // the exact known message, and any other failure is a real failure.
+    // A hard assertion, with no escape hatch: this case carried a message-matched GTEST_SKIP while
+    // the fix was outstanding, and leaving it in after the pin moved would turn a rolled-back fork
+    // into a silent skip instead of the failure it should be.
     TEST_F(TessellationLinkTest, PatchQualifiedArrayLinksAcrossTheTessellationStages) {
         constexpr const char* tcs = R"(#version 460 core
 layout (vertices = 3) out;
@@ -274,17 +276,10 @@ void main() {
                                            /*separable=*/true);
         LinkProgram(program);
         const std::string log = LinkLog(program);
-        if (Programiv(program, GL_LINK_STATUS) != GL_TRUE &&
-            log.find("Array sizes must be compatible") != std::string::npos) {
-            for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-            }
-            GTEST_SKIP() << "vendored glslang still credits the TessEvaluation side of a "
-                            "patch-qualified array with an implicit outer dimension "
-                            "(linkValidate.cpp isIoResizeArray, TessEvaluation arm missing "
-                            "`&& ! type.getQualifier().patch`); link log:\n"
-                         << log;
-        }
-        ASSERT_EQ(Programiv(program, GL_LINK_STATUS), GL_TRUE) << log;
+        ASSERT_EQ(Programiv(program, GL_LINK_STATUS), GL_TRUE)
+            << "a patch-qualified array must cross the TCS/TES boundary; if this says \"Array sizes "
+               "must be compatible\" the glslang fork pin has lost the isIoResizeArray patch guard.\n"
+            << log;
         EXPECT_EQ(GetError(), static_cast<GLenum>(GL_NO_ERROR));
     }
 } // namespace
