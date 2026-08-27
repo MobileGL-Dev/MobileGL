@@ -1690,6 +1690,25 @@ namespace MobileGL::MG_Util::SelfTest {
         // ===================== LOCATED INTER-STAGE INTERFACE BLOCKS =====================
 
         constexpr const char* kIoBlockProbeName = "located interface block";
+
+        // This probe's OWN requirements, not HasEveryEntryPoint's. That one is the geometry
+        // storage probe's list and asks for storage buffers and buffer mapping, which nothing
+        // here touches - borrowing it would let one unresolved SSBO pointer leave a driver that
+        // HAS this defect unrepaired, which is the opposite of what a gate is for. Covers what
+        // BuildProgram, Save/Restore, PrepareForProbeDraw and the draw below actually call.
+        Bool HasIoBlockProbeEntryPoints(const GLESFunctionsTable& gl) {
+            return gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
+                   gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader &&
+                   gl.glLinkProgram && gl.glGetProgramiv && gl.glGetProgramInfoLog &&
+                   gl.glDeleteShader && gl.glDeleteProgram && gl.glUseProgram && gl.glGenVertexArrays &&
+                   gl.glBindVertexArray && gl.glDeleteVertexArrays && gl.glGenRenderbuffers &&
+                   gl.glBindRenderbuffer && gl.glRenderbufferStorage && gl.glDeleteRenderbuffers &&
+                   gl.glGenFramebuffers && gl.glBindFramebuffer && gl.glFramebufferRenderbuffer &&
+                   gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers && gl.glViewport &&
+                   gl.glClearColor && gl.glClear && gl.glDrawArrays && gl.glReadPixels &&
+                   gl.glPixelStorei && gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError &&
+                   gl.glEnable && gl.glDisable && gl.glIsEnabled;
+        }
         // Two values that survive an 8-bit target exactly, so the read is a comparison and not
         // a tolerance: 0.25 -> 64, 0.5 -> 128. A stage that received nothing reads 0/0, which is
         // nowhere near either.
@@ -1805,11 +1824,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
     LocatedIoBlockMeasurement ProbeLocatedIoBlocksLosePayload(const GLESFunctionsTable& gl) {
         LocatedIoBlockMeasurement measurement;
-        if (!HasEveryEntryPoint(gl) || !gl.glRenderbufferStorage || !gl.glFramebufferRenderbuffer ||
-            !gl.glCheckFramebufferStatus || !gl.glReadPixels || !gl.glClearColor || !gl.glClear ||
-            !gl.glDrawArrays || !gl.glViewport) {
-            return measurement;
-        }
+        if (!HasIoBlockProbeEntryPoints(gl)) return measurement;
 
         SavedState saved;
         Save(gl, saved);
