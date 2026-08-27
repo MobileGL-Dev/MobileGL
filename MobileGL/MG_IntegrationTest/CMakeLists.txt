@@ -60,6 +60,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/XfbAfterClipDistanceScenario.cpp
     Scenarios/UnwrittenPositionOutputScenario.cpp
     Scenarios/SampleMaskScopeScenario.cpp
+    Scenarios/SampledSetStalenessScenario.cpp
     Scenarios/ThreeChannelAttachmentScenario.cpp
     Scenarios/SnormAttachmentScenario.cpp
     Scenarios/PipelineFailureScenario.cpp
