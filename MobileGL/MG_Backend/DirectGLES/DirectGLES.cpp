@@ -1957,33 +1957,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // against stale state), and throwing, which is what this did until now, takes the
                 // whole process down over one unsupported blend factor. Declining is defined,
                 // survivable and visible in the log.
+                //
+                // NOT gated on Enabled, deliberately, and the same way the Vulkan twin is not gated
+                // on effectiveBlendEnabled: what has to be kept away from the driver is the FACTOR
+                // ENUM, and the factor push below never consults Enabled - one glBlendFuncSeparate
+                // serves every draw buffer when they agree, and the per-index arm diffs factors
+                // alone. So `glDisable(GL_BLEND); glBlendFunc(GL_SRC1_ALPHA, ...)` followed by any
+                // draw OR clear would otherwise hand a GL_SRC1_ALPHA to a driver that answers
+                // GL_INVALID_ENUM, leaving a spurious error in ITS queue for the next internal
+                // no-error probe to read as its own, and leaving this shadow recording factors the
+                // ES context rejected. Blending being off makes the picture unaffected; it does not
+                // make the enum acceptable.
                 const auto* effectiveBlendStates = &parameters.BlendStates;
                 if (!g_GLESCapabilities.SupportsDualSourceBlend) {
+                    Uint32 declinedWithBlendingOnMask = 0;
                     for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                         const auto& s = parameters.BlendStates[i];
-                        if (s.Enabled &&
-                            (IsDualSourceBlendFactor(s.SrcFactorRGB) || IsDualSourceBlendFactor(s.DstFactorRGB) ||
-                             IsDualSourceBlendFactor(s.SrcFactorAlpha) || IsDualSourceBlendFactor(s.DstFactorAlpha))) {
+                        if (IsDualSourceBlendFactor(s.SrcFactorRGB) || IsDualSourceBlendFactor(s.DstFactorRGB) ||
+                            IsDualSourceBlendFactor(s.SrcFactorAlpha) || IsDualSourceBlendFactor(s.DstFactorAlpha)) {
                             dualSourceDeclinedMask |= 1u << i;
+                            if (s.Enabled) declinedWithBlendingOnMask |= 1u << i;
                         }
                     }
                     if (dualSourceDeclinedMask != 0) {
+                        // Two masks in the message because they mean different things to whoever
+                        // reads the log: the second one is where a PICTURE was lost. A draw buffer
+                        // in the first mask but not the second had blending off anyway, so nothing
+                        // was blended and nothing was dropped - only the unusable enum was kept out
+                        // of the driver.
                         MGLOG_E_ONCE(
-                            "SyncRenderState: dual-source blending (GL_SRC1_* blend factor) was requested on "
-                            "draw buffer mask 0x%x, but the GLES driver does not expose "
-                            "GL_EXT_blend_func_extended (see the dual-source blend row in the driver POST). "
-                            "Blending is DECLINED on those draw buffers - the fragment's first output is "
-                            "written unblended and the second source is dropped.",
-                            dualSourceDeclinedMask);
+                            "SyncRenderState: a GL_SRC1_* (dual-source) blend factor was set on draw buffer "
+                            "mask 0x%x, but the GLES driver does not expose GL_EXT_blend_func_extended (see "
+                            "the dual-source blend row in the driver POST). Those draw buffers are pushed "
+                            "with neutral One/Zero factors instead. Blending was actually ENABLED on mask "
+                            "0x%x, and only there is anything lost: the fragment's first output is written "
+                            "unblended and the second source is dropped.",
+                            dualSourceDeclinedMask, declinedWithBlendingOnMask);
                         g_dualSourceDeclinedBlendStates = parameters.BlendStates;
                         for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                             if ((dualSourceDeclinedMask & (1u << i)) == 0) continue;
                             auto& s = g_dualSourceDeclinedBlendStates[i];
+                            // Both halves, for the same reason the Vulkan arm neutralises both: the
+                            // enable so nothing blends against a source the driver cannot produce,
+                            // the factors so no GL_SRC1_* enum is ever handed over. Clearing Enabled
+                            // on a buffer that was already off is a no-op, which is what makes one
+                            // ungated rule serve both cases.
                             s.Enabled = false;
-                            // Neutral factors as well as the disable: the factor push below is not
-                            // gated on Enabled (one glBlendFuncSeparate serves every draw buffer when
-                            // they agree), so leaving Src1Color here would still hand the driver a
-                            // GL_SRC1_* enum it cannot parse.
                             s.SrcFactorRGB = BlendFactor::One;
                             s.DstFactorRGB = BlendFactor::Zero;
                             s.SrcFactorAlpha = BlendFactor::One;

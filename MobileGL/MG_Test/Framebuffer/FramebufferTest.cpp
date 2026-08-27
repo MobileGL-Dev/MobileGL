@@ -1382,6 +1382,77 @@ TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensio
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// The half the first version of the decline missed: the FACTOR push is not gated on Enabled, so
+// GL_BLEND being OFF does not keep a GL_SRC1_* enum away from a driver that cannot parse it. This
+// is the sequence - `glDisable(GL_BLEND); glBlendFunc(GL_SRC1_ALPHA, ...)` then any draw or clear -
+// and it needs no dual-source shader at all, which is why it survived both the enabled-path unit
+// case above and the integration scenario (that one skips on exactly the extension-less lanes this
+// concerns, because its probe needs a dual-source program to render).
+//
+// What a leaked enum costs: the driver answers GL_INVALID_ENUM and keeps its previous factors, so
+// the error sits in the ES context's own queue for the next internal `glGetError() == GL_NO_ERROR`
+// probe to read as its own failure, and this backend's shadow records factors the context rejected.
+TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
+    ScopedRenderStateDriverStubs driver(/*dualSourceBlendSupported=*/false);
+
+    MG_Impl::GLImpl::Disable(GL_BLEND);
+    MG_Impl::GLImpl::BlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ResetRecordedBlend();
+
+    ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
+
+    for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
+        EXPECT_FALSE(g_driverBlend[i].enabled) << "draw buffer " << i << ": blending was never enabled";
+        EXPECT_NE(g_driverBlend[i].srcRGB, static_cast<GLenum>(GL_SRC1_ALPHA))
+            << "draw buffer " << i
+            << ": a GL_SRC1_* enum must not reach a driver without the extension even with GL_BLEND off";
+        EXPECT_NE(g_driverBlend[i].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_ALPHA)) << "draw buffer " << i;
+        EXPECT_NE(g_driverBlend[i].srcAlpha, static_cast<GLenum>(GL_SRC1_ALPHA)) << "draw buffer " << i;
+        EXPECT_NE(g_driverBlend[i].dstAlpha, static_cast<GLenum>(GL_ONE_MINUS_SRC1_ALPHA)) << "draw buffer " << i;
+    }
+
+    // A clear reaches the same block by the same route (SyncRenderState(forColorClear=true)), and
+    // the flag only steers the alpha-widen colour mask, so it must not reopen this either.
+    MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
+    ResetRecordedBlend();
+    ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true));
+    for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
+        EXPECT_NE(g_driverBlend[i].srcRGB, static_cast<GLenum>(GL_SRC1_COLOR)) << "draw buffer " << i;
+        EXPECT_NE(g_driverBlend[i].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_COLOR)) << "draw buffer " << i;
+    }
+
+    // And the shadow records what was PUSHED, not what the frontend holds - otherwise the next
+    // switch to an ordinary factor diffs against state the ES context never received.
+    MG_Impl::GLImpl::Enable(GL_BLEND);
+    MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    ResetRecordedBlend();
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    ASSERT_TRUE(g_driverBlend[0].factorsSeen);
+    EXPECT_TRUE(g_driverBlend[0].enabled) << "the enable has to be pushed - the shadow said 'off' because it was";
+    EXPECT_EQ(g_driverBlend[0].srcRGB, static_cast<GLenum>(GL_SRC_ALPHA));
+    EXPECT_EQ(g_driverBlend[0].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC_ALPHA));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The capable driver is unaffected by the ungating: GL_BLEND off with SRC1 factors set is a state
+// an application may legitimately hold, and the factors still have to reach a driver that parses
+// them - otherwise the next glEnable(GL_BLEND) would blend against neutralised state.
+TEST_F(FramebufferTest, DualSourceFactorsWithBlendingDisabledStillReachACapableDriver) {
+    ScopedRenderStateDriverStubs driver(/*dualSourceBlendSupported=*/true);
+
+    MG_Impl::GLImpl::Disable(GL_BLEND);
+    MG_Impl::GLImpl::BlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);
+    ResetRecordedBlend();
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+
+    ASSERT_TRUE(g_driverBlend[0].factorsSeen);
+    EXPECT_FALSE(g_driverBlend[0].enabled);
+    EXPECT_EQ(g_driverBlend[0].srcRGB, static_cast<GLenum>(GL_SRC1_ALPHA));
+    EXPECT_EQ(g_driverBlend[0].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_ALPHA));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // --- glFramebufferTexture error conditions (GL 4.6 core 9.2.8) ---------------------------------
 //
 // Four of them were missing from the bound-target path while its DSA sibling
