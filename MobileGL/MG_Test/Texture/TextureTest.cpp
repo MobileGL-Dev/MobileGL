@@ -556,10 +556,12 @@ TEST_F(TextureTest, SamplerMaxAnisotropyUsesTheSameStateAndValidationSemantics) 
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
-// GL 3.3 core 3.8.2: BindSampler rejects a never-generated or already-deleted name with
-// INVALID_OPERATION, while SamplerParameter* on the same name is INVALID_VALUE - the two paths
-// must not share one validator. Delete of an unknown name stays silent.
-TEST_F(TextureTest, BindSamplerRejectsUnknownNameWithInvalidOperationUnlikeSamplerParameter) {
+// GL 4.6 core 8.2: EVERY sampler entry point rejects a never-generated or already-deleted name with
+// INVALID_OPERATION - BindSampler, SamplerParameter* and GetSamplerParameter* alike. The two paths
+// used to disagree (BindSampler answered INVALID_OPERATION from a bespoke check while
+// SamplerParameter* answered the GL 3.3 wording's INVALID_VALUE from the shared validator), and this
+// test enshrined the disagreement. Delete of an unknown name stays silent.
+TEST_F(TextureTest, EverySamplerEntryPointRejectsAnUnknownNameWithInvalidOperation) {
     GLuint sampler = 0;
     MG_Impl::GLImpl::GenSamplers(1, &sampler);
     ASSERT_NE(sampler, 0u);
@@ -575,10 +577,319 @@ TEST_F(TextureTest, BindSamplerRejectsUnknownNameWithInvalidOperationUnlikeSampl
     MG_Impl::GLImpl::BindSampler(0, sampler);
     ExpectSingleGlError(GL_INVALID_OPERATION);
 
-    // Same dead name through SamplerParameter*: INVALID_VALUE, so the two paths cannot share one
-    // validator - and neither may queue the other's code alongside its own.
+    // The same dead name through the parameter entry points, in every spelling the CTS's
+    // samplerparameteri_non_gen_sampler_error walks: one error each, and always the same class.
     MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    ExpectSingleGlError(GL_INVALID_VALUE);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    const GLint signedValue = GL_NEAREST;
+    MG_Impl::GLImpl::SamplerParameterIiv(sampler, GL_TEXTURE_MIN_FILTER, &signedValue);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    const GLuint unsignedValue = GL_NEAREST;
+    MG_Impl::GLImpl::SamplerParameterIuiv(sampler, GL_TEXTURE_MIN_FILTER, &unsignedValue);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    GLint queried = 0;
+    MG_Impl::GLImpl::GetSamplerParameterIiv(sampler, GL_TEXTURE_MIN_FILTER, &queried);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    GLuint queriedUnsigned = 0;
+    MG_Impl::GLImpl::GetSamplerParameterIuiv(sampler, GL_TEXTURE_MIN_FILTER, &queriedUnsigned);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+}
+
+// ===================== GL_TEXTURE_BORDER_COLOR (KHR-GL46.texture_border_clamp) =====================
+
+// GL 4.6 core 8.10 / equation 2.2, and 8.11 / equation 2.3: glTexParameteriv normalizes its integer
+// components into the floating-point border colour and glGetTexParameteriv converts back. The pair is
+// exact for small integers, which is what the CTS's samplerparameteri_border_color checks with
+// {0,1,2,4}; reading the float back with a truncating cast answered {0,0,0,0}.
+TEST_F(TextureTest, BorderColorIntegerFormNormalizesAndRoundTripsPerEquations22And23) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const GLint written[4] = {0, 1, 2, 4};
+    MG_Impl::GLImpl::TexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, written);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint readBack[4] = {-1, -1, -1, -1};
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, readBack);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(readBack[0], 0);
+    EXPECT_EQ(readBack[1], 1);
+    EXPECT_EQ(readBack[2], 2);
+    EXPECT_EQ(readBack[3], 4);
+
+    // The stored value really is the normalized fraction, not the raw integer - otherwise the round
+    // trip above would pass for the wrong reason (two missing conversions cancelling).
+    GLfloat asFloats[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    MG_Impl::GLImpl::GetTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, asFloats);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(asFloats[0], 0.0f);
+    EXPECT_FLOAT_EQ(asFloats[3], 4.0f / 2147483647.0f);
+
+    // Out of range in both directions clamps rather than wrapping (equation 2.3's domain is [-1,1]).
+    const GLfloat outOfRange[4] = {2.0f, -2.0f, 0.0f, 1.0f};
+    MG_Impl::GLImpl::TexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, outOfRange);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, readBack);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(readBack[0], 2147483647);
+    EXPECT_EQ(readBack[1], -2147483647);
+    EXPECT_EQ(readBack[2], 0);
+    EXPECT_EQ(readBack[3], 2147483647);
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
+// The sampler-object twin of the test above. It used to pass for the wrong reason: glSamplerParameteriv
+// and glSamplerParameterIiv were literally the same call, so the raw integers went in and came back
+// out unconverted and the two missing conversions cancelled - which also meant a border of 255 set
+// through glSamplerParameteriv became float 255.0 instead of the spec's ~1.19e-7.
+TEST_F(TextureTest, SamplerBorderColorSeparatesTheIntegerFormFromTheNormalizedForm) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+
+    const GLint normalized[4] = {0, 1, 2, 4};
+    MG_Impl::GLImpl::SamplerParameteriv(sampler, GL_TEXTURE_BORDER_COLOR, normalized);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint readBack[4] = {-1, -1, -1, -1};
+    MG_Impl::GLImpl::GetSamplerParameteriv(sampler, GL_TEXTURE_BORDER_COLOR, readBack);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(readBack[0], 0);
+    EXPECT_EQ(readBack[1], 1);
+    EXPECT_EQ(readBack[2], 2);
+    EXPECT_EQ(readBack[3], 4);
+
+    GLfloat asFloats[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    MG_Impl::GLImpl::GetSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, asFloats);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(asFloats[3], 4.0f / 2147483647.0f) << "the non-I integer form must normalize";
+
+    // The "I" form is the other thing entirely: raw integers, stored and returned unmodified.
+    const GLint raw[4] = {255, -1, 0, 7};
+    MG_Impl::GLImpl::SamplerParameterIiv(sampler, GL_TEXTURE_BORDER_COLOR, raw);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::GetSamplerParameterIiv(sampler, GL_TEXTURE_BORDER_COLOR, readBack);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(readBack[0], 255);
+    EXPECT_EQ(readBack[1], -1);
+    EXPECT_EQ(readBack[2], 0);
+    EXPECT_EQ(readBack[3], 7);
+
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    DrainPendingGlErrors();
+}
+
+// A border colour's FORM is state in its own right: the three representations are kept numerically in
+// step, so a float (0,0,0,1) followed by an integer (0,0,0,1) moves no number at all - but it is a
+// real change, and the backends memoise on the version. Swallowing it left DirectGLES forwarding the
+// colour through glTexParameterfv forever, which is what made an integer border of 255 come back from
+// an isampler2D as 1132396544 (the IEEE-754 bits of 255.0f).
+TEST_F(TextureTest, BorderColorFormChangeBumpsTheVersionEvenWhenTheNumbersDoNotMove) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    const auto& samplerObject = MG_State::pGLContext->GetSamplerObject(sampler);
+    ASSERT_NE(samplerObject, nullptr);
+
+    const GLint asInteger[4] = {0, 0, 0, 1};
+    MG_Impl::GLImpl::SamplerParameterIiv(sampler, GL_TEXTURE_BORDER_COLOR, asInteger);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetBorderColorForm(), BorderColorForm::Int);
+    const Uint16 afterInteger = samplerObject->GetVersion();
+
+    // Same four numbers, float spelling: the value is unchanged, the form is not.
+    const GLfloat asFloat[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    MG_Impl::GLImpl::SamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, asFloat);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetBorderColorForm(), BorderColorForm::Float);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(afterInteger + 1));
+
+    // And a genuinely redundant write - same form, same value - still costs nothing.
+    const Uint16 afterFloat = samplerObject->GetVersion();
+    MG_Impl::GLImpl::SamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, asFloat);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetVersion(), afterFloat);
+
+    const GLuint asUnsigned[4] = {0, 0, 0, 1};
+    MG_Impl::GLImpl::SamplerParameterIuiv(sampler, GL_TEXTURE_BORDER_COLOR, asUnsigned);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(samplerObject->GetBorderColorForm(), BorderColorForm::Uint);
+    EXPECT_EQ(samplerObject->GetVersion(), static_cast<Uint16>(afterFloat + 1));
+
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 8.10: the scalar sampler setters take "the value of pname", so a four-component pname is
+// INVALID_ENUM there. Taking the address of the by-value argument and handing it to the vector path -
+// which is what these used to do - both lost the error and read twelve bytes past a stack scalar.
+TEST_F(TextureTest, ScalarSamplerParameterRejectsTheFourComponentBorderColorPname) {
+    GLuint sampler = 0;
+    MG_Impl::GLImpl::GenSamplers(1, &sampler);
+    ASSERT_NE(sampler, 0u);
+    const auto& samplerObject = MG_State::pGLContext->GetSamplerObject(sampler);
+    ASSERT_NE(samplerObject, nullptr);
+    const Uint16 initialVersion = samplerObject->GetVersion();
+
+    MG_Impl::GLImpl::SamplerParameteri(sampler, GL_TEXTURE_BORDER_COLOR, 1);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::SamplerParameterf(sampler, GL_TEXTURE_BORDER_COLOR, 1.0f);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    EXPECT_EQ(samplerObject->GetVersion(), initialVersion) << "a rejected call must not touch state";
+
+    // The vector spellings of the same pname are of course still accepted.
+    const GLfloat color[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+    MG_Impl::GLImpl::SamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, color);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteSamplers(1, &sampler);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 8.10 / 8.11: the parameter entry points accept a SHORTER target list than the upload
+// entry points. A cube-map FACE and GL_TEXTURE_BUFFER are both legal glTexImage2D/glTexBuffer targets
+// and both illegal here, and MobileGL's permissive converter folded the faces onto the cube map and
+// mapped the buffer target to a real one - so both were silently accepted.
+TEST_F(TextureTest, TextureParameterEntryPointsRejectTargetsTheUploadPathAccepts) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The positive control first: the cube map itself is a legal parameter target.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, 3);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    GLint queried = 0;
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, &queried);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(queried, 3);
+
+    // A face is not.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_MAX_LEVEL, 5);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_CUBE_MAP_POSITIVE_X, GL_TEXTURE_MAX_LEVEL, &queried);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    const GLint borderColor[4] = {0, 0, 0, 0};
+    MG_Impl::GLImpl::TexParameterIiv(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, GL_TEXTURE_BORDER_COLOR, borderColor);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // The rejected call must not have applied anything either.
+    MG_Impl::GLImpl::GetTexParameteriv(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, &queried);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(queried, 3) << "a rejected face-target call still reached the bound cube map";
+
+    // GL_TEXTURE_BUFFER carries no sampler or level state at all.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_BUFFER, GL_TEXTURE_BASE_LEVEL, 0);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    GLuint queriedUnsigned = 0;
+    MG_Impl::GLImpl::GetTexParameterIuiv(GL_TEXTURE_BUFFER, GL_TEXTURE_MAX_LEVEL, &queriedUnsigned);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // And an enum that is not a texture target in any sense used to be silent by construction: the
+    // converter answered Unknown, the lookup answered the null object and every caller just returned.
+    MG_Impl::GLImpl::TexParameteri(GL_RENDERBUFFER, GL_TEXTURE_BASE_LEVEL, 0);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
+// The texture path applied wrap/filter/compare enums straight through the GL->internal converters and
+// threw the converters' Unknown away, so every one of these was GL_NO_ERROR. The sampler-object path
+// has had this exact validator all along (SamplerImpl::ValidateSamplerParam); the texture path now
+// calls it rather than growing a second copy.
+TEST_F(TextureTest, TexParameterRejectsIllegalSamplerEnumValues) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Exactly the pname/value pairs esextcTextureBorderClampTexParameterIErrors.cpp walks.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_RED);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_RED);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_R, GL_RED);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_RED);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    // MAG_FILTER needs more than an Unknown check: GL_NEAREST_MIPMAP_NEAREST converts perfectly well
+    // to SamplerFilterMode::Nearest, and only the explicit NEAREST-or-LINEAR rule catches it.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NEAREST);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_NEAREST);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // The float spelling funnels through the same validator.
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLfloat>(GL_RED));
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // Positive controls: legal values on the same pnames, and a texture-only pname the sampler
+    // validator does not know, all still accepted.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_GREATER);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
+// Two multisample gates that must NOT drift back together. GL 4.6 core 8.10: a multisample target does
+// not accept sampler-state pnames at all, which is INVALID_ENUM; a BASE_LEVEL it does accept but
+// cannot be non-zero, which is INVALID_OPERATION. The sampler-state gate was copied from the
+// BASE_LEVEL one and inherited its error class.
+TEST_F(TextureTest, MultisampleSamplerStateIsInvalidEnumWhileNonZeroBaseLevelIsInvalidOperation) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, texture);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    for (const GLenum pname : {GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T, GL_TEXTURE_WRAP_R, GL_TEXTURE_MIN_FILTER,
+                               GL_TEXTURE_MAG_FILTER, GL_TEXTURE_COMPARE_MODE, GL_TEXTURE_COMPARE_FUNC}) {
+        MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, pname, GL_NEAREST);
+        ExpectSingleGlError(GL_INVALID_ENUM);
+    }
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_MIN_LOD, 0.0f);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    const GLfloat borderColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    MG_Impl::GLImpl::TexParameterfv(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_BORDER_COLOR, borderColor);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // The other class, unchanged - this one is a value error on an accepted pname.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_BASE_LEVEL, 1);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    // ...and zero is fine, so the gate is about the value and not the pname.
+    MG_Impl::GLImpl::TexParameteri(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_BASE_LEVEL, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
 }
 
 TEST_F(TextureTest, GenThenBindCreatesObjectForUnsizedPackedBgraSubImageUpload) {
