@@ -6172,14 +6172,17 @@ void main() {
                 // index, depth/stencil participation, image epochs, no pending clears)
                 // was verified unchanged above, so this is a pure cache hit on the same
                 // entry the snapshot's pipeline was built against.
-                const RenderPassEntry& renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
+                const RenderPassEntry* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(
                     *drawFbo, m_imageIndexAcquired, snap.drawUsesDepthStencil);
-                if (!activeRenderPass->CompatibleWith(renderPassEntry)) {
+                // A decline (nullptr) is an attachment DirectVulkan cannot represent; the builder
+                // has already logged it. Fall out of the fast path the same way an incompatible
+                // pass does - the full path re-resolves, declines again and drops the draw.
+                if (renderPassEntry == nullptr || !activeRenderPass->CompatibleWith(*renderPassEntry)) {
                     return false;
                 }
                 pipeline = GetOrCreatePipeline(mode, program, programObj,
                                                ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags),
-                                               vao, renderPassEntry, drawPrimitiveRestartEnable);
+                                               vao, *renderPassEntry, drawPrimitiveRestartEnable);
                 if (pipeline == VK_NULL_HANDLE) {
                     return false;
                 }
@@ -6564,12 +6567,23 @@ void main() {
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest) ||
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::StencilTest);
         auto* renderPassEntry =
-            &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+            m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+        // nullptr: the framebuffer has an attachment DirectVulkan cannot represent (a texture the
+        // texture manager declined to back, or a view it could not build). The builder logged which
+        // one; drop the draw here, exactly as an unresolvable sampler descriptor drops one in
+        // BindProgramUniformBuffers. Before this existed the same condition dereferenced a null
+        // resource or handed VK_NULL_HANDLE to vkCreateFramebuffer and took the process down.
+        if (renderPassEntry == nullptr) {
+            return false;
+        }
         if (activeRenderPass && !activeRenderPass->CompatibleWith(*renderPassEntry)) {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
             activeRenderPass = nullptr;
             renderPassEntry =
-                &m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+                m_renderPassManager->GetOrCreateRenderPass(*drawFbo, m_imageIndexAcquired, drawUsesDepthStencil);
+            if (renderPassEntry == nullptr) {
+                return false;
+            }
         }
         if (renderPassEntry->attachmentCount == 0 || renderPassEntry->extent.x() <= 0 || renderPassEntry->extent.y() <= 0) {
             MGLOG_D("SetupDraw skipped: drawFbo=%u resolved to an empty render pass (attachmentCount=%u extent=%dx%d)",
@@ -6915,8 +6929,10 @@ void main() {
         }
 
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
-        auto* renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
-        if (renderPassEntry->attachmentCount == 0 ||
+        auto* renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
+        // A declined render pass is the same answer as an empty one for a clear: there is nothing
+        // attached that can be cleared inside a pass. The builder has already logged the reason.
+        if (renderPassEntry == nullptr || renderPassEntry->attachmentCount == 0 ||
             renderPassEntry->extent.x() <= 0 || renderPassEntry->extent.y() <= 0) {
             return ScissoredClearPrep::NoOp;
         }
@@ -6946,7 +6962,10 @@ void main() {
             activeRenderPass = nullptr;
             // Re-resolve: ending the pass updates tracked attachment layouts, which feed the
             // entry's load ops and initial layouts.
-            renderPassEntry = &m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
+            renderPassEntry = m_renderPassManager->GetOrCreateRenderPass(framebuffer, m_imageIndexAcquired);
+            if (renderPassEntry == nullptr) {
+                return ScissoredClearPrep::NoOp;
+            }
         }
         // A still-active pass is necessarily compatible here: the block above ended any
         // incompatible one and nothing since can change the active pass.
@@ -8111,8 +8130,14 @@ void main() {
 
         // A color-only blit never touches depth/stencil: let the default-FBO pass
         // it opens skip the depth attachment (depth-less flavor).
-        auto& renderPassEntry =
+        auto* renderPassEntryPtr =
             m_renderPassManager->GetOrCreateRenderPass(drawFbo, m_imageIndexAcquired, /*drawUsesDepthStencil=*/false);
+        if (renderPassEntryPtr == nullptr) {
+            // Declined (the builder logged which attachment). The caller's contract for `false` is
+            // "this blit was not serviced here", which is the honest answer.
+            return false;
+        }
+        auto& renderPassEntry = *renderPassEntryPtr;
         const Bool ok = VkRenderPassManager::BeginRenderPass(frame.commandBuffer, renderPassEntry);
         MOBILEGL_ASSERT(ok, "%s: BeginRenderPass failed", __func__);
 

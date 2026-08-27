@@ -95,16 +95,50 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (attachment.IsLayered()) {
             const auto& texture = attachment.GetTexture();
             const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+            // A layered CUBE MAP names all six faces (GL 4.6 core 9.2.8), but the attachment model
+            // records only the REPRESENTATIVE upload target for it - the +X face
+            // (ResolveRepresentableFramebufferTextureUploadTarget) - and that face's level size has
+            // z = 1. Reading z here therefore attached one face to a layered framebuffer, so a
+            // geometry shader writing gl_Layer = 1..5 lost five sixths of its output. The image's
+            // six layers are the cube's faces, exactly as for a cube ARRAY (whose representative
+            // target does carry 6n in z and needs no special case).
+            if (target == TextureTarget::TextureCubeMap) {
+                return 6u;
+            }
             return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
         }
         return 1u;
     }
 
+    // VUID-VkFramebufferCreateInfo-flags-04113: every view handed to vkCreateFramebuffer must have
+    // been created as VK_IMAGE_VIEW_TYPE_2D or VK_IMAGE_VIEW_TYPE_2D_ARRAY. The image's OWN view
+    // type is not a legal answer for several of the targets GL can attach, and returning it
+    // unchanged is what took the process down on every layered 3D / cube-map-array attachment:
+    // a 3D view is refused outright by the layer-span guard in GetOrCreateAttachmentViewAtMipLevel
+    // (3D images have arrayLayers == 1) and a CUBE_ARRAY view is built happily and then rejected -
+    // or dereferenced - by the driver inside vkCreateFramebuffer.
+    //
+    // A 2D_ARRAY view is the legal spelling of all three: over a 2D-array-compatible 3D image its
+    // "layers" are the mip's z slices (VUID-VkImageViewCreateInfo-image-04970), and over a
+    // CUBE_COMPATIBLE 2D image - which is what both cube targets are - its layers are the faces.
+    //
+    // Knowingly NOT remapped: VK_IMAGE_VIEW_TYPE_1D / _1D_ARRAY, which 04113 also forbids. There is
+    // no legal alternative for them (a VK_IMAGE_TYPE_1D image admits no 2D-family view at all), so
+    // the only honest answer would be to decline the attachment - and every driver this has run on,
+    // lavapipe included, accepts them. Declining would turn working GL_TEXTURE_1D[_ARRAY] render
+    // targets into skipped draws to satisfy a VU nothing enforces. Left as-is, deliberately.
     static VkImageViewType ResolveAttachmentViewType(
         const MG_State::GLState::FramebufferAttachmentObject& attachment,
         const VkTextureManager::TextureResource& resource) {
         if (attachment.IsLayered()) {
-            return resource.viewType;
+            switch (resource.viewType) {
+            case VK_IMAGE_VIEW_TYPE_3D:
+            case VK_IMAGE_VIEW_TYPE_CUBE:
+            case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+                return VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            default:
+                return resource.viewType;
+            }
         }
         // A non-layered attachment names ONE layer, so the view over it is a plain 2D view whatever
         // the image's own view type is. The cube-face upload targets always meant this; a cube map
@@ -112,8 +146,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // a single layer is not a legal attachment. The CUBE arm is inert today - no frontend path
         // produces a non-layered cube attachment without a face upload target - and is kept for
         // symmetry with CUBE_ARRAY.
+        //
+        // 3D belongs in the same list and was missing from it, which is why the "per-slice
+        // attachment view is a 2D view whose array layer is the slice" branch in
+        // GetOrCreateAttachmentViewAtMipLevel was unreachable: glFramebufferTextureLayer on a
+        // GL_TEXTURE_3D asked for a 3D view (illegal as an attachment) whose span was then checked
+        // against arrayLayers == 1, so every slice above z = 0 came back VK_NULL_HANDLE.
         if (IsCubeMapFaceUploadTarget(attachment.GetTextureUploadTarget()) ||
-            resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY || resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE) {
+            resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY || resource.viewType == VK_IMAGE_VIEW_TYPE_CUBE ||
+            resource.viewType == VK_IMAGE_VIEW_TYPE_3D) {
             return VK_IMAGE_VIEW_TYPE_2D;
         }
         return resource.viewType;
@@ -772,7 +813,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return XXH64_digest(m_hashState);
     }
 
-    RenderPassEntry& VkRenderPassManager::GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
+    RenderPassEntry* VkRenderPassManager::GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
                                                                 Uint32 swapchainImageIndex,
                                                                 Bool drawUsesDepthStencil) {
         // Resolve the default-FBO depth flavor (see the header comment): keep the
@@ -858,7 +899,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             auto activeIt = m_renderPasses.find(activeRenderPass->hash);
             if (activeIt != m_renderPasses.end()) {
                 activeIt->second.lastUsedFrame = m_frameCounter;
-                return activeIt->second;
+                return &activeIt->second;
             }
         }
 
@@ -882,13 +923,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_rpFastRenderPassHash = activeRenderPass->hash;
             m_rpFastHadDepthStencil = activeIt->second.hasDepthStencilAttachment;
             activeIt->second.lastUsedFrame = m_frameCounter;
-            return activeIt->second;
+            return &activeIt->second;
         }
         auto hash = ComputeHash(fbo, swapchainImageIndex, true, includeDefaultFboDepthStencil);
         auto it = m_renderPasses.find(hash);
         if (it != m_renderPasses.end()) {
             it->second.lastUsedFrame = m_frameCounter;
-            return it->second;
+            return &it->second;
         }
 
         Bool isDefaultFbo = fbo.IsDefaultFramebuffer();
@@ -1011,8 +1052,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     textureResources.emplace_back(nullptr);
                     attachmentViews.emplace_back(rbAttachmentFormat != rbResource->format ? rbResource->unormTwinView
                                                                                           : rbResource->view);
-                    MOBILEGL_ASSERT(attachmentViews.back() != VK_NULL_HANDLE,
-                                    "GetOrCreateRenderPass: renderbuffer view missing at color attachment %d", i);
+                    if (attachmentViews.back() == VK_NULL_HANDLE) {
+                        MGLOG_E_ONCE("GetOrCreateRenderPass: renderbuffer %u has no usable view for color attachment "
+                                     "%u on FBO %u; declining the render pass",
+                                     renderbuffer->GetExternalIndex(), i, fbo.GetExternalIndex());
+                        return nullptr;
+                    }
 
                     colorAttachmentRefs[i].attachment = rbAttachmentIndex;
                     continue;
@@ -1100,8 +1145,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         attachmentViews.emplace_back(swapchainViews[swapchainImageIndex]);
                     } else {
                         auto* textureResource = m_textureManager.SyncTextureAndGetDescriptor(*texture);
-                        MOBILEGL_ASSERT(textureResource,
-                                        "GetOrCreateRenderPass: SyncTextureAndGetDescriptor failed at color attachment %d", i);
+                        if (textureResource == nullptr) {
+                            // SyncTextureResource legitimately declines - an unsupported format,
+                            // sample count or image-flag combination, or a vkCreateImage the driver
+                            // refused. There is no image to attach, so there is no render pass.
+                            MGLOG_E_ONCE("GetOrCreateRenderPass: textureId=%d could not be backed for color "
+                                         "attachment %u on FBO %u; declining the render pass",
+                                         texture->GetExternalIndex(), i, fbo.GetExternalIndex());
+                            return nullptr;
+                        }
                         textureResources.emplace_back(textureResource);
                         desc.format = ResolveSrgbAttachmentWriteFormat(
                             textureResource->format,
@@ -1122,8 +1174,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         attachmentViews.emplace_back(
                             m_textureManager.GetOrCreateAttachmentViewAtMipLevel(
                                 *texture, attachmentMipLevel, baseArrayLayer, layerCount, attachmentViewType));
-                        MOBILEGL_ASSERT(attachmentViews.back() != VK_NULL_HANDLE,
-                                        "GetOrCreateRenderPass: GetOrCreateAttachmentView failed at color attachment %d", i);
+                        if (attachmentViews.back() == VK_NULL_HANDLE) {
+                            MGLOG_E_ONCE("GetOrCreateRenderPass: no attachment view for textureId=%d mip=%u layers "
+                                         "[%u, %u) viewType=%d at color attachment %u on FBO %u; declining the "
+                                         "render pass",
+                                         texture->GetExternalIndex(), attachmentMipLevel, baseArrayLayer,
+                                         baseArrayLayer + layerCount, static_cast<Int>(attachmentViewType), i,
+                                         fbo.GetExternalIndex());
+                            return nullptr;
+                        }
                     }
                     desc.samples = attachmentSampleCount;
                     adoptRenderPassSampleCount(attachmentSampleCount, "color", texture->GetExternalIndex());
@@ -1216,8 +1275,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } else if (selectedDepthStencilAttachment->IsTexture()) {
                 auto& texture = *selectedDepthStencilAttachment->GetTexture();
                 depthTextureResource = m_textureManager.SyncTextureAndGetDescriptor(texture);
-                MOBILEGL_ASSERT(depthTextureResource,
-                                "GetOrCreateRenderPass: SyncTextureAndGetDescriptor failed at depth attachment");
+                if (depthTextureResource == nullptr) {
+                    MGLOG_E_ONCE("GetOrCreateRenderPass: textureId=%d could not be backed for the depth/stencil "
+                                 "attachment of FBO %u; declining the render pass",
+                                 texture.GetExternalIndex(), fbo.GetExternalIndex());
+                    return nullptr;
+                }
                 trackedDepthLayout = depthTextureResource->layout;
                 depthAttachmentDescription.format = depthTextureResource->format;
                 depthAttachmentSampleCount = depthTextureResource->sampleCount;
@@ -1229,8 +1292,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } else {
                 const auto& renderbuffer = selectedDepthStencilAttachment->GetRenderbuffer();
                 depthRenderbufferResource = GetOrCreateRenderbufferResource(renderbuffer);
-                MOBILEGL_ASSERT(depthRenderbufferResource,
-                                "GetOrCreateRenderPass: GetOrCreateRenderbufferResource failed at depth attachment");
+                if (depthRenderbufferResource == nullptr) {
+                    MGLOG_E_ONCE("GetOrCreateRenderPass: renderbuffer %u could not be backed for the depth/stencil "
+                                 "attachment of FBO %u; declining the render pass",
+                                 renderbuffer->GetExternalIndex(), fbo.GetExternalIndex());
+                    return nullptr;
+                }
                 trackedDepthLayout = depthRenderbufferResource->layout;
                 depthAttachmentDescription.format = depthRenderbufferResource->format;
                 depthAttachmentSampleCount = depthRenderbufferResource->sampleCount;
@@ -1304,8 +1371,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 attachmentViews.emplace_back(
                     m_textureManager.GetOrCreateAttachmentViewAtMipLevel(
                         texture, attachmentMipLevel, baseArrayLayer, layerCount, attachmentViewType));
-                MOBILEGL_ASSERT(attachmentViews.back() != VK_NULL_HANDLE,
-                                "GetOrCreateRenderPass: GetOrCreateAttachmentView failed at depth attachment");
+                if (attachmentViews.back() == VK_NULL_HANDLE) {
+                    MGLOG_E_ONCE("GetOrCreateRenderPass: no attachment view for textureId=%d mip=%u layers [%u, %u) "
+                                 "viewType=%d at the depth/stencil attachment of FBO %u; declining the render pass",
+                                 texture.GetExternalIndex(), attachmentMipLevel, baseArrayLayer,
+                                 baseArrayLayer + layerCount, static_cast<Int>(attachmentViewType),
+                                 fbo.GetExternalIndex());
+                    return nullptr;
+                }
                 if (width == 0 || height == 0) {
                     width = attachmentExtent.x();
                     height = attachmentExtent.y();
@@ -1327,6 +1400,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 });
                 textureResources.emplace_back(nullptr);
                 attachmentViews.emplace_back(depthRenderbufferResource->view);
+                if (attachmentViews.back() == VK_NULL_HANDLE) {
+                    MGLOG_E_ONCE("GetOrCreateRenderPass: renderbuffer %u has no usable view for the depth/stencil "
+                                 "attachment of FBO %u; declining the render pass",
+                                 renderbuffer->GetExternalIndex(), fbo.GetExternalIndex());
+                    return nullptr;
+                }
                 if (width == 0 || height == 0) {
                     width = attachmentExtent.x();
                     height = attachmentExtent.y();
@@ -1426,6 +1505,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &renderPass));
+        // VK_VERIFY only logs (and only in an INFO build); the handle is the truth. Caching an
+        // entry whose VkRenderPass is null would hand VK_NULL_HANDLE to vkCmdBeginRenderPass and
+        // to every pipeline built against it.
+        if (renderPass == VK_NULL_HANDLE) {
+            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateRenderPass failed for FBO %u; declining the render pass",
+                         fbo.GetExternalIndex());
+            return nullptr;
+        }
 
         // Framebuffer
         VkFramebufferCreateInfo framebufferCreateInfo;
@@ -1440,6 +1527,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         framebufferCreateInfo.layers = framebufferLayers;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
         VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer));
+        if (framebuffer == VK_NULL_HANDLE) {
+            // The render pass has no entry to own it yet, so it is destroyed here rather than
+            // leaked - RenderPassEntry's destructor is the only other thing that would.
+            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateFramebuffer failed for FBO %u (%dx%d, %u attachments, "
+                         "%u layers); declining the render pass",
+                         fbo.GetExternalIndex(), width, height,
+                         static_cast<Uint32>(attachmentViews.size()), framebufferLayers);
+            vkDestroyRenderPass(m_device, renderPass, nullptr);
+            return nullptr;
+        }
         IntVec2 extent = {width, height};
         RenderPassEntry renderPassEntry {
             hash,
@@ -1464,7 +1561,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 extent.y());
         auto [insertedIt, _] = m_renderPasses.emplace(hash, Move(renderPassEntry));
         insertedIt->second.lastUsedFrame = m_frameCounter;
-        return insertedIt->second;
+        return &insertedIt->second;
     }
 
     void VkRenderPassManager::OnPresent() {

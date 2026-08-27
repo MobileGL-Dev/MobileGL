@@ -921,18 +921,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (mipLevel >= resource->mipLevels) {
             return VK_NULL_HANDLE;
         }
-        // A 3D image has arrayLayers == 1 and keeps its GL layers on the z axis, so a per-slice
-        // attachment view is a 2D view whose "array layer" is the slice - legal only on a
-        // 2D-array-compatible image (VUID-VkImageViewCreateInfo-image-04970), which
-        // SyncTextureResource asks for and may have had refused per format.
-        if (resource->viewType == VK_IMAGE_VIEW_TYPE_3D && viewType == VK_IMAGE_VIEW_TYPE_2D) {
+        // A 3D image has arrayLayers == 1 and keeps its GL layers on the z axis, so an attachment
+        // view over it addresses SLICES through baseArrayLayer/layerCount: one slice for a
+        // non-layered attachment (a 2D view) and the whole span for a layered one (a 2D_ARRAY view,
+        // which is what a layered GL_TEXTURE_3D attachment plus a gl_Layer-writing geometry shader
+        // means). BOTH spellings are legal only on a 2D-array-compatible image
+        // (VUID-VkImageViewCreateInfo-image-04970 / -06723), which SyncTextureResource asks for and
+        // may have had refused per format.
+        //
+        // The span is validated against the MIP's slice count, never against arrayLayers: a 3D
+        // image's arrayLayers is 1 by construction, so measuring a layered span against it rejected
+        // every layered 3D attachment - the null view that used to reach vkCreateFramebuffer.
+        if (resource->viewType == VK_IMAGE_VIEW_TYPE_3D &&
+            (viewType == VK_IMAGE_VIEW_TYPE_2D || viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
             const Uint32 sliceCount = std::max(resource->depth >> mipLevel, 1u);
             if ((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) == 0 ||
                 layerCount == 0 || baseArrayLayer >= sliceCount || baseArrayLayer + layerCount > sliceCount) {
-                MGLOG_D("%s: cannot name slice span [%u, %u) of 3D textureId=%d (mip %u has %u slices, "
-                        "2D-array-compatible=%d)",
+                // Not an error line: the render-pass builder turns the null view into one
+                // MGLOG_E_ONCE and a skipped draw, which is the level this belongs at.
+                MGLOG_D("%s: cannot name slice span [%u, %u) of 3D textureId=%d as viewType=%d (mip %u has %u "
+                        "slices, 2D-array-compatible=%d)",
                         __func__, baseArrayLayer, baseArrayLayer + layerCount, texture.GetExternalIndex(),
-                        mipLevel, sliceCount,
+                        static_cast<Int>(viewType), mipLevel, sliceCount,
                         (int)((resource->imageCreateFlags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0));
                 return VK_NULL_HANDLE;
             }
@@ -2173,12 +2183,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (imageFormatResult != VK_SUCCESS && !isMultisampleTexture &&
                 (imageInfo.flags & VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT) != 0) {
-                // Losing 2D-array compatibility only costs per-slice framebuffer attachment for this
-                // format; failing creation would lose the texture entirely. Remembered so later syncs
-                // neither reprobe nor flag-mismatch against this image and recreate it.
+                // Losing 2D-array compatibility only costs framebuffer attachment of this format's
+                // 3D images - per-slice AND layered, since both are spelled as a 2D-family view over
+                // the z axis; failing creation would lose the texture entirely. Recorded here (the
+                // per-format set below) so later syncs neither reprobe nor flag-mismatch against this
+                // image and recreate it, and so GetOrCreateAttachmentViewAtMipLevel declines rather
+                // than handing back a view that cannot exist - the render-pass builder then turns
+                // that decline into a skipped draw instead of a null VkImageView in pAttachments.
                 MGLOG_W_ONCE("%s: VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT is unsupported for format=%d "
-                        "textureId=%d; creating without it (per-slice framebuffer attachment will be "
-                        "unavailable for it)",
+                        "textureId=%d; creating without it (per-slice and layered framebuffer "
+                        "attachment of 3D textures in this format will be unavailable)",
                         __func__, static_cast<Int>(format), texture.GetExternalIndex());
                 m_2dArrayCompatibleUnsupported.insert(format);
                 imageInfo.flags &= ~VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;

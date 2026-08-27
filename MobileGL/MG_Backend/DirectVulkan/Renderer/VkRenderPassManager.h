@@ -243,9 +243,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // draw against a depth-less active pass resolves to a new (incompatible)
         // entry, which the caller's compatibility check turns into a pass split;
         // the new pass's depth loads DONT_CARE (content was undefined all along).
-        RenderPassEntry& GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
-                                               Uint32 swapchainImageIndex,
-                                               Bool drawUsesDepthStencil = true);
+        //
+        // Returns NULLPTR when this framebuffer cannot be represented as a Vulkan render pass at
+        // all - a texture the texture manager declined to back (an unsupported format or sample
+        // count), or an attachment view it cannot construct (a layer span the image has no room
+        // for, a 3D image whose format was refused 2D-array compatibility). This used to be
+        // unrepresentable: the function returned a reference, so the only thing the two fallible
+        // calls it builds on could do was trip a MOBILEGL_ASSERT - which is compiled out of every
+        // INFO build - and then dereference the null resource, or hand VK_NULL_HANDLE to
+        // vkCreateFramebuffer. That took the whole process down (51 lost CTS records over 21
+        // bodies, one runner restart each) where a declined draw is merely a wrong picture.
+        //
+        // EVERY caller must handle nullptr by dropping the operation, exactly as the draw path
+        // already drops a draw whose sampler descriptor could not be resolved
+        // (UniformManager::BindProgramUniformBuffers). The failure paths log MGLOG_E_ONCE
+        // themselves, so a caller needs no message of its own.
+        [[nodiscard]] RenderPassEntry* GetOrCreateRenderPass(const MG_State::GLState::FramebufferObject& fbo,
+                                                             Uint32 swapchainImageIndex,
+                                                             Bool drawUsesDepthStencil = true);
         void QueueRenderbufferClear(GLbitfield mask, const ClearFramebufferPayload& clearPayload,
                                     const MG_State::GLState::FramebufferObject& drawFbo);
         void QueueRenderbufferClear(const ClearAttachmentPayload& clearPayload,
