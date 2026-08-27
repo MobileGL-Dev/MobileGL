@@ -747,9 +747,71 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = programObject->GetSeparable() ? GL_TRUE : GL_FALSE;
             break;
 
+        // The geometry and tessellation link properties (GL 4.6 core table 23.35). Same shape as
+        // GL_COMPUTE_WORK_GROUP_SIZE above, and for the same reason: "a linked program object
+        // with a geometry shader" is one whose EXECUTABLE has the stage, so an
+        // attached-but-not-yet-linked shader must give INVALID_OPERATION rather than the previous
+        // link's value. The geometry three used to be listed here only to fall through into the
+        // INVALID_ENUM default, and the tessellation five were not listed at all.
         case GL_GEOMETRY_VERTICES_OUT:
         case GL_GEOMETRY_INPUT_TYPE:
         case GL_GEOMETRY_OUTPUT_TYPE:
+        case GL_GEOMETRY_SHADER_INVOCATIONS: {
+            if (!programObject->GetLinkStatus() || !programObject->HasLinkedShaderStage(ShaderStage::Geometry)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 std::to_string(program) +
+                                                     " is not a linked program object with a geometry shader."));
+                return;
+            }
+            switch (pname) {
+            case GL_GEOMETRY_VERTICES_OUT: *params = programObject->GetGeometryVerticesOut(); break;
+            case GL_GEOMETRY_INPUT_TYPE: *params = static_cast<GLint>(programObject->GetGeometryInputType()); break;
+            case GL_GEOMETRY_OUTPUT_TYPE: *params = static_cast<GLint>(programObject->GetGeometryOutputType()); break;
+            default: *params = programObject->GetGeometryShaderInvocations(); break;
+            }
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
+        }
+        case GL_TESS_CONTROL_OUTPUT_VERTICES: {
+            if (!programObject->GetLinkStatus() || !programObject->HasLinkedShaderStage(ShaderStage::TessControl)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", __func__,
+                        std::to_string(program) +
+                            " is not a linked program object with a tessellation control shader."));
+                return;
+            }
+            *params = programObject->GetTessControlOutputVertices();
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
+        }
+        case GL_TESS_GEN_MODE:
+        case GL_TESS_GEN_SPACING:
+        case GL_TESS_GEN_VERTEX_ORDER:
+        case GL_TESS_GEN_POINT_MODE: {
+            if (!programObject->GetLinkStatus() || !programObject->HasLinkedShaderStage(ShaderStage::TessEval)) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", __func__,
+                        std::to_string(program) +
+                            " is not a linked program object with a tessellation evaluation shader."));
+                return;
+            }
+            switch (pname) {
+            case GL_TESS_GEN_MODE: *params = static_cast<GLint>(programObject->GetTessGenMode()); break;
+            case GL_TESS_GEN_SPACING: *params = static_cast<GLint>(programObject->GetTessGenSpacing()); break;
+            case GL_TESS_GEN_VERTEX_ORDER:
+                *params = static_cast<GLint>(programObject->GetTessGenVertexOrder());
+                break;
+            default: *params = programObject->GetTessGenPointMode() ? GL_TRUE : GL_FALSE; break;
+            }
+            MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
+            break;
+        }
         default:
             MGLOG_D("%s: %s", __func__, MG_Util::ConvertGLEnumToString(pname).c_str());
             MG_State::pGLContext->RecordError(

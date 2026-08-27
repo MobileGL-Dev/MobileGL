@@ -3973,3 +3973,166 @@ void main() { o_color = vec4(1.0); }
     EXPECT_FALSE(programObject->WriteReservedNumSamples(4));
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
+
+// glGetProgramiv's geometry and tessellation link properties (GL 4.6 core table 23.35). None of
+// these had a source: GL_GEOMETRY_VERTICES_OUT / _INPUT_TYPE / _OUTPUT_TYPE were listed in the
+// switch only to fall through into the GL_INVALID_ENUM default, GL_GEOMETRY_SHADER_INVOCATIONS
+// and the five GL_TESS_* pnames were not listed at all, and the link recorded nothing but the
+// geometry INPUT primitive. 72 of the tessellation family's 116 failing conformance bodies died
+// on the first of these queries, before touching a single tessellation feature.
+namespace {
+    GLuint CompileStage(GLenum type, const char* source) {
+        const GLuint shader = CreateShader(type);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint status = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &status);
+        if (status != GL_TRUE) {
+            char infoLog[2048] = "";
+            GetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
+            ADD_FAILURE() << "stage " << type << " failed to compile: " << infoLog;
+        }
+        return shader;
+    }
+
+    GLuint LinkStages(const std::vector<std::pair<GLenum, const char*>>& stages) {
+        const GLuint program = CreateProgram();
+        for (const auto& [type, source] : stages) {
+            const GLuint shader = CompileStage(type, source);
+            AttachShader(program, shader);
+            DeleteShader(shader);
+        }
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        if (linkStatus != GL_TRUE) {
+            char infoLog[2048] = "";
+            GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+            ADD_FAILURE() << "link failed: " << infoLog;
+        }
+        return program;
+    }
+
+    constexpr const char* kPassthroughVs = R"(#version 460 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    constexpr const char* kPassthroughFs = R"(#version 460 core
+out vec4 mgColor;
+void main() { mgColor = vec4(1.0); }
+)";
+} // namespace
+
+TEST_F(ProgramTest, GetProgramivReportsTheGeometryStageLinkProperties) {
+    constexpr const char* gs = R"(#version 460 core
+layout(triangles, invocations = 3) in;
+layout(line_strip, max_vertices = 7) out;
+void main() {
+    for (int i = 0; i < 3; ++i) { gl_Position = gl_in[i].gl_Position; EmitVertex(); }
+    EndPrimitive();
+}
+)";
+    const GLuint program =
+        LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_GEOMETRY_SHADER, gs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
+
+    GLint value = -1;
+    GetProgramiv(program, GL_GEOMETRY_INPUT_TYPE, &value);
+    EXPECT_EQ(value, GL_TRIANGLES);
+    GetProgramiv(program, GL_GEOMETRY_OUTPUT_TYPE, &value);
+    EXPECT_EQ(value, GL_LINE_STRIP);
+    GetProgramiv(program, GL_GEOMETRY_VERTICES_OUT, &value);
+    EXPECT_EQ(value, 7);
+    GetProgramiv(program, GL_GEOMETRY_SHADER_INVOCATIONS, &value);
+    EXPECT_EQ(value, 3);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // ...and INVALID_OPERATION, not INVALID_ENUM, on a program that has no geometry stage: GL
+    // says "a linked program object with a geometry shader", which the conformance suite checks
+    // from both sides.
+    const GLuint noGeometry = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
+    for (const GLenum pname : {GL_GEOMETRY_INPUT_TYPE, GL_GEOMETRY_OUTPUT_TYPE, GL_GEOMETRY_VERTICES_OUT,
+                               GL_GEOMETRY_SHADER_INVOCATIONS}) {
+        GetProgramiv(noGeometry, pname, &value);
+        EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION)) << "pname " << pname;
+    }
+}
+
+TEST_F(ProgramTest, GetProgramivReportsTheTessellationStageLinkProperties) {
+    constexpr const char* tcs = R"(#version 460 core
+layout(vertices = 3) out;
+void main() {
+    gl_TessLevelOuter[0] = 1.0; gl_TessLevelOuter[1] = 1.0; gl_TessLevelOuter[2] = 1.0;
+    gl_TessLevelInner[0] = 1.0;
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+}
+)";
+    constexpr const char* tes = R"(#version 460 core
+layout(quads, fractional_odd_spacing, cw, point_mode) in;
+void main() { gl_Position = gl_in[0].gl_Position; }
+)";
+    const GLuint program = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs},
+                                       {GL_TESS_CONTROL_SHADER, tcs},
+                                       {GL_TESS_EVALUATION_SHADER, tes},
+                                       {GL_FRAGMENT_SHADER, kPassthroughFs}});
+
+    GLint value = -1;
+    GetProgramiv(program, GL_TESS_CONTROL_OUTPUT_VERTICES, &value);
+    EXPECT_EQ(value, 3);
+    GetProgramiv(program, GL_TESS_GEN_MODE, &value);
+    EXPECT_EQ(value, GL_QUADS);
+    GetProgramiv(program, GL_TESS_GEN_SPACING, &value);
+    EXPECT_EQ(value, GL_FRACTIONAL_ODD);
+    GetProgramiv(program, GL_TESS_GEN_VERTEX_ORDER, &value);
+    EXPECT_EQ(value, GL_CW);
+    GetProgramiv(program, GL_TESS_GEN_POINT_MODE, &value);
+    EXPECT_EQ(value, GL_TRUE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // GLSL 4.60 4.4.2.3 defaults: equal_spacing, ccw, no point mode.
+    constexpr const char* defaultTes = R"(#version 460 core
+layout(triangles) in;
+void main() { gl_Position = gl_in[0].gl_Position; }
+)";
+    const GLuint defaults = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs},
+                                        {GL_TESS_CONTROL_SHADER, tcs},
+                                        {GL_TESS_EVALUATION_SHADER, defaultTes},
+                                        {GL_FRAGMENT_SHADER, kPassthroughFs}});
+    GetProgramiv(defaults, GL_TESS_GEN_MODE, &value);
+    EXPECT_EQ(value, GL_TRIANGLES);
+    GetProgramiv(defaults, GL_TESS_GEN_SPACING, &value);
+    EXPECT_EQ(value, GL_EQUAL);
+    GetProgramiv(defaults, GL_TESS_GEN_VERTEX_ORDER, &value);
+    EXPECT_EQ(value, GL_CCW);
+    GetProgramiv(defaults, GL_TESS_GEN_POINT_MODE, &value);
+    EXPECT_EQ(value, GL_FALSE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    const GLuint noTess = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_FRAGMENT_SHADER, kPassthroughFs}});
+    for (const GLenum pname : {GL_TESS_CONTROL_OUTPUT_VERTICES, GL_TESS_GEN_MODE, GL_TESS_GEN_SPACING,
+                               GL_TESS_GEN_VERTEX_ORDER, GL_TESS_GEN_POINT_MODE}) {
+        GetProgramiv(noTess, pname, &value);
+        EXPECT_EQ(GetError(), static_cast<GLenum>(GL_INVALID_OPERATION)) << "pname " << pname;
+    }
+}
+
+// The context-wide tessellation state the same conformance group reads before it links anything.
+// glGetBooleanv and glGetFloatv both have to answer GL_PATCH_DEFAULT_OUTER_LEVEL, which is
+// FLOAT state - a delegation that writes element 0 only would leave the other three components
+// as whatever was in the caller's stack.
+TEST_F(ProgramTest, ContextWideTessellationPropertiesAnswerEveryWidth) {
+    GLfloat outer[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
+    GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
+    for (const GLfloat level : outer) EXPECT_FLOAT_EQ(level, 1.0f);
+
+    GLfloat inner[2] = {-1.0f, -1.0f};
+    GetFloatv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
+    for (const GLfloat level : inner) EXPECT_FLOAT_EQ(level, 1.0f);
+
+    GLboolean outerBools[4] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
+    GetBooleanv(GL_PATCH_DEFAULT_OUTER_LEVEL, outerBools);
+    for (const GLboolean level : outerBools) EXPECT_EQ(level, GL_TRUE);
+
+    GLint restart = -1;
+    GetIntegerv(GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED, &restart);
+    EXPECT_EQ(restart, GL_FALSE);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

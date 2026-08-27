@@ -1356,6 +1356,23 @@ namespace MobileGL::MG_State::GLState {
             // tessellation control stage, or 0 when the program has none. Checked against
             // GL_MAX_PATCH_VERTICES at link (GL 4.6 core 11.2.1.1).
             Int tcsOutputVertices = 0;
+            // The rest of the geometry stage's link properties, and the tessellation evaluation
+            // stage's. Every one of these is a glGetProgramiv answer that had no source at all:
+            // the query surface listed the geometry pnames only to fall through to
+            // GL_INVALID_ENUM, and the GL_TESS_GEN_* pnames were not mentioned anywhere. They
+            // come from the linked intermediates for the same reason gsInputPrimitive and
+            // tcsOutputVertices do - glslang has already merged the compilation units' layout
+            // qualifiers and diagnosed contradictions, so the linked program is the thing that
+            // knows.
+            GLenum gsOutputPrimitive = GL_NONE;
+            Int gsMaxVertices = 0;
+            Int gsInvocations = 0;
+            // The tessellation evaluation stage's layout: GL_QUADS / GL_TRIANGLES / GL_ISOLINES,
+            // GL_EQUAL / GL_FRACTIONAL_EVEN / GL_FRACTIONAL_ODD, GL_CW / GL_CCW, and point mode.
+            GLenum tessGenMode = GL_NONE;
+            GLenum tessGenSpacing = GL_NONE;
+            GLenum tessGenVertexOrder = GL_NONE;
+            Bool tessGenPointMode = false;
             GLenum xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
             Int xfbVaryingNameMaxLength = 0;
             Bool xfbNeedsScatteredCapture = false;
@@ -1545,10 +1562,22 @@ namespace MobileGL::MG_State::GLState {
         // GL_LINES_ADJACENCY, GL_TRIANGLES or GL_TRIANGLES_ADJACENCY), or GL_NONE when the
         // program has no geometry stage. Draws must present a compatible primitive type.
         GLenum GetGeometryInputType() const { return Artifacts().gsInputPrimitive; }
+        // GL_GEOMETRY_OUTPUT_TYPE (GL_POINTS, GL_LINE_STRIP or GL_TRIANGLE_STRIP),
+        // GL_GEOMETRY_VERTICES_OUT and GL_GEOMETRY_SHADER_INVOCATIONS of the linked geometry
+        // stage. Meaningless without one - glGetProgramiv raises INVALID_OPERATION there.
+        GLenum GetGeometryOutputType() const { return Artifacts().gsOutputPrimitive; }
+        Int GetGeometryVerticesOut() const { return Artifacts().gsMaxVertices; }
+        Int GetGeometryShaderInvocations() const { return Artifacts().gsInvocations; }
         // GL_TESS_CONTROL_OUTPUT_VERTICES of the linked tessellation control stage, or 0 when
         // the program has no such stage. Never greater than GL_MAX_PATCH_VERTICES: a program
         // that declared more does not link at all (GL 4.6 core 11.2.1.1).
         Int GetTessControlOutputVertices() const { return Artifacts().tcsOutputVertices; }
+        // GL_TESS_GEN_MODE / _SPACING / _VERTEX_ORDER / _POINT_MODE of the linked tessellation
+        // evaluation stage.
+        GLenum GetTessGenMode() const { return Artifacts().tessGenMode; }
+        GLenum GetTessGenSpacing() const { return Artifacts().tessGenSpacing; }
+        GLenum GetTessGenVertexOrder() const { return Artifacts().tessGenVertexOrder; }
+        Bool GetTessGenPointMode() const { return Artifacts().tessGenPointMode; }
 
         Uint GetExternalIndex() const { return m_externalIndex; }
         // Globally-unique, never-reused id for this program object's lifetime. Unlike the GL

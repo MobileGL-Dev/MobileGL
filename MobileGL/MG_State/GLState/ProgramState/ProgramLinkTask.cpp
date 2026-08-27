@@ -670,9 +670,14 @@ namespace MobileGL::MG_State::GLState {
             return;
         }
 
-        // GL_GEOMETRY_INPUT_TYPE. A draw's primitive type has to be compatible with it
-        // (GL 4.6 core 11.3.1), so it is resolved for every link, not only a capturing one.
+        // The geometry stage's link properties. GL_GEOMETRY_INPUT_TYPE is load-bearing beyond the
+        // query surface - a draw's primitive type has to be compatible with it (GL 4.6 core
+        // 11.3.1) - so this block runs for every link, not only a capturing one. The other three
+        // are pure glGetProgramiv answers that previously had no source at all.
         artifacts.gsInputPrimitive = GL_NONE;
+        artifacts.gsOutputPrimitive = GL_NONE;
+        artifacts.gsMaxVertices = 0;
+        artifacts.gsInvocations = 0;
         if (const glslang::TIntermediate* gs = artifacts.program->getIntermediate(EShLangGeometry)) {
             switch (gs->getInputPrimitive()) {
             case glslang::ElgPoints: artifacts.gsInputPrimitive = GL_POINTS; break;
@@ -682,6 +687,45 @@ namespace MobileGL::MG_State::GLState {
             case glslang::ElgTrianglesAdjacency: artifacts.gsInputPrimitive = GL_TRIANGLES_ADJACENCY; break;
             default: break;
             }
+            switch (gs->getOutputPrimitive()) {
+            case glslang::ElgPoints: artifacts.gsOutputPrimitive = GL_POINTS; break;
+            case glslang::ElgLineStrip: artifacts.gsOutputPrimitive = GL_LINE_STRIP; break;
+            case glslang::ElgTriangleStrip: artifacts.gsOutputPrimitive = GL_TRIANGLE_STRIP; break;
+            default: break;
+            }
+            // glslang leaves both at TQualifier::layoutNotSet (-1) when the shader declared no
+            // such layout, and `invocations` defaults to one per GLSL 4.60 4.4.2.2 - so clamp
+            // rather than forward, or GL_GEOMETRY_SHADER_INVOCATIONS reports the sentinel.
+            artifacts.gsMaxVertices = std::max(gs->getVertices(), 0);
+            artifacts.gsInvocations = std::max(gs->getInvocations(), 1);
+        }
+
+        // The tessellation evaluation stage's link properties, GL 4.6 core table 23.35: the
+        // primitive generator's mode, spacing, winding and point mode. (The control stage's
+        // output patch size is captured below, together with the limit check that goes with it.)
+        artifacts.tessGenMode = GL_NONE;
+        artifacts.tessGenSpacing = GL_NONE;
+        artifacts.tessGenVertexOrder = GL_NONE;
+        artifacts.tessGenPointMode = false;
+        if (const glslang::TIntermediate* tes = artifacts.program->getIntermediate(EShLangTessEvaluation)) {
+            switch (tes->getInputPrimitive()) {
+            case glslang::ElgTriangles: artifacts.tessGenMode = GL_TRIANGLES; break;
+            case glslang::ElgQuads: artifacts.tessGenMode = GL_QUADS; break;
+            case glslang::ElgIsolines: artifacts.tessGenMode = GL_ISOLINES; break;
+            default: break;
+            }
+            // GLSL 4.60 4.4.2.3: equal_spacing and ccw are the defaults, which is what an unset
+            // qualifier means here.
+            switch (tes->getVertexSpacing()) {
+            case glslang::EvsFractionalEven: artifacts.tessGenSpacing = GL_FRACTIONAL_EVEN; break;
+            case glslang::EvsFractionalOdd: artifacts.tessGenSpacing = GL_FRACTIONAL_ODD; break;
+            default: artifacts.tessGenSpacing = GL_EQUAL; break;
+            }
+            switch (tes->getVertexOrder()) {
+            case glslang::EvoCw: artifacts.tessGenVertexOrder = GL_CW; break;
+            default: artifacts.tessGenVertexOrder = GL_CCW; break;
+            }
+            artifacts.tessGenPointMode = tes->getPointMode();
         }
 
         // GL_TESS_CONTROL_OUTPUT_VERTICES, i.e. the `layout(vertices = N) out` the control stage
