@@ -9136,6 +9136,12 @@ void main() {
             VkExtent2D extent = {0, 0};
             Uint32 depth = 1;
             Uint32 arrayLayers = 1;
+            // Both resources carry a format; this copy used to decline to read it, which is why a
+            // four-row drift between the texture and renderbuffer format tables turned into
+            // corrupted texels with nothing in the log. vkCmdCopyImage requires size-compatible
+            // formats whenever they differ (VUID-vkCmdCopyImage-srcImage-01548) and there is no
+            // downstream check - a mismatched pair is a promise the driver takes at face value.
+            VkFormat format = VK_FORMAT_UNDEFINED;
         };
 
         Bool TryResolveCopyImageSliceMapping(TextureTarget target, const CopyImageVkImage& image, Uint32 mipLevel,
@@ -9255,6 +9261,7 @@ void main() {
                 out.extent = resource->extent;
                 out.depth = 1;
                 out.arrayLayers = 1;
+                out.format = resource->format;
                 return out.image != VK_NULL_HANDLE;
             }
             // An endpoint that named nothing is the frontend validator's INVALID_VALUE and never
@@ -9270,6 +9277,7 @@ void main() {
             out.extent = resource->extent;
             out.depth = resource->depth;
             out.arrayLayers = resource->arrayLayers;
+            out.format = resource->format;
             return true;
         };
         CopyImageVkImage srcImage{};
@@ -9309,6 +9317,27 @@ void main() {
             MGLOG_E_ONCE("%s: mip level out of range (src %d of %u, dst %d of %u); declining the copy", __func__,
                          srcLevel, srcImage.mipLevels, dstLevel, dstImage.mipLevels);
             return;
+        }
+        // Size compatibility, the guard whose absence let a table drift two files away reach the
+        // driver as a promise. glCopyImageSubData is a raw texel-block move (GL 4.6 core 18.3.2), and
+        // Vulkan says as much: when the two formats differ they must be size-compatible - the same
+        // texel block size - or vkCmdCopyImage is undefined (VUID-vkCmdCopyImage-srcImage-01548).
+        // Nothing else on this path asks: the three checks around it cover the mip range, the region
+        // bounds and the slice range, and none of them ever looked at a format.
+        //
+        // A decline rather than a MOBILEGL_ASSERT, for the reason the neighbouring guards spell out:
+        // assertions compile out of the release build that the CTS and shipping both run, which is
+        // exactly where the corruption was observed.
+        if (srcImage.format != dstImage.format) {
+            const Uint32 srcBlockSize = vkuGetFormatInfo(srcImage.format).texel_block_size;
+            const Uint32 dstBlockSize = vkuGetFormatInfo(dstImage.format).texel_block_size;
+            if (srcBlockSize == 0 || dstBlockSize == 0 || srcBlockSize != dstBlockSize) {
+                MGLOG_E_ONCE("%s: source format %d and destination format %d are not size-compatible "
+                             "(%u vs %u bytes per texel block); declining the copy",
+                             __func__, static_cast<Int>(srcImage.format), static_cast<Int>(dstImage.format),
+                             srcBlockSize, dstBlockSize);
+                return;
+            }
         }
         const VkImageAspectFlags copyAspectMask =
             srcImage.aspect & dstImage.aspect &

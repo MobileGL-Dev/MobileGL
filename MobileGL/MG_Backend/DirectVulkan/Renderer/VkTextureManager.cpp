@@ -46,13 +46,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return mipLevelCount;
     }
 
-    struct TextureFormatInfo {
-        VkFormat format = VK_FORMAT_UNDEFINED;
-        Bool expandRgbToRgba = false;
-        Uint32 componentByteCount = 0;
-        Array<Uint8, 4> alphaBytes = {0, 0, 0, 0};
-    };
-
     struct TextureShapeInfo {
         VkImageType imageType = VK_IMAGE_TYPE_2D;
         VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -380,7 +373,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    static TextureFormatInfo ResolveTextureFormatInfo(TextureInternalFormat format) {
+    TextureFormatInfo ResolveTextureFormatInfo(TextureInternalFormat format) {
         switch (format) {
         case TextureInternalFormat::RGB:
         case TextureInternalFormat::RGB8:

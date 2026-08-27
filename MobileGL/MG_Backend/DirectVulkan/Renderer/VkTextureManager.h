@@ -24,6 +24,31 @@ class ITextureObject;
 namespace MobileGL::MG_Backend::DirectVulkan {
 enum class SamplerNumericDomain : Uint8;
 
+// What VkFormat a GL internal format is BACKED with, and how a shadow upload has to be reshaped to
+// fit it. This is not the same question as "is there an exact VkFormat for this GL format", which is
+// what ConvertTextureInternalFormatToVkEnum answers: several GL formats have no Vulkan twin at all
+// (RGBA2, RGBA12) and several three-channel ones are deliberately widened to their four-channel twin
+// because Vulkan devices rarely support the 3-channel layouts.
+//
+// SHARED, and it must stay the only answer to that question. A renderbuffer and a texture of the
+// same GL format have to resolve to the SAME VkFormat or every blit, resolve and glCopyImageSubData
+// between them crosses a size-incompatible pair, which vkCmdCopyImage leaves undefined
+// (VUID-vkCmdCopyImage-srcImage-01548). The renderbuffer path used to carry a hand-maintained second
+// copy of this table that was missing four rows - RGBA2, RGBA4, RGB5A1 and RGBA12 - so those four
+// renderbuffer formats either got no image at all or a 16-bit-packed one facing a 32-bit texture.
+struct TextureFormatInfo {
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    // The GL format has three channels and is carried in a four-channel image; a shadow upload has
+    // to be expanded, inserting `alphaBytes` after every `componentByteCount * 3` source bytes.
+    Bool expandRgbToRgba = false;
+    Uint32 componentByteCount = 0;
+    Array<Uint8, 4> alphaBytes = {0, 0, 0, 0};
+};
+
+// Callers that only need the backing VkFormat (a renderbuffer has no shadow upload to reshape) take
+// `.format` and ignore the rest.
+TextureFormatInfo ResolveTextureFormatInfo(TextureInternalFormat format);
+
 // A GL 1D-ARRAY level keeps its LAYER COUNT in the state-side HEIGHT: that is what
 // glTexImage2D(GL_TEXTURE_1D_ARRAY, width, layers) means, and the frontend records the level
 // as {width, layers, 1} (see GL_Texture.cpp's AllocateStorage and the completeness walk in
