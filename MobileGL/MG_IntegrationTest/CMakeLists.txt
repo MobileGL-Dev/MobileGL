@@ -66,6 +66,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
+    Scenarios/SampleVariablesScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
     Scenarios/DepthStencilReadbackMatrixScenario.cpp
     Scenarios/DepthStencilReadbackAttachmentShapeScenario.cpp
