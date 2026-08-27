@@ -4605,12 +4605,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // GL_TEXTURE_BORDER_COLOR needs ES 3.2 or EXT/OES_texture_border_clamp; on a driver
             // without it every such call is INVALID_ENUM, so the parameter is simply not synced.
+            //
+            // The FORM has to be forwarded along with the value. A border colour set through
+            // glTexParameterIiv/Iuiv is an integer one, and an isampler2D/usampler2D fetch of the
+            // border returns whatever the driver's integer border register holds - so pushing it
+            // through glTexParameterfv handed the driver float 255.0 and the shader read back
+            // 1132396544, the bit pattern of that float. glTexParameterIiv/Iuiv are ES 3.2 core
+            // beside GL_TEXTURE_BORDER_COLOR itself, so they sit behind the same capability gate;
+            // the entry-point null check covers a driver that advertises the extension without them.
+            const auto borderColorForm = stateTextureObject->GetBorderColorForm();
             if (!isMultisampleTarget && g_GLESCapabilities.SupportsTextureBorderClamp &&
-                m_cacheBorderColor != stateTextureObject->GetBorderColor()) {
-                const auto& borderColor = stateTextureObject->GetBorderColor();
-                GLfloat borderColorArray[4] = {borderColor.x(), borderColor.y(), borderColor.z(), borderColor.w()};
-                g_GLESFuncs.glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
-                m_cacheBorderColor = borderColor;
+                (m_cacheBorderColor != stateTextureObject->GetBorderColor() ||
+                 m_cacheBorderColorForm != borderColorForm)) {
+                if (borderColorForm == BorderColorForm::Int && g_GLESFuncs.glTexParameterIiv) {
+                    const auto& borderColorI = stateTextureObject->GetBorderColorI();
+                    const GLint borderColorArray[4] = {borderColorI.x(), borderColorI.y(), borderColorI.z(),
+                                                       borderColorI.w()};
+                    g_GLESFuncs.glTexParameterIiv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
+                } else if (borderColorForm == BorderColorForm::Uint && g_GLESFuncs.glTexParameterIuiv) {
+                    const auto& borderColorUI = stateTextureObject->GetBorderColorUI();
+                    const GLuint borderColorArray[4] = {borderColorUI.x(), borderColorUI.y(), borderColorUI.z(),
+                                                        borderColorUI.w()};
+                    g_GLESFuncs.glTexParameterIuiv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
+                } else {
+                    const auto& borderColor = stateTextureObject->GetBorderColor();
+                    const GLfloat borderColorArray[4] = {borderColor.x(), borderColor.y(), borderColor.z(),
+                                                         borderColor.w()};
+                    g_GLESFuncs.glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
+                }
+                m_cacheBorderColor = stateTextureObject->GetBorderColor();
+                m_cacheBorderColorForm = borderColorForm;
                 DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                     MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
                 });
@@ -7916,15 +7940,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 m_cacheSamplerParameters.maxAnisotropy = samplerParams.maxAnisotropy;
             }
-            if (m_cacheSamplerParameters.borderColor != samplerParams.borderColor) {
-                // Same gate as the texture-side border colour above.
-                if (g_GLESCapabilities.SupportsTextureBorderClamp && g_GLESFuncs.glSamplerParameterfv) {
-                    const GLfloat borderColorArray[4] = {
-                        samplerParams.borderColor.x(), samplerParams.borderColor.y(),
-                        samplerParams.borderColor.z(), samplerParams.borderColor.w()};
-                    g_GLESFuncs.glSamplerParameterfv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR, borderColorArray);
+            if (m_cacheSamplerParameters.borderColor != samplerParams.borderColor ||
+                m_cacheSamplerParameters.borderColorForm != samplerParams.borderColorForm) {
+                // Same gate as the texture-side border colour above, and the same reason for
+                // branching on the form: an integer border colour must reach the driver through
+                // glSamplerParameterIiv/Iuiv or an integer sampler reads the float's bit pattern
+                // back instead of the value.
+                if (g_GLESCapabilities.SupportsTextureBorderClamp) {
+                    if (samplerParams.borderColorForm == BorderColorForm::Int &&
+                        g_GLESFuncs.glSamplerParameterIiv) {
+                        const GLint borderColorArray[4] = {
+                            samplerParams.borderColorI.x(), samplerParams.borderColorI.y(),
+                            samplerParams.borderColorI.z(), samplerParams.borderColorI.w()};
+                        g_GLESFuncs.glSamplerParameterIiv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR,
+                                                          borderColorArray);
+                    } else if (samplerParams.borderColorForm == BorderColorForm::Uint &&
+                               g_GLESFuncs.glSamplerParameterIuiv) {
+                        const GLuint borderColorArray[4] = {
+                            samplerParams.borderColorUI.x(), samplerParams.borderColorUI.y(),
+                            samplerParams.borderColorUI.z(), samplerParams.borderColorUI.w()};
+                        g_GLESFuncs.glSamplerParameterIuiv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR,
+                                                           borderColorArray);
+                    } else if (g_GLESFuncs.glSamplerParameterfv) {
+                        const GLfloat borderColorArray[4] = {
+                            samplerParams.borderColor.x(), samplerParams.borderColor.y(),
+                            samplerParams.borderColor.z(), samplerParams.borderColor.w()};
+                        g_GLESFuncs.glSamplerParameterfv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR,
+                                                         borderColorArray);
+                    }
                 }
                 m_cacheSamplerParameters.borderColor = samplerParams.borderColor;
+                m_cacheSamplerParameters.borderColorI = samplerParams.borderColorI;
+                m_cacheSamplerParameters.borderColorUI = samplerParams.borderColorUI;
+                m_cacheSamplerParameters.borderColorForm = samplerParams.borderColorForm;
             }
 #undef SYNC_SAMPLER_PARAM_IF_CHANGED
             m_isInitialized = true;
