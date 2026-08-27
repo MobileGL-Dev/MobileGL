@@ -103,6 +103,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TextureViewScenario.cpp
     Scenarios/PackedWordReadbackScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
+    Scenarios/LayeredAttachmentShapeScenario.cpp
     Scenarios/LayeredTextureReadbackScenario.cpp
     Scenarios/AtomicCounterScenario.cpp
     Scenarios/SsboArrayDynamicIndexScenario.cpp
