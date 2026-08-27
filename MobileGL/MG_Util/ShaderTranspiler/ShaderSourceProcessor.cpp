@@ -335,10 +335,15 @@ namespace {
                 // #version splice the second into the tail of the first. Only an EXACT repeat of
                 // the directive already accepted is recognized here; see
                 // BlankRedundantVersionDirectives for why that one is tolerated and nothing else.
-                for (SizeT scan = probe; scan < lineEnd; ++scan) {
-                    if (code[scan] != '#') continue;
-                    recordIfRedundant(scan, lineEnd);
-                    break;
+                //
+                // Gated on a directive having been accepted already, so an ordinary shader - which
+                // has none of these - pays one memchr per line past its #version line and nothing
+                // before it.
+                if (info.hasValidVersionDirective) {
+                    const SizeT hashPos = code.find('#', probe);
+                    if (hashPos != MobileGL::String::npos && hashPos < lineEnd) {
+                        recordIfRedundant(hashPos, lineEnd);
+                    }
                 }
             } else {
                 const SizeT directiveStart = probe;
