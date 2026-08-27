@@ -4613,9 +4613,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // 1132396544, the bit pattern of that float. glTexParameterIiv/Iuiv are ES 3.2 core
             // beside GL_TEXTURE_BORDER_COLOR itself, so they sit behind the same capability gate;
             // the entry-point null check covers a driver that advertises the extension without them.
+            // The redundancy filter has to look at the AUTHORITATIVE representation, not just the
+            // float one: two integer borders that differ above 2^24 (16777216 and 16777217, say)
+            // collapse onto the same float, so a float-only comparison would skip the second sync and
+            // leave the driver holding the first value forever.
             const auto borderColorForm = stateTextureObject->GetBorderColorForm();
             if (!isMultisampleTarget && g_GLESCapabilities.SupportsTextureBorderClamp &&
                 (m_cacheBorderColor != stateTextureObject->GetBorderColor() ||
+                 m_cacheBorderColorI != stateTextureObject->GetBorderColorI() ||
+                 m_cacheBorderColorUI != stateTextureObject->GetBorderColorUI() ||
                  m_cacheBorderColorForm != borderColorForm)) {
                 if (borderColorForm == BorderColorForm::Int && g_GLESFuncs.glTexParameterIiv) {
                     const auto& borderColorI = stateTextureObject->GetBorderColorI();
@@ -4634,6 +4640,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glTexParameterfv(target, GL_TEXTURE_BORDER_COLOR, borderColorArray);
                 }
                 m_cacheBorderColor = stateTextureObject->GetBorderColor();
+                m_cacheBorderColorI = stateTextureObject->GetBorderColorI();
+                m_cacheBorderColorUI = stateTextureObject->GetBorderColorUI();
                 m_cacheBorderColorForm = borderColorForm;
                 DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                     MGLOG_D("%s(%s:%d) ES error %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
@@ -7941,6 +7949,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_cacheSamplerParameters.maxAnisotropy = samplerParams.maxAnisotropy;
             }
             if (m_cacheSamplerParameters.borderColor != samplerParams.borderColor ||
+                m_cacheSamplerParameters.borderColorI != samplerParams.borderColorI ||
+                m_cacheSamplerParameters.borderColorUI != samplerParams.borderColorUI ||
                 m_cacheSamplerParameters.borderColorForm != samplerParams.borderColorForm) {
                 // Same gate as the texture-side border colour above, and the same reason for
                 // branching on the form: an integer border colour must reach the driver through

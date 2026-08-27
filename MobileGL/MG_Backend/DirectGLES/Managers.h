@@ -1050,10 +1050,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint16 m_syncedShapeParamsVersion = 0;
             SamplerParameters m_cacheSamplerParameters;
             UintVec2 m_cacheLodRange = {0, 1000};
+            // All three representations plus the form, because none of them alone identifies the
+            // border colour the driver texture is holding: two integer borders can share one float
+            // (anything differing above 2^24), and a Float -> Int transition can leave every number
+            // unchanged while still needing a different driver entry point.
             FloatVec4 m_cacheBorderColor = {0.0f, 0.0f, 0.0f, 0.0f};
-            // Which border-colour entry point the driver texture last received. Cached beside the
-            // value because a Float -> Int transition can leave the numbers unchanged (the derived
-            // representations are kept in step) while still needing a different driver call.
+            IntVec4 m_cacheBorderColorI = {0, 0, 0, 0};
+            UintVec4 m_cacheBorderColorUI = {0, 0, 0, 0};
             BorderColorForm m_cacheBorderColorForm = BorderColorForm::Float;
             Vec4<TextureSwizzleParam> m_cacheSwizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                               TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
