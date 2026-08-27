@@ -827,10 +827,11 @@ TEST_F(QueryTest, DisableTimerQueryFeatureMatchesEnvironment) {
 // ---------------------------------------------------------------------------------------------
 
 TEST_F(QueryTest, PipelineStatisticsTargetsAreAcceptedAndReportZeroCounterBits) {
+    // The NINE unconditional targets. The two tessellation ones are conditional on tessellation
+    // support and have their own test below.
     static constexpr GLenum kTargets[] = {
         GL_VERTICES_SUBMITTED,          GL_PRIMITIVES_SUBMITTED,
-        GL_VERTEX_SHADER_INVOCATIONS,   GL_TESS_CONTROL_SHADER_PATCHES,
-        GL_TESS_EVALUATION_SHADER_INVOCATIONS, GL_GEOMETRY_SHADER_INVOCATIONS,
+        GL_VERTEX_SHADER_INVOCATIONS,   GL_GEOMETRY_SHADER_INVOCATIONS,
         GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED, GL_FRAGMENT_SHADER_INVOCATIONS,
         GL_COMPUTE_SHADER_INVOCATIONS,  GL_CLIPPING_INPUT_PRIMITIVES,
         GL_CLIPPING_OUTPUT_PRIMITIVES,
@@ -869,6 +870,73 @@ TEST_F(QueryTest, PipelineStatisticsTargetsAreAcceptedAndReportZeroCounterBits) 
         EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
         MG_Impl::GLImpl::DeleteQueries(1, &id);
+    }
+}
+
+// GL_TESS_CONTROL_SHADER_PATCHES / GL_TESS_EVALUATION_SHADER_INVOCATIONS are the two
+// pipeline-statistics targets ARB_pipeline_statistics_query makes CONDITIONAL on tessellation
+// support, and the extension string is the only thing an application can read to decide whether
+// an implementation has it. So the target and the string have to move together: accepting a
+// tessellation-conditional token while withholding the string that announces the condition is
+// self-contradictory, and the conformance suite catches exactly that contradiction
+// (KHR-GL46.pipeline_statistics_query_tests_ARB.api_coverage_unsupported_calls demands
+// GL_INVALID_ENUM for every target its own probe calls unsupported, and its probe for these two
+// is `compatibility(4,0) || GL_ARB_tessellation_shader` - a CORE context fails the first half).
+//
+// Written against the advertisement rather than against today's answer on purpose: the day a
+// backend starts emitting GL_ARB_tessellation_shader this test keeps passing and keeps pinning
+// the coupling, and it fails loudly if only one of the two halves moves.
+TEST_F(QueryTest, TessellationPipelineStatisticsTargetsFollowTheTessellationShaderAdvertisement) {
+    const auto* extensionsString =
+        reinterpret_cast<const char*>(MG_Impl::GLImpl::GetString(GL_EXTENSIONS));
+    ASSERT_NE(extensionsString, nullptr);
+    const Bool advertised = String(extensionsString).find("GL_ARB_tessellation_shader") != String::npos;
+    const GLenum expectedError = advertised ? GL_NO_ERROR : GL_INVALID_ENUM;
+
+    static constexpr GLenum kTessTargets[] = {
+        GL_TESS_CONTROL_SHADER_PATCHES,
+        GL_TESS_EVALUATION_SHADER_INVOCATIONS,
+    };
+
+    for (const GLenum target: kTessTargets) {
+        GLuint id = 0;
+        MG_Impl::GLImpl::GenQueries(1, &id);
+        ASSERT_NE(id, 0u);
+
+        MG_Impl::GLImpl::BeginQuery(target, id);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), expectedError)
+            << "glBeginQuery on tessellation pipeline-statistics target 0x" << std::hex << target
+            << " must agree with the GL_ARB_tessellation_shader advertisement";
+
+        if (advertised) {
+            MG_Impl::GLImpl::EndQuery(target);
+            EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+            GLint counterBits = -1;
+            MG_Impl::GLImpl::GetQueryiv(target, GL_QUERY_COUNTER_BITS, &counterBits);
+            EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+            EXPECT_EQ(counterBits, 0);
+        } else {
+            // Refused at glEndQuery too, not just at glBeginQuery: a target the implementation
+            // does not have is not half-accepted.
+            MG_Impl::GLImpl::EndQuery(target);
+            EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_ENUM);
+            // GL_QUERY_COUNTER_BITS still answers the honest zero rather than an error - the
+            // getter has never validated its target, and zero is what "no such counter" reads as
+            // (GL 4.6 core 4.2.1), so the refusal costs no information.
+            GLint counterBits = -1;
+            MG_Impl::GLImpl::GetQueryiv(target, GL_QUERY_COUNTER_BITS, &counterBits);
+            EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+            EXPECT_EQ(counterBits, 0);
+            // And GL_CURRENT_QUERY reads as "no query" rather than tracking a slot that was
+            // never opened.
+            GLint current = -1;
+            MG_Impl::GLImpl::GetQueryiv(target, GL_CURRENT_QUERY, &current);
+            EXPECT_EQ(current, 0);
+        }
+
+        MG_Impl::GLImpl::DeleteQueries(1, &id);
+        while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {
+        }
     }
 }
 

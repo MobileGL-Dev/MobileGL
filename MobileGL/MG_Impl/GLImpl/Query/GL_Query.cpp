@@ -64,21 +64,43 @@ namespace MobileGL::MG_Impl::GLImpl {
         // and none of them has any state beyond "which object is counting".
         UnorderedMap<GLenum, GLuint> g_activePipelineStatisticsQueryIds;
 
+        // Whether MobileGL puts GL_ARB_tessellation_shader in its extension string. Read from the
+        // ADVERTISED list rather than from a capability bit for the same reason
+        // BackendSupportsTextureViews does (GL_Texture.cpp): it makes "MobileGL claims tessellation
+        // support" and "the tessellation-conditional API surface is open" the same fact by
+        // construction, so the day a backend starts advertising the string the surface below opens
+        // with it and no second edit is owed.
+        Bool AdvertisesTessellationShaderExtension() {
+            const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
+            if (!activeBackendObject) return false;
+            const auto& extensions = activeBackendObject->GetRendererInfo().RendererGLInfo.Extensions;
+            return std::find(extensions.begin(), extensions.end(), E_GL_ARB_tessellation_shader) != extensions.end();
+        }
+
         // The eleven pipeline-statistics counters (GL 4.6 core table 4.3 / ARB_pipeline_statistics_query).
-        // A 4.6 core context has to ACCEPT all of them at glBeginQuery - the extension is core
-        // since 4.6 and there is no query by which an application could learn otherwise before
-        // calling. MobileGL instruments none of them, and says so the way GL 4.6 core 4.2.1
-        // provides for: GL_QUERY_COUNTER_BITS answers zero for these targets, which is the
-        // spec's own signal that the counter is unsupported and its results indeterminate. That
-        // is an honest zero, not an advertised capability - the alternative, GL_INVALID_ENUM on a
-        // core entry point, is both non-conformant AND less informative.
+        // A 4.6 core context ACCEPTS the nine unconditional ones at glBeginQuery - there is no query
+        // by which an application could learn otherwise before calling. MobileGL instruments none of
+        // them, and says so the way GL 4.6 core 4.2.1 provides for: GL_QUERY_COUNTER_BITS answers
+        // zero for these targets, which is the spec's own signal that the counter is unsupported and
+        // its results indeterminate. That is an honest zero, not an advertised capability - the
+        // alternative, GL_INVALID_ENUM on a core entry point, is both non-conformant AND less
+        // informative.
+        //
+        // The two TESSELLATION targets are the exception, because ARB_pipeline_statistics_query
+        // makes them conditional on tessellation support rather than unconditional, and the only
+        // thing an application (or the conformance suite) can read to decide whether an
+        // implementation has it is the GL_ARB_tessellation_shader string. MobileGL does not emit it
+        // today, so these two answer GL_INVALID_ENUM: an API surface that accepts a
+        // tessellation-conditional token while withholding the string that announces the condition
+        // is self-contradictory, and it is the contradiction the suite catches
+        // (KHR-GL46.pipeline_statistics_query_tests_ARB.api_coverage_unsupported_calls, whose
+        // support probe is gl4cPipelineStatisticsQueryTests.cpp:1166-1176). The gate is the
+        // advertisement itself, not a hardcoded "no", so this is one switch and not two.
         Bool IsPipelineStatisticsQueryTarget(GLenum target) {
             switch (target) {
             case GL_VERTICES_SUBMITTED:
             case GL_PRIMITIVES_SUBMITTED:
             case GL_VERTEX_SHADER_INVOCATIONS:
-            case GL_TESS_CONTROL_SHADER_PATCHES:
-            case GL_TESS_EVALUATION_SHADER_INVOCATIONS:
             case GL_GEOMETRY_SHADER_INVOCATIONS:
             case GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED:
             case GL_FRAGMENT_SHADER_INVOCATIONS:
@@ -86,6 +108,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_CLIPPING_INPUT_PRIMITIVES:
             case GL_CLIPPING_OUTPUT_PRIMITIVES:
                 return true;
+            case GL_TESS_CONTROL_SHADER_PATCHES:
+            case GL_TESS_EVALUATION_SHADER_INVOCATIONS:
+                return AdvertisesTessellationShaderExtension();
             default:
                 return false;
             }
