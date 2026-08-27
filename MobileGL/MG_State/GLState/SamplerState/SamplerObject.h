@@ -56,6 +56,19 @@ namespace MobileGL {
         Unknown = -1
     };
 
+    // Which of the three GL_TEXTURE_BORDER_COLOR entry-point families last wrote the border colour,
+    // and therefore which of the three stored representations is AUTHORITATIVE. GL 4.6 core 8.10:
+    // TexParameterIiv/Iuiv store an integer border colour "unmodified, with an internal data type of
+    // integer", TexParameterfv stores a floating-point one, and the derived forms are only a
+    // convenience for a getter of the other spelling. A backend cannot pick the right driver entry
+    // point (glSamplerParameterIiv vs fv) or the right VkBorderColor family without this: numerically
+    // the three representations are always populated, so the value alone says nothing about the form.
+    enum class BorderColorForm : Uint8 {
+        Float,
+        Int,
+        Uint
+    };
+
     struct SamplerParameters {
         SamplerWrapMode wrapS = SamplerWrapMode::Repeat;
         SamplerWrapMode wrapT = SamplerWrapMode::Repeat;
@@ -79,6 +92,7 @@ namespace MobileGL {
         FloatVec4 borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
         IntVec4 borderColorI = {0, 0, 0, 0};
         UintVec4 borderColorUI = {0, 0, 0, 0};
+        BorderColorForm borderColorForm = BorderColorForm::Float;
     };
 
     namespace MG_State {
@@ -117,6 +131,7 @@ namespace MobileGL {
                 const FloatVec4& GetBorderColor() const;
                 const IntVec4& GetBorderColorI() const;
                 const UintVec4& GetBorderColorUI() const;
+                BorderColorForm GetBorderColorForm() const;
                 Uint GetExternalIndex() const;
                 Uint16 GetVersion() const;
                 // Globally-unique, never-reused id for this sampler object's lifetime. Lets a

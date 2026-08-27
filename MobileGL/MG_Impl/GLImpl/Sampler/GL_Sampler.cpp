@@ -13,6 +13,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include <MG_Util/Math/FixedPointConversion.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -20,6 +21,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (isFloat) return *(const GLfloat*)param;
             if (isUnsignedInteger) return static_cast<Float>(*(const GLuint*)param);
             return static_cast<Float>(*(const GLint*)param);
+        }
+
+        // GL_TEXTURE_BORDER_COLOR is the only sampler parameter with more than one component, and it
+        // is also the only one whose meaning depends on WHICH entry point wrote it. Everything else
+        // reads exactly one component and does not care.
+        Bool IsVectorOnlySamplerPname(GLenum pname) {
+            return pname == GL_TEXTURE_BORDER_COLOR;
         }
 
         Bool ValidateSamplerParameterValue(GLenum pname, const void* param, Bool isFloat, Bool isUnsignedInteger) {
@@ -56,8 +64,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     } // namespace
 
+    // `isIntegerCommand` distinguishes the "I" spellings (glSamplerParameterIiv / Iuiv) from the
+    // plain ones. It only matters for GL_TEXTURE_BORDER_COLOR, and there it decides everything:
+    // GL 4.6 core 8.10 says the I forms store the components unmodified with an integer internal
+    // type, while glSamplerParameteriv converts them to floating point with equation 2.2. Routing
+    // both to the same setter - which is what this file used to do - meant glSamplerParameteriv
+    // stored raw integers (so a border of 255 became float 255.0 instead of the spec's ~1.19e-7)
+    // and glSamplerParameterIiv lost the fact that it was ever an integer at all.
     void SetSamplerParam_State(GLuint sampler, GLenum pname, const void* param, bool isFloat,
-                               bool isUnsignedInteger) {
+                               bool isUnsignedInteger, bool isIntegerCommand) {
         if (param == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -112,6 +127,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (isFloat) {
                 const auto* values = (const GLfloat*)param;
                 samplerObj->SetBorderColor(FloatVec4(values[0], values[1], values[2], values[3]));
+            } else if (!isIntegerCommand) {
+                // glSamplerParameteriv: GL 4.6 core equation 2.2 into the FLOAT border colour.
+                const auto* values = (const GLint*)param;
+                samplerObj->SetBorderColor(FloatVec4(MG_Util::SignedNormalizedInt32ToFloat(values[0]),
+                                                     MG_Util::SignedNormalizedInt32ToFloat(values[1]),
+                                                     MG_Util::SignedNormalizedInt32ToFloat(values[2]),
+                                                     MG_Util::SignedNormalizedInt32ToFloat(values[3])));
             } else if (isUnsignedInteger) {
                 const auto* values = (const GLuint*)param;
                 samplerObj->SetBorderColorUI(UintVec4(values[0], values[1], values[2], values[3]));
@@ -128,7 +150,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetSamplerParam_State(GLuint sampler, GLenum pname, void* params, bool isFloat,
-                               bool isUnsignedInteger) {
+                               bool isUnsignedInteger, bool isIntegerCommand) {
         if (params == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -191,6 +213,16 @@ namespace MobileGL::MG_Impl::GLImpl {
                 out[1] = color.y();
                 out[2] = color.z();
                 out[3] = color.w();
+            } else if (!isIntegerCommand) {
+                // glGetSamplerParameteriv: the inverse of the write side, GL 4.6 core equation 2.3.
+                // Exactly inverse, so a {0,1,2,4} written with glSamplerParameteriv reads back as
+                // {0,1,2,4}; a bare truncating cast answered {0,0,0,0}.
+                const auto& color = samplerObj->GetBorderColor();
+                auto* out = (GLint*)params;
+                out[0] = MG_Util::FloatToSignedNormalizedInt32(color.x());
+                out[1] = MG_Util::FloatToSignedNormalizedInt32(color.y());
+                out[2] = MG_Util::FloatToSignedNormalizedInt32(color.z());
+                out[3] = MG_Util::FloatToSignedNormalizedInt32(color.w());
             } else if (isUnsignedInteger) {
                 const auto& color = samplerObj->GetBorderColorUI();
                 auto* out = (GLuint*)params;
@@ -293,16 +325,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (sampler == 0) {
             textureUnit.SetSamplerObject(nullptr);
         } else {
-            // GL 3.3 core 3.8.2: BindSampler on a name GenSamplers never returned - or one already
-            // deleted - is INVALID_OPERATION. SamplerParameter* raises INVALID_VALUE for the same
-            // name, which is why this cannot go through the shared SamplerImpl validator.
-            if (!MG_State::pGLContext->ValidateSamplerName(sampler)) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BindSampler_State",
-                                                 std::format("Invalid sampler name {}", sampler)));
-                return;
-            }
+            // GL 4.6 core 8.2: BindSampler on a name GenSamplers never returned - or one already
+            // deleted - is INVALID_OPERATION, and so is every other sampler entry point on such a
+            // name, so the shared validator answers for all of them.
+            if (!SamplerImpl::ValidateSamplerName(sampler)) return;
             Bool doesSamplerObjectCreated = MG_State::pGLContext->ValidateSamplerObject(sampler);
             if (!doesSamplerObjectCreated) {
                 MG_State::pGLContext->CreateSamplerObject(sampler);
@@ -356,30 +382,50 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
     void GetSamplerParameteriv(GLuint sampler, GLenum pname, GLint* params) {
-        GetSamplerParam_State(sampler, pname, params, false, false);
+        GetSamplerParam_State(sampler, pname, params, false, false, false);
     }
 
     void SamplerParameterIuiv(GLuint sampler, GLenum pname, const GLuint* param) {
-        SetSamplerParam_State(sampler, pname, param, false, true);
+        SetSamplerParam_State(sampler, pname, param, false, true, true);
     }
 
     void SamplerParameterIiv(GLuint sampler, GLenum pname, const GLint* param) {
-        SetSamplerParam_State(sampler, pname, param, false, false);
+        SetSamplerParam_State(sampler, pname, param, false, false, true);
     }
 
     void SamplerParameteriv(GLuint sampler, GLenum pname, const GLint* param) {
-        SetSamplerParam_State(sampler, pname, param, false, false);
+        SetSamplerParam_State(sampler, pname, param, false, false, false);
     }
 
     void SamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat* param) {
-        SetSamplerParam_State(sampler, pname, param, true, false);
+        SetSamplerParam_State(sampler, pname, param, true, false, false);
     }
 
+    // GL 4.6 core 8.10: the scalar spellings take "the value of pname", so a pname with more than one
+    // component is INVALID_ENUM here rather than something to read four components of. Guarding at
+    // the entry point rather than downstream is also what stops the vector path reading twelve bytes
+    // past the caller's single stack scalar - taking the address of a by-value argument and handing
+    // it to a four-component reader is what these used to do. The texture-side twins already answer
+    // INVALID_ENUM for GL_TEXTURE_BORDER_COLOR (TexParameteri/f name it as unsupported outright).
     void SamplerParameteri(GLuint sampler, GLenum pname, GLint param) {
+        if (IsVectorOnlySamplerPname(pname)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "SamplerParameteri",
+                                             "pname has more than one component and needs a vector form."));
+            return;
+        }
         SamplerParameteriv(sampler, pname, &param);
     }
 
     void SamplerParameterf(GLuint sampler, GLenum pname, GLfloat param) {
+        if (IsVectorOnlySamplerPname(pname)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "SamplerParameterf",
+                                             "pname has more than one component and needs a vector form."));
+            return;
+        }
         SamplerParameterfv(sampler, pname, &param);
     }
 
@@ -388,15 +434,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetSamplerParameterIuiv(GLuint sampler, GLenum pname, GLuint* params) {
-        GetSamplerParam_State(sampler, pname, params, false, true);
+        GetSamplerParam_State(sampler, pname, params, false, true, true);
     }
 
     void GetSamplerParameterIiv(GLuint sampler, GLenum pname, GLint* params) {
-        GetSamplerParam_State(sampler, pname, params, false, false);
+        GetSamplerParam_State(sampler, pname, params, false, false, true);
     }
 
     void GetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat* params) {
-        GetSamplerParam_State(sampler, pname, params, true, false);
+        GetSamplerParam_State(sampler, pname, params, true, false, false);
     }
 
     void GenSamplers(GLsizei count, GLuint* samplers) {

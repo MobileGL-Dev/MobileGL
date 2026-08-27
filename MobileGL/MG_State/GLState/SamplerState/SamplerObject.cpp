@@ -155,9 +155,21 @@ namespace MobileGL {
             // an answer whichever form was written. Integer <-> float uses the plain value, matching
             // what glTexParameterIiv/Iuiv mean: those forms are for integer texture formats, whose
             // border components are the raw integers rather than a normalized fraction.
+            //
+            // Which of the three the application actually WROTE is recorded separately in
+            // borderColorForm, because the derived values erase it: a backend has to know whether to
+            // forward the colour through glSamplerParameterfv or glSamplerParameterIiv (and which
+            // VkBorderColor family to ask Vulkan for), and the numbers alone cannot say. That is also
+            // why every setter's early-out tests the form as well as the value - a float (0,0,0,1)
+            // followed by an integer (0,0,0,1) is a real state change even though nothing numeric
+            // moved, and swallowing it would leave the backend syncing the wrong entry point forever.
             void SamplerObject::SetBorderColor(const FloatVec4& color) {
-                if (color == m_samplerParameters.borderColor) return;
+                if (color == m_samplerParameters.borderColor &&
+                    m_samplerParameters.borderColorForm == BorderColorForm::Float) {
+                    return;
+                }
 
+                m_samplerParameters.borderColorForm = BorderColorForm::Float;
                 m_samplerParameters.borderColor = color;
                 m_samplerParameters.borderColorI =
                     IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
@@ -169,8 +181,12 @@ namespace MobileGL {
             }
 
             void SamplerObject::SetBorderColorI(const IntVec4& color) {
-                if (color == m_samplerParameters.borderColorI) return;
+                if (color == m_samplerParameters.borderColorI &&
+                    m_samplerParameters.borderColorForm == BorderColorForm::Int) {
+                    return;
+                }
 
+                m_samplerParameters.borderColorForm = BorderColorForm::Int;
                 m_samplerParameters.borderColorI = color;
                 m_samplerParameters.borderColorUI =
                     UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
@@ -182,8 +198,12 @@ namespace MobileGL {
             }
 
             void SamplerObject::SetBorderColorUI(const UintVec4& color) {
-                if (color == m_samplerParameters.borderColorUI) return;
+                if (color == m_samplerParameters.borderColorUI &&
+                    m_samplerParameters.borderColorForm == BorderColorForm::Uint) {
+                    return;
+                }
 
+                m_samplerParameters.borderColorForm = BorderColorForm::Uint;
                 m_samplerParameters.borderColorUI = color;
                 m_samplerParameters.borderColorI =
                     IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
@@ -204,6 +224,10 @@ namespace MobileGL {
 
             const UintVec4& SamplerObject::GetBorderColorUI() const {
                 return m_samplerParameters.borderColorUI;
+            }
+
+            BorderColorForm SamplerObject::GetBorderColorForm() const {
+                return m_samplerParameters.borderColorForm;
             }
 
             SamplerCompareMode SamplerObject::GetCompareMode() const {

@@ -40,6 +40,8 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetBorderColorI(const IntVec4& color) = 0;
         virtual const UintVec4& GetBorderColorUI() const = 0;
         virtual void SetBorderColorUI(const UintVec4& color) = 0;
+        // Which of the three setters above last ran; see SamplerParameters::borderColorForm.
+        virtual BorderColorForm GetBorderColorForm() const = 0;
         virtual TextureSwizzleParam GetSwizzleParam(TextureSwizzleParam param) const = 0;
         virtual void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) = 0;
         virtual void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) = 0;
@@ -129,6 +131,7 @@ namespace MobileGL::MG_State::GLState {
         void SetBorderColorI(const IntVec4& color) override;
         const UintVec4& GetBorderColorUI() const override;
         void SetBorderColorUI(const UintVec4& color) override;
+        BorderColorForm GetBorderColorForm() const override;
         TextureSwizzleParam GetSwizzleParam(TextureSwizzleParam param) const override;
         const Vec4<TextureSwizzleParam>& GetAllSwizzleParams() const override;
         void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) override;

@@ -12,11 +12,17 @@
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 
 namespace MobileGL::MG_Impl::GLImpl::SamplerImpl {
+    // GL 4.6 core 8.2: "An INVALID_OPERATION error is generated if sampler is not the name of a
+    // sampler object previously returned from a call to GenSamplers." That class is shared by every
+    // sampler entry point - BindSampler, SamplerParameter*, GetSamplerParameter* - so this one gate
+    // answers for all of them. It used to report INVALID_VALUE (the GL 3.3 wording), which forced
+    // BindSampler to carry a bespoke duplicate of the same check just to get the class right.
     Bool ValidateSamplerName(GLuint sampler) {
         if (!MG_State::pGLContext->ValidateSamplerName(sampler)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerName",
-                                                                      std::format("Invalid sampler name {}", sampler)));
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateSamplerName",
+                                             std::format("Invalid sampler name {}", sampler)));
             return false;
         }
         return true;

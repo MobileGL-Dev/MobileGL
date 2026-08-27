@@ -113,8 +113,14 @@ namespace MobileGL {
                 return m_sampler->GetBorderColor();
             }
 
+            // The redundancy filters test the FORM as well as the value: the derived representations
+            // make a float (0,0,0,1) and an integer (0,0,0,1) numerically identical, but they are
+            // different GL state and the DirectGLES sync memoises on m_textureParamsVersion.
             void TextureObjectBase::SetBorderColor(const FloatVec4& color) {
-                if (color == m_sampler->GetBorderColor()) return;
+                if (color == m_sampler->GetBorderColor() &&
+                    m_sampler->GetBorderColorForm() == BorderColorForm::Float) {
+                    return;
+                }
 
                 m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
@@ -125,7 +131,10 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetBorderColorI(const IntVec4& color) {
-                if (color == m_sampler->GetBorderColorI()) return;
+                if (color == m_sampler->GetBorderColorI() &&
+                    m_sampler->GetBorderColorForm() == BorderColorForm::Int) {
+                    return;
+                }
 
                 m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
@@ -136,10 +145,17 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetBorderColorUI(const UintVec4& color) {
-                if (color == m_sampler->GetBorderColorUI()) return;
+                if (color == m_sampler->GetBorderColorUI() &&
+                    m_sampler->GetBorderColorForm() == BorderColorForm::Uint) {
+                    return;
+                }
 
                 m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
+            }
+
+            BorderColorForm TextureObjectBase::GetBorderColorForm() const {
+                return m_sampler->GetBorderColorForm();
             }
 
             TextureSwizzleParam TextureObjectBase::GetSwizzleParam(TextureSwizzleParam param) const {
