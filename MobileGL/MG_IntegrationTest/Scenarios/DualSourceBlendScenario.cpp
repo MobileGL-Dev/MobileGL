@@ -25,10 +25,14 @@
 //   capability present - src0 * src1 + dst * (1 - src1)
 //   capability absent  - src0, written straight through
 //
-// On the CI runners (llvmpipe / lavapipe) both capabilities are normally present, so what CI
-// exercises here is the working path plus the fact that the whole sequence is crash-free; the
-// decline arm is what the same code does on a device without the capability, and it is asserted
-// by value rather than assumed.
+// What each CI lane actually reaches: lavapipe has dualSrcBlend, so the DirectVulkan lane runs the
+// whole sequence and measures the blend. Mesa's GLES front end on llvmpipe has no
+// GL_EXT_blend_func_extended, so the ESSL stage carrying `layout(index = 1)` never compiles and the
+// program renders nothing - the DirectGLES lane therefore SKIPS on the capability probe in SetUp
+// rather than measuring a picture the driver never produced. The DECLINE arm itself - the path this
+// scenario exists for - is unit-tested against stubbed capabilities in
+// MG_Test/Framebuffer/FramebufferTest.cpp (DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensionIsMissing),
+// which is the only place it can be reached without a driver that lacks the extension.
 //
 // The Vulkan half has a second edge the last case covers: the dual-source VUIDs
 // (VUID-VkPipelineColorBlendAttachmentState-srcColorBlendFactor-00608 and its three siblings)
@@ -146,15 +150,19 @@ void main()
             }
 
             // Both cases share this gate: nothing below can be measured on a backend that cannot
-            // run a dual-source fragment program at all.
-            void SkipUnlessTheProgramRuns() {
+            // run a dual-source fragment program at all. Returns the skip reason, empty when the
+            // program runs - NOT a void helper that calls GTEST_SKIP itself, because GTEST_SKIP
+            // expands to a `return` and would leave only the HELPER, letting the case run its
+            // assertions anyway and report Failed instead of Skipped.
+            std::string WhyTheProgramCannotRun() const {
                 if (m_program == 0) {
-                    GTEST_SKIP() << "this driver cannot build a dual-source fragment shader: " << m_programError;
+                    return "this driver cannot build a dual-source fragment shader: " + m_programError;
                 }
                 if (!m_programRenders) {
-                    GTEST_SKIP() << "this backend links a dual-source fragment program but renders nothing with "
-                                    "it (GLSL ES needs GL_EXT_blend_func_extended for the `index` qualifier)";
+                    return "this backend links a dual-source fragment program but renders nothing with it "
+                           "(GLSL ES has no `index` layout qualifier without GL_EXT_blend_func_extended)";
                 }
+                return {};
             }
 
             GLuint m_renderbuffer = 0;
@@ -176,7 +184,7 @@ void main()
     // Anything else means the factors were mistranslated rather than either honoured or declined.
     TEST_F(DualSourceBlendScenario, DualSourceBlendDrawProducesOneOfTheTwoDefinedResults) {
         if (!Ready()) GTEST_SKIP();
-        SkipUnlessTheProgramRuns();
+        if (const std::string reason = WhyTheProgramCannotRun(); !reason.empty()) GTEST_SKIP() << reason;
 
         glDisable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ZERO);
@@ -208,7 +216,7 @@ void main()
     // source either way, so this case is really "no crash, no error, no surprise".
     TEST_F(DualSourceBlendScenario, DualSourceFactorsWithBlendingDisabledJustWriteTheSource) {
         if (!Ready()) GTEST_SKIP();
-        SkipUnlessTheProgramRuns();
+        if (const std::string reason = WhyTheProgramCannotRun(); !reason.empty()) GTEST_SKIP() << reason;
 
         glDisable(GL_BLEND);
         glBlendFunc(GL_ONE, GL_ZERO);
