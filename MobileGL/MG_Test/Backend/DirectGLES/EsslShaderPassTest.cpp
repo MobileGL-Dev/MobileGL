@@ -29,7 +29,9 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::PointSizeExtensionName;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
@@ -1289,6 +1291,80 @@ void main() { gl_ViewportIndex = 1; imageStore(uni_image, ivec2(0), uvec4(1u)); 
     EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
 }
 
+// --- tessellation / geometry gl_PointSize directive ---------------------------------------------
+//
+// ESSL 320 makes the tessellation and geometry STAGES core and still leaves gl_PointSize out of
+// their gl_PerVertex entirely - it is only there under EXT/OES_tessellation_point_size resp.
+// EXT/OES_geometry_point_size. SPIRV-Cross only ever sees a SPIR-V BuiltIn PointSize decoration
+// and prints the identifier bare, so without this directive the stage fails to compile with
+// "`gl_PointSize' undeclared", which takes the WHOLE program to program 0: the draw renders
+// nothing and glBeginTransformFeedback on that program is rejected outright, so a capture of
+// anything at all off it silently comes back empty. That is the shape of the 108 conformance
+// bodies (36 per API tree) in tessellation_control_to_tessellation_evaluation.gl_MaxPatch-
+// Vertices_Position_PointSize whose point_mode half puts gl_PointSize in the patch.
+
+TEST(PointSizeExtensionNameTest, NamesBothSpellingsOfBothExtensions) {
+    using Tier = MG_External::GLESCapabilities::PointSizeTier;
+    EXPECT_STREQ(PointSizeExtensionName(Tier::ExtensionEXT, true), "GL_EXT_tessellation_point_size");
+    EXPECT_STREQ(PointSizeExtensionName(Tier::ExtensionOES, true), "GL_OES_tessellation_point_size");
+    EXPECT_STREQ(PointSizeExtensionName(Tier::ExtensionEXT, false), "GL_EXT_geometry_point_size");
+    EXPECT_STREQ(PointSizeExtensionName(Tier::ExtensionOES, false), "GL_OES_geometry_point_size");
+}
+
+// The two extensions are separate and neither implies the other, so the tessellation answer must
+// never be handed to a geometry stage or the other way round - an `#extension` naming a string
+// the driver does not advertise is itself a compile error on a strict compiler.
+TEST(PointSizeExtensionNameTest, NoTierMeansNoDirective) {
+    using Tier = MG_External::GLESCapabilities::PointSizeTier;
+    EXPECT_EQ(PointSizeExtensionName(Tier::None, true), nullptr);
+    EXPECT_EQ(PointSizeExtensionName(Tier::None, false), nullptr);
+}
+
+TEST(RequestPointSizeExtensionTest, TheDirectiveGoesRightAfterTheVersionLine) {
+    const String source = R"(#version 320 es
+layout(triangles, point_mode, cw, equal_spacing) in;
+void main() { gl_Position = vec4(0.0); gl_PointSize = 5.0; }
+)";
+    const String out = RequestPointSizeExtension(source, "GL_EXT_tessellation_point_size");
+    EXPECT_TRUE(Contains(out, "#version 320 es\n#extension GL_EXT_tessellation_point_size : require\n")) << out;
+}
+
+// The nullptr contract, and the reason it exists: a driver that advertises neither spelling gets
+// NOTHING added rather than a directive it would reject on top of the error it already has.
+TEST(RequestPointSizeExtensionTest, ANullNameMeansNotEmitted) {
+    const String source = R"(#version 320 es
+layout(triangles, point_mode, cw, equal_spacing) in;
+void main() { gl_Position = vec4(0.0); gl_PointSize = 5.0; }
+)";
+    EXPECT_EQ(RequestPointSizeExtension(source, nullptr), source);
+}
+
+TEST(RequestPointSizeExtensionTest, AnAlreadyPresentDirectiveIsNotDuplicated) {
+    const String source = R"(#version 320 es
+#extension GL_OES_tessellation_point_size : require
+layout(triangles, point_mode, cw, equal_spacing) in;
+void main() { gl_PointSize = 5.0; }
+)";
+    const String out = RequestPointSizeExtension(source, "GL_OES_tessellation_point_size");
+    EXPECT_EQ(out, source);
+    EXPECT_EQ(CountOf(out, "GL_OES_tessellation_point_size"), 1u) << out;
+}
+
+// Shares its insertion point with the viewport-array and image-format directives, so a stage
+// needing more than one must end up with all of them and with #version still first.
+TEST(RequestPointSizeExtensionTest, CoexistsWithTheOtherHeaderDirectives) {
+    const String source = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_ViewportIndex = 1; gl_PointSize = 2.0; EmitVertex(); }
+)";
+    const String out = RequestPointSizeExtension(RequestViewportArrayExtension(source, true),
+                                                 "GL_EXT_geometry_point_size");
+    EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_geometry_point_size : require\n")) << out;
+}
+
 // --- pass-through tessellation control stage --------------------------------------------------
 //
 // Desktop GL makes the tessellation control stage optional and takes the levels from
@@ -1302,6 +1378,20 @@ namespace {
     const FloatVec4 kDefaultOuter(1.0f, 1.0f, 1.0f, 1.0f);
     const FloatVec2 kDefaultInner(1.0f, 1.0f);
 } // namespace
+
+// The synthesized stage mirrors its neighbours' gl_PerVertex, so it can be the thing that
+// declares gl_PointSize - and in ESSL a redeclaration is exactly as illegal as a reference
+// without the extension. The directive has to survive being applied to its output.
+TEST(RequestPointSizeExtensionTest, CoversAMirroredPassthroughControlStage) {
+    const String out = RequestPointSizeExtension(
+        BuildPassthroughTessControlEssl(320, 4, " highp vec4 gl_Position; highp float gl_PointSize; ",
+                                        " highp vec4 gl_Position; highp float gl_PointSize; ", kDefaultOuter,
+                                        kDefaultInner),
+        "GL_EXT_tessellation_point_size");
+    EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
+    EXPECT_TRUE(Contains(out, "#extension GL_EXT_tessellation_point_size : require\n")) << out;
+    EXPECT_TRUE(Contains(out, "float gl_PointSize")) << out;
+}
 
 TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel) {
     const String out = BuildPassthroughTessControlEssl(320, 4, "", "", kDefaultOuter, kDefaultInner);
