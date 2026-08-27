@@ -263,6 +263,37 @@ namespace MobileGL {
                 return m_parameters.PolygonOffsetUnits;
             }
 
+            void RenderState::SetPolygonOffsetClamped(Float factor, Float units, Float clamp) {
+                if (m_parameters.PolygonOffsetFactor == factor && m_parameters.PolygonOffsetUnits == units &&
+                    m_parameters.PolygonOffsetClamp == clamp)
+                    return;
+
+                m_parameters.PolygonOffsetFactor = factor;
+                m_parameters.PolygonOffsetUnits = units;
+                m_parameters.PolygonOffsetClamp = clamp;
+                ++m_version;
+            }
+
+            Float RenderState::GetPolygonOffsetClamp() const {
+                return m_parameters.PolygonOffsetClamp;
+            }
+
+            void RenderState::SetClipControl(GLenum origin, GLenum depth) {
+                if (m_parameters.ClipOrigin == origin && m_parameters.ClipDepthMode == depth) return;
+
+                m_parameters.ClipOrigin = origin;
+                m_parameters.ClipDepthMode = depth;
+                ++m_version;
+            }
+
+            GLenum RenderState::GetClipOrigin() const {
+                return m_parameters.ClipOrigin;
+            }
+
+            GLenum RenderState::GetClipDepthMode() const {
+                return m_parameters.ClipDepthMode;
+            }
+
             // -------------------- Capabilities --------------------
             namespace {
                 // CapabilityInput lists ClipDistance0..7 contiguously (RenderState.h); the caller

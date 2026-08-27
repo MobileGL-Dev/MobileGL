@@ -218,8 +218,13 @@ namespace MobileGL {
                 void SetPatchDefaultInnerLevel(const FloatVec2& levels);
                 const FloatVec2& GetPatchDefaultInnerLevel() const;
                 void SetPolygonOffset(Float factor, Float units);
+                void SetPolygonOffsetClamped(Float factor, Float units, Float clamp);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;
+                Float GetPolygonOffsetClamp() const;
+                void SetClipControl(GLenum origin, GLenum depth);
+                GLenum GetClipOrigin() const;
+                GLenum GetClipDepthMode() const;
                 void SetHint(GLenum target, GLenum mode);
                 GLenum GetHint(GLenum target) const;
                 void SetPointFadeThresholdSize(Float size);

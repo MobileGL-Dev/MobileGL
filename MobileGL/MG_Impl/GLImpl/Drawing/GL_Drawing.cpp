@@ -846,6 +846,27 @@ namespace MobileGL::MG_Impl::GLImpl {
         memoryBarrier(barriers);
     }
 
+    void TextureBarrier() {
+        // GL 4.5 core 8.26 / GL_ARB_texture_barrier: order every write the fixed-function
+        // framebuffer has already issued ahead of every subsequent texture fetch, so a shader may
+        // read texels of a texture that is also attached to the current framebuffer.
+        //
+        // Both backends serve this through their existing memory-barrier hook rather than a new
+        // entry point of their own: GL_FRAMEBUFFER_BARRIER_BIT is the source half (framebuffer
+        // writes) and GL_TEXTURE_FETCH_BARRIER_BIT the destination half (texture fetches), which
+        // is exactly the dependency ARB_texture_barrier defines - just expressed with the wider
+        // scope glMemoryBarrier gives it. That is a superset of the required ordering, never a
+        // subset, so it cannot under-synchronize.
+        auto memoryBarrier = MG_Backend::gBackendFunctionsTable.GL.MemoryBarrier;
+        if (!memoryBarrier) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Backend does not support memory barriers."));
+            return;
+        }
+        memoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+    }
+
     void MemoryBarrierByRegion(GLbitfield barriers) {
         if (!ValidateMemoryBarrierBits(__func__, barriers)) return;
         auto memoryBarrierByRegion = MG_Backend::gBackendFunctionsTable.GL.MemoryBarrierByRegion;

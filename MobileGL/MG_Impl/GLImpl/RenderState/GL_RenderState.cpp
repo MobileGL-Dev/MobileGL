@@ -340,6 +340,38 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->SetPolygonOffset(static_cast<Float>(factor), static_cast<Float>(units));
     }
 
+    void PolygonOffsetClamp_State(GLfloat factor, GLfloat units, GLfloat clamp) {
+        // GL 4.6 core 14.6.5 / GL_EXT_polygon_offset_clamp. No error cases: any three floats are
+        // legal, and clamp = 0 is exactly glPolygonOffset. Whether the backend can APPLY the clamp
+        // is a separate question (see the DirectGLES/DirectVulkan forwarding); the state is
+        // recorded either way, because GL_POLYGON_OFFSET_CLAMP has to read back what was written.
+        MG_State::pGLContext->SetPolygonOffsetClamped(static_cast<Float>(factor), static_cast<Float>(units),
+                                                      static_cast<Float>(clamp));
+    }
+
+    void ClipControl_State(GLenum origin, GLenum depth) {
+        // GL 4.5 core 13.5: both arguments are strict enums, and either being wrong is
+        // GL_INVALID_ENUM with the state left untouched.
+        if (origin != GL_LOWER_LEFT && origin != GL_UPPER_LEFT) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glClipControl origin must be GL_LOWER_LEFT or GL_UPPER_LEFT; got " +
+                                                 MG_Util::ConvertGLEnumToString(origin) + "."));
+            return;
+        }
+        if (depth != GL_NEGATIVE_ONE_TO_ONE && depth != GL_ZERO_TO_ONE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "glClipControl depth must be GL_NEGATIVE_ONE_TO_ONE or GL_ZERO_TO_ONE; got " +
+                        MG_Util::ConvertGLEnumToString(depth) + "."));
+            return;
+        }
+        MG_State::pGLContext->SetClipControl(origin, depth);
+    }
+
     void PolygonMode_State(GLenum face, GLenum mode) {
         // GL 3.3 core: separate front/back polygon modes were removed in 3.1, so the only legal
         // face is GL_FRONT_AND_BACK. GL_FRONT / GL_BACK must be rejected (some desktop drivers
@@ -1027,6 +1059,14 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void PolygonOffset(GLfloat factor, GLfloat units) {
         PolygonOffset_State(factor, units);
+    }
+
+    void PolygonOffsetClamp(GLfloat factor, GLfloat units, GLfloat clamp) {
+        PolygonOffsetClamp_State(factor, units, clamp);
+    }
+
+    void ClipControl(GLenum origin, GLenum depth) {
+        ClipControl_State(origin, depth);
     }
 
     void PolygonMode(GLenum face, GLenum mode) {

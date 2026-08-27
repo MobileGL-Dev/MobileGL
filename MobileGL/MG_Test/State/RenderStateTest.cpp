@@ -885,3 +885,134 @@ TEST_F(RenderStateTest, SampleShadingEnableIsStoredAndQueryable) {
     EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SAMPLE_SHADING), GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
+
+// glClipControl and glPolygonOffsetClamp were DECLARE_GL_FUNCTION_STUB_HEAD entry points: they
+// took their arguments, recorded nothing and raised no error, and the state variables they own
+// (GL_CLIP_ORIGIN, GL_CLIP_DEPTH_MODE, GL_POLYGON_OFFSET_CLAMP) had no arm in any getter, so the
+// very first query of a conformance case raised GL_INVALID_ENUM and killed it. These assertions
+// are state-shaped on purpose - the rasterization half of clip control is a backend question, but
+// the state machine has to round-trip regardless of what a backend does with it.
+TEST_F(RenderStateTest, ClipControlStateRoundTripsAndDefaultsToLowerLeftNegativeOneToOne) {
+    DrainPendingGlErrors();
+
+    GLint origin = 0;
+    GLint depthMode = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_ORIGIN, &origin);
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_DEPTH_MODE, &depthMode);
+    EXPECT_EQ(origin, GL_LOWER_LEFT);
+    EXPECT_EQ(depthMode, GL_NEGATIVE_ONE_TO_ONE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::ClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_ORIGIN, &origin);
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_DEPTH_MODE, &depthMode);
+    EXPECT_EQ(origin, GL_UPPER_LEFT);
+    EXPECT_EQ(depthMode, GL_ZERO_TO_ONE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // Every getter flavour has to answer, not just the integer one - the conformance suite reads
+    // this state through all of them.
+    GLfloat asFloat = 0.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_CLIP_ORIGIN, &asFloat);
+    EXPECT_EQ(static_cast<GLint>(asFloat), GL_UPPER_LEFT);
+    GLint64 asInt64 = 0;
+    MG_Impl::GLImpl::GetInteger64v(GL_CLIP_DEPTH_MODE, &asInt64);
+    EXPECT_EQ(static_cast<GLint>(asInt64), GL_ZERO_TO_ONE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::ClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ClipControlRejectsBadEnumsAndLeavesTheStateAlone) {
+    DrainPendingGlErrors();
+    MG_Impl::GLImpl::ClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::ClipControl(GL_FRONT, GL_ZERO_TO_ONE);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::ClipControl(GL_UPPER_LEFT, GL_FRONT);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    GLint origin = 0;
+    GLint depthMode = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_ORIGIN, &origin);
+    MG_Impl::GLImpl::GetIntegerv(GL_CLIP_DEPTH_MODE, &depthMode);
+    EXPECT_EQ(origin, GL_UPPER_LEFT) << "a rejected glClipControl must not change the state";
+    EXPECT_EQ(depthMode, GL_ZERO_TO_ONE) << "a rejected glClipControl must not change the state";
+
+    MG_Impl::GLImpl::ClipControl(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
+    DrainPendingGlErrors();
+}
+
+TEST_F(RenderStateTest, PolygonOffsetClampStoresTheClampAndTheFactorUnitsPair) {
+    DrainPendingGlErrors();
+
+    GLfloat clamp = -1.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_CLAMP, &clamp);
+    EXPECT_FLOAT_EQ(clamp, 0.0f) << "the default clamp is zero, i.e. no clamping";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(1.5f, 2.5f, 0.5f);
+    GLfloat factor = 0.0f;
+    GLfloat units = 0.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &factor);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_UNITS, &units);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_CLAMP, &clamp);
+    EXPECT_FLOAT_EQ(factor, 1.5f);
+    EXPECT_FLOAT_EQ(units, 2.5f);
+    EXPECT_FLOAT_EQ(clamp, 0.5f) << "the fractional clamp must survive - the integer path rounds it away";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // glcPolygonOffsetClampTests reads GL_POLYGON_OFFSET_CLAMP through all five getters and
+    // requires no error from any of them; that is what used to kill the availability case.
+    GLboolean asBoolean = GL_FALSE;
+    MG_Impl::GLImpl::GetBooleanv(GL_POLYGON_OFFSET_CLAMP, &asBoolean);
+    EXPECT_EQ(asBoolean, GL_TRUE);
+    GLint asInt = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_POLYGON_OFFSET_CLAMP, &asInt);
+    EXPECT_EQ(asInt, 1) << "0.5 rounds to nearest for the integer query";
+    GLint64 asInt64 = -1;
+    MG_Impl::GLImpl::GetInteger64v(GL_POLYGON_OFFSET_CLAMP, &asInt64);
+    EXPECT_EQ(asInt64, 1);
+    GLdouble asDouble = -1.0;
+    MG_Impl::GLImpl::GetDoublev(GL_POLYGON_OFFSET_CLAMP, &asDouble);
+    EXPECT_NEAR(asDouble, 0.5, 1e-6);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // glPolygonOffset is the clamp = 0 case of the same state, but it must not DISTURB the clamp
+    // it does not take - GL 4.6 core 14.6.5 defines it as PolygonOffsetClamp(factor, units, 0)
+    // only in the sense that the clamp it leaves is whatever glPolygonOffset itself sets, which
+    // for MobileGL is "unchanged". Assert the factor/units half instead, which is unambiguous.
+    MG_Impl::GLImpl::PolygonOffset(3.0f, 4.0f);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &factor);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_UNITS, &units);
+    EXPECT_FLOAT_EQ(factor, 3.0f);
+    EXPECT_FLOAT_EQ(units, 4.0f);
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(0.0f, 0.0f, 0.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL_TEXTURE_BUFFER_BINDING (0x8C2A) is the same token as GL_TEXTURE_BUFFER; as a glGetIntegerv
+// pname it asks which BUFFER object is bound there, and it had no arm at all, so
+// esextcTextureBufferParameters died on its first query.
+TEST_F(RenderStateTest, TextureBufferBindingAnswersTheBoundBufferName) {
+    DrainPendingGlErrors();
+
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_TEXTURE_BUFFER_BINDING, &binding);
+    EXPECT_EQ(binding, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL_ARB_spirv_extensions. Zero is legal and true: MobileGL relies on no SPIR-V extension, so
+// glGetStringi(GL_SPIR_V_EXTENSIONS, i) is never legally reached.
+TEST_F(RenderStateTest, NumSpirVExtensionsIsQueryableAndZero) {
+    DrainPendingGlErrors();
+
+    GLint count = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_NUM_SPIR_V_EXTENSIONS, &count);
+    EXPECT_EQ(count, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}

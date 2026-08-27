@@ -249,6 +249,15 @@ namespace MobileGL {
         FloatVec2 PatchDefaultInnerLevel = FloatVec2(1.0f, 1.0f);
         Float PolygonOffsetFactor = 0.0f;
         Float PolygonOffsetUnits = 0.0f;
+        // GL_POLYGON_OFFSET_CLAMP (GL 4.6 core 14.6.5 / GL_EXT_polygon_offset_clamp): the maximum
+        // magnitude of the offset glPolygonOffsetClamp's third argument allows. Zero - the default
+        // - means "no clamp", which is exactly the behaviour glPolygonOffset leaves behind.
+        Float PolygonOffsetClamp = 0.0f;
+
+        // glClipControl (GL 4.5 core 13.5). Defaults per table 23.7 are the pre-4.5 fixed
+        // behaviour: origin at the lower left, depth mapped from -1..1.
+        GLenum ClipOrigin = GL_LOWER_LEFT;
+        GLenum ClipDepthMode = GL_NEGATIVE_ONE_TO_ONE;
 
         // Blending
         Array<PerBufferBlendState, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS> BlendStates;
@@ -391,8 +400,16 @@ namespace MobileGL {
                 void SetPatchDefaultInnerLevel(const FloatVec2& levels);
                 const FloatVec2& GetPatchDefaultInnerLevel() const;
                 void SetPolygonOffset(Float factor, Float units);
+                // glPolygonOffsetClamp. Writes the same factor/units as glPolygonOffset plus the
+                // clamp, because that is what the entry point does - glPolygonOffset is the
+                // clamp = 0 case of it (GL 4.6 core 14.6.5).
+                void SetPolygonOffsetClamped(Float factor, Float units, Float clamp);
                 Float GetPolygonOffsetFactor() const;
                 Float GetPolygonOffsetUnits() const;
+                Float GetPolygonOffsetClamp() const;
+                void SetClipControl(GLenum origin, GLenum depth);
+                GLenum GetClipOrigin() const;
+                GLenum GetClipDepthMode() const;
                 // Hints. target must be one of the 4 GL 3.3 core hint targets (validated by the caller).
                 void SetHint(GLenum target, GLenum mode);
                 GLenum GetHint(GLenum target) const;

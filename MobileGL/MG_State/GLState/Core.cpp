@@ -848,6 +848,26 @@ namespace MobileGL::MG_State {
             return m_renderState.GetPolygonOffsetUnits();
         }
 
+        void GLContext::SetPolygonOffsetClamped(Float factor, Float units, Float clamp) {
+            m_renderState.SetPolygonOffsetClamped(factor, units, clamp);
+        }
+
+        Float GLContext::GetPolygonOffsetClamp() const {
+            return m_renderState.GetPolygonOffsetClamp();
+        }
+
+        void GLContext::SetClipControl(GLenum origin, GLenum depth) {
+            m_renderState.SetClipControl(origin, depth);
+        }
+
+        GLenum GLContext::GetClipOrigin() const {
+            return m_renderState.GetClipOrigin();
+        }
+
+        GLenum GLContext::GetClipDepthMode() const {
+            return m_renderState.GetClipDepthMode();
+        }
+
         void GLContext::SetCapability(CapabilityInput cap, Bool enabled) {
             m_renderState.SetCapability(cap, enabled);
         }
