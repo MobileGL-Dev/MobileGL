@@ -40,6 +40,27 @@ namespace MobileGL {
             // accept - can be retried instead of failing to compile.
             Bool RetargetLegacyVersionDirectiveTo460(String& source);
 
+            // The "#define <EXT> 1" lines an ES-profile source needs restored after
+            // PreprocessShaderSource rewrote its #version to desktop, or "" for every other source.
+            //
+            // glslang defines the OES/AEP extension macros only in its ES preamble
+            // (TParseVersions::getPreamble), selected by the profile it deduces from the directive -
+            // so the rewrite silently takes them away and the shader's own
+            // "#if !GL_OES_sample_variables" guard flips. They cannot simply be written into the
+            // shader text: "#define GL_..." is a hard error for every application-supplied string
+            // (TParseContext::reservedPpErrorCheck). They therefore go into glslang's CUSTOM
+            // PREAMBLE, which sits at string index -1 and is exempt from that check by the same
+            // gate that exempts glslang's own preamble - hence a separate function called by the
+            // compiler rather than another injection pass.
+            //
+            // Deliberately narrow: only extensions the source itself NAMES in an #extension
+            // directive, and never GL_ES or GL_FRAGMENT_PRECISION_HIGH. The shader really is being
+            // compiled as desktop now, and flipping "#ifdef GL_ES" branches would break far more
+            // than it fixes - which is why this is a partial fix by construction. The clean
+            // long-term fix is to stop rewriting ES sources to desktop at all; the comment in
+            // GetNormalizedVersionDirective records why that has not happened.
+            String CollectEsPreambleMacroDefines(const String& preprocessedSource);
+
             // GLSL reserves a few names glslang happily accepts as identifiers ("packed",
             // "row_major" outside a layout(...) list, the image*Shadow family). Returns the
             // compile-error text for the first violation, or nullopt for a clean source.

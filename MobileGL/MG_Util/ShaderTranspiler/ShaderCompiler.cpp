@@ -270,7 +270,15 @@ namespace MobileGL {
                 tshader->setStrings(src, 1);
                 tshader->setNanMinMaxClamp(true);
                 tshader->setInvertY(true);
-                tshader->setPreamble("#undef VULKAN\n");
+                // The custom preamble is glslang string -1, which CPPdefine exempts from the
+                // "names beginning with GL_ can't be (un)defined" rule - so it is the only place
+                // an ES source's extension macros can be put back after PreprocessShaderSource
+                // rewrote its #version to desktop and cost it glslang's ES preamble. Empty for
+                // every source that was not rewritten from ES, which is almost all of them.
+                //
+                // setPreamble stores the POINTER, so the buffer has to outlive parse() below.
+                const String preamble = String("#undef VULKAN\n") + CollectEsPreambleMacroDefines(source);
+                tshader->setPreamble(preamble.c_str());
                 if (flags & ShaderCompileBits::CompileForOpenGL) {
                     tshader->setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientVulkan, 450);
                     tshader->setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);

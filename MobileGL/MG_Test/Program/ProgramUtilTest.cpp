@@ -4717,7 +4717,9 @@ void main() { fragColor = vec4(float(gl_NumSamples)); }
 // ---------------------------------------------------------------------------------------------
 // ES preamble extension macros. Rewriting "#version 310 es" to "#version 460 core" makes glslang
 // emit its DESKTOP preamble, which defines none of the OES/AEP extension macros - so a shader's
-// own "#if !GL_OES_sample_variables" guard takes the branch it was written to avoid.
+// own "#if !GL_OES_sample_variables" guard takes the branch it was written to avoid. The macros
+// travel through glslang's CUSTOM PREAMBLE rather than the shader text, because "#define GL_..."
+// in an application-supplied string is a hard error (reservedPpErrorCheck).
 // ---------------------------------------------------------------------------------------------
 
 TEST_F(ProgramUtilTest, EsSourceRegainsThePreambleMacrosForTheExtensionsItNames) {
@@ -4736,7 +4738,9 @@ void main() { fragColor = vec4(1.0); }
 )";
 
     PreprocessShaderSource(ShaderStage::Fragment, source);
-    EXPECT_NE(source.find("#define GL_OES_sample_variables 1"), String::npos) << source;
+    EXPECT_EQ(CollectEsPreambleMacroDefines(source), String("#define GL_OES_sample_variables 1\n")) << source;
+    // And the compiler really does feed it to glslang: without the preamble this source takes the
+    // "this is broken" arm and dies on a reserved word.
     ExpectShaderCompiles(GL_FRAGMENT_SHADER, source);
 }
 
@@ -4744,17 +4748,18 @@ TEST_F(ProgramUtilTest, EsPreambleMacroInjectionStaysNarrow) {
     using namespace MG_Util::ShaderTranspiler;
 
     {
-        SCOPED_TRACE("an extension the source never names is not defined");
+        SCOPED_TRACE("only the extensions the source names, and never GL_ES");
         String source = R"(#version 310 es
 #extension GL_OES_sample_variables : enable
 out vec4 fragColor;
 void main() { fragColor = vec4(1.0); }
 )";
         PreprocessShaderSource(ShaderStage::Fragment, source);
-        EXPECT_EQ(source.find("#define GL_OES_shader_image_atomic"), String::npos) << source;
+        const String defines = CollectEsPreambleMacroDefines(source);
+        EXPECT_EQ(defines.find("GL_OES_shader_image_atomic"), String::npos) << defines;
         // GL_ES stays undefined on purpose: the shader really is compiled as desktop now, and
         // flipping "#ifdef GL_ES" branches would break far more than it fixes.
-        EXPECT_EQ(source.find("#define GL_ES"), String::npos) << source;
+        EXPECT_EQ(defines.find("#define GL_ES "), String::npos) << defines;
     }
 
     {
@@ -4765,7 +4770,9 @@ out vec4 fragColor;
 void main() { fragColor = vec4(1.0); }
 )";
         PreprocessShaderSource(ShaderStage::Fragment, source);
-        EXPECT_EQ(source.find("#define GL_EXT_shader_non_constant_global_initializers"), String::npos) << source;
+        // Nothing to restore, so the source is not even marked.
+        EXPECT_EQ(source.find("mobilegl-es-preamble"), String::npos) << source;
+        EXPECT_TRUE(CollectEsPreambleMacroDefines(source).empty());
     }
 
     {
@@ -4775,8 +4782,32 @@ void main() { fragColor = vec4(1.0); }
 out vec4 fragColor;
 void main() { fragColor = vec4(1.0); }
 )";
+        const String before = source;
         PreprocessShaderSource(ShaderStage::Fragment, source);
-        EXPECT_EQ(source.find("#define GL_OES_sample_variables"), String::npos) << source;
+        EXPECT_EQ(source, before);
+        EXPECT_TRUE(CollectEsPreambleMacroDefines(source).empty());
+    }
+
+    {
+        SCOPED_TRACE("a shader that merely contains the marker text cannot steer the preamble");
+        String source = R"(#version 460 core
+/*mobilegl-es-preamble:310*/
+#extension GL_OES_sample_variables : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        // The extractor is honest about what it finds - a source carrying a well-formed marker is
+        // indistinguishable from one this pipeline wrote, which is exactly why the payload is
+        // re-derived from the whitelist here rather than read out of the marker.
+        EXPECT_EQ(CollectEsPreambleMacroDefines(source), String("#define GL_OES_sample_variables 1\n"));
+
+        String malformed = R"(#version 460 core
+/*mobilegl-es-preamble:not-a-version*/
+#extension GL_OES_sample_variables : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        EXPECT_TRUE(CollectEsPreambleMacroDefines(malformed).empty());
     }
 }
 
