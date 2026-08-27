@@ -1383,10 +1383,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             constexpr SizeT kMaxIndexedBufferBindings = 64;
             IndexedBufferBinding g_indexedUBOBindings[kMaxIndexedBufferBindings];
             IndexedBufferBinding g_indexedSSBOBindings[kMaxIndexedBufferBindings];
+            // Transform feedback gets a shadow for a reason the other two do not have: the
+            // capture points are synced from the application's TOUCHED high-water mark, which
+            // deqp/glcts permanently raises to GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS by
+            // clearing every point after each test case. Without a shadow every capture that
+            // uses fewer points than that (i.e. every INTERLEAVED_ATTRIBS capture) re-issued a
+            // redundant glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, i, 0) for the unused
+            // tail immediately before glBeginTransformFeedback - calls a plain GL application
+            // never makes there, and the only thing MobileGL does differently from one.
+            //
+            // Unlike the UBO/SSBO points these are NOT context state: they belong to the bound
+            // transform feedback OBJECT, so XfbImpl::BindTransformFeedback drops the whole
+            // shadow to unknown on every object switch (InvalidateTransformFeedbackBindingShadows).
+            IndexedBufferBinding g_indexedXFBBindings[kMaxIndexedBufferBindings];
             IndexedBufferBinding* IndexedBindingShadow(GLenum glTarget, Uint index) {
                 if (index >= kMaxIndexedBufferBindings) return nullptr; // out of range: never cache
                 if (glTarget == GL_UNIFORM_BUFFER) return &g_indexedUBOBindings[index];
                 if (glTarget == GL_SHADER_STORAGE_BUFFER) return &g_indexedSSBOBindings[index];
+                if (glTarget == GL_TRANSFORM_FEEDBACK_BUFFER) return &g_indexedXFBBindings[index];
                 return nullptr;
             }
 
@@ -1401,6 +1415,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (binding.id == id) binding = {};
                 }
                 for (auto& binding : g_indexedSSBOBindings) {
+                    if (binding.id == id) binding = {};
+                }
+                for (auto& binding : g_indexedXFBBindings) {
                     if (binding.id == id) binding = {};
                 }
                 if (g_boundPixelPackBufferKnown && g_boundPixelPackBufferId == id) {
@@ -1419,8 +1436,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (auto& binding : g_indexedSSBOBindings) {
                     if (binding.id == id) binding.known = false;
                 }
+                for (auto& binding : g_indexedXFBBindings) {
+                    if (binding.id == id) binding.known = false;
+                }
             }
         } // namespace
+
+        // The capture points belong to the bound transform feedback object, so a bind (or a
+        // delete, which reverts to the default object) replaces all of them at once with
+        // state this shadow has never seen. Distrust rather than scrub: the driver's bindings
+        // are whatever the newly bound object holds, which is NOT necessarily base(0), and
+        // scrubbing would let a later bind of 0 be false-skipped.
+        void InvalidateTransformFeedbackBindingShadows() {
+            for (auto& binding : g_indexedXFBBindings) binding.known = false;
+        }
 
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id) {
             auto* s = IndexedBindingShadow(glTarget, index);
@@ -1439,6 +1468,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void InvalidateIndexedBufferBindingCache() {
             for (auto& b : g_indexedUBOBindings) b = {};
             for (auto& b : g_indexedSSBOBindings) b = {};
+            for (auto& b : g_indexedXFBBindings) b = {};
         }
 
         void TrimBufferPool() {
@@ -5753,6 +5783,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint g_fragColorBroadcastCount = 1;
         Uint32 g_unormFallbackClampOutputMask = 0;
         Uint g_lastUsedBackendProgramId = 0;
+        // Every error-queue drain in the program build path is bounded by this: a lost
+        // context never answers GL_NO_ERROR, and the build runs on the thread that would
+        // then spin forever.
+        constexpr Int kMaxDrainedProgramErrors = 32;
         StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl> g_backendProgramObjects;
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
@@ -7523,6 +7557,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // program before it links. SPIRV-Cross keeps user output names verbatim in
             // the transpiled ESSL (`out vec4 result_0;` stays `result_0`), so the
             // frontend's requested names carry over unchanged.
+            SizeT declaredXfbVaryingCount = 0;
             if (stateProgramObject->GetTransformFeedbackVaryingCount() > 0 &&
                 g_GLESFuncs.glTransformFeedbackVaryings != nullptr) {
                 const auto& xfbVaryings = stateProgramObject->GetTransformFeedbackVaryings();
@@ -7548,9 +7583,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 MGLOG_D("Declaring %zu transform feedback varyings on program %u", xfbNames.size(),
                         m_backendProgramId);
+                // Bounded: a lost context never answers GL_NO_ERROR, and this runs on the
+                // thread that would then spin forever.
+                for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+                }
                 g_GLESFuncs.glTransformFeedbackVaryings(m_backendProgramId, static_cast<GLsizei>(xfbNames.size()),
                                                         xfbNames.data(),
                                                         stateProgramObject->GetTransformFeedbackBufferMode());
+                // Unchecked before. A rejected capture set leaves the program linking happily
+                // with NO capture set at all, and then every draw of every span records
+                // nothing while the application reads its buffer's pre-draw bytes and
+                // GL_NO_ERROR - the signature four conformance families were stuck on.
+                if (const GLenum xfbError = g_GLESFuncs.glGetError(); xfbError != GL_NO_ERROR) {
+                    String declared;
+                    for (const auto& xfbName : rewrittenXfbNames) {
+                        if (!declared.empty()) declared += ", ";
+                        declared += xfbName;
+                    }
+                    MGLOG_E("The ES driver REJECTED the transform feedback capture set for backend program %u with "
+                            "%s (mode %s): [%s]. Every capture made with GL program %u will record nothing.",
+                            m_backendProgramId, MG_Util::ConvertGLEnumToString(xfbError).c_str(),
+                            MG_Util::ConvertGLEnumToString(
+                                stateProgramObject->GetTransformFeedbackBufferMode()).c_str(),
+                            declared.c_str(), stateProgramObject->GetExternalIndex());
+                }
+                declaredXfbVaryingCount = xfbNames.size();
             }
 
             // Link program
@@ -7593,6 +7650,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             } else {
                 MGLOG_D("Program linked successfully. ID: %u", m_backendProgramId);
+                // A link that SUCCEEDS can still have dropped the capture set: ESSL rejects a
+                // requested name the transpiled shader does not actually declare by simply not
+                // capturing it, and a program whose last vertex-processing stage was rewritten
+                // by a SPIR-V pass (viewport-index lowering, gl_PerVertex handling, the
+                // synthesized pass-through tessellation control stage) can end up spelling its
+                // outputs differently from the frontend's request. Asking the driver what it
+                // ACTUALLY linked is the only way to tell that apart from a driver that just
+                // captures nothing - which is the whole ambiguity the empty-capture failures
+                // across geometry_shader / tessellation_shader / gpu_shader5 / DSA sat on.
+                if (declaredXfbVaryingCount > 0) {
+                    GLint linkedXfbVaryings = 0;
+                    GLint linkedXfbBufferMode = 0;
+                    g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_TRANSFORM_FEEDBACK_VARYINGS,
+                                               &linkedXfbVaryings);
+                    g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_TRANSFORM_FEEDBACK_BUFFER_MODE,
+                                               &linkedXfbBufferMode);
+                    for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+                    }
+                    const GLenum requestedMode = stateProgramObject->GetTransformFeedbackBufferMode();
+                    if (static_cast<SizeT>(std::max(linkedXfbVaryings, 0)) != declaredXfbVaryingCount ||
+                        static_cast<GLenum>(linkedXfbBufferMode) != requestedMode) {
+                        MGLOG_E("Backend program %u (GL program %u) linked with a capture set the driver does not "
+                                "agree with: asked for %zu varying(s) in mode %s, the driver reports %d varying(s) "
+                                "in mode %s. Captures made with it will be empty or wrongly laid out.",
+                                m_backendProgramId, stateProgramObject->GetExternalIndex(), declaredXfbVaryingCount,
+                                MG_Util::ConvertGLEnumToString(requestedMode).c_str(), linkedXfbVaryings,
+                                MG_Util::ConvertGLEnumToString(
+                                    static_cast<GLenum>(linkedXfbBufferMode)).c_str());
+                    } else {
+                        MGLOG_D("Backend program %u capture set confirmed by the driver: %d varying(s), mode %s",
+                                m_backendProgramId, linkedXfbVaryings,
+                                MG_Util::ConvertGLEnumToString(
+                                    static_cast<GLenum>(linkedXfbBufferMode)).c_str());
+                    }
+                }
             }
             // The driver program was relinked IN PLACE, so its GL name no longer identifies
             // the executable behind it - and that name is exactly what Use()'s

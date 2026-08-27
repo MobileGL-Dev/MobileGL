@@ -393,6 +393,65 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
+        // The capture points the CAPTURE PROGRAM uses, and nothing else.
+        //
+        // This used to go through SyncBufferBindingPoints, which walks the application's
+        // GLOBAL touched-binding-point high-water mark and binds 0 to every point with no
+        // frontend buffer. deqp/glcts permanently raises that mark to
+        // GL_MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS by clearing all of them after each test
+        // case, so every capture using fewer points than that - i.e. every INTERLEAVED_ATTRIBS
+        // capture - had glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, i, 0) issued for the
+        // unused tail immediately before glBeginTransformFeedback. The Mali G1-Ultra driver
+        // then recorded NOTHING: no GL error, GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN 0, the
+        // application's buffer left holding its pre-draw bytes. Confirmed on device - the
+        // separate/interleaved split in KHR-GL46.transform_feedback follows exactly whether
+        // all four points were left bound.
+        //
+        // Those binds were never needed for correctness either. A capture only writes the
+        // points the program's buffer mode uses (GL 4.6 core 13.2.2), so a point past
+        // bufferCount cannot be written whatever is left bound there, and a point the program
+        // DOES use with no buffer bound is already an error the frontend raised at
+        // glBeginTransformFeedback. The rule this encodes: never issue a capture-point bind
+        // the application did not ask for.
+        //
+        // Scoping it to the program (rather than skipping redundant binds behind the shadow)
+        // is what makes it ORDER-INDEPENDENT: the shadow has to drop to unknown whenever a
+        // transform feedback OBJECT is bound, since the points belong to the object, and the
+        // clears came straight back for the next capture in the process.
+        void SyncTransformFeedbackBindingPoints(SizeT bufferCount) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const SizeT pointCount = std::min<SizeT>(
+                bufferCount, MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS);
+            for (SizeT i = 0; i < pointCount; ++i) {
+                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, i);
+                const auto& obj = point.GetBoundObject();
+                // A stride-0 slot (two consecutive gl_NextBuffer entries) captures nothing and
+                // needs no binding; anything else with no buffer never got past the frontend.
+                if (!obj) continue;
+
+                auto* backendResource = EnsureBufferResource(obj);
+                if (!backendResource || backendResource->id == 0) {
+                    MGLOG_E_ONCE("No backend buffer for GL_TRANSFORM_FEEDBACK_BUFFER capture point %zu; the capture "
+                                 "will not reach the application's buffer.",
+                                 i);
+                    continue;
+                }
+
+                const auto& range = point.GetRange();
+                const auto backendBufferId = backendResource->id;
+                if (range.start == 0 && range.end >= obj->GetSize()) {
+                    BindBufferBaseCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLuint>(i), backendBufferId);
+                } else {
+                    const auto start = std::min(range.start, obj->GetSize());
+                    const auto end = std::min(range.end, obj->GetSize());
+                    BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLuint>(i), backendBufferId,
+                                          static_cast<GLintptr>(start), static_cast<GLsizeiptr>(end - start));
+                }
+            }
+        }
+
         // Called once the storage-buffer points are bound and the draw/dispatch is about to
         // go out: whatever the shader writes there lands in the ES driver's buffers, behind
         // the frontend's CPU shadow. Flagging them makes the next MapBuffer/GetBufferSubData
@@ -654,6 +713,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint backendId = 0;
                 SizeT start = 0;
                 SizeT end = 0;
+                // WHICH capture buffer of the program this is. The list is COMPACTED - a
+                // capture buffer with no bound buffer object contributes no entry - so the
+                // position in the vector is not the program's buffer index, and everything
+                // that asks the program about a target (its stride, which varyings land in
+                // it) has to ask about this index instead. A capture list beginning with
+                // gl_NextBuffer is the shape that makes them differ: buffer 0 has stride 0
+                // and nothing bound, so target 0 describes buffer 1.
+                SizeT bufferIndex = 0;
             };
 
             // Per frontend transform feedback object. The default object (name 0) maps to
@@ -698,6 +765,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return *g_currentXfbState;
             }
 
+            // EVERY way this path can lose a capture used to be silent: three unlogged early
+            // returns before the driver Begin, an unchecked glBeginTransformFeedback, and two
+            // `continue`s in the readback. The application sees a buffer that kept its
+            // pre-draw bytes, GL_NO_ERROR, and GL_LINK_STATUS true - which is how one defect
+            // reached ~320 conformance bodies across four families before anyone could say
+            // which of the branches fired. Nothing below changes what MobileGL DOES on a
+            // healthy capture; it only makes a lost one name itself in /sdcard/MG/latest.log.
+            //
+            // MGLOG_E_ONCE (not _D) on purpose: these have to be readable in an INFO-level
+            // artifact, the same reason the backend link failure at Managers.cpp is MGLOG_E.
+            constexpr Int kMaxDrainedXfbErrors = 32;
+
+            // The ES error raised by the call just issued, GL_NO_ERROR if it succeeded. Drains
+            // the rest of the queue so the next probe cannot read this one as its own.
+            GLenum TakeXfbDriverError() {
+                const GLenum first = g_GLESFuncs.glGetError();
+                if (first == GL_NO_ERROR) return GL_NO_ERROR;
+                for (Int i = 0; i < kMaxDrainedXfbErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
+                }
+                return first;
+            }
+
             Bool AreTransformFeedbackObjectsSupported() {
                 return g_GLESFuncs.glGenTransformFeedbacks != nullptr &&
                        g_GLESFuncs.glBindTransformFeedback != nullptr &&
@@ -712,6 +801,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the backend already owns (coherent persistent map) need nothing: reads resolve
             // against that storage directly.
             void ReadbackCapturedRanges(Vector<XfbCaptureTarget>& targets) {
+                if (g_GLESFuncs.glMapBufferRange == nullptr || g_GLESFuncs.glUnmapBuffer == nullptr) {
+                    MGLOG_E_ONCE("EndTransformFeedback: the ES driver exposes no glMapBufferRange/glUnmapBuffer, so "
+                                 "captured data can never reach the application's buffers");
+                }
+                if (targets.empty()) {
+                    // The span closed with nothing to mirror back. Either the deferred Begin
+                    // never ran (a span with no draw - legal) or it ran and found no bound
+                    // capture buffer, which is not.
+                    MGLOG_D("EndTransformFeedback: capture span closed with no recorded targets");
+                }
                 if (g_GLESFuncs.glMapBufferRange != nullptr && g_GLESFuncs.glUnmapBuffer != nullptr) {
                     for (const auto& target : targets) {
                         if (!target.buffer || target.buffer->IsBackendPersistentMapped()) continue;
@@ -721,8 +820,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                     static_cast<GLintptr>(target.start),
                                                                     static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
                         if (mapped == nullptr) {
-                            MGLOG_E_ONCE("EndTransformFeedback: failed to map backend buffer %u for capture readback",
-                                    target.backendId);
+                            // Silent before: the capture landed in the ES buffer and the
+                            // application's next glMapBuffer read the untouched shadow, which
+                            // is indistinguishable from "the draw wrote nothing".
+                            MGLOG_E_ONCE("EndTransformFeedback: failed to map backend buffer %u [%zu, %zu) for "
+                                         "capture readback (ES error %s); the captured data will NOT be visible to "
+                                         "the application",
+                                         target.backendId, target.start, target.end,
+                                         MG_Util::ConvertGLEnumToString(TakeXfbDriverError()).c_str());
                             continue;
                         }
                         target.buffer->WritebackFromBackend({mapped, size}, target.start);
@@ -755,15 +860,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              GL_DYNAMIC_COPY);
                     g_scatterBufferSize = required;
                 }
-                // Point 0 carries every captured varying (the ES capture is INTERLEAVED); the
-                // other points must be cleared or the driver would still write the app's buffers.
+                // Point 0 carries every captured varying: the gl_NextBuffer / gl_SkipComponents
+                // entries are consumed at link time and never reach the driver, so the ES
+                // program is declared INTERLEAVED over a single buffer and point 0 is the only
+                // point it can write (GL 4.6 core 13.2.2).
+                //
+                // The other points are therefore left exactly as they are. Clearing them - which
+                // this used to do, across the application's whole touched high-water mark - is
+                // both unnecessary (the ES program cannot write an unused point) and the precise
+                // trigger for the Mali G1-Ultra capture loss: see
+                // SyncTransformFeedbackBindingPoints for the mechanism and the device evidence.
+                // KHR-GL46.transform_feedback.capture_special_interleaved_test is the case that
+                // reaches this path.
                 BufferImpl::BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, 0, g_scatterBufferId, 0,
                                                   static_cast<GLsizeiptr>(required));
-                const SizeT pointCount =
-                    MG_State::pGLContext->GetTouchedBufferBindingPointCount(BufferTarget::TransformFeedback);
-                for (SizeT i = 1; i < pointCount; ++i) {
-                    BufferImpl::BindBufferBaseCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<Uint>(i), 0);
-                }
                 return true;
             }
 
@@ -777,10 +887,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (g_GLESFuncs.glMapBufferRange == nullptr || g_GLESFuncs.glUnmapBuffer == nullptr) return;
 
                 const SizeT packedStride = program->GetTransformFeedbackPackedStride();
-                const SizeT vertices = std::min<SizeT>(
-                    static_cast<SizeT>(MG_State::pGLContext->GetTransformFeedbackCapturedVertices()),
-                    xfb.scatterCapacityVertices);
-                if (packedStride == 0 || vertices == 0) return;
+                const SizeT modelledVertices =
+                    static_cast<SizeT>(MG_State::pGLContext->GetTransformFeedbackCapturedVertices());
+                const SizeT vertices = std::min<SizeT>(modelledVertices, xfb.scatterCapacityVertices);
+                if (packedStride == 0 || vertices == 0) {
+                    // The scatter path redirected the DRIVER's capture into the scratch buffer,
+                    // so bailing here leaves the application's buffers holding their pre-draw
+                    // bytes - a total data loss, not a no-op. The vertex count is the CPU model
+                    // (AccountTransformFeedbackPrimitives), which is 0 for any draw mode
+                    // CountPrimitivesForDraw does not know and for the instanced/indirect entry
+                    // points that never call it.
+                    MGLOG_E_ONCE("EndTransformFeedback: scattered capture discarded - packedStride=%zu, "
+                                 "CPU-modelled captured vertices=%zu, scratch capacity=%zu. The capture buffers keep "
+                                 "their pre-draw contents.",
+                                 packedStride, modelledVertices, xfb.scatterCapacityVertices);
+                    return;
+                }
 
                 BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
                 const void* packed = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget, 0,
@@ -798,14 +920,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (SizeT targetIndex = 0; targetIndex < xfb.targets.size(); ++targetIndex) {
                     const auto& target = xfb.targets[targetIndex];
                     if (!target.buffer) continue;
-                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(targetIndex));
+                    // By BUFFER index, not by position in the compacted list - see XfbCaptureTarget.
+                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(target.bufferIndex));
                     if (stride == 0) continue;
                     const SizeT rangeBytes = target.end - target.start;
                     Vector<Uint8> staged(rangeBytes);
                     Memcpy(staged.data(), target.buffer->MappedData() + target.start, rangeBytes);
 
                     for (const auto& varying : program->GetTransformFeedbackVaryings()) {
-                        if (varying.bufferIndex != targetIndex) continue;
+                        if (varying.bufferIndex != target.bufferIndex) continue;
                         for (SizeT v = 0; v < vertices; ++v) {
                             const SizeT dstOffset = v * stride + varying.offsetBytes;
                             if (dstOffset + varying.byteSize > rangeBytes) break;
@@ -860,9 +983,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not captured, and opening the span would also subject it to the capture
             // primitive-mode rule the paused draw is exempt from.
             if (!xfb.pending || xfb.paused) return;
-            xfb.pending = false;
             const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
-            if (!program) return;
+            if (!program) {
+                // The pending flag is deliberately NOT consumed here. It used to be cleared
+                // before this check, so a single draw that could not see the capture program
+                // retired the span permanently: every later draw of the same span found
+                // pending==false, the driver Begin never happened, and End found started==false
+                // and skipped the readback - a whole capture lost with no GL error anywhere.
+                // The frontend only reaches a draw with an active span after glBeginTransformFeedback
+                // stored a program, so this is a "cannot happen" that must stay recoverable.
+                MGLOG_E_ONCE("StartPendingTransformFeedback: an active capture span has no capture program; the "
+                             "driver span stays closed and this draw is not captured");
+                return;
+            }
+            xfb.pending = false;
 
             // Snapshot what the driver is about to capture into. GL forbids rebinding the
             // capture buffers while the span is open, so this stays valid until End, and
@@ -879,10 +1013,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT start = std::min(range.start, bufferObject->GetSize());
                 const SizeT end = std::min(range.end, bufferObject->GetSize());
                 if (end <= start) continue;
-                xfb.targets.push_back({bufferObject, backendResource->id, start, end});
+                xfb.targets.push_back({bufferObject, backendResource->id, start, end, i});
             }
 
-            BufferImpl::SyncBufferBindingPoints(BufferTarget::TransformFeedback, GL_TRANSFORM_FEEDBACK_BUFFER);
+            BufferImpl::SyncTransformFeedbackBindingPoints(bufferCount);
 
             // A layout with holes or several interleaved buffers is not expressible on ES:
             // capture gap-free into scratch storage and place the records at End instead.
@@ -891,31 +1025,99 @@ namespace MobileGL::MG_Backend::DirectGLES {
             xfb.scatterCapacityVertices = 0;
             if (program->NeedsScatteredTransformFeedbackCapture()) {
                 SizeT capacityVertices = ~SizeT(0);
-                for (SizeT i = 0; i < xfb.targets.size(); ++i) {
-                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(i));
+                for (const auto& target : xfb.targets) {
+                    // By BUFFER index. Reading the stride at the target's POSITION made a
+                    // capture list beginning with gl_NextBuffer - buffer 0 has stride 0 and
+                    // nothing bound, so target 0 describes buffer 1 - read stride 0, skip every
+                    // target, and leave the capacity at zero.
+                    const SizeT stride = program->GetTransformFeedbackStride(static_cast<Uint32>(target.bufferIndex));
                     if (stride == 0) continue;
-                    capacityVertices =
-                        std::min<SizeT>(capacityVertices, (xfb.targets[i].end - xfb.targets[i].start) / stride);
+                    capacityVertices = std::min<SizeT>(capacityVertices, (target.end - target.start) / stride);
                 }
                 if (capacityVertices == ~SizeT(0)) capacityVertices = 0;
                 if (BindScatterCaptureBuffer(program->GetTransformFeedbackPackedStride(), capacityVertices)) {
                     xfb.scattered = true;
                     xfb.scatterProgram = program;
                     xfb.scatterCapacityVertices = capacityVertices;
+                } else {
+                    // NO SPAN RATHER THAN A SPAN THAT WRITES SOMEWHERE ELSE. The ES program for a
+                    // scattered capture is a single-buffer INTERLEAVED one (the gl_NextBuffer /
+                    // gl_SkipComponents entries are consumed at link time and never reach the
+                    // driver), so it writes capture point 0 and nothing else. Point 0 here is
+                    // either unbound or - the dangerous case - still holds whatever an earlier
+                    // capture in this process bound there, because the frontend's own
+                    // glBindBufferBase is state-only and nothing else in the backend touches the
+                    // indexed points. Opening the span would then have the driver capture over an
+                    // application buffer that has nothing to do with this draw, and the frontend
+                    // shadow would never learn of it.
+                    //
+                    // Leaving the span closed reproduces exactly what the old high-water clear
+                    // loop achieved by binding 0 here and letting the driver refuse the Begin -
+                    // the capture records nothing - without issuing a capture-point bind the
+                    // application did not ask for, which is the thing that loses captures whole
+                    // on Mali (see SyncTransformFeedbackBindingPoints).
+                    MGLOG_E_ONCE("StartPendingTransformFeedback: no scratch storage for a scattered capture "
+                                 "(packed stride %zu, capacity %zu vertices); leaving the driver span CLOSED so the "
+                                 "capture cannot land in a stale binding. Nothing will be captured.",
+                                 program->GetTransformFeedbackPackedStride(), capacityVertices);
+                    xfb.targets.clear();
+                    return;
                 }
             }
 
+            // A capture program with buffers bound must have produced at least one target;
+            // an empty list means End has nothing to mirror back and the application will
+            // read its buffer's pre-draw bytes however well the GPU captured.
+            if (xfb.targets.empty()) {
+                MGLOG_E_ONCE("StartPendingTransformFeedback: opening a capture span with NO capture targets "
+                             "(program declares %zu capture buffer(s), none of them resolved to a bound backend "
+                             "buffer with a non-empty range); nothing will be read back",
+                             bufferCount);
+            }
+
             g_GLESFuncs.glBeginTransformFeedback(xfb.primitiveMode);
+            // Unchecked before. Every ES error condition here (already active, a current
+            // program with no capture set, a capture point the program uses with no buffer)
+            // ends the same way: the driver records nothing, GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
+            // reads 0 and the application sees no error at all - MobileGL's own error state is
+            // separate from the driver's, so a driver rejection here is invisible to it.
+            if (const GLenum beginError = TakeXfbDriverError(); beginError != GL_NO_ERROR) {
+                // The mode is printed as a number as well as a name: GL_POINTS is 0, which the
+                // enum converter spells "GL_FALSE", and a reader chasing a lost capture should
+                // not have to know that.
+                MGLOG_E_ONCE("StartPendingTransformFeedback: the ES driver REJECTED "
+                             "glBeginTransformFeedback(%s / 0x%04x) with %s - nothing will be captured. Backend "
+                             "program %u, %zu capture buffer(s), %zu target(s), mode=%s.",
+                             MG_Util::ConvertGLEnumToString(xfb.primitiveMode).c_str(),
+                             static_cast<unsigned>(xfb.primitiveMode),
+                             MG_Util::ConvertGLEnumToString(beginError).c_str(),
+                             PrgramImpl::g_lastUsedBackendProgramId, bufferCount,
+                             xfb.targets.size(),
+                             MG_Util::ConvertGLEnumToString(program->GetTransformFeedbackBufferMode()).c_str());
+            }
             xfb.started = true;
         }
 
         void EndTransformFeedback() {
             auto& xfb = CurrentXfb();
+            const Bool wasPending = xfb.pending;
             xfb.pending = false;
             xfb.paused = false;
-            if (!xfb.started) return;
+            if (!xfb.started) {
+                // A span that never drew is legal and captures nothing by definition; one that
+                // is STILL pending here drew nothing the backend saw, which for a span the
+                // application expected data from is the whole bug in one line.
+                MGLOG_D("EndTransformFeedback: closing a span the driver never opened (pending=%d)",
+                        wasPending ? 1 : 0);
+                return;
+            }
             xfb.started = false;
             g_GLESFuncs.glEndTransformFeedback();
+            if (const GLenum endError = TakeXfbDriverError(); endError != GL_NO_ERROR) {
+                MGLOG_E_ONCE("EndTransformFeedback: the ES driver rejected glEndTransformFeedback with %s - the "
+                             "driver's capture state and MobileGL's have diverged",
+                             MG_Util::ConvertGLEnumToString(endError).c_str());
+            }
             if (xfb.scattered) {
                 ScatterCapturedRecords(xfb);
                 xfb.scattered = false;
@@ -943,6 +1145,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void BindTransformFeedback(GLuint name) {
             g_currentXfbState = nullptr; // name changes; operator[] below may also rehash
+            // The capture buffer bindings are the OBJECT's, not the context's: the bind below
+            // swaps all of them for whatever the target object holds, which the redundant-bind
+            // shadow has never seen.
+            BufferImpl::InvalidateTransformFeedbackBindingShadows();
             if (!AreTransformFeedbackObjectsSupported()) {
                 // Without driver objects there is only the default span; keep the frontend
                 // name so the bookkeeping below stays consistent.
@@ -979,6 +1185,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_currentXfbName = 0;
             g_scatterBufferId = 0;
             g_scatterBufferSize = 0;
+            BufferImpl::InvalidateTransformFeedbackBindingShadows();
         }
     } // namespace XfbImpl
 

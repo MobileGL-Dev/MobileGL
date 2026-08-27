@@ -97,6 +97,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexAttribBindingScenario.cpp
     Scenarios/XfbCaptureBufferReuseScenario.cpp
     Scenarios/XfbPrimitiveQueryScenario.cpp
+    Scenarios/XfbRepeatedCaptureScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp

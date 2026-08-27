@@ -544,12 +544,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // BackendVertexArrayObject::SyncToBackend.
         extern Uint64 g_bufferBackendIdGeneration;
         // Redundant-bind cache for INDEXED buffer bindings (glBindBufferBase/Range on
-        // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER): skips the GL call when the
-        // (id, range) already at that index matches, like the array-buffer/texture/
-        // sampler caches already do. Invalidated on MakeCurrent (context may reset).
+        // GL_UNIFORM_BUFFER / GL_SHADER_STORAGE_BUFFER / GL_TRANSFORM_FEEDBACK_BUFFER):
+        // skips the GL call when the (id, range) already at that index matches, like the
+        // array-buffer/texture/sampler caches already do. Invalidated on MakeCurrent
+        // (context may reset).
+        // Binds the transform feedback capture points [0, bufferCount) from the frontend
+        // state, and touches nothing else - in particular it never binds a zero the
+        // application did not ask for. See the definition for why that matters on Mali.
+        void SyncTransformFeedbackBindingPoints(SizeT bufferCount);
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id);
         void BindBufferRangeCached(GLenum glTarget, Uint index, Uint id, GLintptr offset, GLsizeiptr size);
         void InvalidateIndexedBufferBindingCache();
+        // The transform feedback capture points are per-transform-feedback-OBJECT state, so
+        // every glBindTransformFeedback swaps all of them under the shadow above. XfbImpl
+        // calls this on each bind/delete.
+        void InvalidateTransformFeedbackBindingShadows();
         // Re-issues the GL_ATOMIC_COUNTER_BUFFER binding points a program's shaders declare as
         // GL_SHADER_STORAGE_BUFFER bindings at the reserved slots the transpiled ESSL was built
         // against (BackendProgramObjectImpl::GetAtomicCounterBindings /

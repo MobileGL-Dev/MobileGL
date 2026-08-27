@@ -146,6 +146,20 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TRIANGLES: return static_cast<Uint64>(count / 3);
         case GL_TRIANGLE_STRIP:
         case GL_TRIANGLE_FAN: return count >= 3 ? static_cast<Uint64>(count - 2) : 0;
+        // Adjacency primitives (GL 4.6 core table 10.1). Only a geometry stage can consume
+        // them, and it is the ADJACENT-free primitive count that reaches it: 4 vertices per
+        // line, 6 per triangle, one per step for the strips. Answering 0 here - which is what
+        // the default arm did - made AccountTransformFeedbackPrimitives bail before it had
+        // recorded anything, so an adjacency capture advanced neither the captured-vertex
+        // counter the scattered-capture path is bounded by nor the geometry-capture-draw flag
+        // that routes the transform feedback queries to the driver's own counter.
+        case GL_LINES_ADJACENCY: return static_cast<Uint64>(count / 4);
+        case GL_LINE_STRIP_ADJACENCY: return count >= 4 ? static_cast<Uint64>(count - 3) : 0;
+        case GL_TRIANGLES_ADJACENCY: return static_cast<Uint64>(count / 6);
+        case GL_TRIANGLE_STRIP_ADJACENCY: return count >= 6 ? static_cast<Uint64>((count - 4) / 2) : 0;
+        // GL_PATCHES is deliberately absent: the tessellator's amplification is not knowable
+        // on the CPU, and answering 0 is what defers GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
+        // to the driver's own counter, which is the only correct source for a patch capture.
         default: return 0;
         }
     }
@@ -172,11 +186,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_LINES:
         case GL_LINE_STRIP:
         case GL_LINE_LOOP:
+        // An adjacency primitive delivers the same line/triangle to the geometry stage; the
+        // adjacent vertices are context, not part of the primitive.
+        case GL_LINES_ADJACENCY:
+        case GL_LINE_STRIP_ADJACENCY:
             verticesPerPrimitive = 2;
             break;
         case GL_TRIANGLES:
         case GL_TRIANGLE_STRIP:
         case GL_TRIANGLE_FAN:
+        case GL_TRIANGLES_ADJACENCY:
+        case GL_TRIANGLE_STRIP_ADJACENCY:
             verticesPerPrimitive = 3;
             break;
         default:
@@ -381,11 +401,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_POINTS:
                 compatible = mode == GL_POINTS;
                 break;
+            // The adjacency modes belong here too (GL 4.6 core table 13.1, ES 3.2 table 12.1).
+            // This arm is only reached when the program has NO geometry or tessellation
+            // evaluation stage, and without a geometry stage the adjacent vertices are simply
+            // ignored (GL 4.6 core 10.1) - the primitive assembled IS a plain line or triangle,
+            // so the combination is legal and must capture. Omitting them raised a spurious
+            // GL_INVALID_OPERATION and dropped the draw entirely, leaving the capture buffer
+            // with its pre-draw bytes. The geometry-stage input table above already carries the
+            // same four arms; this is the second table catching up with it.
             case GL_LINES:
-                compatible = mode == GL_LINES || mode == GL_LINE_STRIP || mode == GL_LINE_LOOP;
+                compatible = mode == GL_LINES || mode == GL_LINE_STRIP || mode == GL_LINE_LOOP ||
+                             mode == GL_LINES_ADJACENCY || mode == GL_LINE_STRIP_ADJACENCY;
                 break;
             case GL_TRIANGLES:
-                compatible = mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN;
+                compatible = mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN ||
+                             mode == GL_TRIANGLES_ADJACENCY || mode == GL_TRIANGLE_STRIP_ADJACENCY;
                 break;
             default:
                 break;
