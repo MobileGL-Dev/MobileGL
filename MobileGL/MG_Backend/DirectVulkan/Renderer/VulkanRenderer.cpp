@@ -6558,9 +6558,21 @@ void main() {
             }
 
             auto* textureResource = m_textureManager->SyncTextureAndGetDescriptor(*sampledTexture);
-            MOBILEGL_ASSERT(textureResource != nullptr,
-                            "%s: SyncTextureAndGetDescriptor failed for textureId=%d",
-                            __func__, sampledTexture->GetExternalIndex());
+            if (textureResource == nullptr) {
+                // SyncTextureAndGetDescriptor has a real failure channel - an incomplete or
+                // otherwise unbackable texture declines and returns nullptr with its own log
+                // line - and the assert that used to be the only guard here is compiled out of
+                // every build past DEBUG. The next line dereferenced it, so a sampler left
+                // pointing at a texture GL calls incomplete was a SIGSEGV inside SetupDraw
+                // rather than a degraded draw. Leave the slot null and carry on: the descriptor
+                // resolve substitutes the fallback texture for exactly these bindings
+                // (ResolveSamplerDescriptor's SamplesAsIncompleteTexture branch), and the fast
+                // path at the top of SetupDraw already treats a null resource as "re-resolve".
+                MGLOG_E_ONCE("SetupDraw: no texture resource for sampled textureId=%d; leaving the binding to the "
+                             "descriptor resolve's fallback",
+                             sampledTexture->GetExternalIndex());
+                continue;
+            }
             sampledResources[sampledIndex] = textureResource;
             MGLOG_D("SetupDraw: sampled textureId=%d layout(before)=%s(%d)",
                     sampledTexture->GetExternalIndex(), VkImageLayoutToString(textureResource->layout),
@@ -6624,9 +6636,14 @@ void main() {
             MOBILEGL_ASSERT(ready, "%s: TransitionTextureForSampling failed for textureId=%d",
                             __func__, sampledTexture->GetExternalIndex());
             auto* transitionedResource = m_textureManager->SyncTextureAndGetDescriptor(*sampledTexture);
-            MOBILEGL_ASSERT(transitionedResource != nullptr,
-                            "%s: post-transition SyncTextureAndGetDescriptor failed for textureId=%d",
-                            __func__, sampledTexture->GetExternalIndex());
+            if (transitionedResource == nullptr) {
+                // Same declined-sync channel as the first loop, and the same reason not to
+                // dereference it: StampResourceRecordingUse below takes a reference.
+                MGLOG_E_ONCE("SetupDraw: no texture resource after transitioning sampled textureId=%d; leaving the "
+                             "binding to the descriptor resolve's fallback",
+                             sampledTexture->GetExternalIndex());
+                continue;
+            }
             // Pre-pass stream bookkeeping: the draw about to be recorded reads
             // this image, so later out-of-pass work on it can no longer jump
             // ahead of the recording.

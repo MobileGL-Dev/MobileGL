@@ -38,6 +38,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // id only has to stay clear of the application's, exactly like the sampled fallback's.
         constexpr Uint kUnboundStorageImageExternalIndex = 0xFFFFFF01u;
 
+        // MobileGL's own stand-in textures, by the reserved ids above. Nothing an application can
+        // do reaches one, so anything keyed on the GL object an application bound - image-unit
+        // aliasing above all - has to leave them alone.
+        Bool IsPlaceholderTexture(const MG_State::GLState::ITextureObject* texture) {
+            if (texture == nullptr) return false;
+            const Uint index = static_cast<Uint>(texture->GetExternalIndex());
+            return index == kFallbackTexture2DExternalIndex || index == kUnboundStorageImageExternalIndex;
+        }
+
         // The R32 member of each numeric class. Every one of the three is a MANDATORY-support
         // format for uniform texel buffers, storage texel buffers and storage images alike
         // (Vulkan 1.0, "Required Format Support"), which is what makes them a fallback that
@@ -1551,9 +1560,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const TextureTarget preferredTarget = programObj.samplerTextureTargetByBinding[binding];
         MG_State::GLState::ITextureObject* texture =
             textureUnit.GetBindingSlot(preferredTarget).GetBoundObject().get();
+        // The sampler in effect, resolved BEFORE the completeness test below rather than after:
+        // GL's completeness rules are a property of (texture, sampler in effect), so the test
+        // cannot be asked without it.
+        const auto& samplerOverride = textureUnit.GetSamplerObject();
+        const MG_State::GLState::SamplerObject* effectiveSampler =
+            samplerOverride ? samplerOverride.get()
+                            : (texture != nullptr ? texture->GetSamplerObject().get() : nullptr);
         // Undefined default texture (name 0, no image) resolves as "unbound", exactly
         // like ResolveSamplerTextureRaw reports it.
         if (MG_State::GLState::IsUndefinedDefaultTexture(texture)) {
+            texture = nullptr;
+        }
+        // ...and so does a texture that fails the completeness rules for the filter in effect,
+        // because that is precisely what ResolveSamplerDescriptor does with it. The two used to
+        // disagree: this one asked only whether the default texture was UNDEFINED, so a default
+        // texture that had been given a base level but no mip chain - which is what the GL-CTS
+        // state reset between test cases leaves behind, and what any application that uploads to
+        // texture 0 has - stayed in the sampled set while the descriptor path swapped it for the
+        // fallback. SetupDraw then synced a texture no descriptor would use, the sync declined
+        // (GL calls it incomplete), and the null it returned was dereferenced one line later.
+        // Keeping the two predicates identical is the invariant; CollectSampledTextures exists to
+        // pre-sync exactly the textures the descriptors will hold.
+        if (MG_State::GLState::SamplesAsIncompleteTexture(texture, effectiveSampler)) {
             texture = nullptr;
         }
         if (texture == nullptr) {
@@ -1565,11 +1594,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
             texture = GetFallbackTexture(preferredTarget).get();
+            // The substitution changed the texture, so the "no override" arm of the effective
+            // sampler has to follow it to the fallback's own.
+            if (!samplerOverride) {
+                effectiveSampler = texture != nullptr ? texture->GetSamplerObject().get() : nullptr;
+            }
         }
-        const auto& samplerOverride = textureUnit.GetSamplerObject();
         outTexture = texture;
-        outSampler = samplerOverride ? samplerOverride.get()
-                                     : (texture != nullptr ? texture->GetSamplerObject().get() : nullptr);
+        outSampler = effectiveSampler;
         return true;
     }
 
@@ -1765,9 +1797,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!ResolveSampledBinding(program, programObj, samplerBinding, samplerElement,
                                            sampledTexture, sampledSampler) ||
                     sampledTexture == nullptr || sampledSampler == nullptr ||
-                    MG_State::GLState::SamplesAsIncompleteTexture(sampledTexture, sampledSampler)) {
+                    IsPlaceholderTexture(sampledTexture)) {
                     // ResolveSamplerDescriptor uses a fallback in these cases, which cannot
-                    // alias the image-unit binding of the original texture.
+                    // alias the image-unit binding of the original texture. The unbound and
+                    // incomplete cases both arrive here AS that fallback now that
+                    // ResolveSampledBinding applies the completeness rule itself, so the test is
+                    // "is this one of ours" rather than a second completeness check.
                     continue;
                 }
                 // Multisample source images intentionally omit TRANSFER_SRC usage. Keep their existing
