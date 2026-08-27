@@ -1543,9 +1543,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     // returned without recording anything. Rejecting here closes that too, at the entry point rather
     // than at the lookup, so exactly one error is recorded.
     //
-    // The proxy targets are accepted because the parameter paths already route them (both
-    // GetTextureObjectByTargetForParameter and the getters resolve a proxy object); narrowing that
-    // is a separate question from the one this predicate answers.
+    // EXACTLY the ten targets 8.10 and 8.11 enumerate - no proxies. The spec's own asymmetry is the
+    // proof: GetTexLevelParameter needs an explicit clause extending its list with PROXY_TEXTURE_1D,
+    // PROXY_TEXTURE_2D and the rest, and neither TexParameter nor GetTexParameter carries one. That
+    // clause is why GetTexLevelParameteriv_State/GetTexLevelParameterfv_State are deliberately NOT
+    // gated by this predicate.
+    //
+    // Routing was not a reason to accept them: GetTextureObjectByTargetForParameter resolves a proxy
+    // object only after a proxy glTexImage has run, so before that the parameter call was a silent
+    // no-op and after it the parameter was applied for real - both GL_NO_ERROR, and both the same
+    // silent-acceptance shape this predicate exists to close for cube faces and GL_TEXTURE_BUFFER.
     static Bool IsLegalTextureParameterTarget(GLenum target) {
         switch (target) {
         case GL_TEXTURE_1D:
@@ -1558,20 +1565,30 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_CUBE_MAP_ARRAY:
         case GL_TEXTURE_2D_MULTISAMPLE:
         case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
-        case GL_PROXY_TEXTURE_1D:
-        case GL_PROXY_TEXTURE_2D:
-        case GL_PROXY_TEXTURE_3D:
-        case GL_PROXY_TEXTURE_1D_ARRAY:
-        case GL_PROXY_TEXTURE_2D_ARRAY:
-        case GL_PROXY_TEXTURE_RECTANGLE:
-        case GL_PROXY_TEXTURE_CUBE_MAP:
-        case GL_PROXY_TEXTURE_CUBE_MAP_ARRAY:
-        case GL_PROXY_TEXTURE_2D_MULTISAMPLE:
-        case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
             return true;
         default:
             return false;
         }
+    }
+
+    // The by-NAME spelling of the same rule. glTextureParameter* has no target token, so GL 4.6 core
+    // 8.10 applies the list to the texture's EFFECTIVE target instead. The four vector DSA forms
+    // reach the gate above for free because they re-enter through WithTemporarilyBoundNamedTexture,
+    // which synthesizes the target from the object; the two scalar forms call the per-object setter
+    // directly and reached no gate at all, so glTextureParameteri on a buffer texture applied state
+    // with GL_NO_ERROR while glTextureParameteriv on the same texture answered GL_INVALID_ENUM.
+    static Bool ValidateNamedTextureParameterTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                    const char* caller) {
+        if (!textureObject) return false;
+        const GLenum effectiveTarget = MG_Util::ConvertTextureTargetToGLEnum(textureObject->GetTarget());
+        if (IsLegalTextureParameterTarget(effectiveTarget)) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>(
+                "MG_Impl/GLImpl", caller,
+                std::format("The effective target {} does not accept texture parameters.",
+                            MG_Util::ConvertGLEnumToString(effectiveTarget))));
+        return false;
     }
 
     static Bool ValidateTextureParameterTarget(GLenum target, const char* caller) {
@@ -5262,6 +5279,72 @@ namespace MobileGL::MG_Impl::GLImpl {
                                          "GetTexImage_State");
     }
 
+    // What this helper can and cannot answer.
+    //
+    // ProcessTexturePixelsDataPack performs NO format or type conversion: it sizes every texel with
+    // GetInternalBytesPerPixel(the TEXTURE's internal format) and memcpys the shadow rows verbatim,
+    // and it carries a standing TODO for the pixel-store parameters, so it honours only SwapBytes and
+    // the bitmap LSBFirst path. Both facts are invisible from the outside, and both are dangerous:
+    //
+    //   * a (format, type) narrower than the shadow's own texel makes the copy write MORE bytes than
+    //     the caller's buffer holds. glGetTexImage passes bufSize = -1 (it has no bufSize argument),
+    //     so the size guard below is skipped and the Memcpy runs off the end of the application's
+    //     allocation - reading an 8x8 GL_RGBA8 level as (GL_RED, GL_UNSIGNED_BYTE) writes 256 bytes
+    //     into the 64 that GL 4.6 core 8.11 says are required. A wider (format, type) is not an
+    //     overflow but is still wrong data.
+    //   * a pack state that puts padding, a row-length override or a skip offset between rows is
+    //     ignored outright, so the rows land at the wrong destination strides - while the GPU
+    //     readback path (DirectGLES StoreClientRows, and DirectVulkan through it) honours all of it.
+    //     Same glGetTexImage call, two different destination layouts, decided by whether the texture
+    //     happens to have a GPU image.
+    //
+    // So the copy is only correct when the client layout IS the shadow layout and the destination
+    // walk is tight. That is checked here rather than assumed, and a request outside it is refused
+    // with an error instead of being answered wrongly. Refusing is a real narrowing of what GL
+    // promises - the spec wants the conversion performed - but the alternative on this path is a
+    // heap overflow, and the conversion belongs in the pack processor rather than in another
+    // open-coded copy here.
+    static Bool ValidateShadowReadbackLayout(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                             TextureInputFormat textureInputFormat,
+                                             TexturePixelDataType texturePixelDataType, GLsizei width,
+                                             const char* caller) {
+        const SizeT shadowTexelSize =
+            MG_Util::GetInternalBytesPerPixel(textureObject->GetFormat(), texturePixelDataType);
+        const SizeT clientTexelSize = MG_Util::GetInputBytesPerPixel(textureInputFormat, texturePixelDataType);
+        if (shadowTexelSize == 0 || clientTexelSize == 0 || shadowTexelSize != clientTexelSize) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("Reading this texture back needs a format/type conversion that the CPU-shadow "
+                                "path cannot perform: the shadow texel is {} bytes and the requested one is {}.",
+                                shadowTexelSize, clientTexelSize)));
+            return false;
+        }
+
+        // A tight destination walk is the only one the pack processor produces. GL_PACK_ALIGNMENT
+        // defaults to 4, so a row whose byte count is not already a multiple of it needs padding that
+        // would never be written - no glPixelStorei call from the application is required to reach
+        // this.
+        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const SizeT alignment = packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : 1;
+        const SizeT rowBytes = static_cast<SizeT>(std::max<GLsizei>(width, 0)) * clientTexelSize;
+        const Bool tightRows = (rowBytes % alignment) == 0;
+        const Bool noOverrides = packParams.RowLength == 0 && packParams.ImageHeight == 0 &&
+                                 packParams.SkipPixels == 0 && packParams.SkipRows == 0 &&
+                                 packParams.SkipImages == 0;
+        if (!tightRows || !noOverrides) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    "The CPU-shadow readback path packs rows tightly and cannot honour a pixel-store state that "
+                    "adds row padding, a row-length override or a skip offset."));
+            return false;
+        }
+        return true;
+    }
+
     void CopyTextureImageToClientOrPBO_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                             TextureUploadTarget textureUploadTarget, GLint level, GLenum format,
                                             GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
@@ -5288,6 +5371,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const auto texelSize = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, level);
+        if (!ValidateShadowReadbackLayout(textureObject, textureInputFormat, texturePixelDataType, texelSize.x(),
+                                          caller)) {
+            return;
+        }
+
         const void* src = textureMipmapObject->MapMipmapData(textureUploadTarget, level);
         if (!src) return;
 
@@ -6140,11 +6228,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TextureParameteri(GLuint texture, GLenum pname, GLint param) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureParameterTarget(textureObject, __func__)) return;
         TextureParameterObject_State(textureObject, pname, param, __func__);
     }
 
     void TextureParameterf(GLuint texture, GLenum pname, GLfloat param) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!ValidateNamedTextureParameterTarget(textureObject, __func__)) return;
         TextureParameterObjectf_State(textureObject, pname, param, __func__);
     }
 

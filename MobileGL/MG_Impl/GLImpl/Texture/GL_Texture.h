@@ -12,10 +12,17 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
-    // Answers a texture-image query straight out of the CPU shadow, honouring the pack state and a
-    // bound PIXEL_PACK_BUFFER. This is the whole of glGetTexImage on a build with no backend
-    // readback, and it is also the sound fallback for a backend that has no GPU image to read: with
-    // no image, nothing GPU-side can ever have written the texture, so the shadow IS its content.
+    // Answers a texture-image query straight out of the CPU shadow, into client memory or a bound
+    // PIXEL_PACK_BUFFER. This is the whole of glGetTexImage on a build with no backend readback, and
+    // it is also the sound fallback for a backend that has no GPU image to read: with no image,
+    // nothing GPU-side can ever have written the texture, so the shadow IS its content.
+    //
+    // It answers a NARROWER contract than glGetTexImage's, and refuses what it cannot do rather than
+    // answering wrongly. The copy is verbatim: it performs no format or type conversion, and it packs
+    // rows tightly, honouring only GL_PACK_SWAP_BYTES and the bitmap GL_PACK_LSB_FIRST path. A
+    // request whose (format, type) texel size differs from the texture's own, or a pixel-store state
+    // that adds row padding / a row-length override / a skip offset, is rejected with
+    // GL_INVALID_OPERATION (see ValidateShadowReadbackLayout, which spells out why each is unsafe).
     void CopyTextureImageToClientOrPBO_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                              TextureUploadTarget textureUploadTarget, GLint level, GLenum format,
                                              GLenum type, GLsizei bufSize, void* pixels, const char* caller);
