@@ -4718,8 +4718,9 @@ void main() {
     // build in GetOrCreatePipeline - any new GL-state read there must be added here:
     //   - capability bits: CullFace, DepthTest, PolygonOffsetFill (mode gating rides
     //     the memo's mode key), RasterizerDiscard, ColorLogicOp, StencilTest,
-    //     PrimitiveRestart(+FixedIndex), plus the depth write mask
-    //   - patch vertices, polygon mode, cull face mode, depth func, logic op
+    //     PrimitiveRestart(+FixedIndex), SampleShading, plus the depth write mask
+    //   - patch vertices, polygon mode, cull face mode, depth func, logic op,
+    //     min sample shading
     //   - front/back stencil ops + compare funcs (ref/mask are dynamic state)
     //   - per draw buffer up to the render pass's colour span: indexed blend enable,
     //     blend factors/equations, indexed colour write mask (broadcast from index 0
@@ -4744,7 +4745,16 @@ void main() {
         capabilityBits |= p.PrimitiveRestartEnabled ? 1ull << 6 : 0;
         capabilityBits |= p.PrimitiveRestartFixedIndexEnabled ? 1ull << 7 : 0;
         capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
+        capabilityBits |= p.SampleShadingEnabled ? 1ull << 9 : 0;
         Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
+        // glMinSampleShading. Hashed by BITS, not by value: this memo compares hashes rather than
+        // versions, so an unhashed float would let a pipeline built at one rate be handed back
+        // after glMinSampleShading moved it - the memo would see identical state.
+        {
+            Uint32 minSampleShadingBits = 0;
+            std::memcpy(&minSampleShadingBits, &p.MinSampleShadingValue, sizeof(minSampleShadingBits));
+            hash = CombinePipelineStateWord(hash, static_cast<Uint64>(minSampleShadingBits));
+        }
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
         // The default tessellation levels belong here for the same reason PatchVertices does:
         // when a program has an evaluation stage and no control stage, both are compiled into the
