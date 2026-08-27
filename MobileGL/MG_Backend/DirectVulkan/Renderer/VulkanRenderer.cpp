@@ -1418,6 +1418,48 @@ void main() {
             return {width, height, depth};
         }
 
+        // How many components of a GL-space texel size actually halve down the mip chain. An array
+        // texture's LAYER count is not a dimension of the image (GL 4.6 core 8.14.3): it stays put
+        // all the way down, and GetMipmapTexelSize parks it in the slot after the image's own
+        // dimensions. This is the same split IsMipmapCompleteForFilter applies, and the two have to
+        // agree - allocating a chain whose layer count shrinks builds levels the completeness rule
+        // then rejects. Vulkan-space extents need none of this: layers live in arrayLayers there,
+        // so resource->depth is already 1 for every array target.
+        static Int MipShrinkingComponentCount(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture1DArray:
+                return 1;
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::TextureCubeMapArray:
+                return 2;
+            default:
+                return 3;
+            }
+        }
+
+        static IntVec3 ComputeMipTexelSizeWithFixedComponents(const IntVec3& baseTexelSize, Uint32 relativeMipLevel,
+                                                              Int shrinkingComponents) {
+            IntVec3 size = baseTexelSize;
+            for (Int component = 0; component < shrinkingComponents && component < 3; ++component) {
+                size[component] = std::max<Int>(size[component] >> static_cast<Int>(relativeMipLevel), 1);
+            }
+            return size;
+        }
+
+        static Uint32 ComputeFullMipLevelCountWithFixedComponents(const IntVec3& baseTexelSize,
+                                                                  Int shrinkingComponents) {
+            Int maxDimension = 1;
+            for (Int component = 0; component < shrinkingComponents && component < 3; ++component) {
+                maxDimension = std::max<Int>(maxDimension, baseTexelSize[component]);
+            }
+            Uint32 mipLevelCount = 1;
+            while (maxDimension > 1) {
+                maxDimension = std::max<Int>(maxDimension / 2, 1);
+                ++mipLevelCount;
+            }
+            return mipLevelCount;
+        }
+
         static Bool EnsureGenerateMipmapStorageAllocated(::MobileGL::MG_State::GLState::TextureObjectMipmap& texture,
                                                          Uint32 baseMipLevel) {
             const Uint32 existingMipLevelCount = static_cast<Uint32>(texture.GetMipmapLevelCount());
@@ -1429,6 +1471,8 @@ void main() {
             if (uploadTargets.empty()) {
                 return false;
             }
+
+            const Int shrinkingComponents = MipShrinkingComponentCount(texture.GetTarget());
 
             for (const auto uploadTarget : uploadTargets) {
                 const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, baseMipLevel);
@@ -1446,13 +1490,15 @@ void main() {
                 }
 
                 const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-                const Uint32 requiredMipLevelCount = baseMipLevel + ComputeFullMipLevelCount(baseTexelSize);
+                const Uint32 requiredMipLevelCount =
+                    baseMipLevel + ComputeFullMipLevelCountWithFixedComponents(baseTexelSize, shrinkingComponents);
                 if (existingMipLevelCount >= requiredMipLevelCount) {
                     continue;
                 }
 
                 for (Uint32 level = existingMipLevelCount; level < requiredMipLevelCount; ++level) {
-                    const IntVec3 levelTexelSize = ComputeMipTexelSize(baseTexelSize, level - baseMipLevel);
+                    const IntVec3 levelTexelSize = ComputeMipTexelSizeWithFixedComponents(
+                        baseTexelSize, level - baseMipLevel, shrinkingComponents);
                     const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
                                                 static_cast<SizeT>(levelTexelSize.y()) *
                                                 static_cast<SizeT>(levelTexelSize.z());
@@ -10495,15 +10541,23 @@ void main() {
 
     void VulkanRenderer::GenerateMipmap(GLenum target) {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
-        // The other mipmappable targets - 1D, 1D array, cube map array - are legal GL and the front
-        // end lets them through, so reaching one here is a coverage gap in this backend, not a
-        // broken invariant. Declining leaves the mip chain unwritten; asserting took the process
-        // down with it.
+        // Whatever is left here is a coverage gap in this backend, not a broken invariant, so it
+        // declines (leaving the mip chain unwritten) rather than asserting the process down. What
+        // remains is the multisample targets, which GL 4.6 core 8.14.4 forbids to glGenerateMipmap
+        // outright.
+        //
+        // Every ARRAY target - 1D array, 2D array, cube map array - needs no blit code of its own:
+        // its layers live in the VkImage's arrayLayers, so resource->extent/depth already describe
+        // one layer's image and the loop below already copies every layer per level via
+        // srcSubresource.layerCount = resource->arrayLayers. The one thing they DO need is that the
+        // GL-space storage allocation not shrink the layer count down the chain, which
+        // MipShrinkingComponentCount handles.
         if (textureTarget != TextureTarget::Texture2D && textureTarget != TextureTarget::Texture2DArray &&
             textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::TextureCubeMap &&
+            textureTarget != TextureTarget::TextureCubeMapArray &&
             // A 1D texture needs nothing special: its storage extent is {width, 1, 1}, so the blit
             // loop below already emits the y and z offsets of 0 and 1 that a 1D image requires.
-            textureTarget != TextureTarget::Texture1D) {
+            textureTarget != TextureTarget::Texture1D && textureTarget != TextureTarget::Texture1DArray) {
             MGLOG_W_ONCE("GenerateMipmap: unsupported target %s", MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
             return;
         }
