@@ -10,8 +10,10 @@
 
 #include "../VkIncludes.h"
 #include <Includes.h>
+#include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <vk_mem_alloc.h>
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -39,6 +41,37 @@ inline IntVec3 ToVulkanLevelExtent(TextureTarget stateTarget, const IntVec3& glT
         return {glTexelSize.x(), 1, glTexelSize.y()};
     }
     return glTexelSize;
+}
+
+// How many Vulkan array layers (or, for a 3D image, z slices) a GL framebuffer attachment spans.
+//
+// THE ONE COPY, deliberately. This used to exist twice - privately in VkRenderPassManager.cpp and
+// again in VkClearManager.cpp - and the two are not independent: the render pass builds the
+// attachment view and VkFramebufferCreateInfo::layers from one, while the CLEAR key built from the
+// other is written verbatim into VkImageSubresourceRange::layerCount when a queued glClear is
+// materialised outside a render pass (MaterializePendingClearForTexture). They are two consumers
+// of the same GL clear, so any disagreement means the same glClear produces two different pictures
+// depending only on which path happens to consume it first - and the materialise path then POPS
+// the entry, so the other one never runs. Fixing one copy and leaving the other is exactly how
+// that split gets introduced; keep them the same function.
+//
+// Two shapes make this more than `size.z()`:
+//   * GL_TEXTURE_1D_ARRAY keeps its layer count in the state-side HEIGHT (see ToVulkanLevelExtent
+//     just above), so z reads 1 and every layer above the first was silently dropped.
+//   * GL_TEXTURE_CUBE_MAP is attached layered as its REPRESENTATIVE upload target, the +X face
+//     (ResolveRepresentableFramebufferTextureUploadTarget), and one face's level size has z = 1 -
+//     but a layered cube attachment names all six faces (GL 4.6 core 9.2.8), which are the image's
+//     six array layers. A cube ARRAY needs no such arm: its representative target carries 6n in z.
+inline Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+    if (!attachment.IsLayered()) {
+        return 1u;
+    }
+    const auto& texture = attachment.GetTexture();
+    const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+    if (target == TextureTarget::TextureCubeMap) {
+        return 6u;
+    }
+    return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
 }
 
 // A GL framebuffer attachment's level/layer, and a GL image unit's, are relative to the texture

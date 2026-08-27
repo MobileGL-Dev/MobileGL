@@ -8,6 +8,10 @@
 
 #include "VkClearManager.h"
 
+// For the shared ResolveAttachmentLayerCount (and the ToVulkanLevelExtent it is built on): the
+// clear key's layer span has to be the same one the render pass builds its attachment view from.
+#include "VkTextureManager.h"
+
 #include "MG_State/GLState/Core.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
@@ -100,13 +104,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ResolveAttachmentBaseArrayLayer(uploadTarget);
     }
 
-    static Uint32 ResolveAttachmentLayerCount(
-        const MG_State::GLState::FramebufferAttachmentObject& attachment) {
-        if (attachment.IsLayered()) {
-            return static_cast<Uint32>(std::max(attachment.GetSize().z(), 1));
-        }
-        return 1u;
-    }
+    // ResolveAttachmentLayerCount used to be duplicated here, reading attachment.GetSize().z()
+    // raw - no ToVulkanLevelExtent remap for a 1D array, no six-faces arm for a cube map. That is
+    // not a cosmetic difference: the count below is not key-only, it is written straight into
+    // VkImageSubresourceRange::layerCount by MaterializePendingClearForTexture, which then POPS
+    // the entry - so a layered cube map's glClear reached one face and the other five were lost
+    // for good, while the very same queued clear cleared all six through the render pass's
+    // LOAD_OP_CLEAR. The helper now lives once, in VkTextureManager.h beside ToVulkanLevelExtent.
 
     static const MG_State::GLState::FramebufferAttachmentObject* GetClearableAttachment(
         const MG_State::GLState::FramebufferObject& drawFbo, FramebufferAttachmentType attachmentType) {

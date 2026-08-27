@@ -86,29 +86,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return ToStorageArrayLayer(texture, face);
     }
 
-    // The attachment's size is GL geometry, and GL_TEXTURE_1D_ARRAY keeps its layer count in the
-    // state-side HEIGHT rather than in z (see ToVulkanLevelExtent, which exists for exactly this
-    // remap). Reading z directly gave every layered 1D-array attachment layerCount = 1, so a
-    // geometry shader writing gl_Layer = 1..n had its output silently dropped and the parent's
-    // upper layers were never written at all.
-    static Uint32 ResolveAttachmentLayerCount(const MG_State::GLState::FramebufferAttachmentObject& attachment) {
-        if (attachment.IsLayered()) {
-            const auto& texture = attachment.GetTexture();
-            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
-            // A layered CUBE MAP names all six faces (GL 4.6 core 9.2.8), but the attachment model
-            // records only the REPRESENTATIVE upload target for it - the +X face
-            // (ResolveRepresentableFramebufferTextureUploadTarget) - and that face's level size has
-            // z = 1. Reading z here therefore attached one face to a layered framebuffer, so a
-            // geometry shader writing gl_Layer = 1..5 lost five sixths of its output. The image's
-            // six layers are the cube's faces, exactly as for a cube ARRAY (whose representative
-            // target does carry 6n in z and needs no special case).
-            if (target == TextureTarget::TextureCubeMap) {
-                return 6u;
-            }
-            return static_cast<Uint32>(std::max(ToVulkanLevelExtent(target, attachment.GetSize()).z(), 1));
-        }
-        return 1u;
-    }
+    // ResolveAttachmentLayerCount lives in VkTextureManager.h, beside ToVulkanLevelExtent, because
+    // VkClearManager needs the SAME answer: its pending-clear key's layerCount becomes a real
+    // VkImageSubresourceRange when a clear is materialised outside a render pass. See the header.
 
     // VUID-VkFramebufferCreateInfo-flags-04113: every view handed to vkCreateFramebuffer must have
     // been created as VK_IMAGE_VIEW_TYPE_2D or VK_IMAGE_VIEW_TYPE_2D_ARRAY. The image's OWN view
@@ -1503,13 +1483,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         renderPassCreateInfo.dependencyCount = 2;
         renderPassCreateInfo.pDependencies = subpassDependencies;
 
+        // NOT VK_VERIFY. VkIncludes.h states the rule this function now lives by: VK_VERIFY is the
+        // INVARIANT check - a should-never-happen state, fatal-logged unlatched and trapped in a
+        // DEBUG build - and "a soft, recoverable failure must therefore NOT be routed through
+        // VK_VERIFY. Check the VkResult directly and report it with MGLOG_E_ONCE". A decline here
+        // is recoverable by construction: the caller drops the draw. Routing it through VK_VERIFY
+        // would have made the recovery dead code in a DEBUG build (the TRAP fires inside the macro,
+        // before the handle is ever examined) and, in an INFO build, printed an UNLATCHED fatal
+        // line on every draw for the life of the process - a decline caches nothing, so every
+        // later draw to the same framebuffer re-enters this path and fails again.
         VkRenderPass renderPass = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &renderPass));
-        // VK_VERIFY only logs (and only in an INFO build); the handle is the truth. Caching an
-        // entry whose VkRenderPass is null would hand VK_NULL_HANDLE to vkCmdBeginRenderPass and
-        // to every pipeline built against it.
-        if (renderPass == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateRenderPass failed for FBO %u; declining the render pass",
+        const VkResult renderPassResult =
+            vkCreateRenderPass(m_device, &renderPassCreateInfo, nullptr, &renderPass);
+        if (renderPassResult != VK_SUCCESS || renderPass == VK_NULL_HANDLE) {
+            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateRenderPass failed (%s, %d) for FBO %u; declining the "
+                         "render pass",
+                         VkResultToString(renderPassResult), static_cast<Int>(renderPassResult),
                          fbo.GetExternalIndex());
             return nullptr;
         }
@@ -1525,13 +1514,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         framebufferCreateInfo.width = width;
         framebufferCreateInfo.height = height;
         framebufferCreateInfo.layers = framebufferLayers;
+        // Direct VkResult check, for the same reason as vkCreateRenderPass above.
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer));
-        if (framebuffer == VK_NULL_HANDLE) {
+        const VkResult framebufferResult =
+            vkCreateFramebuffer(m_device, &framebufferCreateInfo, nullptr, &framebuffer);
+        if (framebufferResult != VK_SUCCESS || framebuffer == VK_NULL_HANDLE) {
             // The render pass has no entry to own it yet, so it is destroyed here rather than
             // leaked - RenderPassEntry's destructor is the only other thing that would.
-            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateFramebuffer failed for FBO %u (%dx%d, %u attachments, "
-                         "%u layers); declining the render pass",
+            MGLOG_E_ONCE("GetOrCreateRenderPass: vkCreateFramebuffer failed (%s, %d) for FBO %u (%dx%d, "
+                         "%u attachments, %u layers); declining the render pass",
+                         VkResultToString(framebufferResult), static_cast<Int>(framebufferResult),
                          fbo.GetExternalIndex(), width, height,
                          static_cast<Uint32>(attachmentViews.size()), framebufferLayers);
             vkDestroyRenderPass(m_device, renderPass, nullptr);

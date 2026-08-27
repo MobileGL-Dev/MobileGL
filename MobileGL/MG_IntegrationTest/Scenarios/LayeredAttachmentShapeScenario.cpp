@@ -32,9 +32,10 @@
 // too, so the per-slice branch that exists for exactly this case was unreachable and every
 // slice above z = 0 came back VK_NULL_HANDLE.
 //
-// The five cases below are those shapes - layered 3D, one 3D slice, layered cube-map array, and
-// its depth and packed depth-stencil attachments - and each one asserts LAYER ROUTING, not merely
-// survival: the colour a layer receives is a function of its own index, so an attachment that
+// The seven cases below are those shapes - layered 3D, one 3D slice, layered cube-map array with
+// its depth and packed depth-stencil attachments, and (cases 6 and 7) a layered cube MAP and 1D
+// ARRAY whose queued glClear is consumed outside a render pass. Each one asserts LAYER ROUTING,
+// not merely survival: what a layer receives is a function of its own index, so an attachment that
 // collapsed onto layer 0, or attached one face of a cube, fails on the layers it did not reach
 // rather than passing quietly. Every texture is seeded with a poison value first, so "the draw
 // never landed here" reads differently from "the wrong layer landed here".
@@ -52,6 +53,7 @@
 // red on DirectVulkan alone means Magma is.
 
 #include <cstddef>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -81,9 +83,18 @@ namespace MGITest {
         // right whether or not the slice is resolved at all.
         constexpr int kSubjectSlice = 2;
 
+        // Layers of the 1D array whose clear the last case checks. Its layer count lives in the
+        // state-side HEIGHT, not in z, which is the whole reason it is here.
+        constexpr int kOneDArrayLayers = 4;
+
         // A colour no pass paints, uploaded before every draw. A layer that reads it back was
         // never rendered to.
         constexpr GLubyte kPoison = 0xAB;
+
+        // The glClear colour the two materialise cases use. Chosen as exact 8-bit values and fed
+        // to glClearColor as n/255, so the round trip through a UNORM8 target is lossless and a
+        // mismatch means a real miss rather than rounding.
+        constexpr Rgba8 kClearColor{17, 68, 187, 255};
 
         // What pass `pass` paints on layer `layer`. r and g name the LAYER (so a mis-routed write
         // says which layer it came from) and b names the PASS (so "the second draw was not
@@ -148,6 +159,21 @@ void main()
                    float(3 + u_pass * 60) / 255.0,
                    1.0);
 }
+)";
+
+        // The two clear cases do not draw into the layered attachment at all - they SAMPLE it, so
+        // the queued clear is consumed by MaterializePendingClearForTexture rather than by a render
+        // pass's LOAD_OP_CLEAR. What the sample returns is irrelevant; being sampled is the point.
+        const char* const kCubeSampleFragmentSource = R"(#version 420 core
+uniform samplerCube u_source;
+out vec4 o_color;
+void main() { o_color = texture(u_source, vec3(1.0, 0.0, 0.0)); }
+)";
+
+        const char* const kOneDArraySampleFragmentSource = R"(#version 420 core
+uniform sampler1DArray u_source;
+out vec4 o_color;
+void main() { o_color = texture(u_source, vec2(0.5, 0.0)); }
 )";
 
         // The non-layered case has no geometry stage at all - the slice comes from the
@@ -310,6 +336,103 @@ void main()
                                 GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
                 glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
                 return texture;
+            }
+
+            // A plain RGBA8 CUBE MAP (not an array), every face poisoned. This is the shape whose
+            // layered attachment records the +X face as its representative upload target, so its
+            // level size reads z = 1 - the reason a shared layer-count helper is needed at all.
+            GLuint MakePoisonedCubeMap() {
+                const GLuint texture = TrackTexture();
+                glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kExtent, kExtent);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kExtent * 4, kPoison);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                for (int face = 0; face < 6; ++face) {
+                    glTexSubImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, 0, 0, kExtent,
+                                    kExtent, GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
+                }
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+                return texture;
+            }
+
+            // An RGBA8 1D array, every layer poisoned. glTexImage2D's HEIGHT is the layer count -
+            // that is what GL_TEXTURE_1D_ARRAY means, and it is why reading the level size's z
+            // gives 1 however many layers there are.
+            GLuint MakePoisoned1DArray() {
+                const GLuint texture = TrackTexture();
+                glBindTexture(GL_TEXTURE_1D_ARRAY, texture);
+                glTexParameteri(GL_TEXTURE_1D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_1D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kOneDArrayLayers * 4, kPoison);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                glTexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, kExtent, kOneDArrayLayers, 0, GL_RGBA,
+                             GL_UNSIGNED_BYTE, seed.data());
+                glBindTexture(GL_TEXTURE_1D_ARRAY, 0);
+                return texture;
+            }
+
+            // A scratch 2D colour target for the sampling draw. It exists only so the draw has
+            // somewhere to go that is NOT the layered attachment under test - a draw into that
+            // would open a render pass and consume the pending clear through LOAD_OP_CLEAR, which
+            // is the other consumer and the one that was already right.
+            GLuint MakeScratchColorFbo() {
+                const GLuint scratch = TrackTexture();
+                glBindTexture(GL_TEXTURE_2D, scratch);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kExtent, kExtent);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                const GLuint fbo = TrackFramebuffer();
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, scratch, 0);
+                glDrawBuffer(GL_COLOR_ATTACHMENT0);
+                return fbo;
+            }
+
+            // One draw that SAMPLES `texture`, into `intoFbo`. This is what drags the queued clear
+            // through MaterializePendingClearForTexture (VulkanRenderer's sampled-texture
+            // pre-pass), which is the consumer that used to write the clear key's layerCount
+            // straight into a VkImageSubresourceRange.
+            void DrawSampling(GLuint program, GLuint intoFbo, GLenum textureTarget, GLuint texture) {
+                glBindFramebuffer(GL_FRAMEBUFFER, intoFbo);
+                glViewport(0, 0, kExtent, kExtent);
+                glDisable(GL_SCISSOR_TEST);
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_STENCIL_TEST);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(textureTarget, texture);
+                glUseProgram(program);
+                const GLint sourceLocation = glGetUniformLocation(program, "u_source");
+                ASSERT_GE(sourceLocation, 0) << "u_source was not reflected";
+                glUniform1i(sourceLocation, 0);
+                const GLint depthLocation = glGetUniformLocation(program, "u_depth");
+                ASSERT_GE(depthLocation, 0) << "u_depth was not reflected";
+                glUniform1f(depthLocation, 0.0f);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                glBindTexture(textureTarget, 0);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
+
+            // Every texel of `texels` is the clear colour. +/-1 per channel, which no rounding can
+            // exceed and which cannot be confused with the poison (0xAB) it replaced.
+            void ExpectAllCleared(const std::vector<Rgba8>& texels, int perTexelStride, const char* what) {
+                for (std::size_t i = 0; i < texels.size(); ++i) {
+                    const Rgba8& actual = texels[i];
+                    const bool ok = std::abs(static_cast<int>(actual.r) - kClearColor.r) <= 1 &&
+                                    std::abs(static_cast<int>(actual.g) - kClearColor.g) <= 1 &&
+                                    std::abs(static_cast<int>(actual.b) - kClearColor.b) <= 1;
+                    if (ok) continue;
+                    ADD_FAILURE() << what << ": unit " << (static_cast<int>(i) / perTexelStride) << " texel "
+                                  << (static_cast<int>(i) % perTexelStride) << " is " << Describe(actual)
+                                  << ", expected " << Describe(kClearColor)
+                                  << (actual.r == kPoison && actual.g == kPoison
+                                          ? " - the poison, so the clear never reached this one"
+                                          : "");
+                    // One message per unit is enough to say what happened.
+                    i = (static_cast<std::size_t>(i) / perTexelStride + 1) * perTexelStride - 1;
+                }
             }
 
             // A depth (or packed depth-stencil) cube-map array of the same shape. No upload: a
@@ -704,6 +827,123 @@ void main()
             ExpectEveryLayer(texels, kCubeLayerFaces, /*pass=*/0,
                              "layered cube-map-array depth-stencil attachment (a later pass's colour means "
                              "the depth or stencil test did not cover that layer)");
+
+            Gl().EndFrame();
+        }
+
+        // (6) and (7) leave the render pass alone entirely and pin the OTHER consumer of a layered
+        // attachment's layer count.
+        //
+        // A glClear on a texture-backed FBO with the scissor test off is not executed on the spot:
+        // it is queued (VkClearManager), and then exactly one of two things consumes it - the next
+        // render pass's LOAD_OP_CLEAR over the attachment view, or MaterializePendingClearForTexture
+        // if the texture is used outside a pass first (sampled, blitted, copied, read back). The
+        // second path writes the queued key's layerCount straight into a VkImageSubresourceRange
+        // and then POPS the entry, so whatever it misses is lost for good - the render pass never
+        // gets a second chance at it.
+        //
+        // Both consumers must therefore agree about how many layers a layered attachment spans, and
+        // they are now literally the same function (ResolveAttachmentLayerCount, VkTextureManager.h).
+        // These two cases are the shapes where a raw `size.z()` and the real answer differ, and
+        // neither is reachable through the cases above: a cube MAP records the +X face as its
+        // representative upload target (z = 1, six real faces) and a 1D ARRAY keeps its layer count
+        // in the state-side height (z = 1, N real layers). The cube-map-ARRAY and 3D shapes the
+        // earlier cases use both carry their count in z, so they agree either way and cannot see it.
+        //
+        // The draw goes into a scratch 2D target, never into the layered attachment, so the
+        // materialise path is the only consumer that can fire.
+        TEST_F(LayeredAttachmentShapeScenario, LayeredCubeMapClearMaterialisedBySamplingReachesEveryFace) {
+            if (!Ready()) return;
+
+            const GLuint program = BuildProgram(nullptr, kCubeSampleFragmentSource);
+            if (program == 0) return;
+
+            const GLuint cube = MakePoisonedCubeMap();
+            ASSERT_EQ(FirstGLError(), 0u) << "creating the RGBA8 cube map failed";
+
+            const GLuint layeredFbo = TrackFramebuffer();
+            glBindFramebuffer(GL_FRAMEBUFFER, layeredFbo);
+            glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, cube, 0);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            ASSERT_EQ(FirstGLError(), 0u) << "attaching the cube map layered failed";
+            ASSERT_TRUE(FramebufferIsComplete());
+
+            glViewport(0, 0, kExtent, kExtent);
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(kClearColor.r / 255.0f, kClearColor.g / 255.0f, kClearColor.b / 255.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ASSERT_EQ(FirstGLError(), 0u) << "clearing the layered cube-map attachment errored";
+
+            // Consume the queued clear through the sampled-texture path, with no draw into the
+            // layered FBO in between.
+            const GLuint scratchFbo = MakeScratchColorFbo();
+            ASSERT_TRUE(FramebufferIsComplete()) << "the scratch 2D target is not complete";
+            DrawSampling(program, scratchFbo, GL_TEXTURE_CUBE_MAP, cube);
+            EXPECT_EQ(FirstGLError(), 0u) << "the sampling draw errored";
+
+            // Every face, read back one at a time - the per-face spelling is what names the
+            // offender when only +X was cleared.
+            static const char* const kFaceNames[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+            glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            for (int face = 0; face < 6; ++face) {
+                std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
+                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA,
+                              GL_UNSIGNED_BYTE, texels.data());
+                EXPECT_EQ(FirstGLError(), 0u) << "reading cube face " << kFaceNames[face] << " back errored";
+                ExpectAllCleared(texels, kExtent * kExtent,
+                                 (std::string("layered GL_TEXTURE_CUBE_MAP glClear materialised by sampling, "
+                                              "face ") +
+                                  kFaceNames[face])
+                                     .c_str());
+            }
+            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+            Gl().EndFrame();
+        }
+
+        // The 1D-array half of the same divergence. Pre-existing rather than introduced by this
+        // branch (the clear copy never had ToVulkanLevelExtent), and fixed by the same hoist.
+        TEST_F(LayeredAttachmentShapeScenario, LayeredOneDArrayClearMaterialisedBySamplingReachesEveryLayer) {
+            if (!Ready()) return;
+
+            const GLuint program = BuildProgram(nullptr, kOneDArraySampleFragmentSource);
+            if (program == 0) return;
+
+            const GLuint array = MakePoisoned1DArray();
+            if (const GLenum error = FirstGLError()) {
+                GTEST_SKIP() << "no usable GL_TEXTURE_1D_ARRAY on this backend: " << GLErrorName(error);
+            }
+
+            const GLuint layeredFbo = TrackFramebuffer();
+            glBindFramebuffer(GL_FRAMEBUFFER, layeredFbo);
+            glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, array, 0);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            ASSERT_EQ(FirstGLError(), 0u) << "attaching the 1D array layered failed";
+            ASSERT_TRUE(FramebufferIsComplete());
+
+            // The viewport is the LEVEL's shape: a 1D array level is `kExtent` wide and one row
+            // tall, whatever its layer count.
+            glViewport(0, 0, kExtent, 1);
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(kClearColor.r / 255.0f, kClearColor.g / 255.0f, kClearColor.b / 255.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ASSERT_EQ(FirstGLError(), 0u) << "clearing the layered 1D-array attachment errored";
+
+            const GLuint scratchFbo = MakeScratchColorFbo();
+            ASSERT_TRUE(FramebufferIsComplete()) << "the scratch 2D target is not complete";
+            DrawSampling(program, scratchFbo, GL_TEXTURE_1D_ARRAY, array);
+            EXPECT_EQ(FirstGLError(), 0u) << "the sampling draw errored";
+
+            // GL hands a 1D array back as a two-dimensional image whose ROWS are the layers.
+            std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kOneDArrayLayers, Rgba8{});
+            glBindTexture(GL_TEXTURE_1D_ARRAY, array);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glGetTexImage(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+            glBindTexture(GL_TEXTURE_1D_ARRAY, 0);
+            EXPECT_EQ(FirstGLError(), 0u) << "reading the 1D-array level back errored";
+            ExpectAllCleared(texels, kExtent,
+                             "layered GL_TEXTURE_1D_ARRAY glClear materialised by sampling (unit = layer)");
 
             Gl().EndFrame();
         }
