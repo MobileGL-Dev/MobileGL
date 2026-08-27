@@ -91,6 +91,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/SsboDeclarationFormScenario.cpp
     Scenarios/Glsl420DeclarationScenario.cpp
     Scenarios/IoBlockNameCollisionScenario.cpp
+    Scenarios/UnlocatedIoBlockScenario.cpp
     Scenarios/TessellationDrawModeScenario.cpp
     Scenarios/GeometryDrawModeScenario.cpp
     Scenarios/PostLinkAttachScenario.cpp
@@ -352,6 +353,8 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT
     "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1" ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0" ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1" ${MGL_ITEST_COMMON_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -416,6 +419,23 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}"
+)
+
+# UnlocatedIoBlockScenario with the interface-block location strip PINNED ON, for the same
+# reason the depth/stencil entry above pins its emulation: without it this scenario is
+# UNFALSIFIABLE on the machines this suite runs on. llvmpipe carries a located interface block
+# correctly, so the driver POST that arms the strip on Mali answers "healthy" here and the
+# emulation never runs - the ambient registration would be exercising the un-stripped path
+# twice and calling it coverage. With the variable set, the blocks really are emitted with no
+# location and the assertion is about the spelling the device gets.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.UnlocatedIoBlocks."
+    TEST_FILTER "UnlocatedIoBlockScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}"
 )
 
 # AsyncCompileScenario, with asynchronous compilation PINNED ON per backend.

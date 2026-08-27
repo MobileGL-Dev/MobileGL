@@ -55,6 +55,44 @@ namespace MobileGL::MG_Util::SelfTest {
         String detail;
     };
 
+    // What the located-interface-block probe measured.
+    struct LocatedIoBlockMeasurement {
+        // The driver delivers nothing through an inter-stage interface block that carries an
+        // explicit layout(location=) once a geometry stage is in the pipeline. The only field
+        // any caller's behaviour depends on.
+        Bool detected = false;
+        // ...and it does the same WITHOUT a geometry stage, i.e. between a vertex and a
+        // fragment stage. False on the device this was characterised on, and reported because
+        // DirectGLES's repair is scoped to tessellation/geometry programs: a driver that
+        // answered true here would be losing block payloads the repair does not reach.
+        Bool alsoAffectsVertexToFragment = false;
+    };
+
+    // Draws one full-viewport triangle through VS+GS+FS whose two interface blocks carry an
+    // explicit layout(location = 0), and reports whether the payload the vertex stage wrote
+    // reached the fragment stage.
+    //
+    // The Mali-G1-Ultra ES driver (r54p1) delivers ZEROES: the stages compile, the program
+    // links with an empty info log, the draw runs without error, and the block is empty. It is
+    // the whole of the KHR-GLxx.shading_language_420pack interface-block group's failures on
+    // that device, and of a further 21 tessellation and geometry bodies beside it.
+    //
+    // TWO CONTROLS, and the first is why this is a LOCATION finding rather than a block one:
+    // (1) the identical three-stage program with the qualifier removed from both blocks must
+    // deliver its payload - without that, "this driver cannot carry an interface block through
+    // a geometry stage" would be the claim, which is false and would justify flattening every
+    // block on the device; and (2) a two-stage vertex-to-fragment program with a LOCATED block
+    // is measured separately, because that one works on the affected driver and is what scopes
+    // the repair to programs with a tessellation or geometry stage.
+    //
+    // Returns `detected` false when an entry point is missing, when the driver has no geometry
+    // stage, or when the unlocated control fails - an inconclusive probe must never be reported
+    // as a bug, and must never arm the repair. Restores every piece of GL state it touches.
+    LocatedIoBlockMeasurement ProbeLocatedIoBlocksLosePayload(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeLocatedIoBlocksLosePayload(), evaluated at most once per process.
+    const LocatedIoBlockMeasurement& LocatedIoBlocksLosePayload(const MG_External::GLESFunctionsTable& gl);
+
     // Blits one layer of an RGBA8 2D array onto another array's layer 1 and reports whether the
     // copy landed where it was asked to. Returns true only when the destination layer is ignored
     // while the control lands correctly.

@@ -1360,12 +1360,6 @@ namespace MobileGL {
         // so MG_Test can drive it against a fake GLES functions table.
         Bool ProbeIndirectInstanceIdIncludesBaseInstance(const MG_External::GLESCapabilities& caps,
                                                          const MG_External::GLESFunctionsTable& glesFuncs);
-        // Detects whether an inter-stage interface block that carries an explicit
-        // layout(location=) actually transports its payload across a geometry boundary (see
-        // Loader.cpp). Called by FillInGLESCapabilities; exposed so MG_Test can drive it
-        // against a fake GLES functions table.
-        Bool ProbeLocatedInterStageIoBlocksTransportPayload(const MG_External::GLESCapabilities& caps,
-                                                            const MG_External::GLESFunctionsTable& glesFuncs);
     } // namespace MG_Util::BackendLoader
 } // namespace MobileGL
 #undef MOBILEGL_EXTERNAL_GLES

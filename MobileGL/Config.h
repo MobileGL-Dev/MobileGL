@@ -142,6 +142,16 @@ namespace MobileGL::MG_Config {
         // descriptor and kills the process. Deviates from spec (Vulkan adds the bias to
         // OpImageSampleExplicitLod), so it is an avoidance for that stack only.
         Bool AvoidExplicitLodBias = false;
+        // MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS: emit a tessellation/geometry program's
+        // inter-stage interface blocks WITHOUT their layout(location=) qualifier, letting ES
+        // match them by block name and member sequence instead. The Mali ES driver delivers
+        // nothing at all through a located block once a tessellation or geometry stage is in
+        // the pipeline; the driver POST measures that and turns this on by itself, so Auto is
+        // the right setting everywhere. ForceOn exists so the emulation can be exercised on a
+        // healthy driver - which is what the integration lane does, since llvmpipe and
+        // lavapipe carry a located block correctly and would otherwise never run this code -
+        // and ForceOff is the negative control. See StripIoBlockLocationsPass.
+        QuirkOverride EsprytUnlocatedIoBlocks = QuirkOverride::Auto;
         // MOBILEGL_COHERENT_AS_FLUSH: app-compat for engines (e.g. Flywheel) that write
         // GPU-read data through persistent GL_MAP_FLUSH_EXPLICIT_BIT maps they never
         // flush. Persistent FLUSH_EXPLICIT map requests are rewritten to coherent

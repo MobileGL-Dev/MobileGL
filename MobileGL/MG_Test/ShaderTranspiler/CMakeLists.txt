@@ -11,6 +11,7 @@ add_executable(
         FlattenFloat64StorageBlockTest.cpp
         FlattenXfbInterfaceBlocksTest.cpp
         UniquifyIoBlockNamesTest.cpp
+        StripIoBlockLocationsTest.cpp
         LowerViewportIndexTest.cpp
         ClampMultisampleFetchTest.cpp
         LegalizeResourceArrayIndexTest.cpp

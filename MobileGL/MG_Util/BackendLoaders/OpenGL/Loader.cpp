@@ -836,196 +836,6 @@ namespace MobileGL::MG_Util::BackendLoader {
         return includesBase;
     }
 
-    // Whether an inter-stage interface BLOCK that carries an explicit layout(location=)
-    // actually transports its payload across a geometry (or tessellation) boundary.
-    //
-    // The Mali-G1-Ultra ES driver (r54p1) links such a program with an empty info log, runs
-    // the draw, and delivers ZEROES to the consuming stage; the identical program with the
-    // qualifier removed from the blocks carries the payload correctly. That is not a MobileGL
-    // artefact - a bare EGL/GLES 3.2 program with no MobileGL in the process reproduces it -
-    // and it is the whole of the KHR-GLxx.shading_language_420pack interface-block group's
-    // failures on this device. A located block between a VERTEX and a FRAGMENT stage is fine
-    // on the same driver, so the probe deliberately spans a geometry stage: that is the
-    // shape that breaks, and answering the narrower question would report a healthy driver.
-    //
-    // Probed rather than matched on the renderer string, because "which drivers do this" is
-    // not knowable and a quirk list is wrong the moment a driver is fixed. A driver that
-    // cannot run the probe at all (pre-ES 3.2, no geometry stage, missing entry point) is
-    // reported as HEALTHY: that leaves its ESSL exactly as it is today, which is the answer
-    // with no behaviour change in it.
-    Bool ProbeLocatedInterStageIoBlocksTransportPayload(const MG_External::GLESCapabilities& caps,
-                                                        const MG_External::GLESFunctionsTable& f) {
-        const Bool esVersionOk =
-            caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
-        if (!esVersionOk || !f.glCreateShader || !f.glCreateProgram || !f.glGenVertexArrays ||
-            !f.glGenRenderbuffers || !f.glGenFramebuffers || !f.glReadPixels || !f.glDrawArrays) {
-            MGLOG_I("located-IO-block probe skipped: needs an ES 3.2 context with a geometry stage");
-            return true;
-        }
-        while (f.glGetError() != GL_NO_ERROR) {
-        }
-
-        // Position comes from gl_VertexID so the probe needs no vertex buffer, and the block
-        // payload is two values that survive an 8-bit target exactly (0.25 -> 64, 0.5 -> 128).
-        // TWO different block names, because the two boundaries this crosses (VS->GS and
-        // GS->FS) are separate interfaces; a single name would also trip the in/out collision
-        // UniquifyIoBlockNamesPass exists for and confuse one defect with the other.
-        const char* vsSource = "#version 320 es\n"
-                               "precision highp float;\n"
-                               "layout(location = 0) out MgProbeBlock { vec2 mg_probeValue; } mg_probeOut;\n"
-                               "void main() {\n"
-                               "    vec2 p = vec2((gl_VertexID == 1) ? 3.0 : -1.0, (gl_VertexID == 2) ? 3.0 : -1.0);\n"
-                               "    gl_Position = vec4(p, 0.0, 1.0);\n"
-                               "    mg_probeOut.mg_probeValue = vec2(0.25, 0.5);\n"
-                               "}\n";
-        const char* gsSource = "#version 320 es\n"
-                               "precision highp float;\n"
-                               "layout(triangles) in;\n"
-                               "layout(triangle_strip, max_vertices = 3) out;\n"
-                               "layout(location = 0) in MgProbeBlock { vec2 mg_probeValue; } mg_probeIn[];\n"
-                               "layout(location = 0) out MgProbeBlock2 { vec2 mg_probeValue; } mg_probeOut;\n"
-                               "void main() {\n"
-                               "    for (int i = 0; i < 3; ++i) {\n"
-                               "        gl_Position = gl_in[i].gl_Position;\n"
-                               "        mg_probeOut.mg_probeValue = mg_probeIn[i].mg_probeValue;\n"
-                               "        EmitVertex();\n"
-                               "    }\n"
-                               "}\n";
-        const char* fsSource = "#version 320 es\n"
-                               "precision highp float;\n"
-                               "layout(location = 0) in MgProbeBlock2 { vec2 mg_probeValue; } mg_probeIn;\n"
-                               "layout(location = 0) out vec4 mg_probeColor;\n"
-                               "void main() { mg_probeColor = vec4(mg_probeIn.mg_probeValue, 0.0, 1.0); }\n";
-
-        const auto compileShader = [&f](GLenum type, const char* src) -> GLuint {
-            const GLuint shader = f.glCreateShader(type);
-            if (shader == 0) return 0;
-            f.glShaderSource(shader, 1, &src, nullptr);
-            f.glCompileShader(shader);
-            GLint status = GL_FALSE;
-            f.glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
-            if (status != GL_TRUE) {
-                f.glDeleteShader(shader);
-                return 0;
-            }
-            return shader;
-        };
-        const GLuint vs = compileShader(GL_VERTEX_SHADER, vsSource);
-        const GLuint gs = compileShader(GL_GEOMETRY_SHADER, gsSource);
-        const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSource);
-        GLuint program = 0;
-        if (vs != 0 && gs != 0 && fs != 0) {
-            program = f.glCreateProgram();
-            if (program != 0) {
-                f.glAttachShader(program, vs);
-                f.glAttachShader(program, gs);
-                f.glAttachShader(program, fs);
-                f.glLinkProgram(program);
-                GLint status = GL_FALSE;
-                f.glGetProgramiv(program, GL_LINK_STATUS, &status);
-                if (status != GL_TRUE) {
-                    f.glDeleteProgram(program);
-                    program = 0;
-                }
-            }
-        }
-        if (vs != 0) f.glDeleteShader(vs);
-        if (gs != 0) f.glDeleteShader(gs);
-        if (fs != 0) f.glDeleteShader(fs);
-        if (program == 0) {
-            MGLOG_I("located-IO-block probe skipped: probe program failed to build (vs=%u gs=%u fs=%u)", vs,
-                    gs, fs);
-            while (f.glGetError() != GL_NO_ERROR) {
-            }
-            return true;
-        }
-
-        // Everything this probe changes is read back first and put back afterwards. The
-        // capability run owns a context of its own, but a probe that leaves a 1x1 viewport or
-        // a bound scratch framebuffer behind would be found by whatever draws next rather
-        // than here, and that is not a bug anyone should have to chase twice.
-        GLint savedProgram = 0, savedVao = 0, savedDrawFbo = 0, savedReadFbo = 0, savedRenderbuffer = 0;
-        GLint savedViewport[4] = {0, 0, 0, 0};
-        GLfloat savedClearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        GLboolean savedColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
-        f.glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
-        f.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVao);
-        f.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedDrawFbo);
-        f.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &savedReadFbo);
-        f.glGetIntegerv(GL_RENDERBUFFER_BINDING, &savedRenderbuffer);
-        f.glGetIntegerv(GL_VIEWPORT, savedViewport);
-        f.glGetFloatv(GL_COLOR_CLEAR_VALUE, savedClearColor);
-        f.glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
-        // The five raster states that can void the draw and turn a healthy driver into a
-        // "broken" verdict. Saved, forced off, and put back.
-        constexpr GLenum kQuietedStates[] = {GL_SCISSOR_TEST, GL_RASTERIZER_DISCARD, GL_CULL_FACE,
-                                             GL_DEPTH_TEST, GL_BLEND};
-        GLboolean savedStates[5] = {GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE};
-        for (SizeT i = 0; i < std::size(kQuietedStates); ++i) {
-            savedStates[i] = f.glIsEnabled(kQuietedStates[i]);
-            if (savedStates[i] == GL_TRUE) f.glDisable(kQuietedStates[i]);
-        }
-        f.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-        // ES makes a draw on the default vertex array object invalid in a core-profile sense,
-        // and the default framebuffer may be incomplete (surfaceless contexts), so the probe
-        // brings both of its own.
-        GLuint vao = 0, framebuffer = 0, renderbuffer = 0;
-        f.glGenVertexArrays(1, &vao);
-        f.glBindVertexArray(vao);
-        f.glGenRenderbuffers(1, &renderbuffer);
-        f.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-        f.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
-        f.glGenFramebuffers(1, &framebuffer);
-        f.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-        f.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
-        f.glViewport(0, 0, 1, 1);
-        f.glUseProgram(program);
-        f.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        f.glClear(GL_COLOR_BUFFER_BIT);
-        f.glDrawArrays(GL_TRIANGLES, 0, 3);
-
-        Bool transports = true;
-        const GLenum drawError = f.glGetError();
-        if (drawError == GL_NO_ERROR) {
-            GLubyte pixel[4] = {0, 0, 0, 0};
-            f.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-            if (f.glGetError() == GL_NO_ERROR) {
-                // Exactly the two values the vertex stage wrote, with one bit of slack for a
-                // driver that rounds the 8-bit conversion the other way. A stage that received
-                // nothing reads 0/0, which is nowhere near either.
-                transports = pixel[0] >= 0x3f && pixel[0] <= 0x41 && pixel[1] >= 0x7f && pixel[1] <= 0x81;
-                MGLOG_I("located-IO-block probe: fragment stage received (%u, %u), expected (64, 128)",
-                        pixel[0], pixel[1]);
-            } else {
-                MGLOG_I("located-IO-block probe inconclusive: readback failed");
-            }
-        } else {
-            MGLOG_I("located-IO-block probe inconclusive: draw raised GL error 0x%x", drawError);
-        }
-
-        f.glUseProgram(static_cast<GLuint>(savedProgram));
-        f.glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        f.glDeleteFramebuffers(1, &framebuffer);
-        f.glDeleteRenderbuffers(1, &renderbuffer);
-        f.glBindVertexArray(0);
-        f.glDeleteVertexArrays(1, &vao);
-        f.glBindVertexArray(static_cast<GLuint>(savedVao));
-        f.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(savedRenderbuffer));
-        f.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(savedDrawFbo));
-        f.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(savedReadFbo));
-        f.glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
-        f.glClearColor(savedClearColor[0], savedClearColor[1], savedClearColor[2], savedClearColor[3]);
-        f.glColorMask(savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3]);
-        for (SizeT i = 0; i < std::size(kQuietedStates); ++i) {
-            if (savedStates[i] == GL_TRUE) f.glEnable(kQuietedStates[i]);
-        }
-        f.glDeleteProgram(program);
-        while (f.glGetError() != GL_NO_ERROR) {
-        }
-        return transports;
-    }
-
     // GL 4.6 table 23.65 admits exactly four answers for GL_LAYER_PROVOKING_VERTEX and
     // GL_VIEWPORT_INDEX_PROVOKING_VERTEX. Anything else means the driver wrote something MobileGL
     // cannot forward as a convention, and GL_UNDEFINED_VERTEX - a legal answer, not a placeholder
@@ -1914,8 +1724,34 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    Indirect draw gl_InstanceID includes baseInstance: %s",
                 caps.IndirectDrawInstanceIdIncludesBaseInstance ? "true" : "false");
 
-        caps.SupportsLocatedInterStageIoBlocks =
-            ProbeLocatedInterStageIoBlocksTransportPayload(caps, glesFuncs);
+        // ForceOn means "emit the blocks unlocated", i.e. treat the driver as NOT supporting
+        // located blocks - which is why the override reads inverted here. Auto is the probe's
+        // own answer and is what every real run uses; the two forced settings exist so the
+        // emulation can be exercised on a healthy driver (the integration lane) and turned
+        // off again as a negative control.
+        switch (MG_Config::Features.EsprytUnlocatedIoBlocks) {
+            case MG_Config::QuirkOverride::ForceOn:
+                caps.SupportsLocatedInterStageIoBlocks = false;
+                MGLOG_I("    Located inter-stage interface blocks: forced OFF by "
+                        "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
+                break;
+            case MG_Config::QuirkOverride::ForceOff:
+                caps.SupportsLocatedInterStageIoBlocks = true;
+                MGLOG_I("    Located inter-stage interface blocks: forced ON by "
+                        "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
+                break;
+            case MG_Config::QuirkOverride::Auto:
+            default:
+                // SelfTest::ProbeLocatedIoBlocksLosePayload - the Mali-G1-Ultra ES driver
+                // delivers nothing through an interface block that carries an explicit
+                // layout(location=) once a tessellation or geometry stage is in the pipeline.
+                // Probed with its own controls rather than matched on a renderer string; see
+                // DriverBugProbes.h for the shape and for why the two controls decide what the
+                // finding is allowed to claim.
+                caps.SupportsLocatedInterStageIoBlocks =
+                    !SelfTest::LocatedIoBlocksLosePayload(glesFuncs).detected;
+                break;
+        }
         MGLOG_I("    Located inter-stage interface blocks transport their payload: %s",
                 caps.SupportsLocatedInterStageIoBlocks
                     ? "true"

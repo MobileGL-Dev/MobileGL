@@ -1687,6 +1687,179 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        // ===================== LOCATED INTER-STAGE INTERFACE BLOCKS =====================
+
+        constexpr const char* kIoBlockProbeName = "located interface block";
+        // Two values that survive an 8-bit target exactly, so the read is a comparison and not
+        // a tolerance: 0.25 -> 64, 0.5 -> 128. A stage that received nothing reads 0/0, which is
+        // nowhere near either.
+        constexpr GLubyte kIoBlockExpectedR = 0x40;
+        constexpr GLubyte kIoBlockExpectedG = 0x80;
+
+        // `@BL@` becomes the layout qualifier under test, or nothing at all for the control.
+        // Position comes from gl_VertexID, so no probe here needs a vertex buffer.
+        String BuildIoBlockVertexSource(const char* blockQualifier) {
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "{}out MgProbeBlock {{ vec2 mg_probeValue; }} mg_probeOut;\n"
+                          "void main() {{\n"
+                          "    vec2 mg_p = vec2((gl_VertexID == 1) ? 3.0 : -1.0,\n"
+                          "                     (gl_VertexID == 2) ? 3.0 : -1.0);\n"
+                          "    gl_Position = vec4(mg_p, 0.0, 1.0);\n"
+                          "    mg_probeOut.mg_probeValue = vec2(0.25, 0.5);\n"
+                          "}}\n",
+                          blockQualifier);
+        }
+
+        // The block name changes across the geometry stage, because the two boundaries are two
+        // separate interfaces; one name would also be the in-and-out-under-one-name shape
+        // UniquifyIoBlockNamesPass exists for, and confusing one defect with the other is
+        // exactly what this file's control rule is against.
+        String BuildIoBlockGeometrySource(const char* blockQualifier) {
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "layout(triangles) in;\n"
+                          "layout(triangle_strip, max_vertices = 3) out;\n"
+                          "{0}in MgProbeBlock {{ vec2 mg_probeValue; }} mg_probeIn[];\n"
+                          "{0}out MgProbeBlock2 {{ vec2 mg_probeValue; }} mg_probeOut;\n"
+                          "void main() {{\n"
+                          "    for (int i = 0; i < 3; ++i) {{\n"
+                          "        gl_Position = gl_in[i].gl_Position;\n"
+                          "        mg_probeOut.mg_probeValue = mg_probeIn[i].mg_probeValue;\n"
+                          "        EmitVertex();\n"
+                          "    }}\n"
+                          "}}\n",
+                          blockQualifier);
+        }
+
+        String BuildIoBlockFragmentSource(const char* blockQualifier, const char* blockName) {
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "{}in {} {{ vec2 mg_probeValue; }} mg_probeIn;\n"
+                          "layout(location = 0) out vec4 mg_probeColor;\n"
+                          "void main() {{ mg_probeColor = vec4(mg_probeIn.mg_probeValue, 0.0, 1.0); }}\n",
+                          blockQualifier, blockName);
+        }
+
+        // Builds and draws one of the four programs this probe compares and reports whether the
+        // fragment stage received the payload. `outRan` distinguishes "the payload did not
+        // arrive" from "this program could not be built or drawn at all" - the second is
+        // inconclusive and must never become a finding.
+        Bool IoBlockPayloadArrives(const GLESFunctionsTable& gl, const char* blockQualifier,
+                                   Bool withGeometryStage, Bool& outRan) {
+            outRan = false;
+            Vector<StageSource> stages;
+            stages.push_back({GL_VERTEX_SHADER, BuildIoBlockVertexSource(blockQualifier), "vertex"});
+            if (withGeometryStage) {
+                stages.push_back(
+                    {GL_GEOMETRY_SHADER, BuildIoBlockGeometrySource(blockQualifier), "geometry"});
+            }
+            stages.push_back({GL_FRAGMENT_SHADER,
+                              BuildIoBlockFragmentSource(blockQualifier,
+                                                         withGeometryStage ? "MgProbeBlock2"
+                                                                           : "MgProbeBlock"),
+                              "fragment"});
+
+            const ProgramBuild build = BuildProgram(gl, stages, kIoBlockProbeName);
+            if (!build.linked) {
+                if (build.program != 0) gl.glDeleteProgram(build.program);
+                return false;
+            }
+
+            GLuint renderbuffer = 0;
+            GLuint framebuffer = 0;
+            Bool arrives = false;
+            gl.glGenRenderbuffers(1, &renderbuffer);
+            gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+            gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
+            gl.glGenFramebuffers(1, &framebuffer);
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                         renderbuffer);
+            if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                gl.glUseProgram(build.program);
+                gl.glViewport(0, 0, 1, 1);
+                gl.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                gl.glClear(GL_COLOR_BUFFER_BIT);
+                Drain(gl);
+                gl.glDrawArrays(GL_TRIANGLES, 0, 3);
+                if (gl.glGetError() == GL_NO_ERROR) {
+                    GLubyte pixel[4] = {0, 0, 0, 0};
+                    gl.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+                    if (gl.glGetError() == GL_NO_ERROR) {
+                        outRan = true;
+                        // One bit of slack each way, for a driver that rounds the 8-bit
+                        // conversion the other direction.
+                        arrives = pixel[0] + 1 >= kIoBlockExpectedR && pixel[0] <= kIoBlockExpectedR + 1 &&
+                                  pixel[1] + 1 >= kIoBlockExpectedG && pixel[1] <= kIoBlockExpectedG + 1;
+                    }
+                }
+            }
+
+            if (framebuffer != 0) gl.glDeleteFramebuffers(1, &framebuffer);
+            if (renderbuffer != 0) gl.glDeleteRenderbuffers(1, &renderbuffer);
+            gl.glDeleteProgram(build.program);
+            return arrives;
+        }
+    } // namespace
+
+    LocatedIoBlockMeasurement ProbeLocatedIoBlocksLosePayload(const GLESFunctionsTable& gl) {
+        LocatedIoBlockMeasurement measurement;
+        if (!HasEveryEntryPoint(gl) || !gl.glRenderbufferStorage || !gl.glFramebufferRenderbuffer ||
+            !gl.glCheckFramebufferStatus || !gl.glReadPixels || !gl.glClearColor || !gl.glClear ||
+            !gl.glDrawArrays || !gl.glViewport) {
+            return measurement;
+        }
+
+        SavedState saved;
+        Save(gl, saved);
+        GLuint vao = 0;
+        gl.glGenVertexArrays(1, &vao);
+        gl.glBindVertexArray(vao);
+        PrepareForProbeDraw(gl);
+        if (gl.glColorMask != nullptr) gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+        // THE CONTROL, and it runs first: the identical three-stage program with no location on
+        // the blocks. If THAT cannot carry the payload, this driver's problem is not the
+        // qualifier and the probe has no finding to make - reporting one would justify dropping
+        // a qualifier that was never the cause.
+        Bool controlRan = false;
+        const Bool controlArrives = IoBlockPayloadArrives(gl, "", true, controlRan);
+        if (controlRan && controlArrives) {
+            Bool subjectRan = false;
+            const Bool subjectArrives =
+                IoBlockPayloadArrives(gl, "layout(location = 0) ", true, subjectRan);
+            if (subjectRan && !subjectArrives) {
+                measurement.detected = true;
+                // The second control, and the one that scopes the repair: the same located
+                // block between a vertex and a fragment stage. It arrives on the driver this
+                // was characterised on, which is why DirectGLES only drops the qualifier for
+                // programs that have a tessellation or geometry stage. A driver where this one
+                // ALSO fails is losing payloads the repair does not reach, and the report says
+                // so rather than implying the fix is complete.
+                Bool vsFsRan = false;
+                const Bool vsFsArrives =
+                    IoBlockPayloadArrives(gl, "layout(location = 0) ", false, vsFsRan);
+                measurement.alsoAffectsVertexToFragment = vsFsRan && !vsFsArrives;
+            }
+        }
+
+        if (vao != 0) {
+            gl.glBindVertexArray(0);
+            gl.glDeleteVertexArrays(1, &vao);
+        }
+        Restore(gl, saved);
+        Drain(gl);
+        return measurement;
+    }
+
+    const LocatedIoBlockMeasurement& LocatedIoBlocksLosePayload(const GLESFunctionsTable& gl) {
+        // One driver per process, and the answer is structural rather than sampled.
+        static const LocatedIoBlockMeasurement measurement = ProbeLocatedIoBlocksLosePayload(gl);
+        return measurement;
+    }
+
+    namespace {
         Optional<DriverBugFinding> ProbeExplicitVertexInputLocationCeilingBug(const GLESFunctionsTable& gl) {
             const VertexInputLocationCeilingMeasurement& measurement = ExplicitVertexInputLocationCeiling(gl);
             if (!measurement.detected) return std::nullopt;
@@ -1808,6 +1981,37 @@ namespace MobileGL::MG_Util::SelfTest {
                     percentOf(measurement.emittedShapeMismatchedTexels))};
         }
 
+        Optional<DriverBugFinding> ProbeLocatedIoBlockPayloadBug(const GLESFunctionsTable& gl) {
+            const LocatedIoBlockMeasurement& measurement = LocatedIoBlocksLosePayload(gl);
+            if (!measurement.detected) return std::nullopt;
+            String detail =
+                "an inter-stage interface block that carries an explicit layout(location = N) "
+                "delivers NOTHING once a geometry (or tessellation) stage is in the pipeline: the "
+                "stages compile, the program links with an empty info log, the draw raises no "
+                "error, and the consuming stage reads zeroes. The byte-identical program with the "
+                "qualifier removed from the blocks carries its payload correctly, which is what "
+                "makes this a LOCATION defect rather than an interface-block one - blocks "
+                "themselves work here";
+            detail += measurement.alsoAffectsVertexToFragment
+                          ? ". A located block between a VERTEX and a FRAGMENT stage is lost on "
+                            "this driver too, so the defect is wider than the repair below "
+                            "reaches: MobileGL only drops the qualifier for programs that have a "
+                            "tessellation or geometry stage, and a located block in a plain "
+                            "vertex+fragment program is still emitted as the application wrote it"
+                          : ". A located block between a VERTEX and a FRAGMENT stage is delivered "
+                            "correctly on the same driver, which is what scopes the repair";
+            detail +=
+                ". MobileGL emits a tessellation/geometry program's interface blocks with no "
+                "location qualifier at all (StripIoBlockLocationsPass) and lets ES match them by "
+                "block name and member sequence, which it does; the locations were invented by "
+                "the cross-stage IO resolver rather than written by the application";
+            return DriverBugFinding{"Located inter-stage interface blocks carry no payload",
+                                    measurement.alsoAffectsVertexToFragment
+                                        ? DriverBugVerdict::Unfixable
+                                        : DriverBugVerdict::Fixed,
+                                    Move(detail)};
+        }
+
         // The table. One row per known driver bug; see the header for how to add a sibling.
         using DriverBugProbeFn = Optional<DriverBugFinding> (*)(const GLESFunctionsTable&);
         constexpr DriverBugProbeFn kGlesDriverBugProbes[] = {
@@ -1818,6 +2022,7 @@ namespace MobileGL::MG_Util::SelfTest {
             &ProbeImageCoherencyResidualBug,
             &ProbeExplicitVertexInputLocationCeilingBug,
             &ProbeLayeredBlitDestinationBug,
+            &ProbeLocatedIoBlockPayloadBug,
         };
     } // namespace
 
