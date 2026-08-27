@@ -8,9 +8,17 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_State/GLState/TextureState/TextureObject.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     /* @INSERTION_POINT:FUNCTION_DECLARATION@ */
+    // Answers a texture-image query straight out of the CPU shadow, honouring the pack state and a
+    // bound PIXEL_PACK_BUFFER. This is the whole of glGetTexImage on a build with no backend
+    // readback, and it is also the sound fallback for a backend that has no GPU image to read: with
+    // no image, nothing GPU-side can ever have written the texture, so the shadow IS its content.
+    void CopyTextureImageToClientOrPBO_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                             TextureUploadTarget textureUploadTarget, GLint level, GLenum format,
+                                             GLenum type, GLsizei bufSize, void* pixels, const char* caller);
     // The sized internal formats a buffer texture accepts (GL 4.6 core table 8.16). The buffer
     // clears take the same list, so it is shared rather than written out twice.
     Bool IsBufferTextureInternalFormat(GLenum internalformat);

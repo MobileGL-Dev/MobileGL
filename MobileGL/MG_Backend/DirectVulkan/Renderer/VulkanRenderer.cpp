@@ -19,6 +19,7 @@
 #include "MG_State/GLState/SamplerState/SamplerObject.h"
 #include "MG_State/GLState/TextureState/TextureObject.h"
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
+#include "MG_Impl/GLImpl/Texture/GL_Texture.h"
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 // Only reached from an MGLOG_W, which the shipping INFO log level compiles out - so the
 // missing include never broke a default build and did break every WARN/DEBUG-level one.
@@ -10412,8 +10413,23 @@ void main() {
 
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*textureObject);
         if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            MGLOG_E_ONCE("DirectVulkan::GetTexImage skipped: failed to sync textureId=%u",
+            // No VkImage exists for this texture, so by construction nothing GPU-side has ever
+            // written it and the CPU shadow IS its content - answer from there instead of leaving
+            // the caller's buffer untouched. Gated on "no image at all", never on "the image exists
+            // but syncing it was inconvenient": a blanket shadow answer would silently return stale
+            // bytes for every render-to-texture result.
+            //
+            // The live shape that lands here is a mutable texture whose GL level 0 was never defined
+            // - glTexImage2D(GL_TEXTURE_2D, 5, ...) and nothing else, which is exactly what the
+            // clear_tex_image conformance cases build. VkTextureManager refuses to back such a
+            // texture (CheckMipmapCompleteness takes storage mip 0 as the image extent), so it is
+            // invisible to sampling and rendering as well; this fallback fixes the readback only.
+            MGLOG_D("DirectVulkan::GetTexImage: textureId=%u has no VkImage (GL level 0 undefined?); "
+                    "answering from the CPU shadow",
                     textureObject->GetExternalIndex());
+            MG_Impl::GLImpl::CopyTextureImageToClientOrPBO_State(textureObject, textureUploadTarget, level, format,
+                                                                 type, bufSize, pixels,
+                                                                 "DirectVulkan::GetTextureImage");
             return;
         }
 
