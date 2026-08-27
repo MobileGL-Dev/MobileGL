@@ -140,17 +140,21 @@ namespace {
         return std::nullopt;
     }
 
-    // What glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS) answers, recomputed rather than
-    // queried: the compile runs on a worker with no context, and the pname is not a plain backend
-    // parameter - the getter caps the backend's count by the state layer's fixed binding-point
-    // array (GL_Getter's GetIndexedBufferQueryPointCount). A shader must be judged against the
-    // number the application was told, not against either half of it.
+    // What glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS) answers. Derived by the shared
+    // ResolveResourceBindingLimits so the compile-time scan below and the link-time general check
+    // (TMglGlslIoResolver::CheckDeclaredBindingRange) can never disagree about the number.
+    //
+    // Why BOTH still exist. GLSL makes an over-range binding a COMPILE-time error, and this scan
+    // is the only place MobileGL can raise one - glslang's own ceilings are switched off by the
+    // relaxed Vulkan parse and cannot be turned back on without changing the parse everything
+    // else depends on. The link-time check covers the four kinds a lexical scan of unexpanded
+    // source cannot see at all (samplers, images, uniform blocks, atomic counters, whose binding
+    // only survives inside a synthesized block NAME) and re-covers storage blocks as a backstop.
+    // The conformance predicate is compile AND link, so either site satisfies it; the split is
+    // about WHICH error GL reports, not about whether the shader is rejected.
     static MobileGL::Int MaxShaderStorageBufferBindings(
         const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
-        const MobileGL::Int frontendPoints =
-            static_cast<MobileGL::Int>(MobileGL::MG_State::GLState::BufferBindingPointCount);
-        if (!env.HasBackend()) return frontendPoints;
-        return std::min<MobileGL::Int>(frontendPoints, std::max<MobileGL::Int>(env.params.MaxShaderStorageBufferBindings, 0));
+        return MobileGL::MG_State::GLState::ResolveResourceBindingLimits(env).MaxShaderStorageBufferBindings;
     }
 
     // The half of a compile that depends on nothing but the source text, the stage and the

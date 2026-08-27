@@ -621,13 +621,21 @@ namespace MobileGL::MG_State::GLState {
         // mapper's collect callback is the last point at which a resource's qualifier still
         // says what the SHADER declared rather than what glslang assigned, so both captures
         // have to be taken from inside the link. See TMglGlslIoResolver::reserverResourceSlot.
+        // The binding-range rule (GLSL 4.30 4.4.5): its ceilings in, and the first violation the
+        // resolver finds out. Enforced at the link because mapIO's collect callback is the last
+        // point at which a resource's qualifier still says what the SHADER declared - see
+        // TMglGlslIoResolver::CheckDeclaredBindingRange.
+        String resourceBindingViolation;
         ProgramAttrib attrib{.shaders = Move(shaders),
                              .explicitVertexInLocations = in.explicitAttribLocations,
                              .explicitFragmentOutLocations = in.explicitFragDataLocation,
                              .explicitFragmentOutIndices = in.explicitFragDataIndex,
                              .explicitOpaqueUniformBindings = &artifacts.explicitOpaqueUniformBindings,
                              .storageBlocksWithoutBinding = &artifacts.storageBlocksWithoutBinding,
-                             .uniformBlocksWithoutBinding = &artifacts.uniformBlocksWithoutBinding};
+                             .uniformBlocksWithoutBinding = &artifacts.uniformBlocksWithoutBinding,
+                             .resourceBindingLimits = in.env ? ResolveResourceBindingLimits(*in.env)
+                                                             : MG_Util::ShaderTranspiler::ResourceBindingLimits{},
+                             .resourceBindingViolation = &resourceBindingViolation};
 
         MGLOG_D("ProgramObject %u: Calling ShaderCompiler::LinkProgram", in.externalIndex);
         auto result = ShaderCompiler::LinkProgram(attrib);

@@ -19,6 +19,7 @@
 #include "MG_Backend/BackendObjects.h"
 #include "MG_Impl/GLImpl/Getter/GL_Getter.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
+#include "MG_Impl/GLImpl/Program/GL_ProgramPipeline.h"
 #include "MG_State/GLState/Core.h"
 #include "MG_State/GLState/ProgramState/ShaderPreprocessCache.h"
 #include "MG_Util/Async/ShaderCompilePool.h"
@@ -4135,4 +4136,230 @@ TEST_F(ProgramTest, ContextWideTessellationPropertiesAnswerEveryWidth) {
     GetIntegerv(GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED, &restart);
     EXPECT_EQ(restart, GL_FALSE);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The binding-range rule (GLSL 4.30 4.4.5 / ES 3.1 4.4.4): layout(binding = N) at or above the
+// resource kind's implementation limit is an error. glslang cannot enforce it for MobileGL - it
+// owns ceilings for samplers/images and for atomic counters and the relaxed Vulkan parse switches
+// both OFF, and for uniform and storage BLOCKS it has no ceiling at all - so MobileGL enforces it
+// itself, at the link, from TMglGlslIoResolver::CheckDeclaredBindingRange. es31cLayoutBindingTests
+// accepts a link-time rejection: its predicate, compiledAndLinked(), is the AND of the two.
+//
+// The two ceilings asserted here are frontend constants, so they hold with no backend active,
+// which is what makes them testable in this GPU-free binary. The sampler and image ceilings are
+// backend-derived and read zero here, i.e. "do not enforce"; their arm is the same code path.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    // Links a compute program from one source and returns its LINK_STATUS. Compute, because every
+    // kind this rule covers can be declared in a compute shader and nothing else has to be
+    // supplied alongside it.
+    GLint LinkComputeProgramStatus(const char* source, String* outInfoLog = nullptr) {
+        char infoLog[2048] = "";
+        const GLuint shader = CreateShader(GL_COMPUTE_SHADER);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint compileStatus = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+        if (compileStatus != GL_TRUE) {
+            GetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
+            if (outInfoLog) *outInfoLog = infoLog;
+            // A compile-time rejection satisfies the same rule; report it as "not linked".
+            return GL_FALSE;
+        }
+        const GLuint program = CreateProgram();
+        AttachShader(program, shader);
+        LinkProgram(program);
+        GLint linkStatus = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+        GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+        if (outInfoLog) *outInfoLog = infoLog;
+        return linkStatus;
+    }
+} // namespace
+
+TEST_F(ProgramTest, UniformBlockBindingAtTheLimitIsRejected) {
+    DrainProgramTestErrors();
+
+    GLint maxUniformBufferBindings = 0;
+    GetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maxUniformBufferBindings);
+    ASSERT_GT(maxUniformBufferBindings, 0);
+
+    const String legal = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                         std::to_string(maxUniformBufferBindings - 1) +
+                         ", std140) uniform Blk { vec4 v; } blk;\nvoid main() { }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(legal.c_str()), GL_TRUE)
+        << "the last binding in the range is legal and must still link";
+
+    String infoLog;
+    const String overRange = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                             std::to_string(maxUniformBufferBindings) +
+                             ", std140) uniform Blk { vec4 v; } blk;\nvoid main() { }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(overRange.c_str(), &infoLog), GL_FALSE)
+        << "a uniform block binding at GL_MAX_UNIFORM_BUFFER_BINDINGS must be rejected";
+    EXPECT_NE(infoLog.find("GL_MAX_UNIFORM_BUFFER_BINDINGS"), String::npos)
+        << "the info log must name the limit the declaration broke; got: " << infoLog;
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, AtomicCounterBindingAtTheLimitIsRejected) {
+    DrainProgramTestErrors();
+
+    GLint maxAtomicBindings = 0;
+    GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &maxAtomicBindings);
+    ASSERT_GT(maxAtomicBindings, 0);
+
+    const String legal = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                         std::to_string(maxAtomicBindings - 1) +
+                         ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(legal.c_str()), GL_TRUE)
+        << "the last counter binding in the range is legal and must still link";
+
+    String infoLog;
+    const String overRange = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                             std::to_string(maxAtomicBindings) +
+                             ") uniform atomic_uint counter;\nvoid main() { atomicCounterIncrement(counter); }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(overRange.c_str(), &infoLog), GL_FALSE)
+        << "an atomic_uint binding at GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS must be rejected";
+
+    DrainProgramTestErrors();
+}
+
+// The arrayed-instance half of the rule: an array of N takes base .. base + N - 1, and every one
+// of them has to fit. A base that is itself legal is therefore not enough.
+TEST_F(ProgramTest, ArrayedUniformBlockInstanceMustFitEntirelyBelowTheBindingLimit) {
+    DrainProgramTestErrors();
+
+    GLint maxUniformBufferBindings = 0;
+    GetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &maxUniformBufferBindings);
+    ASSERT_GE(maxUniformBufferBindings, 4);
+
+    const String fits = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                        std::to_string(maxUniformBufferBindings - 4) +
+                        ", std140) uniform Blk { vec4 v; } blk[4];\nvoid main() { }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(fits.c_str()), GL_TRUE)
+        << "base + count - 1 is the last legal binding, so this array fits exactly";
+
+    const String spills = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                          std::to_string(maxUniformBufferBindings - 3) +
+                          ", std140) uniform Blk { vec4 v; } blk[4];\nvoid main() { }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(spills.c_str()), GL_FALSE)
+        << "the array's last element is past the limit even though its base is not";
+
+    DrainProgramTestErrors();
+}
+
+// The storage-block arm still has its own COMPILE-time enforcement (the lexical scan glslang's
+// relaxed parse leaves MobileGL to do), and the link-time check is a backstop for it. Both agree
+// because both read ResolveResourceBindingLimits; this pins the outcome rather than the site.
+TEST_F(ProgramTest, StorageBlockBindingAtTheLimitIsStillRejected) {
+    DrainProgramTestErrors();
+
+    GLint maxStorageBindings = 0;
+    GetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &maxStorageBindings);
+    if (maxStorageBindings <= 0) {
+        GTEST_SKIP() << "no storage-buffer binding points advertised in this configuration";
+    }
+
+    const String overRange = "#version 430 core\nlayout(local_size_x = 1) in;\nlayout(binding = " +
+                             std::to_string(maxStorageBindings) +
+                             ", std430) buffer Blk { vec4 v; } blk;\nvoid main() { blk.v = vec4(0.0); }\n";
+    EXPECT_EQ(LinkComputeProgramStatus(overRange.c_str()), GL_FALSE);
+
+    DrainProgramTestErrors();
+}
+
+// ---------------------------------------------------------------------------------------------
+// GL_PROGRAM_SEPARABLE is LATCHED at link (GL 4.6 core 7.3), and glUseProgramStages tests the
+// latched flag, not the live one.
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(ProgramTest, ProgramSeparableIsLatchedAtLinkNotReportedLive) {
+    DrainProgramTestErrors();
+
+    const GLuint program = CreateProgram();
+    GLint separable = GL_TRUE;
+    GetProgramiv(program, GL_PROGRAM_SEPARABLE, &separable);
+    EXPECT_EQ(separable, GL_FALSE) << "a fresh program is not separable";
+
+    // Requested but never linked: the request has not taken effect yet.
+    ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
+    GetProgramiv(program, GL_PROGRAM_SEPARABLE, &separable);
+    EXPECT_EQ(separable, GL_FALSE) << "GL_PROGRAM_SEPARABLE takes effect at the NEXT link";
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // Link it, and the request lands.
+    const char* vsSource = "#version 330 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSource, nullptr);
+    CompileShader(vs);
+    AttachShader(program, vs);
+    LinkProgram(program);
+    GetProgramiv(program, GL_PROGRAM_SEPARABLE, &separable);
+    EXPECT_EQ(separable, GL_TRUE);
+
+    // Clearing the live flag does not un-separate the EXECUTABLE that was already linked.
+    ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_FALSE);
+    GetProgramiv(program, GL_PROGRAM_SEPARABLE, &separable);
+    EXPECT_EQ(separable, GL_TRUE) << "the latched flag only moves at a link";
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, UseProgramStagesRequiresAProgramLinkedAsSeparable) {
+    DrainProgramTestErrors();
+
+    const char* vsSource = "#version 330 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &vsSource, nullptr);
+    CompileShader(vs);
+
+    // Linked, but NOT as a separable program.
+    const GLuint monolithic = CreateProgram();
+    AttachShader(monolithic, vs);
+    LinkProgram(monolithic);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(monolithic, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE);
+    DrainProgramTestErrors();
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, monolithic);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
+        << "GL 4.6 core 7.4: the program must have been LINKED with PROGRAM_SEPARABLE set";
+
+    // The same program, relinked as separable, is accepted.
+    ProgramParameteri(monolithic, GL_PROGRAM_SEPARABLE, GL_TRUE);
+    LinkProgram(monolithic);
+    DrainProgramTestErrors();
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, monolithic);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    DeleteProgramPipelines(1, &pipeline);
+    DrainProgramTestErrors();
+}
+
+// GL 4.6 core 7.6: an unlinked program is GL_INVALID_OPERATION for both of these, and
+// glProgramUniform*'s location == -1 early-out must not swallow it - -1 is exactly what an
+// application holds after asking an unlinked program for a location.
+TEST_F(ProgramTest, UniformEntryPointsRejectAnUnlinkedProgram) {
+    DrainProgramTestErrors();
+
+    const GLuint program = CreateProgram();
+
+    EXPECT_EQ(GetUniformLocation(program, "uAnything"), -1);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    const GLfloat value = 1.0f;
+    ProgramUniform1fv(program, -1, 1, &value);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
+        << "the link check has to run BEFORE the location == -1 early-out";
+
+    ProgramUniform1f(program, 0, 1.0f);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    DrainProgramTestErrors();
 }

@@ -21,27 +21,35 @@
 #include <glslang/MachineIndependent/iomapper.h>
 #include "TVarEntryInfo.h"
 #include "MG_Util/Types.h"
+#include "MG_Util/ShaderTranspiler/Types.h"
 
 namespace MobileGL {
     class TMglGlslIoResolver : public glslang::TDefaultGlslIoResolver {
     public:
         using ExplicitVarSlotMap = UnorderedMap<String, Uint>;
+        using ResourceBindingLimits = MG_Util::ShaderTranspiler::ResourceBindingLimits;
         TMglGlslIoResolver(const glslang::TIntermediate& intermediate, const ExplicitVarSlotMap& vertexIns,
                            const ExplicitVarSlotMap& fragOuts, const ExplicitVarSlotMap& fragOutIndices,
                            ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
-                           std::set<String>* uniformBlocksWithoutBinding = nullptr)
+                           std::set<String>* uniformBlocksWithoutBinding = nullptr,
+                           const ResourceBindingLimits* bindingLimits = nullptr,
+                           String* bindingViolation = nullptr)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
               m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings),
               m_storageBlocksWithoutBinding(storageBlocksWithoutBinding),
-              m_uniformBlocksWithoutBinding(uniformBlocksWithoutBinding) {}
+              m_uniformBlocksWithoutBinding(uniformBlocksWithoutBinding), m_bindingLimits(bindingLimits),
+              m_bindingViolation(bindingViolation) {}
         TMglGlslIoResolver(const glslang::TProgram& program, const EShLanguage stage,
                            const ExplicitVarSlotMap& vertexIns, const ExplicitVarSlotMap& fragOuts,
                            const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
-                           std::set<String>* uniformBlocksWithoutBinding = nullptr)
+                           std::set<String>* uniformBlocksWithoutBinding = nullptr,
+                           const ResourceBindingLimits* bindingLimits = nullptr,
+                           String* bindingViolation = nullptr)
             : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
-                                 opaqueUniformBindings, storageBlocksWithoutBinding, uniformBlocksWithoutBinding) {}
+                                 opaqueUniformBindings, storageBlocksWithoutBinding, uniformBlocksWithoutBinding,
+                                 bindingLimits, bindingViolation) {}
         void reserverStorageSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         void reserverResourceSlot(glslang::TVarEntryInfo& ent, TInfoSink& infoSink) override;
         int resolveInOutLocation(EShLanguage stage, glslang::TVarEntryInfo& ent) override;
@@ -72,6 +80,10 @@ namespace MobileGL {
         // resource kind on set 0), so an unbound block declared after an unbound image lands on
         // 1. See ProgramLinkTask's UBO reflection loop for what is done with them.
         std::set<String>* m_uniformBlocksWithoutBinding = nullptr;
+        // The binding-range rule, IN and OUT. See RecordBindingRangeViolation.
+        const ResourceBindingLimits* m_bindingLimits = nullptr;
+        String* m_bindingViolation = nullptr;
+        void CheckDeclaredBindingRange(const glslang::TType& type, const glslang::TString& name);
         std::map<glslang::TString, int> m_plainUniformLocationSizeByName;
         std::map<glslang::TString, int> m_plainUniformLocationByName;
         bool m_plainUniformLocationsAssigned = false;

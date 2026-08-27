@@ -40,6 +40,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     // below resolves it exactly once and hands it to both users.
     static Bool ValidateResolvedProgramForDraw(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram,
                                                const char* functionName) {
+        // "If there is no current program object or bound program pipeline object, the results of
+        // a draw are UNDEFINED" - and undefined is not an error (GL 4.6 core 7.3, ES 3.1 7.3).
+        // The draw is dropped, silently, which is one of the shapes "undefined" is allowed to
+        // take; recording INVALID_OPERATION here is not, and es31cSeparateShaderObjsTests'
+        // StateInteraction reads exactly that error back after useProgram(0) + bindProgramPipeline(0).
+        // A DISPATCH is the opposite rule ("INVALID_OPERATION if there is no active program for
+        // the compute shader stage"), which is why this lives on the draw path and not in the
+        // shared ValidateProgramForExecution below.
+        if (!currentProgram) return false;
         if (!ValidateProgramForExecution(currentProgram, functionName)) return false;
 
         // GL 4.6 core 7.4.1, the pipeline validation rule every vertex-transferring command

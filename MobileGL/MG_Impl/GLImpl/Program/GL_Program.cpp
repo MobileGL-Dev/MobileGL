@@ -768,7 +768,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = programObject->GetBinaryRetrievableHint() ? GL_TRUE : GL_FALSE;
             break;
         case GL_PROGRAM_SEPARABLE:
-            *params = programObject->GetSeparable() ? GL_TRUE : GL_FALSE;
+            // The LATCHED flag, not the live one: glProgramParameteri's write takes effect at the
+            // next link (GL 4.6 core 7.3), so a program told to be separable and then never
+            // linked still reports GL_FALSE.
+            *params = programObject->GetLinkedSeparable() ? GL_TRUE : GL_FALSE;
             break;
 
         // The geometry and tessellation link properties (GL 4.6 core table 23.35). Same shape as
@@ -951,6 +954,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     GLint GetUniformLocation_State(GLuint program, const GLchar* name) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return -1;
+        // GL 4.6 core 7.6: "INVALID_OPERATION is generated if program has not been successfully
+        // linked". Answering -1 silently is not the same thing - the conformance suite reads the
+        // error, not the location.
+        if (!programObject->GetLinkStatus()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "program " + std::to_string(program) + " is not linked."));
+            return -1;
+        }
         auto loc = programObject->GetUniformLocation(name);
         MGLOG_D("%s: loc %02d = %s", __func__, loc, name);
         return loc;
@@ -1363,11 +1376,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     template <GLsizei ItemCount, typename T>
     void ProgramUniformv_State(GLuint program, GLint location, GLsizei count, T* value) {
-        if (location == -1) return;
-
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
 
+        // The link check comes BEFORE the location == -1 early-out, not after. GL 4.6 core 7.6
+        // makes an unlinked program INVALID_OPERATION regardless of the location, and -1 is
+        // exactly the location an application holds after glGetUniformLocation on such a program -
+        // so checking -1 first swallowed the very case the rule exists for.
         if (!programObject->GetLinkStatus()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1375,6 +1390,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        // "If location is equal to -1, the data passed in will be silently ignored and the
+        // specified uniform variable will not be changed" - after the program itself has been
+        // found acceptable.
+        if (location == -1) return;
 
         for (GLint offset = 0; offset < count; offset++) {
             if (offset > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + offset)) {

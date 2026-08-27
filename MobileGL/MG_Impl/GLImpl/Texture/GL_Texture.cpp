@@ -2649,6 +2649,22 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL 4.6 core 8.9 / GL_EXT_texture_buffer: the two TARGET-taking forms (glTexBuffer,
+    // glTexBufferRange) accept exactly GL_TEXTURE_BUFFER, and anything else is GL_INVALID_ENUM.
+    // Checked up front rather than left to fall out of "the bound object is not a buffer texture"
+    // deeper in, because that path's error code depends on which entry point took it - the
+    // name-taking DSA forms owe GL_INVALID_OPERATION for the same shape - and because for some
+    // targets it did not reach that check at all. esextcTextureBufferErrors walks every other
+    // texture target through both entry points and reads the code back each time.
+    static Bool ValidateBufferTextureTarget(GLenum target, const char* caller) {
+        if (target == GL_TEXTURE_BUFFER) return true;
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidEnum,
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                         std::format("target 0x{:X} is not GL_TEXTURE_BUFFER.", target)));
+        return false;
+    }
+
     static void AttachBufferToTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                       GLenum internalformat, GLuint buffer, GLintptr offset, SizeT size,
                                       const char* caller) {
@@ -2731,9 +2747,21 @@ namespace MobileGL::MG_Impl::GLImpl {
         TextureInternalFormat textureInternalFormat = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
 
         // ===================== Error Checking ==============================
+        if (!ValidateBufferTextureTarget(target, __func__)) return;
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
         if (!TextureImpl::ValidateTextureInternalFormat(textureInternalFormat)) return;
-        // TODO: make sure `internalformat` is in one of supported format for TexBuffer
+        // The sized-format table a buffer texture accepts (GL 4.6 core table 8.15). The DSA and
+        // range forms have always run this through AttachBufferToTexture; this one carried a TODO
+        // instead, so glTexBuffer(GL_TEXTURE_BUFFER, GL_DEPTH_COMPONENT32F, ...) succeeded.
+        if (!IsBufferTextureInternalFormat(internalformat)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    std::format("internalformat 0x{:X} is not one of the sized formats a buffer texture accepts.",
+                                internalformat)));
+            return;
+        }
         // GL 3.3 core 3.8.5: buffer zero detaches any buffer from the buffer texture - only a
         // nonzero name that is not an existing buffer object is an error. This is reachable on
         // the default buffer texture (bound whenever texture 0 is bound to GL_TEXTURE_BUFFER),
@@ -2757,6 +2785,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // silent no-op; the slot is never empty now that every unit/target holds its default.
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (textureObject->GetStorageType() != TextureStorageType::Buffer) {
+            // Defensive: the target gate above already rejected every target but GL_TEXTURE_BUFFER,
+            // whose binding slot only ever holds buffer textures.
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -6593,6 +6623,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TexBufferRange(GLenum target, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size) {
+        // The TARGET-taking form owes GL_INVALID_ENUM for a target that is not GL_TEXTURE_BUFFER,
+        // where the name-taking DSA forms below owe GL_INVALID_OPERATION for the corresponding
+        // "that texture is not a buffer texture". Same shared body, different gate.
+        if (!ValidateBufferTextureTarget(target, __func__)) return;
         AttachBufferToTexture(GetBoundBufferTexture(target, __func__), internalformat, buffer, offset,
                               static_cast<SizeT>(size < 0 ? 0 : size), __func__);
     }

@@ -492,6 +492,10 @@ namespace MobileGL::MG_State::GLState {
         // time, for anything cached during the pending window itself.)
         ++m_backendStateVersion;
         BumpLinkObservableVersions();
+        // The separable flag takes effect HERE, at the link, and nowhere else (GL 4.6 core 7.3).
+        // Latched before the early-outs below so a link that fails still counts as a link -
+        // what must not update it is a link that never happened at all.
+        m_linkedSeparable = m_separable;
         // A whole-struct reset, unlike ResetLinkArtifacts(): during the pending window this
         // is what every gated reader sees, so it has to be the complete "not linked" state -
         // including the fields ResetLinkArtifacts deliberately preserves for its own callers.

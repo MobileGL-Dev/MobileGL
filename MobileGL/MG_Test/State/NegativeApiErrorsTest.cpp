@@ -536,10 +536,15 @@ void main() { g_color = vec4(1); }
              [] { DrawElementsIndirect(kBadMode, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
             {"glDrawArraysIndirect with an unaccepted mode", [] { DrawArraysIndirect(kBadMode, nullptr); },
              GL_INVALID_ENUM},
-            // A mode the enum check accepts falls through to the guard, so the INVALID_OPERATION
-            // that used to win is still raised for the calls it is actually about.
+            // A mode the enum check accepts falls through to the no-program path, which is now
+            // a SILENT drop rather than an error: GL 4.6 core 7.3 and ES 3.1 7.3 both make a draw
+            // with no current program and no bound pipeline UNDEFINED, not erroneous, and
+            // es31cSeparateShaderObjsTests.StateInteraction reads glGetError() straight after
+            // useProgram(0) + bindProgramPipeline(0) + glDrawElements and requires GL_NO_ERROR.
+            // Dropping the draw is one of the shapes "undefined" may take; inventing an error is
+            // not. The enum check above still outranks it, which is what this case is really for.
             {"glDrawArrays with a legal mode and no program bound", [] { DrawArrays(GL_TRIANGLES, 0, 3); },
-             GL_INVALID_OPERATION},
+             GL_NO_ERROR},
         });
     }
 

@@ -145,6 +145,33 @@ namespace MobileGL {
                 const CompileEnv* env = nullptr;
             };
 
+            // The per-device ceilings a shader-declared `layout(binding = N)` is measured
+            // against - one per resource kind, because GL gives each kind its own limit and they
+            // differ by an order of magnitude on real hardware (a Mali-G925 reports 96 combined
+            // texture image units and 21 image units).
+            //
+            // These exist because glslang cannot enforce them for MobileGL. It owns ceilings for
+            // samplers/images and for atomic counters, and both are switched OFF by the parse
+            // configuration MobileGL uses everywhere - `spvVersion.vulkan == 0` gates the first
+            // and `!spvVersion.vulkanRelaxed` the second (ParseHelper.cpp layoutTypeCheck), and
+            // MobileGL always parses with setEnvClient(EShClientVulkan) +
+            // setEnvInputVulkanRulesRelaxed(). For uniform and storage BLOCKS glslang quotes the
+            // spec sentence and then checks nothing at all. Flipping to the OpenGL client to wake
+            // those checks is not an option (it would change the parse the whole relaxed
+            // lowering pipeline is built on) and would not even be correct: glslang measures
+            // IMAGE bindings against the SAMPLER limit and hardcodes that limit at 80, so it
+            // would reject legal bindings 80..95 and keep under-rejecting images.
+            //
+            // Zero or negative means "no ceiling to enforce for this kind" - a backendless
+            // environment, which every unit test and the pre-init preload path run in.
+            struct ResourceBindingLimits {
+                Int MaxSamplerBindings = 0;              // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+                Int MaxImageBindings = 0;                // GL_MAX_IMAGE_UNITS
+                Int MaxUniformBufferBindings = 0;        // GL_MAX_UNIFORM_BUFFER_BINDINGS
+                Int MaxShaderStorageBufferBindings = 0;  // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS
+                Int MaxAtomicCounterBufferBindings = 0;  // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS
+            };
+
             struct ProgramAttrib {
                 Vector<SharedPtr<glslang::TShader>> shaders;
                 UnorderedMap<String, Uint> explicitVertexInLocations;
@@ -160,6 +187,11 @@ namespace MobileGL {
                 UnorderedMap<String, Uint>* explicitOpaqueUniformBindings = nullptr;
                 std::set<String>* storageBlocksWithoutBinding = nullptr;
                 std::set<String>* uniformBlocksWithoutBinding = nullptr;
+                // IN: the ceilings above. OUT: the first violation the resolver found, in the
+                // same capture window and for the same reason - past mapIO's doMap() every
+                // resource carries an ASSIGNED binding and the question can no longer be asked.
+                ResourceBindingLimits resourceBindingLimits{};
+                String* resourceBindingViolation = nullptr;
             };
 
             struct ProgramBinaryAttrib {

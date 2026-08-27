@@ -192,6 +192,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                                     std::format("Program {} has not been linked successfully.", program));
                 return;
             }
+            // GL 4.6 core 7.4: "INVALID_OPERATION is generated if program was not linked with its
+            // PROGRAM_SEPARABLE status set". The LATCHED flag is the one that decides - a program
+            // whose live flag was cleared after a separable link is still a legal stage, and a
+            // program whose live flag was set after a non-separable link is not.
+            if (!programObject->GetLinkedSeparable()) {
+                RecordPipelineError(ErrorCode::InvalidOperation, __func__,
+                                    std::format("Program {} was not linked as a separable program.", program));
+                return;
+            }
         }
 
         const GLbitfield selected = stages == GL_ALL_SHADER_BITS ? kAllStageBits : stages;

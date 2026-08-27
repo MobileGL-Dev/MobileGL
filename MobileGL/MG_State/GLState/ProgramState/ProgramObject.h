@@ -915,6 +915,14 @@ namespace MobileGL::MG_State::GLState {
         // subset of the stages of a program pipeline. Only takes effect on the next link,
         // which is why it is plain state here rather than something Link() consults.
         Bool GetSeparable() const { return m_separable; }
+        // What GL_PROGRAM_SEPARABLE actually reports, and what glUseProgramStages actually
+        // requires: the value the flag held at the program's LAST LINK, not the live flag.
+        // GL 4.6 core 7.3 - "the flag takes effect the next time the program is linked" - so a
+        // program that was told to be separable and then never linked is still NOT separable,
+        // which is precisely what es31cSeparateShaderObjsTests's PipelineApi and CreateShadProgApi
+        // assert. The live flag stays available as GetSeparable() for glGetProgramiv's sibling
+        // state and for the next link to latch.
+        Bool GetLinkedSeparable() const { return m_linkedSeparable; }
         void SetSeparable(Bool separable) {
             m_separable = separable;
             // ---- arming the uniform-write tracking latch ----
@@ -1528,6 +1536,14 @@ namespace MobileGL::MG_State::GLState {
             m_requestedXfbVaryings = Move(names);
             m_requestedXfbBufferMode = bufferMode;
         }
+        // The REQUEST, not the linked result: what glTransformFeedbackVaryings last recorded,
+        // which the next link will try to resolve. A program pipeline's draw composite reads it
+        // off the capturing stage program and re-issues it on itself, because the composite is
+        // built from the stage programs' SHADERS and would otherwise inherit no capture list at
+        // all - which made glBeginTransformFeedback reject every separable-program capture
+        // (glcSeparableProgramsTransformFeedbackTests).
+        const Vector<String>& GetRequestedTransformFeedbackVaryings() const { return m_requestedXfbVaryings; }
+        GLenum GetRequestedTransformFeedbackBufferMode() const { return m_requestedXfbBufferMode; }
         GLenum GetTransformFeedbackBufferMode() const { return Artifacts().xfbBufferMode; }
         SizeT GetTransformFeedbackVaryingCount() const { return Artifacts().xfbVaryings.size(); }
         const XfbVarying* GetTransformFeedbackVarying(SizeT index) const {
@@ -1703,6 +1719,11 @@ namespace MobileGL::MG_State::GLState {
         Bool m_deleteStatus = false;
         Bool m_binaryRetrievableHint = false;
         Bool m_separable = false;
+        // m_separable as of the last link; see GetLinkedSeparable. Latched by Link() rather than
+        // carried in LinkArtifacts because it is a GL-thread-owned decision made at enqueue time,
+        // not a result the worker computes - and because a FAILED link still latches it, exactly
+        // as a successful one does.
+        Bool m_linkedSeparable = false;
         // Monotone "this program may ever be a pipeline stage" latch; see SetSeparable for why
         // it is a latch and not just m_separable. Outside LinkArtifacts on purpose: a relink
         // clears the write SET, but a program that was separable is still separable after it.

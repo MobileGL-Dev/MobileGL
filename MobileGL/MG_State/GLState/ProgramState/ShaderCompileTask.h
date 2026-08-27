@@ -10,9 +10,48 @@
 #include <Includes.h>
 #include <MG_Util/Async/JobNode.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
+#include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_State/GLState/ProgramState/ShaderPreprocessCache.h>
 
 namespace MobileGL::MG_State::GLState {
+    // THE one derivation of the binding ceilings a shader-declared layout(binding = N) is judged
+    // against. Two readers have to agree on them - the compile-time storage-block scan below and
+    // the link-time general check in TMglGlslIoResolver - and the numbers are recomputed here
+    // rather than queried because both readers run on a worker with no context.
+    //
+    // Each is exactly what glGetIntegerv answers for the matching pname, and none of them is a
+    // plain backend parameter: the buffer families are additionally capped by the state layer's
+    // indexed-binding array (GL_Getter's GetIndexedBufferQueryPointCount does the same), because
+    // a shader must be judged against the number the APPLICATION was told, not against either
+    // half of it. Lives in MG_State rather than in MG_Util/ShaderTranspiler/Types.h purely
+    // because BufferBindingPointCount is state-layer knowledge that the transpiler layer must
+    // not reach up for.
+    inline MG_Util::ShaderTranspiler::ResourceBindingLimits ResolveResourceBindingLimits(
+        const MG_Util::ShaderTranspiler::CompileEnv& env) {
+        namespace ST = MG_Util::ShaderTranspiler;
+        ST::ResourceBindingLimits limits;
+        const Int bindingPoints = static_cast<Int>(BufferBindingPointCount);
+        // The atomic-counter ceiling is a frontend constant, so it holds even with no backend -
+        // and it is the number BuildTBuiltInResource compiles a layout(binding = N) atomic_uint
+        // against, which is what makes it enforceable at all.
+        limits.MaxAtomicCounterBufferBindings = std::min<Int>(bindingPoints, ST::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS);
+        // So is the uniform-buffer one: GL_MAX_UNIFORM_BUFFER_BINDINGS is clamped to the indexed
+        // binding array in the getter and its floor (the GL 4.5 core minimum of 84) is that same
+        // array's width, so the backend's own number never moves it.
+        limits.MaxUniformBufferBindings = bindingPoints;
+        if (!env.HasBackend()) {
+            // No backend: the two backend-derived ceilings have nothing to be measured against,
+            // and zero means "do not enforce this kind" rather than "reject everything".
+            return limits;
+        }
+        limits.MaxSamplerBindings = std::max<Int>(env.params.MaxCombinedTextureImageUnits, 0);
+        limits.MaxImageBindings = std::max<Int>(env.params.MaxImageUnits, 0);
+        limits.MaxShaderStorageBufferBindings =
+            std::min<Int>(bindingPoints, std::max<Int>(env.params.MaxShaderStorageBufferBindings, 0));
+        return limits;
+    }
+
     // glslang has no "detach this thread" API in the vendored revision, but TShader::parse
     // leaves the calling thread's TLS pool allocator pointing at the shader's own pool and
     // never restores it. Left there, the next allocation this thread makes - in an unrelated

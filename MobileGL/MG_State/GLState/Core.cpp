@@ -668,6 +668,26 @@ namespace MobileGL::MG_State {
                 }
             }
             if (!anyStage) return nullProgram;
+            // Transform feedback captures the output of the LAST vertex-processing stage
+            // (GL 4.6 core 11.1.2.1), and glTransformFeedbackVaryings is per-PROGRAM state that
+            // only the stage program carrying that stage can have been given. The composite is
+            // assembled out of the stage programs' shaders and inherits none of their
+            // GL-thread-owned request state, so without this the composite links with an empty
+            // capture list and glBeginTransformFeedback rejects the draw with INVALID_OPERATION
+            // ("the program has no transform feedback varyings") even though
+            // glValidateProgramPipeline had just passed. Same resolution order as
+            // ProgramLinkTask::ResolveTransformFeedbackVaryings: geometry, else tessellation
+            // evaluation, else vertex.
+            for (const ShaderStage captureStage:
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::Vertex}) {
+                const auto& captureProgram = pipeline->GetStageProgram(captureStage);
+                if (!captureProgram) continue;
+                const auto& requested = captureProgram->GetRequestedTransformFeedbackVaryings();
+                if (requested.empty()) continue;
+                composite->SetTransformFeedbackVaryings(Vector<String>(requested),
+                                                        captureProgram->GetRequestedTransformFeedbackBufferMode());
+                break;
+            }
             // A pipeline with no fragment stage still rasterises, so the default fragment
             // shader is wanted here even though the separable stage programs never get one.
             composite->Link(true);

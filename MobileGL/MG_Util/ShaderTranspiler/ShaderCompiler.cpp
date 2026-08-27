@@ -548,12 +548,28 @@ namespace MobileGL {
                                                        attrib.explicitFragmentOutIndices,
                                                        attrib.explicitOpaqueUniformBindings,
                                                        attrib.storageBlocksWithoutBinding,
-                                                       attrib.uniformBlocksWithoutBinding);
+                                                       attrib.uniformBlocksWithoutBinding,
+                                                       &attrib.resourceBindingLimits,
+                                                       attrib.resourceBindingViolation);
                     break;
                 }
                 auto ioMapper = UniquePtr<glslang::TIoMapper>(glslang::GetGlslIoMapper());
 
-                if (!program->mapIO(resolver.get(), ioMapper.get())) {
+                const bool mapped = program->mapIO(resolver.get(), ioMapper.get());
+
+                // The binding-range verdict is read BEFORE mapIO's own outcome, and unconditionally:
+                // the resolver fills it during the collect phase, which runs whether or not doMap()
+                // later succeeds, and a shader that names an out-of-range binding is rejected for
+                // THAT reason no matter what else the mapper made of it. Reporting the mapper's
+                // generic failure instead would hand the application an info log that says nothing
+                // about the declaration it has to fix.
+                if (attrib.resourceBindingViolation != nullptr && !attrib.resourceBindingViolation->empty()) {
+                    ResultInfo r;
+                    r.log = *attrib.resourceBindingViolation;
+                    r.errc = -5;
+                    return std::unexpected(r);
+                }
+                if (!mapped) {
                     ResultInfo r;
                     r.log = "Error: [glslang] Cannot mapIO:\n" + std::string(program->getInfoLog());
                     r.errc = -4;
