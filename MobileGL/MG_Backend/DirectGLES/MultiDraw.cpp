@@ -29,11 +29,15 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             }
         }
 
-        // The all-ones value of an index type, which is what GL restarts on once
-        // primitive restart is in play. CheckPrimitiveRestartSupported has already
-        // rejected the arbitrary-index form of GL_PRIMITIVE_RESTART, so an enabled
-        // restart always restarts here and nowhere else.
+        // The index value this batch restarts on, in the SOURCE index type's width. Normally
+        // the all-ones value of that type, which is what GL_PRIMITIVE_RESTART_FIXED_INDEX and
+        // GLES both restart on; with desktop GL_PRIMITIVE_RESTART it is instead whatever
+        // glPrimitiveRestartIndex named. The rebased tier turns whichever it is into
+        // 0xFFFFFFFF in its widened stream, which is what the driver restarts on.
         Uint32 RestartSentinelFor(GLenum type) {
+            if (NeedsArbitraryRestartSubstitution(type)) {
+                return MG_State::pGLContext->GetPrimitiveRestartIndex();
+            }
             switch (type) {
             case GL_UNSIGNED_BYTE: return 0xFFu;
             case GL_UNSIGNED_SHORT: return 0xFFFFu;
@@ -275,9 +279,19 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // its remaining feasibility checks inside its implementation, where the data it
         // has to walk is already in hand.
         GLESMultiDrawMode ResolveTierForBatch(Bool programReadsDrawID, Bool perSubDrawBaseVertex,
-                                              Bool hasIndexBuffer) {
+                                              Bool hasIndexBuffer, Bool arbitraryRestart) {
             ResolveTierOnce();
             GLESMultiDrawMode tier = g_resolvedTier;
+
+            // Desktop GL_PRIMITIVE_RESTART restarts on an application-chosen index; the driver
+            // only ever restarts on the all-ones value. Every tier but the rebased one hands
+            // the application's own index data to the driver, which would then see no restarts
+            // at all and weld the primitives together. The rebased tier is the one that
+            // REWRITES the stream, and RestartSentinelFor already tells it which value to
+            // translate, so it is the only tier this batch can take.
+            if (arbitraryRestart) {
+                return GLESMultiDrawMode::DrawElements;
+            }
 
             // Batched tiers issue one driver entry for the whole batch, so the emulated
             // gl_DrawID uniform can only hold one value across every sub-draw. A program
@@ -852,8 +866,10 @@ void main() {
     void DrawElementsBatch(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                            GLsizei drawcount, const GLint* basevertex) {
         if (drawcount <= 0 || !count || !indices) return;
-        // State-independent and possibly throwing, so it runs before any GL work.
-        CheckPrimitiveRestartSupported(type);
+        // Read before any GL work, because it decides the tier below: a desktop restart index
+        // the driver does not know about can only be honoured by the tier that rewrites the
+        // index stream (see ResolveTierForBatch).
+        const Bool arbitraryRestart = NeedsArbitraryRestartSubstitution(type);
 
         const Bool hasIndexBuffer = BoundIndexBuffer() != nullptr;
 
@@ -889,7 +905,8 @@ void main() {
         // the tier choice and the per-sub-draw feeds use those, not the guess above.
         const Bool feedDrawID = CurrentProgramReadsDrawID();
         const Bool feedBaseVertex = basevertex != nullptr && CurrentProgramReadsBaseVertex();
-        const GLESMultiDrawMode tier = ResolveTierForBatch(feedDrawID, feedBaseVertex, hasIndexBuffer);
+        const GLESMultiDrawMode tier =
+            ResolveTierForBatch(feedDrawID, feedBaseVertex, hasIndexBuffer, arbitraryRestart);
 
         Bool drawn = false;
         switch (tier) {
@@ -921,8 +938,10 @@ void main() {
         // Every tier above may decline a batch whose shape it cannot express. The two
         // below are the floor: a base-vertex replay where the driver has one, and the
         // rewritten index stream where it does not. Both are safe for any batch these
-        // entry points can receive.
-        if (!drawn) {
+        // entry points can receive - except that the base-vertex replay hands the
+        // application's own indices to the driver, which cannot restart on a desktop
+        // restart index, so that batch has only the rewriting floor.
+        if (!drawn && !arbitraryRestart) {
             drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
         }
         if (!drawn) {

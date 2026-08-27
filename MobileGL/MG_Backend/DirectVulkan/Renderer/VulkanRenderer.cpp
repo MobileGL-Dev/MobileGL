@@ -5029,8 +5029,15 @@ void main() {
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
         // Primitive restart on a *list* topology requires the primitiveTopologyListRestart feature;
-        // strip/fan restart works without it. Silently dropping restarts would corrupt geometry, so
-        // hard-fail here (at the draw) with the reason when the device lacks the feature.
+        // strip/fan restart works without it. There is no fallback - silently dropping the restarts
+        // would weld the primitives on either side of each one together - so the draw is declined
+        // here with the reason.
+        //
+        // Declined, not thrown. This used to THROW_EXCEPTION, which unwinds a C++ exception through
+        // the C GL ABI and takes the process down (the hazard GL_Texture.cpp and RenderState.cpp
+        // already name); an application that merely enabled a legal desktop feature died instead of
+        // getting a draw that rendered nothing. VK_NULL_HANDLE is this function's established
+        // "skip this draw" answer, used by the no-stages case above.
         const auto isListTopology = [](VkPrimitiveTopology t) {
             return t == VK_PRIMITIVE_TOPOLOGY_POINT_LIST || t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
                    t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
@@ -5038,9 +5045,12 @@ void main() {
                    t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY || t == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
         };
         if (primitiveRestartEnabled && !m_primitiveTopologyListRestartFeatureEnabled && isListTopology(vkTopology)) {
-            THROW_EXCEPTION("Primitive restart on a list topology requires the primitiveTopologyListRestart device "
-                            "feature (VK_EXT_primitive_topology_list_restart), which this device does not support; use "
-                            "a strip/fan topology or a device that supports it.");
+            MGLOG_E_ONCE("Draw skipped: primitive restart on a list topology (0x%x) requires the "
+                         "primitiveTopologyListRestart device feature (VK_EXT_primitive_topology_list_restart), "
+                         "which this device does not support; use a strip/fan topology, or disable primitive "
+                         "restart for list-topology draws.",
+                         mode);
+            return VK_NULL_HANDLE;
         }
 
         PipelineFactory::PipelineCreatePayload payload {

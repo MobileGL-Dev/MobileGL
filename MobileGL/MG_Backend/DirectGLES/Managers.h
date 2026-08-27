@@ -102,9 +102,52 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Brings the whole draw-relevant frontend state onto the native ES context and binds
     // the program; every GL draw entry point calls it exactly once before issuing draws.
     void PrepareForDraw(DrawSyncFlags syncBits);
-    // GLES core supports only GL_PRIMITIVE_RESTART_FIXED_INDEX. Throws when the app enabled
-    // the arbitrary GL_PRIMITIVE_RESTART with a non-fixed index for this index type.
-    void CheckPrimitiveRestartSupported(GLenum indexType);
+    // Desktop GL restarts indexed primitives on an application-chosen index
+    // (glPrimitiveRestartIndex under GL_PRIMITIVE_RESTART); GLES core restarts only on the
+    // all-ones value of the index type (GL_PRIMITIVE_RESTART_FIXED_INDEX), which the render
+    // state push already enables for both caps. True when the two disagree for this index
+    // type, i.e. when the index data itself has to be rewritten for the draw to restart
+    // where the application asked. False - the overwhelmingly common answer - for a draw
+    // with restart disabled, with the fixed-index cap, or with a restart index that already
+    // equals the fixed value.
+    Bool NeedsArbitraryRestartSubstitution(GLenum indexType);
+
+    // Swaps in a scratch element array buffer holding a copy of the index data in which the
+    // application's restart index has been replaced by the value GLES restarts on. Inert
+    // (and free) unless NeedsArbitraryRestartSubstitution says otherwise. The swap lives for
+    // the object's lifetime, so it covers every pass of a viewport-routed draw, and the
+    // previous GL_ELEMENT_ARRAY_BUFFER name is restored on destruction - which matters
+    // beyond tidiness, because the VAO twin memoises that it already synced that binding.
+    class ScopedRestartIndexSubstitution {
+    public:
+        // count/indices describe the draw's index range when the CPU knows it. Pass
+        // count == 0 for an indirect draw, whose count lives in GPU memory: the whole bound
+        // element array buffer is rewritten instead, so every element keeps its position and
+        // a GPU-resident firstIndex still addresses the index it named.
+        ScopedRestartIndexSubstitution(GLenum indexType, GLsizei count, const void* indices);
+        ~ScopedRestartIndexSubstitution();
+        ScopedRestartIndexSubstitution(const ScopedRestartIndexSubstitution&) = delete;
+        ScopedRestartIndexSubstitution& operator=(const ScopedRestartIndexSubstitution&) = delete;
+
+        // False only when a substitution was needed and could not be made. The draw must
+        // then be skipped: issuing it would let the driver silently drop every restart and
+        // weld the primitives on either side together, which is worse than drawing nothing.
+        Bool DrawIsValid() const { return m_valid; }
+        // The element-array offset (or client pointer) the draw must use. Identical to what
+        // was passed in unless a substitution was made.
+        const void* Indices() const { return m_indices; }
+
+    private:
+        const void* m_indices = nullptr;
+        Uint m_previousBinding = 0;
+        Bool m_substituted = false;
+        Bool m_valid = true;
+    };
+
+    // Drops the scratch element array buffer the substitution above stages through. Like
+    // MultiDrawImpl's scratch names it is abandoned rather than deleted: the name belongs to
+    // the dead ES context, and deleting it would target whatever its successor handed out.
+    void OnRestartSubstitutionContextDestroyed();
     // Feed the current program's gl_BaseInstance / gl_DrawID / gl_BaseVertex emulation
     // uniforms. All are no-ops when the program does not read the corresponding builtin.
     void SetCurrentBaseInstance(Uint32 baseInstance);

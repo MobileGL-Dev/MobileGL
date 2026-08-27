@@ -63,6 +63,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PipelineFailureScenario.cpp
     Scenarios/AdvertisedLimitsScenario.cpp
     Scenarios/PixelStoreSweepScenario.cpp
+    Scenarios/PrimitiveRestartScenario.cpp
     Scenarios/FragCoordOriginScenario.cpp
     Scenarios/ClearThenReadPixelsScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
