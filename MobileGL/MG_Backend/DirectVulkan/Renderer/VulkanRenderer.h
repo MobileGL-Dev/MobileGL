@@ -733,6 +733,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // values the memo already holds.
             Uint64 pipelineStateHash = 0;
             ProgramFactory::CompileOptionFlags transformFlags = {};
+            // Baked into the pipeline (PipelineFactory::ComputeHash mixes it), and NOT derivable
+            // from anything else in this key: it depends on whether the draw is indexed and on the
+            // index type, neither of which the mode/program/state hashes carry. Without it an
+            // indexed and a non-indexed draw over the same program and state collide on one entry
+            // and the second one gets the first one's restart setting.
+            Bool primitiveRestartEnable = false;
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
         static constexpr Uint32 kPipelineMemoSize = 8;
@@ -865,6 +871,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 bindGeneration = 0;
             Uint32 baseTransformFlags = 0;
             Uint32 resolvedTransformFlags = 0;
+            // What ResolvePrimitiveRestartEnable answered for the draw this snapshot was taken
+            // from, i.e. what its pipeline's primitiveRestartEnable was built with. `aspects`
+            // already separates indexed from non-indexed draws, but not one index TYPE from
+            // another, and a restart index that fits GL_UNSIGNED_INT but not GL_UNSIGNED_SHORT
+            // makes those two draws want different pipelines.
+            Bool primitiveRestartEnable = false;
             Uint64 renderPassHash = 0;
             Uint32 imageIndex = 0;
             Uint64 textureEraseEpoch = 0;
@@ -1168,13 +1180,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void CreateSwapchain();
         void CreateCommandPool();
 
+        // Whether THIS draw's primitive stream restarts, and therefore what
+        // VkPipelineInputAssemblyStateCreateInfo::primitiveRestartEnable must be. Resolved by the
+        // caller because it needs two facts a pipeline cannot see: whether the draw is indexed at
+        // all (GL primitive restart acts on the index stream, so it is a no-op for glDrawArrays),
+        // and the index TYPE (an application restart index that does not fit the type matches no
+        // index, so that draw restarts nowhere - see UploadAndBindIndexBuffer).
+        Bool ResolvePrimitiveRestartEnable(Flags<DrawSetupAspect> aspects,
+                                           const IndexBufferView* pIndexBufferView) const;
+
         VkPipeline GetOrCreatePipeline(
             GLenum mode,
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
-            const RenderPassEntry& renderPassEntry);
+            const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable);
         VkPipeline GetOrCreateComputePipeline(const ProgramFactory::VkProgramObject& programObj);
         void DestroyComputePipelines();
         // Takes the frame rather than a command buffer: a first-time storage-usage upgrade has to

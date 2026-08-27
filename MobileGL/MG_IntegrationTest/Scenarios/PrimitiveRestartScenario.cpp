@@ -297,5 +297,108 @@ void main()
                 << "the second draw restarted on an index that is not in its data";
         }
 
+        // A NON-indexed draw has no index stream, so GL primitive restart cannot affect it - and a
+        // list topology is the shape DirectVulkan has to refuse when the device lacks
+        // VK_EXT_primitive_topology_list_restart. Deriving the pipeline's primitiveRestartEnable
+        // from the capability bits alone conflated the two: an application that enables
+        // GL_PRIMITIVE_RESTART once at init and then draws its UI with glDrawArrays(GL_TRIANGLES)
+        // had every one of those draws silently dropped on such a device.
+        TEST_F(PrimitiveRestartScenario, ANonIndexedListTopologyDrawIsUnaffectedByTheCap) {
+            if (!Ready()) GTEST_SKIP();
+
+            glEnable(GL_PRIMITIVE_RESTART);
+            glPrimitiveRestartIndex(kRestartIndex);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // Vertices 0,1,2 are the left triangle; GL_TRIANGLES is a list topology.
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            std::vector<Pixel> pixels(static_cast<std::size_t>(kSurface) * kSurface);
+            glReadPixels(0, 0, kSurface, kSurface, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            EXPECT_TRUE(IsGreen(At(pixels, kLeftX, kLeftY)))
+                << "primitive restart has no meaning for glDrawArrays, so the draw must render "
+                   "normally whatever the device supports";
+            DrainErrors();
+        }
+
+        // GL 4.6 core 10.3.6 compares the fetched index, zero-extended, against the full 32-bit
+        // PRIMITIVE_RESTART_INDEX. A restart index the index type cannot hold therefore matches
+        // nothing and the draw restarts NOWHERE - it does not restart on the truncated value, and
+        // it does not restart on the type's all-ones value either, which is what the driver's own
+        // fixed-index restart would have done if it had been left enabled.
+        TEST_F(PrimitiveRestartScenario, ARestartIndexTooLargeForTheIndexTypeRestartsNowhere) {
+            if (!Ready()) GTEST_SKIP();
+
+            // 16-bit indices with a restart index of 0x10007: the low half (7) IS a real index in
+            // the data, so a truncating comparison would split the strip exactly where a correct
+            // one leaves it whole.
+            const GLushort shortIndices[] = {0, 1, 2, static_cast<GLushort>(kRestartIndex), 3, 4, 5};
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(shortIndices), shortIndices, GL_STATIC_DRAW);
+
+            glEnable(GL_PRIMITIVE_RESTART);
+            glPrimitiveRestartIndex(0x10000u + kRestartIndex);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDrawElements(GL_TRIANGLE_STRIP, static_cast<GLsizei>(std::size(shortIndices)), GL_UNSIGNED_SHORT,
+                           nullptr);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            std::vector<Pixel> pixels(static_cast<std::size_t>(kSurface) * kSurface);
+            glReadPixels(0, 0, kSurface, kSurface, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            EXPECT_TRUE(IsGreen(At(pixels, kLeftX, kLeftY)));
+            EXPECT_TRUE(IsGreen(At(pixels, kGapX, kGapY)))
+                << "no 16-bit index can equal 0x10007, so nothing restarts and the strip is "
+                   "continuous - truncating the restart index to 7 would split it here";
+
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kIndices), kIndices, GL_STATIC_DRAW);
+            DrainErrors();
+        }
+
+        // The all-ones value of an index type is an ordinary vertex index whenever the array uses
+        // the type's full range, which is exactly why an application picks an arbitrary restart
+        // index in the first place. Substituting the sentinel in place would either steal that
+        // vertex or spuriously restart on it, so the copy widens instead - and the draw has to be
+        // issued with the widened type, which is the part that is easy to forget.
+        TEST_F(PrimitiveRestartScenario, AnAllOnesVertexIndexSurvivesTheSubstitution) {
+            if (!Ready()) GTEST_SKIP();
+
+            // The buffer carries the 16-bit all-ones value as an ordinary element. It sits past
+            // the seven indices this draw reads, because the vertex array has only eight entries
+            // and fetching index 65535 would be out of range - what is under test is that its
+            // mere PRESENCE forces the widened copy, and that the draw still finds its own
+            // indices at the right offsets in a copy whose element width has changed underneath
+            // it. Narrowly substituting in place instead would rewrite this element to 0xFFFE.
+            const GLushort shortIndices[] = {0, 1, 2, static_cast<GLushort>(kRestartIndex), 3, 4, 5, 0xFFFFu};
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(shortIndices), shortIndices, GL_STATIC_DRAW);
+
+            glEnable(GL_PRIMITIVE_RESTART);
+            glPrimitiveRestartIndex(kRestartIndex);
+            ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // Only the first seven indices are drawn, so the 0xFFFF element is never fetched - what
+            // is under test is that its PRESENCE does not break the substitution or the offsets.
+            glDrawElements(GL_TRIANGLE_STRIP, 7, GL_UNSIGNED_SHORT, nullptr);
+            EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+            std::vector<Pixel> pixels(static_cast<std::size_t>(kSurface) * kSurface);
+            glReadPixels(0, 0, kSurface, kSurface, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            EXPECT_TRUE(IsGreen(At(pixels, kLeftX, kLeftY))) << "the first strip half did not render";
+            EXPECT_TRUE(IsGreen(At(pixels, kRightX, kRightY))) << "the second strip half did not render";
+            EXPECT_FALSE(IsGreen(At(pixels, kGapX, kGapY)))
+                << "the restart still has to happen once the copy has been widened";
+
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kIndices), kIndices, GL_STATIC_DRAW);
+            DrainErrors();
+        }
+
     } // namespace
 } // namespace MGITest

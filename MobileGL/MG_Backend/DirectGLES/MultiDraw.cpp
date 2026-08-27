@@ -29,20 +29,21 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             }
         }
 
-        // The index value this batch restarts on, in the SOURCE index type's width. Normally
-        // the all-ones value of that type, which is what GL_PRIMITIVE_RESTART_FIXED_INDEX and
-        // GLES both restart on; with desktop GL_PRIMITIVE_RESTART it is instead whatever
-        // glPrimitiveRestartIndex named. The rebased tier turns whichever it is into
-        // 0xFFFFFFFF in its widened stream, which is what the driver restarts on.
+        // The index value this batch restarts on, compared at 32 bits against the zero-extended
+        // source index. Normally the all-ones value of the source type, which is what
+        // GL_PRIMITIVE_RESTART_FIXED_INDEX and GLES both restart on; with desktop
+        // GL_PRIMITIVE_RESTART it is instead whatever glPrimitiveRestartIndex named. The rebased
+        // tier turns whichever it is into 0xFFFFFFFF in its widened stream, which is what the
+        // driver restarts on.
+        //
+        // No truncation, deliberately, and the same rule ResolveRestartSubstitution applies: a
+        // restart index the source type cannot hold simply matches nothing, so returning it
+        // verbatim is already "this batch restarts nowhere".
         Uint32 RestartSentinelFor(GLenum type) {
-            if (NeedsArbitraryRestartSubstitution(type)) {
+            if (ResolveRestartSubstitution(type) != RestartSubstitutionKind::None) {
                 return MG_State::pGLContext->GetPrimitiveRestartIndex();
             }
-            switch (type) {
-            case GL_UNSIGNED_BYTE: return 0xFFu;
-            case GL_UNSIGNED_SHORT: return 0xFFFFu;
-            default: return 0xFFFFFFFFu;
-            }
+            return MG_Util::FixedRestartIndexForGLType(type);
         }
 
         Bool RestartActive() {
@@ -502,6 +503,16 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
             const Bool restartActive = RestartActive();
             const Uint32 restartSentinel = RestartSentinelFor(type);
+            // Widening to GL_UNSIGNED_INT gives a UBYTE/USHORT source a sentinel it can never
+            // spell, so those batches are lossless. A UINT source that already uses 0xFFFFFFFF as
+            // a real vertex index while restarting on a different one is the one shape 32 bits
+            // cannot express - the same corner the single-draw substitution reports.
+            if (restartActive && indexSize == 4 && restartSentinel != 0xFFFFFFFFu) {
+                MGLOG_E_ONCE("GL_PRIMITIVE_RESTART with restart index %u over GL_UNSIGNED_INT multi-draw indices: "
+                             "any index that is already 0xFFFFFFFF will restart too, because the rewritten stream "
+                             "has no wider sentinel to move to.",
+                             restartSentinel);
+            }
             g_indexStaging.resize(total);
             SizeT cursor = 0;
             for (GLsizei i = 0; i < drawcount; ++i) {
@@ -868,8 +879,12 @@ void main() {
         if (drawcount <= 0 || !count || !indices) return;
         // Read before any GL work, because it decides the tier below: a desktop restart index
         // the driver does not know about can only be honoured by the tier that rewrites the
-        // index stream (see ResolveTierForBatch).
-        const Bool arbitraryRestart = NeedsArbitraryRestartSubstitution(type);
+        // index stream (see ResolveTierForBatch). A restart index this index type cannot hold
+        // needs no rewrite at all - nothing can match it - but it does need the driver's own
+        // fixed-index restart held off for the batch, which is what the scope below does.
+        const RestartSubstitutionKind restartKind = ResolveRestartSubstitution(type);
+        const Bool arbitraryRestart = restartKind == RestartSubstitutionKind::RewriteIndices;
+        const ScopedSuppressedPrimitiveRestart restartCapOverride(restartKind);
 
         const Bool hasIndexBuffer = BoundIndexBuffer() != nullptr;
 

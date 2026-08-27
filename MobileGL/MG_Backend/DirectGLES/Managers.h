@@ -102,28 +102,64 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Brings the whole draw-relevant frontend state onto the native ES context and binds
     // the program; every GL draw entry point calls it exactly once before issuing draws.
     void PrepareForDraw(DrawSyncFlags syncBits);
-    // Desktop GL restarts indexed primitives on an application-chosen index
-    // (glPrimitiveRestartIndex under GL_PRIMITIVE_RESTART); GLES core restarts only on the
-    // all-ones value of the index type (GL_PRIMITIVE_RESTART_FIXED_INDEX), which the render
-    // state push already enables for both caps. True when the two disagree for this index
-    // type, i.e. when the index data itself has to be rewritten for the draw to restart
-    // where the application asked. False - the overwhelmingly common answer - for a draw
-    // with restart disabled, with the fixed-index cap, or with a restart index that already
-    // equals the fixed value.
-    Bool NeedsArbitraryRestartSubstitution(GLenum indexType);
+    // What an indexed draw has to do about primitive restart before it can be issued.
+    //
+    // Desktop GL restarts on an application-chosen index (glPrimitiveRestartIndex under
+    // GL_PRIMITIVE_RESTART); GLES core restarts only on the all-ones value of the index type
+    // (GL_PRIMITIVE_RESTART_FIXED_INDEX), which the render-state push enables for BOTH caps.
+    // That leaves three cases, and the difference between the last two is not cosmetic - one
+    // adds restarts, the other has to take away restarts the driver would otherwise make.
+    enum class RestartSubstitutionKind : Uint8 {
+        // Nothing to do: restart is off, the fixed-index cap is on, or the application's
+        // restart index already IS the type's all-ones value. The overwhelmingly common answer.
+        None,
+        // The application's index is representable in this index type and differs from the
+        // all-ones value: the index DATA has to be rewritten so the driver restarts where the
+        // application asked.
+        RewriteIndices,
+        // The application's index cannot be held by this index type at all. GL 4.6 core 10.3.6
+        // compares the fetched index, zero-extended, against the full 32-bit
+        // PRIMITIVE_RESTART_INDEX, so no index can match and the draw restarts NOWHERE - but the
+        // render-state push has already enabled the driver's fixed-index restart, so the
+        // all-ones value has to be un-restarted for the duration of the draw.
+        SuppressRestart,
+    };
+    RestartSubstitutionKind ResolveRestartSubstitution(GLenum indexType);
+
+    // Turns the driver's fixed-index restart off for one draw and back on afterwards, for the
+    // SuppressRestart case above. Separate from the substitution below because the multi-draw
+    // tiers need it on its own: they rewrite the index stream themselves and only ever need the
+    // cap half. Inert for every other kind, and it never touches the render-state shadow - it
+    // puts the driver back exactly where SyncRenderState left it.
+    class ScopedSuppressedPrimitiveRestart {
+    public:
+        explicit ScopedSuppressedPrimitiveRestart(RestartSubstitutionKind kind);
+        ~ScopedSuppressedPrimitiveRestart();
+        ScopedSuppressedPrimitiveRestart(const ScopedSuppressedPrimitiveRestart&) = delete;
+        ScopedSuppressedPrimitiveRestart& operator=(const ScopedSuppressedPrimitiveRestart&) = delete;
+
+    private:
+        Bool m_suppressed = false;
+    };
 
     // Swaps in a scratch element array buffer holding a copy of the index data in which the
     // application's restart index has been replaced by the value GLES restarts on. Inert
-    // (and free) unless NeedsArbitraryRestartSubstitution says otherwise. The swap lives for
-    // the object's lifetime, so it covers every pass of a viewport-routed draw, and the
-    // previous GL_ELEMENT_ARRAY_BUFFER name is restored on destruction - which matters
-    // beyond tidiness, because the VAO twin memoises that it already synced that binding.
+    // (and free) unless ResolveRestartSubstitution asks for it. The swap lives for the
+    // object's lifetime, so it covers every pass of a viewport-routed draw, and the previous
+    // GL_ELEMENT_ARRAY_BUFFER name is restored on destruction - which matters beyond tidiness,
+    // because the VAO twin memoises that it already synced that binding.
+    //
+    // The copy may be WIDER than the source (see IndexType): when the source already contains
+    // the type's all-ones value as an ordinary vertex index, that value cannot double as the
+    // restart sentinel, and widening is the only way to keep both meanings. Callers must
+    // therefore take the index type from this object, not from their own argument.
     class ScopedRestartIndexSubstitution {
     public:
         // count/indices describe the draw's index range when the CPU knows it. Pass
         // count == 0 for an indirect draw, whose count lives in GPU memory: the whole bound
         // element array buffer is rewritten instead, so every element keeps its position and
-        // a GPU-resident firstIndex still addresses the index it named.
+        // a GPU-resident firstIndex - an ELEMENT index, so it survives widening too - still
+        // addresses the index it named.
         ScopedRestartIndexSubstitution(GLenum indexType, GLsizei count, const void* indices);
         ~ScopedRestartIndexSubstitution();
         ScopedRestartIndexSubstitution(const ScopedRestartIndexSubstitution&) = delete;
@@ -136,9 +172,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The element-array offset (or client pointer) the draw must use. Identical to what
         // was passed in unless a substitution was made.
         const void* Indices() const { return m_indices; }
+        // The index type the draw must be issued with. Identical to the constructor's unless
+        // the copy had to be widened to keep an all-ones vertex index distinguishable from the
+        // restart sentinel.
+        GLenum IndexType() const { return m_indexType; }
 
     private:
+        // Declared before m_capOverride so it is initialised first (members initialise in
+        // declaration order): the whole decision is made once, and both the cap override and the
+        // constructor body read the same answer.
+        RestartSubstitutionKind m_kind = RestartSubstitutionKind::None;
+        ScopedSuppressedPrimitiveRestart m_capOverride;
         const void* m_indices = nullptr;
+        GLenum m_indexType = 0;
         Uint m_previousBinding = 0;
         Bool m_substituted = false;
         Bool m_valid = true;

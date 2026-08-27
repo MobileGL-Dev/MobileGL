@@ -2467,13 +2467,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // makes it stale too. Both level comparisons sit INSIDE the >= 0 guard: a program
                 // with a control stage of its own - which is nearly all of them - still pays only
                 // the one integer test.
+                //
+                // Compared by BIT PATTERN, matching what DirectVulkan hashes into its module key.
+                // A float compare here would never settle for a NaN level - NaN != NaN - and every
+                // draw of that program would re-transpile, re-compile and re-link a byte-identical
+                // shader. glPatchParameterfv accepts NaN by design.
                 (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
                  (twin->GetPassthroughTessControlPatchVertices() !=
                       static_cast<Int>(MG_State::pGLContext->GetPatchVertices()) ||
-                  twin->GetPassthroughTessControlOuterLevel() !=
-                      MG_State::pGLContext->GetPatchDefaultOuterLevel() ||
-                  twin->GetPassthroughTessControlInnerLevel() !=
-                      MG_State::pGLContext->GetPatchDefaultInnerLevel()))) {
+                  !BitwiseEqual(twin->GetPassthroughTessControlOuterLevel(),
+                                MG_State::pGLContext->GetPatchDefaultOuterLevel()) ||
+                  !BitwiseEqual(twin->GetPassthroughTessControlInnerLevel(),
+                                MG_State::pGLContext->GetPatchDefaultInnerLevel())))) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();
@@ -3538,8 +3543,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // to rewrite the whole element array buffer rather than this draw's range - which is
         // exactly what it does when no CPU-known count is handed to it. Held for the whole
         // command loop so every command in the batch reads the rewritten copy.
+        //
+        // firstIndex counts ELEMENTS, so it survives a widened copy untouched; what does not
+        // survive is the type and the element size, which are re-taken from the substitution
+        // below for both the native and the CPU-unrolled path.
         const ScopedRestartIndexSubstitution restart(type, /*count=*/0, /*indices=*/nullptr);
         if (!restart.DrawIsValid()) return;
+        type = restart.IndexType();
+        indexSize = MG_Util::GetGLTypeSize(type);
         const Bool useNative = drawIndirectBuffer != nullptr && SupportsNativeIndirectDraws();
         if (useNative) {
             // gl_BaseInstance must observe GPU-written command fields; expose the indirect
@@ -3852,8 +3863,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // ever restarts on the all-ones value of the index type. When the two agree - which
     // includes every GL_PRIMITIVE_RESTART_FIXED_INDEX user - the render state push at
     // SyncRenderState is the whole implementation and nothing here does any work. When they
-    // disagree the index DATA is rewritten into a scratch element array buffer, which is
-    // what DirectVulkan has always done (VulkanRenderer's RewriteRestartIndices).
+    // disagree the index DATA is rewritten into a scratch element array buffer.
     //
     // This used to throw instead. A throw here unwinds a C++ exception through the C GL ABI
     // and takes the process down - the same hazard GL_Texture.cpp and RenderState.cpp
@@ -3875,63 +3885,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // trying: a draw that renders nothing is recoverable, a stall of that size is not.
         constexpr SizeT kMaxRestartRewriteBytes = SizeT{1} << 26; // 64 MiB
 
-        SizeT RestartIndexTypeSize(GLenum indexType) {
+        // The index type one step wider than this one, or 0 when there is none. Widening is how
+        // an all-ones value that is a REAL vertex index keeps its meaning while the all-ones
+        // value of the destination type serves as the restart sentinel: a source that cannot
+        // spell 0xFFFF cannot collide with a 16-bit sentinel, and likewise 8 -> 16.
+        GLenum WiderIndexType(GLenum indexType) {
             switch (indexType) {
-            case GL_UNSIGNED_BYTE: return 1;
-            case GL_UNSIGNED_SHORT: return 2;
-            case GL_UNSIGNED_INT: return 4;
+            case GL_UNSIGNED_BYTE: return GL_UNSIGNED_SHORT;
+            case GL_UNSIGNED_SHORT: return GL_UNSIGNED_INT;
             default: return 0;
             }
         }
 
-        // The value GLES restarts on for this index type. Zero for a type that cannot index
-        // at all, which the caller treats as "nothing to do" - the driver will reject the
-        // draw on its own terms.
-        Uint32 FixedRestartIndexFor(GLenum indexType) {
-            switch (indexType) {
-            case GL_UNSIGNED_BYTE: return 0xFFu;
-            case GL_UNSIGNED_SHORT: return 0xFFFFu;
-            case GL_UNSIGNED_INT: return 0xFFFFFFFFu;
-            default: return 0;
+        Uint32 ReadIndex(const Uint8* source, SizeT i, SizeT indexSize) {
+            switch (indexSize) {
+            case 1: return source[i];
+            case 2: {
+                Uint16 narrow = 0;
+                std::memcpy(&narrow, source + i * 2, sizeof(narrow));
+                return narrow;
+            }
+            default: {
+                Uint32 wide = 0;
+                std::memcpy(&wide, source + i * 4, sizeof(wide));
+                return wide;
+            }
             }
         }
 
-        // Copies index data, replacing every occurrence of the application's arbitrary
-        // restart index with the fixed all-ones value - the only one GLES restarts on. An
-        // index that already equals the fixed value would then be indistinguishable from a
-        // restart, so it is nudged to the next-lowest value: it can only be a real index
-        // (the application's restart index is a different number), and the vertex it selects
-        // is outside any well-defined draw anyway, whereas leaving it alone would tear the
-        // primitive in two. Byte-for-byte the rule DirectVulkan applies.
-        void RewriteRestartIndices(const void* source, SizeT sizeBytes, GLenum indexType,
-                                   Uint32 applicationRestartIndex, Vector<Uint8>& output) {
-            output.resize(sizeBytes);
-            if (sizeBytes == 0 || source == nullptr) {
-                return;
+        void WriteIndex(Uint8* destination, SizeT i, SizeT indexSize, Uint32 value) {
+            switch (indexSize) {
+            case 1: destination[i] = static_cast<Uint8>(value); break;
+            case 2: {
+                const Uint16 narrow = static_cast<Uint16>(value);
+                std::memcpy(destination + i * 2, &narrow, sizeof(narrow));
+                break;
             }
-            std::memcpy(output.data(), source, sizeBytes);
-            const auto rewrite = [&](auto* indices, auto fixedMax) {
-                const SizeT count = sizeBytes / sizeof(*indices);
-                for (SizeT i = 0; i < count; ++i) {
-                    if (indices[i] == static_cast<decltype(fixedMax)>(applicationRestartIndex)) {
-                        indices[i] = fixedMax;
-                    } else if (indices[i] == fixedMax) {
-                        indices[i] = static_cast<decltype(fixedMax)>(fixedMax - 1);
-                    }
+            default: std::memcpy(destination + i * 4, &value, sizeof(value)); break;
+            }
+        }
+
+        // True when any index in the range already holds the type's all-ones value, i.e. when
+        // that value is doing double duty as a real vertex index and so cannot also be the
+        // restart sentinel. Only asked on the rare substitution path.
+        Bool ContainsFixedRestartIndex(const Uint8* source, SizeT indexCount, SizeT indexSize,
+                                       Uint32 fixedMax) {
+            for (SizeT i = 0; i < indexCount; ++i) {
+                if (ReadIndex(source, i, indexSize) == fixedMax) return true;
+            }
+            return false;
+        }
+
+        // Copies index data, replacing every occurrence of the application's restart index with
+        // the all-ones value of the DESTINATION type - the only one GLES restarts on. The
+        // destination may be wider than the source, which is what makes the copy lossless: a
+        // source index equal to the source's all-ones value zero-extends to something the wider
+        // sentinel can never equal, so it stays the vertex it was.
+        //
+        // Same width in and out is the degenerate case, used when the source contains no
+        // all-ones index at all (nothing to protect) or when there is no wider type to move to.
+        // In that last case only - a GL_UNSIGNED_INT stream that really does use index
+        // 0xFFFFFFFF while asking to restart on a different one - a legal index has to be
+        // nudged to 0xFFFFFFFE, because 32 bits cannot hold both meanings. The caller logs it;
+        // it is the one input this feature cannot represent.
+        void RewriteRestartIndices(const Uint8* source, SizeT indexCount, SizeT sourceIndexSize,
+                                   SizeT destinationIndexSize, Uint32 applicationRestartIndex,
+                                   Uint32 destinationFixedMax, Vector<Uint8>& output) {
+            output.resize(indexCount * destinationIndexSize);
+            for (SizeT i = 0; i < indexCount; ++i) {
+                Uint32 value = ReadIndex(source, i, sourceIndexSize);
+                if (value == applicationRestartIndex) {
+                    value = destinationFixedMax;
+                } else if (value == destinationFixedMax) {
+                    // Only reachable when no widening was possible; see above.
+                    value = destinationFixedMax - 1;
                 }
-            };
-            switch (indexType) {
-            case GL_UNSIGNED_BYTE:
-                rewrite(reinterpret_cast<Uint8*>(output.data()), static_cast<Uint8>(0xFFu));
-                break;
-            case GL_UNSIGNED_SHORT:
-                rewrite(reinterpret_cast<Uint16*>(output.data()), static_cast<Uint16>(0xFFFFu));
-                break;
-            case GL_UNSIGNED_INT:
-                rewrite(reinterpret_cast<Uint32*>(output.data()), static_cast<Uint32>(0xFFFFFFFFu));
-                break;
-            default:
-                break;
+                WriteIndex(output.data(), i, destinationIndexSize, value);
             }
         }
 
@@ -3975,14 +4004,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
-    Bool NeedsArbitraryRestartSubstitution(GLenum indexType) {
+    RestartSubstitutionKind ResolveRestartSubstitution(GLenum indexType) {
         if (!MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
             MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
-            return false;
+            return RestartSubstitutionKind::None;
         }
-        const Uint32 fixedMax = FixedRestartIndexFor(indexType);
-        if (fixedMax == 0) return false;
-        return MG_State::pGLContext->GetPrimitiveRestartIndex() != fixedMax;
+        const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
+        if (fixedMax == 0) return RestartSubstitutionKind::None;
+        const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+        if (restartIndex == fixedMax) return RestartSubstitutionKind::None;
+        // Strictly greater, never truncated. GL 4.6 core 10.3.6 compares the fetched index
+        // zero-extended against the full 32-bit state, so an index this type cannot hold matches
+        // nothing. Truncating instead - glPrimitiveRestartIndex(0x100) over GL_UNSIGNED_BYTE data
+        // becoming "restart on 0" - turns the most common index in any mesh into a restart.
+        if (restartIndex > fixedMax) return RestartSubstitutionKind::SuppressRestart;
+        return RestartSubstitutionKind::RewriteIndices;
     }
 
     void OnRestartSubstitutionContextDestroyed() {
@@ -3991,22 +4027,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_restartStaging.shrink_to_fit();
     }
 
+    ScopedSuppressedPrimitiveRestart::ScopedSuppressedPrimitiveRestart(RestartSubstitutionKind kind) {
+        if (kind != RestartSubstitutionKind::SuppressRestart) return;
+        // SyncRenderState turned the driver's fixed-index restart on because GL_PRIMITIVE_RESTART
+        // is enabled; for this draw's index type it would restart on a value the application
+        // never named. Toggled directly rather than through the render-state shadow, and put back
+        // in the destructor, so the shadow stays true and the next draw pays nothing.
+        g_GLESFuncs.glDisable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+        m_suppressed = true;
+    }
+
+    ScopedSuppressedPrimitiveRestart::~ScopedSuppressedPrimitiveRestart() {
+        if (!m_suppressed) return;
+        g_GLESFuncs.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+    }
+
     ScopedRestartIndexSubstitution::ScopedRestartIndexSubstitution(GLenum indexType, GLsizei count,
                                                                    const void* indices)
-        : m_indices(indices) {
-        if (!NeedsArbitraryRestartSubstitution(indexType)) {
+        : m_kind(ResolveRestartSubstitution(indexType)), m_capOverride(m_kind), m_indices(indices),
+          m_indexType(indexType) {
+        if (m_kind != RestartSubstitutionKind::RewriteIndices) {
             return;
         }
-        const SizeT indexSize = RestartIndexTypeSize(indexType);
+        const SizeT sourceIndexSize = MG_Util::GetGLTypeSize(indexType);
+        const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
         const Uint32 applicationRestartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
         const auto& indexBuffer = BoundElementArrayBuffer();
 
+        const Uint8* source = nullptr;
+        SizeT indexCount = 0;
+        SizeT sourceByteOffset = 0;
+
         if (indexBuffer) {
             // The WHOLE buffer is rewritten, not just this draw's range, so that every index
-            // keeps its position: an indirect draw's firstIndex lives in GPU memory and
-            // cannot be adjusted from here. Same reasoning, same shape, as DirectVulkan.
+            // keeps its position: an indirect draw's firstIndex lives in GPU memory and cannot be
+            // adjusted from here. It is an ELEMENT index, so it survives widening unchanged.
             const SizeT sizeBytes = indexBuffer->GetSize();
-            if (sizeBytes == 0) {
+            if (sizeBytes < sourceIndexSize) {
                 return; // Nothing to restart on; let the driver see the draw unchanged.
             }
             if (sizeBytes > kMaxRestartRewriteBytes) {
@@ -4022,35 +4079,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // shader write may have moved past it since the last sync.
             indexBuffer->SyncPersistentMappedRange();
             indexBuffer->SyncGpuWrites();
-            const Uint8* bytes = indexBuffer->MappedData();
-            if (bytes == nullptr) {
+            source = indexBuffer->MappedData();
+            if (source == nullptr) {
                 MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART with restart index %u needs a CPU-readable copy of "
                              "the bound element array buffer and none is available.",
                              applicationRestartIndex);
                 m_valid = false;
                 return;
             }
-            RewriteRestartIndices(bytes, sizeBytes, indexType, applicationRestartIndex, g_restartStaging);
+            indexCount = sizeBytes / sourceIndexSize;
+            sourceByteOffset = reinterpret_cast<SizeT>(indices);
         } else {
             // No element array buffer: `indices` is a client pointer, so only the draw's own
             // range is readable and an indirect draw has nothing to read at all.
-            if (count <= 0 || indices == nullptr || indexSize == 0) {
+            if (count <= 0 || indices == nullptr || sourceIndexSize == 0) {
                 MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART with restart index %u needs either a bound element "
                              "array buffer or a client index array with a CPU-known count.",
                              applicationRestartIndex);
                 m_valid = false;
                 return;
             }
-            const SizeT sizeBytes = static_cast<SizeT>(count) * indexSize;
-            if (sizeBytes > kMaxRestartRewriteBytes) {
+            if (static_cast<SizeT>(count) * sourceIndexSize > kMaxRestartRewriteBytes) {
                 MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART index rewrite of %zu bytes is past the %zu-byte "
                              "ceiling.",
-                             sizeBytes, kMaxRestartRewriteBytes);
+                             static_cast<SizeT>(count) * sourceIndexSize, kMaxRestartRewriteBytes);
                 m_valid = false;
                 return;
             }
-            RewriteRestartIndices(indices, sizeBytes, indexType, applicationRestartIndex, g_restartStaging);
+            source = static_cast<const Uint8*>(indices);
+            indexCount = static_cast<SizeT>(count);
         }
+
+        // Widen only when the source really does use the all-ones value as a vertex index -
+        // otherwise the sentinel is free and the copy stays the caller's width, which keeps the
+        // common substitution allocation-for-allocation identical to the narrow form.
+        GLenum destinationType = indexType;
+        SizeT destinationIndexSize = sourceIndexSize;
+        if (ContainsFixedRestartIndex(source, indexCount, sourceIndexSize, fixedMax)) {
+            const GLenum wider = WiderIndexType(indexType);
+            // An element-array offset that is not a whole number of indices cannot be rescaled
+            // into the widened copy, so such a draw keeps the narrow (lossy) form.
+            const Bool offsetIsWholeIndices = sourceIndexSize != 0 && (sourceByteOffset % sourceIndexSize) == 0;
+            if (wider != 0 && offsetIsWholeIndices &&
+                indexCount * MG_Util::GetGLTypeSize(wider) <= kMaxRestartRewriteBytes) {
+                destinationType = wider;
+                destinationIndexSize = MG_Util::GetGLTypeSize(wider);
+            } else {
+                MGLOG_E_ONCE("GL_PRIMITIVE_RESTART with restart index %u over index data that also uses the "
+                             "all-ones index %u: this index type cannot spell both, so every all-ones index is "
+                             "drawn as %u instead. Use GL_PRIMITIVE_RESTART_FIXED_INDEX, or keep the all-ones "
+                             "value out of the index data.",
+                             applicationRestartIndex, fixedMax, fixedMax - 1);
+            }
+        }
+
+        const Uint32 destinationFixedMax = MG_Util::FixedRestartIndexForGLType(destinationType);
+        RewriteRestartIndices(source, indexCount, sourceIndexSize, destinationIndexSize, applicationRestartIndex,
+                              destinationFixedMax, g_restartStaging);
 
         if (!UploadRestartScratch(g_restartStaging.size(), g_restartStaging.data())) {
             MGLOG_E_ONCE("Draw skipped: could not allocate the scratch element array buffer for GL_PRIMITIVE_RESTART "
@@ -4061,9 +4146,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_previousBinding = BoundElementArrayBufferId();
         BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, g_restartIndices.id);
         m_substituted = true;
-        // The rewritten copy starts at byte 0 of the scratch buffer, so an EBO-sourced draw
-        // keeps the very offset it was given and a client-memory draw reads from the front.
-        m_indices = indexBuffer ? indices : nullptr;
+        m_indexType = destinationType;
+        // The rewritten copy starts at byte 0 of the scratch buffer and holds one
+        // destination-width element per source element, so an EBO-sourced draw keeps its ELEMENT
+        // offset (rescaled to the new width) and a client-memory draw reads from the front.
+        m_indices = indexBuffer
+                        ? reinterpret_cast<const void*>((sourceByteOffset / sourceIndexSize) * destinationIndexSize)
+                        : nullptr;
     }
 
     ScopedRestartIndexSubstitution::~ScopedRestartIndexSubstitution() {
@@ -4080,7 +4169,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
         ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawElements(mode, count, type, restart.Indices());
+            g_GLESFuncs.glDrawElements(mode, count, restart.IndexType(), restart.Indices());
         });
     }
 
@@ -4112,7 +4201,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!restart.DrawIsValid()) return;
         SetCurrentBaseVertex(basevertex);
         ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawElementsBaseVertex(mode, count, type, restart.Indices(), basevertex);
+            g_GLESFuncs.glDrawElementsBaseVertex(mode, count, restart.IndexType(), restart.Indices(), basevertex);
         });
         SetCurrentBaseVertex(0);
     }
@@ -4381,7 +4470,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!restart.DrawIsValid()) return;
         SetCurrentBaseVertex(basevertex);
         ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, type, restart.Indices(), basevertex);
+            g_GLESFuncs.glDrawRangeElementsBaseVertex(mode, start, end, count, restart.IndexType(), restart.Indices(),
+                                                      basevertex);
         });
         SetCurrentBaseVertex(0);
     }
@@ -4392,7 +4482,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
         ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawRangeElements(mode, start, end, count, type, restart.Indices());
+            g_GLESFuncs.glDrawRangeElements(mode, start, end, count, restart.IndexType(), restart.Indices());
         });
     }
 
@@ -4420,11 +4510,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SetCurrentBaseVertex(basevertex);
         ForEachViewportRoutingPass([&] {
             if (UseNativeBaseInstance()) {
-                g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, type, restart.Indices(),
-                                                                            instancecount, basevertex, baseinstance);
+                g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, restart.IndexType(),
+                                                                            restart.Indices(), instancecount,
+                                                                            basevertex, baseinstance);
             } else {
-                g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, type, restart.Indices(), instancecount,
-                                                              basevertex);
+                g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, restart.IndexType(), restart.Indices(),
+                                                              instancecount, basevertex);
             }
         });
         SetCurrentBaseVertex(0);
@@ -4455,10 +4546,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SetCurrentBaseInstance(baseinstance);
         ForEachViewportRoutingPass([&] {
             if (UseNativeBaseInstance()) {
-                g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, type, restart.Indices(), instancecount,
-                                                                  baseinstance);
+                g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, restart.IndexType(), restart.Indices(),
+                                                                  instancecount, baseinstance);
             } else {
-                g_GLESFuncs.glDrawElementsInstanced(mode, count, type, restart.Indices(), instancecount);
+                g_GLESFuncs.glDrawElementsInstanced(mode, count, restart.IndexType(), restart.Indices(), instancecount);
             }
         });
         SetCurrentBaseInstance(0);
@@ -4470,7 +4561,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
         ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawElementsInstanced(mode, count, type, restart.Indices(), instancecount);
+            g_GLESFuncs.glDrawElementsInstanced(mode, count, restart.IndexType(), restart.Indices(), instancecount);
         });
     }
 

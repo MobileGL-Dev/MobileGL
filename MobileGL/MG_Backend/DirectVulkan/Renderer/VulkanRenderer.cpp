@@ -3985,14 +3985,13 @@ void main() {
         const RenderStateParameters& rsp = MG_State::pGLContext->GetRenderStateParameters();
         if (rsp.PrimitiveRestartEnabled && !rsp.PrimitiveRestartFixedIndexEnabled) {
             const Uint32 restartIndex = rsp.PrimitiveRestartIndex;
-            Uint32 fixedMax = 0;
-            switch (vkIndexType) {
-            case VK_INDEX_TYPE_UINT8: fixedMax = 0xFFu; break;
-            case VK_INDEX_TYPE_UINT16: fixedMax = 0xFFFFu; break;
-            case VK_INDEX_TYPE_UINT32: fixedMax = 0xFFFFFFFFu; break;
-            default: break;
-            }
-            substituteRestart = restartIndex != fixedMax;
+            const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
+            // STRICTLY less, and never truncated. Equal needs no rewrite (the driver already
+            // restarts there); GREATER means the index type cannot hold the application's restart
+            // index, so GL 4.6 core 10.3.6 says nothing matches it and the draw restarts nowhere -
+            // which is exactly what ResolvePrimitiveRestartEnable told the pipeline, so rewriting
+            // here would put restarts into a stream the pipeline was built not to restart on.
+            substituteRestart = restartIndex < fixedMax;
             substituteRestartIndex = restartIndex;
         }
 
@@ -4794,13 +4793,42 @@ void main() {
         return program.HasLinkedShaderStage(ShaderStage::Geometry);
     }
 
+    // GL primitive restart is defined on the INDEX STREAM (GL 4.6 core 10.3.6): it splits
+    // primitives when a fetched index matches PRIMITIVE_RESTART_INDEX. Two consequences the
+    // capability bits alone cannot express, both resolved here because only the caller knows them:
+    //
+    //  - A non-indexed draw has no index stream, so restart is a no-op for it. Leaving the
+    //    pipeline's primitiveRestartEnable on for a glDrawArrays is what made the list-topology
+    //    guard below refuse those draws, so an application that enables GL_PRIMITIVE_RESTART once
+    //    at init lost every glDrawArrays on a device without the extension.
+    //  - The comparison is against the full 32-bit restart index with the fetched index
+    //    zero-extended, so a restart index the type cannot hold (0x100FF against UNSIGNED_BYTE
+    //    data) matches no index and that draw restarts NOWHERE. UploadAndBindIndexBuffer makes the
+    //    same call for the rewrite, and the two must agree or the pipeline says "restart" over
+    //    index data nothing rewrote.
+    Bool VulkanRenderer::ResolvePrimitiveRestartEnable(Flags<DrawSetupAspect> aspects,
+                                                       const IndexBufferView* pIndexBufferView) const {
+        if (!(aspects & DrawSetupAspect::IndexBuffer) || pIndexBufferView == nullptr) {
+            return false;
+        }
+        const RenderStateParameters& rsp = MG_State::pGLContext->GetRenderStateParameters();
+        if (rsp.PrimitiveRestartFixedIndexEnabled) {
+            return true;
+        }
+        if (!rsp.PrimitiveRestartEnabled) {
+            return false;
+        }
+        return rsp.PrimitiveRestartIndex <= MG_Util::FixedRestartIndexForGLType(pIndexBufferView->indexType);
+    }
+
     VkPipeline VulkanRenderer::GetOrCreatePipeline(
             GLenum mode,
             const MG_State::GLState::ProgramObject& program,
             const ProgramFactory::VkProgramObject& programObj,
             ProgramFactory::CompileOptionFlags transformFlags,
             const MG_State::GLState::VertexArrayObject& vao,
-            const RenderPassEntry& renderPassEntry) {
+            const RenderPassEntry& renderPassEntry,
+            Bool primitiveRestartEnable) {
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
@@ -4842,6 +4870,7 @@ void main() {
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
                 entry.pipelineStateHash == pipelineStateHash &&
+                entry.primitiveRestartEnable == primitiveRestartEnable &&
                 entry.transformFlags == transformFlags) {
                 return entry.pipeline;
             }
@@ -5040,9 +5069,22 @@ void main() {
                 : VK_POLYGON_MODE_FILL;
 
         const VkPrimitiveTopology vkTopology = MG_Util::ConvertPrimitiveModeToVkEnum(mode);
-        const Bool primitiveRestartEnabled =
-            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+        // Resolved by the caller (ResolvePrimitiveRestartEnable), which knows whether the draw is
+        // indexed and with what index type; the capability bits alone answer neither.
+        Bool primitiveRestartEnabled = primitiveRestartEnable;
+
+        // GL applies restart to PATCHES only when PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED is true
+        // (GL 4.6 core 10.3.6). MobileGL supports no such thing - neither backend has a way to
+        // restart a patch stream - and GL_FALSE is a legal answer to that query, so a patch draw
+        // simply never restarts here. Doing this BEFORE the feature guard below is what keeps a
+        // perfectly ordinary GL_PATCHES draw from being refused on a device that lacks
+        // VK_EXT_primitive_topology_list_restart. (When GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED
+        // is eventually added to glGetIntegerv it has to report GL_FALSE to stay consistent with
+        // this.)
+        if (vkTopology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
+            primitiveRestartEnabled = false;
+        }
+
         // Primitive restart on a *list* topology requires the primitiveTopologyListRestart feature;
         // strip/fan restart works without it. There is no fallback - silently dropping the restarts
         // would weld the primitives on either side of each one together - so the draw is declined
@@ -5053,11 +5095,16 @@ void main() {
         // already name); an application that merely enabled a legal desktop feature died instead of
         // getting a draw that rendered nothing. VK_NULL_HANDLE is this function's established
         // "skip this draw" answer, used by the no-stages case above.
+        //
+        // Reached only when this draw's index stream really does restart. Testing the raw
+        // capability bits here instead - which is what it did - refused every NON-INDEXED
+        // list-topology draw as well, so an application that enables GL_PRIMITIVE_RESTART once at
+        // init and then calls glDrawArrays(GL_TRIANGLES, ...) rendered nothing at all.
         const auto isListTopology = [](VkPrimitiveTopology t) {
             return t == VK_PRIMITIVE_TOPOLOGY_POINT_LIST || t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
                    t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
                    t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
-                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY || t == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
         };
         if (primitiveRestartEnabled && !m_primitiveTopologyListRestartFeatureEnabled && isListTopology(vkTopology)) {
             MGLOG_E_ONCE("Draw skipped: primitive restart on a list topology (0x%x) requires the "
@@ -5425,6 +5472,7 @@ void main() {
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
             entry.pipelineStateHash = pipelineStateHash;
+            entry.primitiveRestartEnable = primitiveRestartEnable;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
             m_pipelineMemoNext = (m_pipelineMemoNext + 1) % kPipelineMemoSize;
@@ -5809,7 +5857,11 @@ void main() {
             return false;
         }
         SetupDrawSnapshot& snap = *snapPtr;
-        if (snap.aspects != aspects.GetRaw() || snap.mode != mode) {
+        // Resolved once for the whole function: it guards the snapshot, keys the pipeline memo
+        // probe below, and is handed to GetOrCreatePipeline on a miss - all three must agree.
+        const Bool drawPrimitiveRestartEnable = ResolvePrimitiveRestartEnable(aspects, pIndexBufferView);
+        if (snap.aspects != aspects.GetRaw() || snap.mode != mode ||
+            snap.primitiveRestartEnable != drawPrimitiveRestartEnable) {
             return false;
         }
         if (m_clearManager->HasAnyPendingClears()) {
@@ -6079,6 +6131,7 @@ void main() {
                     entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
                     entry.renderPassHash == snap.renderPassHash &&
                     entry.pipelineStateHash == m_pipelineStateHash &&
+                    entry.primitiveRestartEnable == drawPrimitiveRestartEnable &&
                     entry.transformFlags == memoTransformFlags) {
                     pipeline = entry.pipeline;
                     break;
@@ -6096,7 +6149,7 @@ void main() {
                 }
                 pipeline = GetOrCreatePipeline(mode, program, programObj,
                                                ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags),
-                                               vao, renderPassEntry);
+                                               vao, renderPassEntry, drawPrimitiveRestartEnable);
                 if (pipeline == VK_NULL_HANDLE) {
                     return false;
                 }
@@ -6533,7 +6586,8 @@ void main() {
             }
         }
 
-        auto pipeline = GetOrCreatePipeline(mode, program, programObj, transformFlags, vao, *renderPassEntry);
+        auto pipeline = GetOrCreatePipeline(mode, program, programObj, transformFlags, vao, *renderPassEntry,
+                                            ResolvePrimitiveRestartEnable(aspects, pIndexBufferView));
         // GetOrCreatePipeline documents a VK_NULL_HANDLE return (empty stages, or a driver that
         // rejected vkCreateGraphicsPipelines). Binding it dereferences null inside the driver -
         // 9 of the 15 CTS process deaths were exactly this vkCmdBindPipeline. A draw that has no
@@ -6596,6 +6650,7 @@ void main() {
             if (nowActiveRenderPass != nullptr && !programObj.hasStorageImages) {
                 snap.valid = true;
                 snap.aspects = aspects.GetRaw();
+                snap.primitiveRestartEnable = ResolvePrimitiveRestartEnable(aspects, pIndexBufferView);
                 snap.mode = mode;
                 snap.programLifetimeId = program.GetLifetimeId();
                 snap.programVersion = program.GetBackendStateVersion();

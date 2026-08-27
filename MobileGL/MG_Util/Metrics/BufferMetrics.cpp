@@ -10,6 +10,15 @@
 
 namespace MobileGL {
     namespace MG_Util {
+        Uint32 FixedRestartIndexForGLType(GLenum indexType) {
+            switch (indexType) {
+            case GL_UNSIGNED_BYTE: return 0xFFu;
+            case GL_UNSIGNED_SHORT: return 0xFFFFu;
+            case GL_UNSIGNED_INT: return 0xFFFFFFFFu;
+            default: return 0;
+            }
+        }
+
         SizeT GetGLTypeSize(GLenum type) {
             switch (type) {
             // Scalars
