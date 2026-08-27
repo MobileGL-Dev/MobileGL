@@ -1772,6 +1772,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // clear-then-draw pair on an unchanged parameter block early-outs and the draw inherits
         // the clear's undoctored mask.
         static Uint32 g_syncedColorMaskAlphaWidenMask = 0;
+        // Scratch for the dual-source-blend decline path in the blend block below. File-scope
+        // rather than a local so the ordinary draw pays nothing for it: it is written only on a
+        // driver with no GL_EXT_blend_func_extended that is also handed a GL_SRC1_* factor, and
+        // SyncRenderState runs on the GL thread only.
+        static Array<PerBufferBlendState, MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS>
+            g_dualSourceDeclinedBlendStates;
         void InvalidateSyncedRenderState() {
             g_forceFullRenderStateResync = true;
             g_hasSyncedRenderState = false;
@@ -1931,31 +1937,66 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const auto& ToGLBoolean = [](Bool b) -> GLboolean { return b ? GL_TRUE : GL_FALSE; };
 
+            // Which draw buffers the blend block below DECLINED (see it for why). Needed again at
+            // the shadow write-back at the end of this function: the span memcpy there clones the
+            // FRONTEND block, which for a declined draw buffer is not what the driver was handed.
+            Uint32 dualSourceDeclinedMask = 0;
+
             if (blendSpanDirty) { // Blend State
                 using FBO = MG_State::GLState::FramebufferObject;
-                const auto& targetStates = parameters.BlendStates;
                 auto& syncedStates = g_syncedRenderStateParameters.BlendStates;
 
                 // Dual-source blending (GL_SRC1_* factors from glBlendFunc paired with
                 // glBindFragDataLocationIndexed) needs GL_EXT_blend_func_extended; GLES core has none.
-                // Detected at load and surfaced in the POST. There is no fallback, so if a draw actually
-                // enables blending with a SRC1 factor on a driver that lacks it, hard-fail here at use
-                // time rather than let the driver reject glBlendFuncSeparate and silently mis-blend.
+                // Detected at load and surfaced in the POST. There is no fallback that BLENDS
+                // correctly, so a draw that asks for a SRC1 factor on a driver without the extension
+                // gets the blend DECLINED: that draw buffer is pushed with blending off and neutral
+                // One/Zero factors, and the loss is logged once. The two rejected alternatives are
+                // both worse - pushing GL_SRC1_* at glBlendFuncSeparate leaves the driver to raise
+                // GL_INVALID_ENUM and keep whatever factors were there before (a silent mis-blend
+                // against stale state), and throwing, which is what this did until now, takes the
+                // whole process down over one unsupported blend factor. Declining is defined,
+                // survivable and visible in the log.
+                const auto* effectiveBlendStates = &parameters.BlendStates;
                 if (!g_GLESCapabilities.SupportsDualSourceBlend) {
                     for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
-                        const auto& s = targetStates[i];
+                        const auto& s = parameters.BlendStates[i];
                         if (s.Enabled &&
                             (IsDualSourceBlendFactor(s.SrcFactorRGB) || IsDualSourceBlendFactor(s.DstFactorRGB) ||
                              IsDualSourceBlendFactor(s.SrcFactorAlpha) || IsDualSourceBlendFactor(s.DstFactorAlpha))) {
-                            THROW_EXCEPTION(
-                                "Dual-source blending (GL_SRC1_* blend factor) was used on draw buffer " +
-                                std::to_string(i) +
-                                ", but the GLES driver does not expose GL_EXT_blend_func_extended (see the "
-                                "dual-source blend row in the driver POST). No fallback exists; the draw "
-                                "cannot proceed.");
+                            dualSourceDeclinedMask |= 1u << i;
                         }
                     }
+                    if (dualSourceDeclinedMask != 0) {
+                        MGLOG_E_ONCE(
+                            "SyncRenderState: dual-source blending (GL_SRC1_* blend factor) was requested on "
+                            "draw buffer mask 0x%x, but the GLES driver does not expose "
+                            "GL_EXT_blend_func_extended (see the dual-source blend row in the driver POST). "
+                            "Blending is DECLINED on those draw buffers - the fragment's first output is "
+                            "written unblended and the second source is dropped.",
+                            dualSourceDeclinedMask);
+                        g_dualSourceDeclinedBlendStates = parameters.BlendStates;
+                        for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
+                            if ((dualSourceDeclinedMask & (1u << i)) == 0) continue;
+                            auto& s = g_dualSourceDeclinedBlendStates[i];
+                            s.Enabled = false;
+                            // Neutral factors as well as the disable: the factor push below is not
+                            // gated on Enabled (one glBlendFuncSeparate serves every draw buffer when
+                            // they agree), so leaving Src1Color here would still hand the driver a
+                            // GL_SRC1_* enum it cannot parse.
+                            s.SrcFactorRGB = BlendFactor::One;
+                            s.DstFactorRGB = BlendFactor::Zero;
+                            s.SrcFactorAlpha = BlendFactor::One;
+                            s.DstFactorAlpha = BlendFactor::Zero;
+                        }
+                        effectiveBlendStates = &g_dualSourceDeclinedBlendStates;
+                    }
                 }
+                // The rest of the block reads the EFFECTIVE state. The per-field writes it makes
+                // into `syncedStates` are provisional - the span memcpy at the end of this function
+                // overwrites the whole blend span with the frontend's own bytes - so the declined
+                // draw buffers are put back there, see the write-back below.
+                const auto& targetStates = *effectiveBlendStates;
 
                 Bool allEnabled = true;
                 Bool allDisabled = true;
@@ -2355,6 +2396,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (blendSpanDirty) {
                 std::memcpy(syncedBytesMut + kBlendSpanBegin, currentBytes + kBlendSpanBegin,
                             kBlendSpanEnd - kBlendSpanBegin);
+                // ...except for a draw buffer whose dual-source blend was DECLINED, where the
+                // frontend block is precisely what did NOT reach the driver. The shadow has to hold
+                // what was pushed or the next diff compares against state the ES context never got:
+                // going from a SRC1 factor to an ordinary one leaves Enabled equal on both sides,
+                // the enable block finds nothing to do, and blending stays off from the decline.
+                // The span stays permanently "dirty" against the frontend as a result, which costs
+                // one memcmp plus this block per render-state VERSION change - the top-of-function
+                // version early-out still skips repeat draws entirely.
+                for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                    if ((dualSourceDeclinedMask & (1u << i)) == 0) continue;
+                    g_syncedRenderStateParameters.BlendStates[i] = g_dualSourceDeclinedBlendStates[i];
+                }
             }
             if (tailSpanDirty) {
                 std::memcpy(syncedBytesMut + kBlendSpanEnd, currentBytes + kBlendSpanEnd,

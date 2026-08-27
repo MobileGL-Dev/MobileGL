@@ -1034,14 +1034,69 @@ namespace {
         if (index < kRecordedDrawBuffers) g_driverIndexedColorMasks[index] = {true, r, g, b, a};
     }
 
+    // What the blend block of SyncRenderState pushed. Enough to answer the two questions the
+    // dual-source cases ask: is blending on for a draw buffer, and which factor enums reached
+    // the driver.
+    struct RecordedBlend {
+        Bool enabled = false;
+        Bool enableSeen = false;
+        Bool factorsSeen = false;
+        GLenum srcRGB = 0, dstRGB = 0, srcAlpha = 0, dstAlpha = 0;
+    };
+    RecordedBlend g_driverBlend[kRecordedDrawBuffers];
+
+    void ResetRecordedBlend() {
+        for (auto& recorded : g_driverBlend) recorded = {};
+    }
+
+    void RecordBlendEnable(Bool enabled) {
+        for (auto& recorded : g_driverBlend) {
+            recorded.enabled = enabled;
+            recorded.enableSeen = true;
+        }
+    }
+
+    void RecordBlendFactors(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) {
+        for (auto& recorded : g_driverBlend) {
+            recorded.factorsSeen = true;
+            recorded.srcRGB = srcRGB;
+            recorded.dstRGB = dstRGB;
+            recorded.srcAlpha = srcAlpha;
+            recorded.dstAlpha = dstAlpha;
+        }
+    }
+
     void StubViewport(GLint, GLint, GLsizei, GLsizei) {}
     void StubScissor(GLint, GLint, GLsizei, GLsizei) {}
-    void StubEnable(GLenum) {}
-    void StubDisable(GLenum) {}
-    void StubEnablei(GLenum, GLuint) {}
-    void StubDisablei(GLenum, GLuint) {}
-    void StubBlendFuncSeparate(GLenum, GLenum, GLenum, GLenum) {}
-    void StubBlendFuncSeparatei(GLuint, GLenum, GLenum, GLenum, GLenum) {}
+    void StubEnable(GLenum cap) {
+        if (cap == GL_BLEND) RecordBlendEnable(true);
+    }
+    void StubDisable(GLenum cap) {
+        if (cap == GL_BLEND) RecordBlendEnable(false);
+    }
+    void StubEnablei(GLenum cap, GLuint index) {
+        if (cap == GL_BLEND && index < kRecordedDrawBuffers) {
+            g_driverBlend[index].enabled = true;
+            g_driverBlend[index].enableSeen = true;
+        }
+    }
+    void StubDisablei(GLenum cap, GLuint index) {
+        if (cap == GL_BLEND && index < kRecordedDrawBuffers) {
+            g_driverBlend[index].enabled = false;
+            g_driverBlend[index].enableSeen = true;
+        }
+    }
+    void StubBlendFuncSeparate(GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) {
+        RecordBlendFactors(srcRGB, dstRGB, srcAlpha, dstAlpha);
+    }
+    void StubBlendFuncSeparatei(GLuint index, GLenum srcRGB, GLenum dstRGB, GLenum srcAlpha, GLenum dstAlpha) {
+        if (index >= kRecordedDrawBuffers) return;
+        g_driverBlend[index].factorsSeen = true;
+        g_driverBlend[index].srcRGB = srcRGB;
+        g_driverBlend[index].dstRGB = dstRGB;
+        g_driverBlend[index].srcAlpha = srcAlpha;
+        g_driverBlend[index].dstAlpha = dstAlpha;
+    }
     void StubBlendEquationSeparate(GLenum, GLenum) {}
     void StubBlendEquationSeparatei(GLuint, GLenum, GLenum) {}
     void StubBlendColor(GLfloat, GLfloat, GLfloat, GLfloat) {}
@@ -1066,7 +1121,9 @@ namespace {
     // into a driver that this process never made current.
     class ScopedRenderStateDriverStubs {
     public:
-        ScopedRenderStateDriverStubs():
+        // dualSourceBlendSupported models GL_EXT_blend_func_extended on the ES driver, which is
+        // the one capability in here that a real device is commonly WITHOUT.
+        explicit ScopedRenderStateDriverStubs(Bool dualSourceBlendSupported = true):
             m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
             auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
             gl = MG_External::GLESFunctionsTable{};
@@ -1102,9 +1159,10 @@ namespace {
             caps.SupportsIndexedColorMask = true;
             caps.SupportsSrgbWriteControl = false;
             caps.SupportsPolygonMode = false;
-            caps.SupportsDualSourceBlend = true;
+            caps.SupportsDualSourceBlend = dualSourceBlendSupported;
 
             ResetRecordedColorMasks();
+            ResetRecordedBlend();
             // The viewport and scissor blocks fall back to querying the surface size when the
             // frontend's rectangle is degenerate, and there is no surface in this process.
             MG_Impl::GLImpl::Viewport(0, 0, 4, 4);
@@ -1119,6 +1177,11 @@ namespace {
             // The shadow now describes pushes that went to the stubs, not to any driver.
             MG_Backend::DirectGLES::RenderStateImpl::InvalidateSyncedRenderState();
             MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            // Blend state is per-CONTEXT and the context outlives the fixture, so a case that
+            // enabled blending or asked for an exotic factor has to put it back or every later
+            // case in this binary inherits it.
+            MG_Impl::GLImpl::Disable(GL_BLEND);
+            MG_Impl::GLImpl::BlendFunc(GL_ONE, GL_ZERO);
         }
 
     private:
@@ -1250,6 +1313,72 @@ TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffe
     EXPECT_EQ(g_driverIndexedColorMasks[2].g, GL_TRUE);
     EXPECT_EQ(g_driverIndexedColorMasks[2].b, GL_FALSE);
     EXPECT_EQ(g_driverIndexedColorMasks[2].a, GL_TRUE) << "a native buffer keeps its alpha writes";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// --- Dual-source blending without GL_EXT_blend_func_extended ------------------------------------
+//
+// GL_SRC1_* blend factors are core GL since 3.3, GLES core has nothing equivalent, and the ES
+// driver may or may not carry GL_EXT_blend_func_extended. When it does, the factors translate and
+// blend properly - the positive case below. When it does not, the blend block used to
+// THROW_EXCEPTION, which is a plain `throw` (MG_Util/Types.h) with no catch anywhere in MG_Impl or
+// MG_Backend, so it unwound out through the C GL ABI and killed the process over one unsupported
+// blend factor. It now DECLINES: the draw buffer is pushed with blending off and neutral One/Zero
+// factors, and the loss is logged once.
+//
+// Both halves are asserted at the seam that matters - what the ES driver is actually handed -
+// because a GL_SRC1_* enum reaching a driver without the extension is the other failure mode: the
+// driver answers GL_INVALID_ENUM, keeps whatever factors were set before, and mis-blends silently.
+
+TEST_F(FramebufferTest, DualSourceBlendFactorsReachTheDriverWhenTheExtensionIsThere) {
+    ScopedRenderStateDriverStubs driver(/*dualSourceBlendSupported=*/true);
+
+    MG_Impl::GLImpl::Enable(GL_BLEND);
+    MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_SRC1_* is core since 3.3; glBlendFunc must take it";
+    ResetRecordedBlend();
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+
+    ASSERT_TRUE(g_driverBlend[0].factorsSeen);
+    EXPECT_TRUE(g_driverBlend[0].enabled) << "nothing may decline a blend the driver can do";
+    EXPECT_EQ(g_driverBlend[0].srcRGB, static_cast<GLenum>(GL_SRC1_COLOR));
+    EXPECT_EQ(g_driverBlend[0].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_COLOR));
+    EXPECT_EQ(g_driverBlend[0].srcAlpha, static_cast<GLenum>(GL_SRC1_COLOR));
+    EXPECT_EQ(g_driverBlend[0].dstAlpha, static_cast<GLenum>(GL_ONE_MINUS_SRC1_COLOR));
+}
+
+TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensionIsMissing) {
+    ScopedRenderStateDriverStubs driver(/*dualSourceBlendSupported=*/false);
+
+    MG_Impl::GLImpl::Enable(GL_BLEND);
+    MG_Impl::GLImpl::BlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
+        << "the FRONTEND accepts the factor whatever the driver can do - the decline is a backend decision";
+    ResetRecordedBlend();
+
+    // The whole point: this used to be `throw std::runtime_error` straight through the GL ABI.
+    ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
+
+    ASSERT_TRUE(g_driverBlend[0].enableSeen) << "the blend enable still has to be pushed";
+    EXPECT_FALSE(g_driverBlend[0].enabled) << "a blend the driver cannot do is declined, not attempted";
+    for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
+        EXPECT_NE(g_driverBlend[i].srcRGB, static_cast<GLenum>(GL_SRC1_ALPHA))
+            << "draw buffer " << i << ": no GL_SRC1_* enum may reach a driver without the extension";
+        EXPECT_NE(g_driverBlend[i].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_ALPHA)) << "draw buffer " << i;
+        EXPECT_NE(g_driverBlend[i].srcAlpha, static_cast<GLenum>(GL_SRC1_ALPHA)) << "draw buffer " << i;
+        EXPECT_NE(g_driverBlend[i].dstAlpha, static_cast<GLenum>(GL_ONE_MINUS_SRC1_ALPHA)) << "draw buffer " << i;
+    }
+
+    // The decline is scoped to the offending factor, not to blending as a whole: an ordinary
+    // blend on the same driver still goes through, and the SAME sync that declined the first one
+    // is what has to push it.
+    MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    ResetRecordedBlend();
+    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    ASSERT_TRUE(g_driverBlend[0].factorsSeen);
+    EXPECT_TRUE(g_driverBlend[0].enabled);
+    EXPECT_EQ(g_driverBlend[0].srcRGB, static_cast<GLenum>(GL_SRC_ALPHA));
+    EXPECT_EQ(g_driverBlend[0].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC_ALPHA));
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 

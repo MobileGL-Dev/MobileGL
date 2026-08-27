@@ -5533,18 +5533,32 @@ void main() {
                 }
             }
             // Dual-source blending (GL_SRC1_* factors from glBlendFunc paired with
-            // glBindFragDataLocationIndexed) requires the dualSrcBlend device feature. It is detected at
-            // device creation and surfaced in the POST; if a shader actually issues a draw with a SRC1
-            // factor on a device that lacks it, there is no fallback, so hard-fail here at use time
-            // rather than silently mistranslating the blend equation.
-            if (effectiveBlendEnabled && !m_dualSrcBlendFeatureEnabled &&
+            // glBindFragDataLocationIndexed) requires the dualSrcBlend device feature. It is detected
+            // at device creation and surfaced in the POST; there is no fallback that BLENDS correctly,
+            // so a draw that asks for a SRC1 factor on a device without the feature gets the blend
+            // DECLINED - this attachment is baked with blending off and neutral One/Zero factors, and
+            // the loss is logged once. Both the factors AND the enable have to be neutralised:
+            // VUID-VkPipelineColorBlendAttachmentState-srcColorBlendFactor-00608 and its three
+            // siblings forbid a VK_BLEND_FACTOR_SRC1_* in the struct without the feature whatever
+            // blendEnable says, so clearing only the enable would still be invalid pipeline state.
+            // The previous behaviour, throwing, took the whole process down over one unsupported
+            // blend factor; this is defined, survivable and visible in the log, and it matches what
+            // the non-blendable-format arm above already does.
+            if (!m_dualSrcBlendFeatureEnabled &&
                 (IsDualSourceBlendFactor(srcRGB) || IsDualSourceBlendFactor(dstRGB) ||
                  IsDualSourceBlendFactor(srcAlpha) || IsDualSourceBlendFactor(dstAlpha))) {
-                THROW_EXCEPTION(
-                    "Dual-source blending (GL_SRC1_* blend factor) was used on color attachment " +
-                    std::to_string(i) +
-                    ", but the Vulkan device does not support the dualSrcBlend feature (see the "
-                    "dualSrcBlend row in the driver POST). No fallback exists; the draw cannot proceed.");
+                MGLOG_E_ONCE(
+                    "GetOrCreatePipeline: dual-source blending (GL_SRC1_* blend factor) was requested on "
+                    "color attachment %u, but the Vulkan device does not support the dualSrcBlend feature "
+                    "(see the dualSrcBlend row in the driver POST). Blending is DECLINED on that "
+                    "attachment - the fragment's first output is written unblended and the second source "
+                    "is dropped (program=%u)",
+                    i, program.GetExternalIndex());
+                effectiveBlendEnabled = false;
+                srcRGB = BlendFactor::One;
+                dstRGB = BlendFactor::Zero;
+                srcAlpha = BlendFactor::One;
+                dstAlpha = BlendFactor::Zero;
             }
             payload.colorBlendAttachments[i] = MakeColorBlendAttachmentState(
                 effectiveBlendEnabled,
