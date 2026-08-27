@@ -554,7 +554,8 @@ namespace MobileGL::MG_State::GLState {
         // asked for is the safer of the two readings.
         if (task->in.requestedXfbVaryings.empty()) {
             for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::Vertex}) {
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
+                  ShaderStage::Vertex}) {
                 Bool stagePresent = false;
                 for (const auto& shader : m_shaders) {
                     if (!shader || shader->GetShaderStage() != captureStage) continue;

@@ -710,8 +710,15 @@ namespace MobileGL::MG_State {
             //     must not, or failing the link and killing every draw. A capture stage with an
             //     empty list is not a reason to look further down: it is the answer, and
             //     glBeginTransformFeedback's INVALID_OPERATION is the correct consequence.
+            //
+            // The order is the pipeline read backwards and includes the tessellation CONTROL
+            // stage, which is a vertex-processing stage too (GL 4.6 core 11): it can only be
+            // the last one in a pipeline that has a TCS but no evaluation or geometry stage,
+            // which is why it sits after TessEval. Same four stages, same order, as
+            // ProgramLinkTask::ResolveTransformFeedbackVaryings - see rule (2).
             for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::Vertex}) {
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
+                  ShaderStage::Vertex}) {
                 if (!compositeHasStage[static_cast<SizeT>(captureStage)]) continue;
                 const auto& captureProgram = pipeline->GetStageProgram(captureStage);
                 if (!captureProgram) continue;

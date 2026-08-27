@@ -1910,10 +1910,18 @@ namespace MobileGL::MG_State::GLState {
             return true;
         }
 
-        // Capture happens at the last vertex-processing stage (geometry, then
-        // tessellation evaluation, then vertex).
+        // Capture happens at the last vertex-processing stage (geometry, then tessellation
+        // evaluation, then tessellation CONTROL, then vertex). All four are vertex-processing
+        // stages in GL 4.6 core 11 - the control shader included - and in a separable program
+        // whose only stage is a TCS it is the last one that exists, so it is the capture stage
+        // and such a program MUST link (GL 4.6 core 7.3/11.1.2.1; the conformance suite spells
+        // the API split out at esextcTessellationShaderXFB.cpp:390-416, where a non-ES context
+        // takes should_succeed=true). TessControl sits AFTER TessEvaluation so a complete
+        // pipeline still captures at the evaluation stage and only a TCS-only program falls
+        // through to it. If MobileGL ever serves an ES context this arm has to be gated on the
+        // advertised API: ES requires the very same link to FAIL.
         const glslang::TIntermediate* captureIntermediate = nullptr;
-        for (EShLanguage stage : {EShLangGeometry, EShLangTessEvaluation, EShLangVertex}) {
+        for (EShLanguage stage : {EShLangGeometry, EShLangTessEvaluation, EShLangTessControl, EShLangVertex}) {
             captureIntermediate = artifacts.program->getIntermediate(stage);
             if (captureIntermediate != nullptr) {
                 break;
