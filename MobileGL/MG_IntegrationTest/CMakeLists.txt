@@ -108,6 +108,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/AtomicCounterScenario.cpp
     Scenarios/SsboArrayDynamicIndexScenario.cpp
     Scenarios/StorageBufferRegrowScenario.cpp
+    Scenarios/SpirvShaderBinaryScenario.cpp
     Scenarios/RelinkStageSetScenario.cpp
     Scenarios/GuiBatchScenario.cpp
     Scenarios/UnboundImageDescriptorScenario.cpp

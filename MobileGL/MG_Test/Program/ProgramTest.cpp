@@ -4363,3 +4363,230 @@ TEST_F(ProgramTest, UniformEntryPointsRejectAnUnlinkedProgram) {
 
     DrainProgramTestErrors();
 }
+
+// ---------------------------------------------------------------------------------------------
+// GL_ARB_gl_spirv, core since 4.6. glShaderBinary and glSpecializeShader were
+// DECLARE_GL_FUNCTION_STUB entry points - they took their arguments, recorded no error and did
+// nothing - and glGetShaderiv(GL_SPIR_V_BINARY) fell into the terminal INVALID_ENUM arm, which is
+// where all nine gl_spirv conformance bodies died.
+//
+// The module below is a real one, compiled ahead of time by glslangValidator (-G --target-env
+// opengl) so this GPU-free binary needs no toolchain at run time. Its GLSL:
+//     layout(location = 0) in vec2 aPos;
+//     layout(constant_id = 3) const float uScale = 1.0;
+//     void main() { gl_Position = vec4(aPos * uScale, 0.0, 1.0); }
+// The RENDERING half of the path is asserted separately, on a real context, in
+// MG_IntegrationTest/Scenarios/SpirvShaderBinaryScenario.cpp.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    // Asserts a call recorded exactly one error and drains it, so the next case starts clean.
+    void ExpectOnlyThisGlError(GLenum expected) {
+        EXPECT_EQ(GetError(), expected);
+        EXPECT_EQ(GetError(), GL_NO_ERROR) << "the call recorded more than one error";
+    }
+
+        // 255 words
+        const unsigned int kVertexModule[] = {
+            0x07230203u, 0x00010000u, 0x0008000bu, 0x00000020u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+            0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+            0x0009000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000012u, 0x0000001eu,
+            0x0000001fu, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u,
+            0x00060005u, 0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x0000000bu,
+            0x00000000u, 0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u,
+            0x746e696fu, 0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u, 0x4470696cu,
+            0x61747369u, 0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u,
+            0x0065636eu, 0x00030005u, 0x0000000du, 0x00000000u, 0x00040005u, 0x00000012u, 0x736f5061u, 0x00000000u,
+            0x00040005u, 0x00000014u, 0x61635375u, 0x0000656cu, 0x00050005u, 0x0000001eu, 0x565f6c67u, 0x65747265u,
+            0x00444978u, 0x00060005u, 0x0000001fu, 0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x00000044u, 0x00030047u,
+            0x0000000bu, 0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u,
+            0x0000000bu, 0x00000001u, 0x0000000bu, 0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu,
+            0x00000003u, 0x00050048u, 0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000012u,
+            0x0000001eu, 0x00000000u, 0x00040047u, 0x00000014u, 0x00000001u, 0x00000003u, 0x00040047u, 0x0000001eu,
+            0x0000000bu, 0x00000005u, 0x00040047u, 0x0000001fu, 0x0000000bu, 0x00000006u, 0x00020013u, 0x00000002u,
+            0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u,
+            0x00000006u, 0x00000004u, 0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u,
+            0x00000009u, 0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u, 0x0006001eu, 0x0000000bu,
+            0x00000007u, 0x00000006u, 0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu,
+            0x0004003bu, 0x0000000cu, 0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u,
+            0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040017u, 0x00000010u, 0x00000006u, 0x00000002u,
+            0x00040020u, 0x00000011u, 0x00000001u, 0x00000010u, 0x0004003bu, 0x00000011u, 0x00000012u, 0x00000001u,
+            0x00040032u, 0x00000006u, 0x00000014u, 0x3f800000u, 0x0004002bu, 0x00000006u, 0x00000016u, 0x00000000u,
+            0x0004002bu, 0x00000006u, 0x00000017u, 0x3f800000u, 0x00040020u, 0x0000001bu, 0x00000003u, 0x00000007u,
+            0x00040020u, 0x0000001du, 0x00000001u, 0x0000000eu, 0x0004003bu, 0x0000001du, 0x0000001eu, 0x00000001u,
+            0x0004003bu, 0x0000001du, 0x0000001fu, 0x00000001u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
+            0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000010u, 0x00000013u, 0x00000012u, 0x0005008eu,
+            0x00000010u, 0x00000015u, 0x00000013u, 0x00000014u, 0x00050051u, 0x00000006u, 0x00000018u, 0x00000015u,
+            0x00000000u, 0x00050051u, 0x00000006u, 0x00000019u, 0x00000015u, 0x00000001u, 0x00070050u, 0x00000007u,
+            0x0000001au, 0x00000018u, 0x00000019u, 0x00000016u, 0x00000017u, 0x00050041u, 0x0000001bu, 0x0000001cu,
+            0x0000000du, 0x0000000fu, 0x0003003eu, 0x0000001cu, 0x0000001au, 0x000100fdu, 0x00010038u,
+        };
+} // namespace
+
+TEST_F(ProgramTest, ShaderBinaryStoresASpirvModuleAndTheStateQueryReportsIt) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    GLint isSpirv = GL_TRUE;
+    GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "GL_SPIR_V_BINARY is an accepted pname in a 4.6 context";
+    EXPECT_EQ(isSpirv, GL_FALSE);
+
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(isSpirv, GL_TRUE);
+
+    // glCompileShader on a SPIR-V shader is INVALID_OPERATION: glSpecializeShader is what compiles
+    // one. This is the whole of spirv_modules_error_verification_test's first assertion.
+    CompileShader(shader);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    // glShaderSource takes the object back to being a GLSL shader.
+    const char* source = "#version 450 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    ShaderSource(shader, 1, &source, nullptr);
+    GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(isSpirv, GL_FALSE);
+    CompileShader(shader);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, ShaderBinaryValidatesItsArguments) {
+    DrainProgramTestErrors();
+
+    GLuint shaders[2] = {0, 0};
+    shaders[0] = CreateShader(GL_VERTEX_SHADER);
+    shaders[1] = CreateShader(GL_FRAGMENT_SHADER);
+
+    // The only accepted format is the SPIR-V one; the stub used to accept everything silently.
+    ShaderBinary(1, shaders, GL_PROGRAM_BINARY_FORMATS, kVertexModule, sizeof(kVertexModule));
+    ExpectOnlyThisGlError(GL_INVALID_ENUM);
+
+    // A SPIR-V module is a sequence of 32-bit words.
+    ShaderBinary(1, shaders, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule) - 1);
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+
+    // The same shader twice is INVALID_VALUE, and nothing may have been attached.
+    GLuint duplicated[2] = {shaders[0], shaders[0]};
+    ShaderBinary(2, duplicated, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+    GLint isSpirv = GL_TRUE;
+    GetShaderiv(shaders[0], GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(isSpirv, GL_FALSE) << "a rejected glShaderBinary is all-or-nothing";
+
+    // A name that is not a shader object.
+    GLuint bogus = 0xBADBEEF;
+    ShaderBinary(1, &bogus, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+
+    // Something that is not SPIR-V at all: the magic number gate, before SPIRV-Cross ever sees it.
+    const unsigned int notSpirv[4] = {0xDEADBEEFu, 0u, 0u, 0u};
+    ShaderBinary(1, shaders, GL_SHADER_BINARY_FORMAT_SPIR_V, notSpirv, sizeof(notSpirv));
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+    GetShaderiv(shaders[0], GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(isSpirv, GL_FALSE);
+
+    // ONE call, TWO shader objects - the shape spirv_modules_shader_binary_multiple_shader_objects_test
+    // exercises. Both end up holding the module.
+    ShaderBinary(2, shaders, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    for (const GLuint shader : shaders) {
+        GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
+        EXPECT_EQ(isSpirv, GL_TRUE);
+    }
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, SpecializeShaderCompilesTheModuleAndAppliesItsConstants) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+
+    // Before any module: INVALID_OPERATION rather than a silent no-op.
+    const unsigned int constantId = 3;
+    const unsigned int constantValue = 0;
+    SpecializeShader(shader, "main", 1, &constantId, &constantValue);
+    ExpectOnlyThisGlError(GL_INVALID_OPERATION);
+
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // Constant id 3 is the module's `uScale`, handed over as the bit pattern of 0.5f.
+    float half = 0.5f;
+    unsigned int halfBits = 0;
+    std::memcpy(&halfBits, &half, sizeof(halfBits));
+    SpecializeShader(shader, "main", 1, &constantId, &halfBits);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    GLint compiled = GL_FALSE;
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    char infoLog[2048] = "";
+    GetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
+    EXPECT_EQ(compiled, GL_TRUE) << infoLog;
+
+    // The module stays attached after specialization: glSpecializeShader may legally run again
+    // with different constants, and it has to re-specialize the ORIGINAL words.
+    GLint isSpirv = GL_FALSE;
+    GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
+    EXPECT_EQ(isSpirv, GL_TRUE);
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    EXPECT_EQ(compiled, GL_TRUE) << "a second specialization of the same module must also compile";
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, SpecializeShaderReportsBadEntryPointsAndUnknownConstantsThroughCompileStatus) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // A constant id the module does not declare. ARB_gl_spirv routes a failed specialization
+    // through COMPILE_STATUS and the info log, exactly as glCompileShader does - it is not a GL
+    // error, which is why an application that only checks glGetError would see nothing.
+    const unsigned int unknownId = 4242;
+    const unsigned int value = 0;
+    SpecializeShader(shader, "main", 1, &unknownId, &value);
+    GLint compiled = GL_TRUE;
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    EXPECT_EQ(compiled, GL_FALSE);
+    GLint logLength = 0;
+    GetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+    EXPECT_GT(logLength, 0) << "a failed specialization has to say why";
+
+    // A repeated constant index is GL_INVALID_VALUE at the entry point itself.
+    const unsigned int repeated[2] = {3, 3};
+    const unsigned int values[2] = {0, 0};
+    SpecializeShader(shader, "main", 2, repeated, values);
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+
+    // An entry point the module does not carry.
+    SpecializeShader(shader, "notMain", 0, nullptr, nullptr);
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    EXPECT_EQ(compiled, GL_FALSE);
+
+    DrainProgramTestErrors();
+}
+
+TEST_F(ProgramTest, ShaderBinaryFormatsAreAdvertisedConsistently) {
+    DrainProgramTestErrors();
+
+    GLint count = -1;
+    GetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &count);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    ASSERT_EQ(count, 1);
+
+    GLint formats[4] = {0, 0, 0, 0};
+    GetIntegerv(GL_SHADER_BINARY_FORMATS, formats);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+    EXPECT_EQ(formats[0], static_cast<GLint>(GL_SHADER_BINARY_FORMAT_SPIR_V))
+        << "the count and the list have to describe the same thing";
+
+    DrainProgramTestErrors();
+}
