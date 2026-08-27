@@ -551,10 +551,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+                // `layered` has to travel with the split. GL_DEPTH_STENCIL_ATTACHMENT is only a
+                // shorthand for attaching the same image to both halves (GL 4.6 core 9.2.6), so
+                // whether glFramebufferTexture made it LAYERED is a property of the call, not of
+                // which half is being recorded - and dropping it here (the parameter defaults to
+                // false) recorded a non-layered depth/stencil attachment beside a layered colour
+                // one for every layered target. That is an inconsistent framebuffer by 9.4.1's
+                // own rule, and downstream it means the depth/stencil attachment covers layer 0
+                // alone: DirectVulkan built its view with layerCount 1 under a framebuffer
+                // declaring N layers (VUID-VkFramebufferCreateInfo-flags-04535), and DirectGLES
+                // attached one layer of it beside a layered colour target, which the driver
+                // answers with GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS - every draw silently
+                // produced nothing. This is the shape
+                // texture_cube_map_array.stencil_attachments_*_layered and
+                // geometry_shader.layered_framebuffer.stencil_support are built on.
                 AttachFramebufferTextureWithUploadTarget(functionName, target, GL_DEPTH_ATTACHMENT, texture, level,
-                                                        textureUploadTarget);
+                                                        textureUploadTarget, layered);
                 AttachFramebufferTextureWithUploadTarget(functionName, target, GL_STENCIL_ATTACHMENT, texture, level,
-                                                        textureUploadTarget);
+                                                        textureUploadTarget, layered);
                 return;
             }
 
