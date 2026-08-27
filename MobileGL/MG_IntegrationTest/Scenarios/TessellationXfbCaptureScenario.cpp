@@ -235,6 +235,19 @@ void main()
             // assertions anyway and report Failed instead of Skipped.
             std::string WhyPointSizeCasesCannotRun();
 
+            // The geometry stage's own answer, and it has to BE its own answer: the two ESSL
+            // extensions are independent (Loader models them as two PointSizeTier fields fed by
+            // four distinct strings, and neither implies the other), so a driver with
+            // tessellation point size and no geometry point size passes the probe above and
+            // still cannot run the case below. Same two-program shape, one stage over.
+            //
+            // It also replaces a guard that could never fire: GL_MAX_GEOMETRY_OUTPUT_VERTICES is
+            // a hardcoded frontend constant (256) with no capability behind it, so "does this
+            // stack have a geometry stage at all" can only be answered by trying to build one -
+            // which is what this does, exactly as IoBlockNameCollisionScenario does for the same
+            // reason.
+            std::string WhyGeometryPointSizeCaseCannotRun();
+
             std::vector<GLuint> m_programs;
             std::string m_buildLog;
             GLuint m_vao = 0;
@@ -591,13 +604,70 @@ void main()
 }
 )";
 
+        // The control: identical but for the gl_PointSize write, so the pair answers "can this
+        // stack host a geometry stage that names the built-in" without asking anything about
+        // capture.
+        const char* const kPointSizeFreeGeometrySource = R"(#version 420 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+out float gs_value;
+void main()
+{
+    gs_value    = 7.0;
+    gl_Position = gl_in[0].gl_Position;
+    EmitVertex();
+}
+)";
+
+        std::string TessellationXfbCaptureScenario::WhyGeometryPointSizeCaseCannotRun() {
+            const auto probeCaptures = [&](const char* geometrySource) {
+                const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kMinimalVertexSource},
+                                                            {GL_GEOMETRY_SHADER, geometrySource},
+                                                            {GL_FRAGMENT_SHADER, kFragmentSource}},
+                                                           {"gs_value"});
+                if (program == 0) return false;
+                const std::vector<float> poison(1, kPoison);
+                GLuint xfbBuffer = 0;
+                glGenBuffers(1, &xfbBuffer);
+                glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
+                glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(sizeof(float)), poison.data(),
+                             GL_STATIC_DRAW);
+                glBindVertexArray(m_vao);
+                glUseProgram(program);
+                glEnable(GL_RASTERIZER_DISCARD);
+                glBeginTransformFeedback(GL_POINTS);
+                glDrawArrays(GL_POINTS, 0, 1);
+                glEndTransformFeedback();
+                glDisable(GL_RASTERIZER_DISCARD);
+                float captured = kPoison;
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(float)),
+                                   &captured);
+                glUseProgram(0);
+                glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+                glDeleteBuffers(1, &xfbBuffer);
+                DrainErrors();
+                return captured == 7.0f;
+            };
+
+            if (probeCaptures(kPointSizeGeometrySource)) return {};
+            if (!probeCaptures(kPointSizeFreeGeometrySource)) {
+                // The control failed too, so this stack cannot run a capturing geometry stage at
+                // all - which is not what this case is about, and is the question the dead
+                // GL_MAX_GEOMETRY_OUTPUT_VERTICES guard was trying to ask. Skipping rather than
+                // failing loses nothing: XfbRepeatedCaptureScenario pins plain geometry capture
+                // and goes red on its own if that is what actually broke.
+                return "this backend cannot capture from a geometry stage at all, with or without gl_PointSize";
+            }
+            return "this backend cannot express gl_PointSize in a geometry stage - the same program captures an "
+                   "ordinary varying with the gl_PointSize write removed and captures nothing with it present "
+                   "(an ES driver without GL_EXT/OES_geometry_point_size, which is a SEPARATE extension from the "
+                   "tessellation one, or a Vulkan device without shaderTessellationAndGeometryPointSize)";
+        }
+
         TEST_F(TessellationXfbCaptureScenario, CapturesGlPointSizeByNameFromTheGeometryStage) {
             if (!Ready()) GTEST_SKIP();
-            GLint maxGeometryOutputVertices = 0;
-            glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-            DrainErrors();
-            if (maxGeometryOutputVertices < 1) {
-                GTEST_SKIP() << "no geometry stage on " << Gl().BackendName() << " (" << Gl().RendererString() << ")";
+            if (const std::string reason = WhyGeometryPointSizeCaseCannotRun(); !reason.empty()) {
+                GTEST_SKIP() << reason << " (" << Gl().BackendName() << ", " << Gl().RendererString() << ")";
             }
 
             const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kMinimalVertexSource},
