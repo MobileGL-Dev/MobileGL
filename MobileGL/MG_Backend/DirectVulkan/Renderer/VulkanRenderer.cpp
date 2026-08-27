@@ -3916,10 +3916,15 @@ void main() {
         // Copies index data, replacing every occurrence of the application's arbitrary restart
         // index with the fixed all-ones value of the index type - the only one Vulkan restarts
         // on. An index that already equals the fixed value would then be indistinguishable from
-        // a restart, so it is nudged to the next-lowest value: it can only be a real index (the
-        // application's restart index is a different number), and the vertex it selects is
-        // outside any well-defined draw anyway, whereas leaving it alone would tear the
-        // primitive in two.
+        // a restart, so it is nudged to the next-lowest value, which silently draws the wrong
+        // vertex. That is a real (if narrow) loss and it is reported once rather than left
+        // invisible; DirectGLES avoids it for 8- and 16-bit indices by widening the copy instead,
+        // and the same treatment here is follow-up work.
+        //
+        // The caller guarantees applicationRestartIndex fits the index type, so no truncating
+        // cast is needed - and none may be used: truncating turns glPrimitiveRestartIndex(0x100)
+        // over 8-bit indices into "restart on index 0", which shreds every primitive that
+        // references vertex 0.
         void RewriteRestartIndices(const void* source, SizeT sizeBytes, VkIndexType indexType,
                                    Uint32 applicationRestartIndex, Vector<Uint8>& output) {
             output.resize(sizeBytes);
@@ -3933,6 +3938,12 @@ void main() {
                     if (indices[i] == static_cast<decltype(fixedMax)>(applicationRestartIndex)) {
                         indices[i] = fixedMax;
                     } else if (indices[i] == fixedMax) {
+                        MGLOG_E_ONCE("GL_PRIMITIVE_RESTART with restart index %u over index data that also uses "
+                                     "the all-ones index %u: both cannot be spelled at this index width, so every "
+                                     "all-ones index is drawn one vertex lower. Use "
+                                     "GL_PRIMITIVE_RESTART_FIXED_INDEX, or keep the all-ones value out of the "
+                                     "index data.",
+                                     applicationRestartIndex, static_cast<Uint32>(fixedMax));
                         indices[i] = fixedMax - 1;
                     }
                 }
