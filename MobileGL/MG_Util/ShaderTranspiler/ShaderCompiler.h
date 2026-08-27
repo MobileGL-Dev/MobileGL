@@ -405,6 +405,45 @@ namespace MobileGL {
                                                    bool enableSpirvValidation = false);
                 static Result<String> DecompileShader(SpvcSession& session);
 
+                // ---- GL_ARB_gl_spirv ----
+                // Turn an APPLICATION-supplied SPIR-V module into the desktop GLSL the ordinary
+                // compile pipeline consumes.
+                //
+                // Why a round trip rather than handing the module straight to the backends. SPIR-V
+                // is not where MobileGL's pipeline STARTS: a program's whole GL-visible surface -
+                // every glGetActiveUniform, every uniform location, every block index, the
+                // transform-feedback layout, the default-block UBO routing - is reflected out of
+                // glslang's TProgram at link (ProgramLinkTask::SnapshotGlslangReflection), and
+                // glslang can only build one from a GLSL parse. Injecting the module at
+                // ProgramSpirvTask instead would skip the link entirely and leave every one of
+                // those queries answering nothing. Decompiling puts the application's module at
+                // the head of the SAME pipeline, so reflection, the relaxed default-block
+                // lowering, both backends and every memo tier work on it unchanged.
+                //
+                // What it costs, stated plainly: names. A module stripped of OpName (which
+                // ARB_gl_spirv permits, and the conformance suite deliberately does) comes back
+                // with SPIRV-Cross's generated identifiers rather than with none, so the
+                // *_MAX_LENGTH queries answer those instead of 1.
+                //
+                // `entryPoint` selects among several OpEntryPoint of this stage's execution
+                // model; an empty string means "whichever one is there". The specialization
+                // constants glSpecializeShader supplied are applied in the same pass - SPIRV-Cross
+                // folds each into the emitted source as a literal once Vulkan semantics are off,
+                // which is exactly what "specialize, then compile" means for a GLSL consumer.
+                //
+                // `constantIds` and `constantValues` are the parallel arrays the entry point
+                // takes. A constant id the module does not declare is GL_INVALID_VALUE per the
+                // extension; it is reported through the error log rather than silently ignored.
+                static Result<String> SpecializeAndDecompileSpirvModule(const Vector<Uint32>& spirv,
+                                                                        GLenum shaderType, const String& entryPoint,
+                                                                        const Vector<Uint32>& constantIds,
+                                                                        const Vector<Uint32>& constantValues);
+
+                // spirv-val over an application-supplied module, against the environment MobileGL
+                // parses and emits under. glShaderBinary is where a malformed module has to be
+                // caught: past it the words reach SPIRV-Cross, which is not a validator.
+                static Result<void> ValidateSpirvModule(const Vector<Uint32>& spirv);
+
                 // Parses one trivial shader in each configuration the production path can
                 // reach, on the calling thread, so the built-in symbol tables those
                 // configurations need are already cached before any worker asks for one.

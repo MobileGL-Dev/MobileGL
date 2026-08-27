@@ -160,6 +160,21 @@ namespace MobileGL {
                 // A block carrying only ONE of the two is left exactly as it is: those really do
                 // constrain the accesses the shader makes, and the driver is entitled to know.
                 spvc_result RelaxReadWriteExclusiveStorageBuffers();
+                // ---- GL_ARB_gl_spirv: an APPLICATION-supplied module, not one MobileGL emitted ----
+                // Select which OpEntryPoint of `model` this session compiles. A module may carry
+                // several of the same execution model, and glSpecializeShader names the one the
+                // shader object stands for.
+                spvc_result SetEntryPoint(const char* name, SpvExecutionModel model);
+                // Bake glSpecializeShader's values into the module's specialization constants.
+                // Every value is a GLuint on the GL side and is reinterpreted according to the
+                // constant's own scalar type, exactly as ARB_gl_spirv specifies ("the value is
+                // interpreted as the type of the specialization constant"). Returns false and
+                // sets `outUnknownConstantId` when an id the caller passed is not a
+                // specialization constant of this module, which the extension makes
+                // GL_INVALID_VALUE.
+                Bool SetSpecializationConstants(const Vector<Uint32>& constantIds,
+                                                const Vector<Uint32>& constantValues,
+                                                Uint32& outUnknownConstantId);
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;
                 const char* GetLastErrorString() const;

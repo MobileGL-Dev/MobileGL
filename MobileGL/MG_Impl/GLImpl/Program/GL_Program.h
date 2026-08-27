@@ -13,6 +13,12 @@ namespace MobileGL::MG_Impl::GLImpl {
     void AttachShader(GLuint program, GLuint shader);
     void BindAttribLocation(GLuint program, GLuint index, const GLchar* name);
     void CompileShader(GLuint shader);
+    // GL_ARB_gl_spirv, core since 4.6. The pair is a two-step operation: glShaderBinary attaches
+    // the module to one or more shader objects, glSpecializeShader names its entry point and
+    // supplies its specialization constants and is what actually compiles them.
+    void ShaderBinary(GLsizei count, const GLuint* shaders, GLenum binaryformat, const void* binary, GLsizei length);
+    void SpecializeShader(GLuint shader, const GLchar* pEntryPoint, GLuint numSpecializationConstants,
+                          const GLuint* pConstantIndex, const GLuint* pConstantValue);
     GLuint CreateProgram(void);
     GLuint CreateShader(GLenum type);
     void DeleteProgram(GLuint program);

@@ -65,6 +65,28 @@ namespace MobileGL {
             void SetShaderSource(const String& source);
             void SetShaderSource(String&& source);
             void Compile();
+
+            // ---- GL_ARB_gl_spirv ----
+            // glShaderBinary(GL_SHADER_BINARY_FORMAT_SPIR_V): the object stops standing for a
+            // GLSL source and starts standing for an application-supplied SPIR-V module. The
+            // module is held verbatim until glSpecializeShader names an entry point for it -
+            // ARB_gl_spirv makes the pair a two-step operation, and glCompileShader in between is
+            // INVALID_OPERATION rather than a compile of anything.
+            //
+            // Both directions clear the other: glShaderSource on a SPIR-V shader takes it back to
+            // being a GLSL shader with GL_SPIR_V_BINARY reading FALSE, which the conformance suite
+            // checks explicitly.
+            void SetSpirvBinary(Vector<Uint32>&& binary);
+            Bool HasSpirvBinary() const { return m_hasSpirvBinary; }
+            const Vector<Uint32>& GetSpirvBinary() const { return m_spirvBinary; }
+            // glSpecializeShader's half: hand the object the GLSL its module specializes to and
+            // let the ordinary pipeline compile it.
+            void SpecializeFromSpirv(String&& glsl);
+            // The other half: specialization itself failed (a bad entry point, a constant id the
+            // module does not declare, a module spirv-val rejects). There is nothing to compile,
+            // so the verdict is recorded directly - COMPILE_STATUS false with this log - and both
+            // queries answer from it without touching the compile pipeline.
+            void RecordSpecializationFailure(String&& infoLog);
             // Gives up this object's claim on its compile node, cancelling the node only if
             // this object was its LAST claimant. Called at the points where the object's
             // compiled state stops being observable through THIS name: a real source change,
@@ -99,14 +121,16 @@ namespace MobileGL {
             const SharedPtr<const String>& GetShaderSourcePtr() const { return m_source; }
 
             const SharedPtr<glslang::TShader>& GetCompiledShader() const { return Compiled().shader; }
-            const String& GetInfoLog() const { return Compiled().infoLog; }
+            const String& GetInfoLog() const {
+                return m_specializationFailed ? m_specializationInfoLog : Compiled().infoLog;
+            }
             // Explicit layout(location = N) qualifiers on this shader's default-block
             // uniforms, as glslang recorded them at the point its Vulkan-relaxed remap
             // discarded them (see CollectExplicitUniformLocations).
             const UnorderedMap<String, Int>& GetExplicitUniformLocations() const {
                 return Compiled().explicitUniformLocations;
             }
-            Bool GetCompileStatus() const { return Compiled().compileStatus; }
+            Bool GetCompileStatus() const { return m_specializationFailed ? false : Compiled().compileStatus; }
             Bool GetDeleteStatus() const { return m_deleteStatus; }
 
             // Blocks until a pending compile has published its artifacts. Public for the
@@ -248,6 +272,18 @@ namespace MobileGL {
             // query optimistically for the current node. Cleared wherever the node
             // changes hands (AdoptCompileNode) or goes away (DropCompileNode).
             mutable Bool m_optimisticAnswerLatched = false;
+            // The application-supplied SPIR-V module and the flag GL_SPIR_V_BINARY reports. The
+            // module is kept after specialization too: glSpecializeShader may legally run again on
+            // the same object with different constants, and the second call has to re-specialize
+            // the ORIGINAL words rather than the ones the first call folded.
+            Vector<Uint32> m_spirvBinary;
+            Bool m_hasSpirvBinary = false;
+            // A specialization that failed before any compile could start. Kept beside the
+            // compile artifacts rather than inside them because there is no compile job to hang
+            // it on - see RecordSpecializationFailure. Cleared by anything that gives the object
+            // a new meaning (a new source, a new module, a fresh specialization).
+            Bool m_specializationFailed = false;
+            String m_specializationInfoLog;
         };
     } // namespace MG_State::GLState
 } // namespace MobileGL

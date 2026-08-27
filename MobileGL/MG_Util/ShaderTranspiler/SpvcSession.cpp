@@ -496,6 +496,51 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            spvc_result SpvcSession::SetEntryPoint(const char* name, SpvExecutionModel model) {
+                if (compiler == nullptr || name == nullptr || *name == '\0') return SPVC_SUCCESS;
+                return spvc_compiler_set_entry_point(compiler, name, model);
+            }
+
+            Bool SpvcSession::SetSpecializationConstants(const Vector<Uint32>& constantIds,
+                                                         const Vector<Uint32>& constantValues,
+                                                         Uint32& outUnknownConstantId) {
+                if (constantIds.empty()) return true;
+                if (compiler == nullptr) return false;
+
+                const spvc_specialization_constant* declared = nullptr;
+                SizeT declaredCount = 0;
+                if (spvc_compiler_get_specialization_constants(compiler, &declared, &declaredCount) != SPVC_SUCCESS) {
+                    outUnknownConstantId = constantIds.front();
+                    return false;
+                }
+
+                for (SizeT i = 0; i < constantIds.size(); ++i) {
+                    const Uint32 wantedId = constantIds[i];
+                    spvc_constant handle = nullptr;
+                    for (SizeT j = 0; j < declaredCount; ++j) {
+                        if (declared[j].constant_id != wantedId) continue;
+                        handle = spvc_compiler_get_constant_handle(compiler, declared[j].id);
+                        break;
+                    }
+                    if (handle == nullptr) {
+                        // ARB_gl_spirv: "INVALID_VALUE is generated if any value in pConstantIndex
+                        // refers to a specialization constant that does not exist in the shader
+                        // module". Reported rather than skipped - a silently ignored id would let
+                        // the shader specialize to something the application never asked for.
+                        outUnknownConstantId = wantedId;
+                        return false;
+                    }
+                    // The GL side hands over a flat GLuint per constant and ARB_gl_spirv says it
+                    // is "interpreted according to the type of the specialization constant", so
+                    // the 32-bit PATTERN is what has to be stored, not a converted number.
+                    // spvc_constant_set_scalar_u32 writes exactly that pattern into the constant's
+                    // scalar union, which SPIRV-Cross then reads back as whatever the constant's
+                    // declared type is - the reinterpretation the extension asks for, for free.
+                    spvc_constant_set_scalar_u32(handle, 0, 0, constantValues[i]);
+                }
+                return true;
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

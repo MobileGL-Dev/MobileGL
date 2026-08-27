@@ -244,11 +244,17 @@ TEST_F(ProgramPipelineCompositeTest, AValueIdenticalWriteStillTakesTheSlotForIts
     DeleteProgramPipelines(1, &pipeline);
 }
 
-// glUseProgramStages here accepts a program that was never linked as separable (GL 4.6 core 7.4
-// says it should not, and MobileGL validates only LINK_STATUS). Such a program has recorded
-// none of its writes, because nothing ever armed its tracking latch - so the mirror has to fall
-// back to carrying everything rather than carrying nothing. Mirroring nothing would have been a
-// fresh regression on a shape that worked before the dirty set existed.
+// A stage program that recorded NONE of its writes, because nothing ever armed its tracking
+// latch: the mirror has to fall back to carrying everything rather than carrying nothing.
+// Mirroring nothing would have been a fresh regression on a shape that worked before the dirty
+// set existed.
+//
+// The shape used to be reachable through glUseProgramStages, which accepted a program that was
+// never linked as separable. It no longer is: GL 4.6 core 7.4 requires the LATCHED
+// PROGRAM_SEPARABLE flag and MobileGL now enforces it, and arming that flag is the very thing
+// that arms the tracking latch - so no program the entry point accepts can be in this state. The
+// fallback is therefore unreachable from GL and is exercised through the state layer instead,
+// which is the only way left to keep it covered rather than deleting the coverage with the hole.
 TEST_F(ProgramPipelineCompositeTest, ANonSeparableStageProgramStillMirrorsItsUniforms) {
     const char* vsSource = R"(#version 430 core
 uniform vec4 u_vsOnly;
@@ -271,9 +277,19 @@ void main() { gl_Position = u_vsOnly; }
     GLuint pipeline = 0;
     GenProgramPipelines(1, &pipeline);
     BindProgramPipeline(pipeline);
-    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    // The fragment stage goes through the entry point; the vertex one cannot, so it is installed
+    // directly on the pipeline object - the same call glUseProgramStages makes once it is done
+    // validating, minus the validation this shape now fails.
     UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
     ASSERT_EQ(GetError(), GL_NO_ERROR);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    ASSERT_EQ(GetError(), GL_INVALID_OPERATION)
+        << "a program not linked as separable is not a legal pipeline stage";
+    {
+        const auto& pipelineObject = MG_State::pGLContext->MaterializeProgramPipelineObject(pipeline);
+        ASSERT_NE(pipelineObject, nullptr);
+        pipelineObject->SetStageProgram(ShaderStage::Vertex, MG_State::pGLContext->GetProgramObject(vs));
+    }
 
     const float written[4] = {3.0f, 1.0f, 4.0f, 1.0f};
     ProgramUniform4fv(vs, GetUniformLocation(vs, "u_vsOnly"), 1, written);

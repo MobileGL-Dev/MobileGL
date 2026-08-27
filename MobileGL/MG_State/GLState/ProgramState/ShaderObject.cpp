@@ -15,7 +15,59 @@
 #include <MG_Util/ShaderTranspiler/Types.h>
 
 namespace MobileGL::MG_State::GLState {
+    void ShaderObject::SetSpirvBinary(Vector<Uint32>&& binary) {
+        // A module replaces whatever this object stood for, so the compiled state of the old
+        // source goes with it - including a compile still in flight.
+        ReleaseCompileNode();
+        m_spirvBinary = Move(binary);
+        m_hasSpirvBinary = true;
+        m_specializationFailed = false;
+        m_specializationInfoLog.clear();
+        m_source = MakeShared<const String>(String{});
+        InvalidateCompiledState();
+    }
+
+    void ShaderObject::SpecializeFromSpirv(String&& glsl) {
+        ReleaseCompileNode();
+        m_specializationFailed = false;
+        m_specializationInfoLog.clear();
+        // The GLSL the module specializes to enters the ORDINARY pipeline from here: preprocess,
+        // glslang parse, reflection, transpile, both backends. Nothing downstream needs to know
+        // the source was not written by the application - which is the whole reason this hop
+        // exists, and the reason a SPIR-V program's GL-visible surface (uniform locations, block
+        // indices, transform-feedback layout) is populated at all.
+        m_source = MakeShared<const String>(Move(glsl));
+        InvalidateCompiledState();
+        Compile();
+    }
+
+    void ShaderObject::RecordSpecializationFailure(String&& infoLog) {
+        ReleaseCompileNode();
+        m_source = MakeShared<const String>(String{});
+        InvalidateCompiledState();
+        m_specializationFailed = true;
+        m_specializationInfoLog = Move(infoLog);
+    }
+
     void ShaderObject::SetShaderSource(const String& source) {
+        // glShaderSource on a SPIR-V shader takes the object back to being a GLSL one, and
+        // GL_SPIR_V_BINARY must then read FALSE (ARB_gl_spirv; gl4cGlSpirvTests'
+        // spirv_modules_state_queries_test checks exactly this transition). The stored module goes
+        // with the flag - re-specializing it would be re-specializing a shader the application has
+        // already replaced. The memo below is skipped on purpose: the source may well be
+        // byte-identical to the empty string this object has been holding, and keeping the
+        // "compiled state" of that would keep the module's verdict too.
+        if (m_hasSpirvBinary || m_specializationFailed) {
+            m_hasSpirvBinary = false;
+            m_spirvBinary.clear();
+            m_spirvBinary.shrink_to_fit();
+            m_specializationFailed = false;
+            m_specializationInfoLog.clear();
+            ReleaseCompileNode();
+            m_source = MakeShared<const String>(source);
+            InvalidateCompiledState();
+            return;
+        }
         // P0b layer 1. glShaderSource always REPLACES the source, but replacing it with a
         // byte-identical one cannot change what a compile would produce: the whole
         // pipeline (preprocess -> lexical checks -> glslang parse) is a pure function of
@@ -36,6 +88,10 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void ShaderObject::SetShaderSource(String&& source) {
+        if (m_hasSpirvBinary || m_specializationFailed) {
+            SetShaderSource(static_cast<const String&>(source));
+            return;
+        }
         if (SourceMatchesCompiledState(source)) return;
         ReleaseCompileNode();
         m_source = MakeShared<const String>(Move(source));

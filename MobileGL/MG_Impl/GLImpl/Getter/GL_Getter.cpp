@@ -1990,8 +1990,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_NUM_SPIR_V_EXTENSIONS:
             *params = 0;
             return;
+        // GL_ARB_gl_spirv, core since 4.6: exactly one shader binary format, and the pair has to
+        // agree - an application sizes its GL_SHADER_BINARY_FORMATS array from the count.
         case GL_NUM_SHADER_BINARY_FORMATS:
-            *params = 0; // ShaderBinary entrypoints are stubbed
+            *params = 1;
+            return;
+        case GL_SHADER_BINARY_FORMATS:
+            *params = static_cast<GLint>(GL_SHADER_BINARY_FORMAT_SPIR_V);
             return;
         case GL_PACK_ALIGNMENT:
             *params = MG_State::pGLContext->GetPixelStoreParam(PixelStoreParam::PackAlignment);

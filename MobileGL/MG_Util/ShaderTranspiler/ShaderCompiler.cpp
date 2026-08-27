@@ -1681,6 +1681,120 @@ namespace MobileGL {
                 return true;
             }
 
+            namespace {
+                // The execution model an application-supplied module's entry point must carry for
+                // the shader object it was handed to. glShaderBinary attaches a module to a shader
+                // of a fixed type, and ARB_gl_spirv requires the specialized entry point to match.
+                SpvExecutionModel ExecutionModelForShaderType(GLenum shaderType) {
+                    switch (shaderType) {
+                    case GL_VERTEX_SHADER:
+                        return SpvExecutionModelVertex;
+                    case GL_TESS_CONTROL_SHADER:
+                        return SpvExecutionModelTessellationControl;
+                    case GL_TESS_EVALUATION_SHADER:
+                        return SpvExecutionModelTessellationEvaluation;
+                    case GL_GEOMETRY_SHADER:
+                        return SpvExecutionModelGeometry;
+                    case GL_COMPUTE_SHADER:
+                        return SpvExecutionModelGLCompute;
+                    case GL_FRAGMENT_SHADER:
+                    default:
+                        return SpvExecutionModelFragment;
+                    }
+                }
+            } // namespace
+
+            Result<void> ShaderCompiler::ValidateSpirvModule(const Vector<Uint32>& spirv) {
+                ResultInfo r;
+                r.errc = -6;
+                if (spirv.size() < 5) {
+                    r.log = "Error: [ARB_gl_spirv] the module is too short to be SPIR-V.";
+                    return std::unexpected(r);
+                }
+                // 0x07230203 is SPIR-V's magic number. A module in the other byte order is a
+                // legal SPIR-V file but NOT one glShaderBinary accepts: ARB_gl_spirv fixes the
+                // word order to the host's.
+                if (spirv[0] != 0x07230203u) {
+                    r.log = "Error: [ARB_gl_spirv] the module does not begin with the SPIR-V magic number.";
+                    return std::unexpected(r);
+                }
+
+                PrepareSpirvValidation();
+                spvtools::SpirvTools tools(SPV_ENV_OPENGL_4_5);
+                String diagnostics;
+                tools.SetMessageConsumer([&diagnostics](spv_message_level_t, const char*, const spv_position_t&,
+                                                        const char* message) {
+                    if (!diagnostics.empty()) diagnostics += "\n";
+                    diagnostics += message ? message : "";
+                });
+                if (!tools.Validate(spirv.data(), spirv.size())) {
+                    r.log = "Error: [ARB_gl_spirv] the module failed SPIR-V validation:\n" + diagnostics;
+                    return std::unexpected(r);
+                }
+                return {};
+            }
+
+            Result<String> ShaderCompiler::SpecializeAndDecompileSpirvModule(const Vector<Uint32>& spirv,
+                                                                             GLenum shaderType,
+                                                                             const String& entryPoint,
+                                                                             const Vector<Uint32>& constantIds,
+                                                                             const Vector<Uint32>& constantValues) {
+                SpvcSession session(spirv, SessionUsageBit::Transpile);
+
+                Uint32 unknownConstantId = 0;
+                if (!session.SetSpecializationConstants(constantIds, constantValues, unknownConstantId)) {
+                    ResultInfo r;
+                    r.errc = -7;
+                    r.log = "Error: [ARB_gl_spirv] constant index " + std::to_string(unknownConstantId) +
+                            " is not a specialization constant of this module.";
+                    return std::unexpected(r);
+                }
+
+                if (!entryPoint.empty()) {
+                    if (session.SetEntryPoint(entryPoint.c_str(), ExecutionModelForShaderType(shaderType)) !=
+                        SPVC_SUCCESS) {
+                        ResultInfo r;
+                        r.errc = -8;
+                        r.log = "Error: [ARB_gl_spirv] the module has no entry point named '" + entryPoint +
+                                "' for this shader stage:\n" + String(session.GetLastErrorString());
+                        return std::unexpected(r);
+                    }
+                }
+
+                spvc_compiler_options options;
+                if (session.CreateOptions(&options) != SPVC_SUCCESS) {
+                    ResultInfo r;
+                    r.errc = -9;
+                    r.log = "Error: [ARB_gl_spirv] could not create SPIRV-Cross options for the module.";
+                    return std::unexpected(r);
+                }
+                // DESKTOP 4.60, not the ESSL 3.20 DecompileShader emits: this source goes back in
+                // at the FRONT of the pipeline, to be parsed by glslang exactly like an
+                // application's own GLSL, and every one of MobileGL's source-level passes is
+                // written against the desktop dialect. The ESSL hop happens later and unchanged,
+                // out of the SPIR-V this re-parse produces.
+                spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, 460);
+                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_FALSE);
+                // Vulkan semantics OFF is what makes this a GL source: descriptor sets collapse
+                // onto GL binding points, push constants become a uniform block, and - the point
+                // of the specialization pass above - every specialization constant is folded in
+                // as a literal instead of re-emitted as layout(constant_id = N).
+                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
+                spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_SEPARATE_SHADER_OBJECTS, SPVC_TRUE);
+                session.SetOptions(options);
+
+                const char* emitted = nullptr;
+                session.Compile(&emitted);
+                if (!emitted) {
+                    ResultInfo r;
+                    r.errc = -10;
+                    r.log = "Error: [ARB_gl_spirv] could not translate the module to GLSL:\n" +
+                            String(session.GetLastErrorString());
+                    return std::unexpected(r);
+                }
+                return String(emitted);
+            }
+
             Result<String> ShaderCompiler::DecompileShader(SpvcSession& session) {
                 spvc_compiler_options options;
                 session.CreateOptions(&options);
