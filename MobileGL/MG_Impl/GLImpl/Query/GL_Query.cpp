@@ -59,6 +59,37 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLuint g_activePrimitivesGeneratedQueryId = 0;
         // Id of the query active on GL_SAMPLES_PASSED (0 = none).
         GLuint g_activeSamplesPassedQueryId = 0;
+        // Ids of the queries active on the GL_ARB_pipeline_statistics_query targets, one slot per
+        // target (0 = none). A map rather than a field per target: the eleven behave identically
+        // and none of them has any state beyond "which object is counting".
+        UnorderedMap<GLenum, GLuint> g_activePipelineStatisticsQueryIds;
+
+        // The eleven pipeline-statistics counters (GL 4.6 core table 4.3 / ARB_pipeline_statistics_query).
+        // A 4.6 core context has to ACCEPT all of them at glBeginQuery - the extension is core
+        // since 4.6 and there is no query by which an application could learn otherwise before
+        // calling. MobileGL instruments none of them, and says so the way GL 4.6 core 4.2.1
+        // provides for: GL_QUERY_COUNTER_BITS answers zero for these targets, which is the
+        // spec's own signal that the counter is unsupported and its results indeterminate. That
+        // is an honest zero, not an advertised capability - the alternative, GL_INVALID_ENUM on a
+        // core entry point, is both non-conformant AND less informative.
+        Bool IsPipelineStatisticsQueryTarget(GLenum target) {
+            switch (target) {
+            case GL_VERTICES_SUBMITTED:
+            case GL_PRIMITIVES_SUBMITTED:
+            case GL_VERTEX_SHADER_INVOCATIONS:
+            case GL_TESS_CONTROL_SHADER_PATCHES:
+            case GL_TESS_EVALUATION_SHADER_INVOCATIONS:
+            case GL_GEOMETRY_SHADER_INVOCATIONS:
+            case GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED:
+            case GL_FRAGMENT_SHADER_INVOCATIONS:
+            case GL_COMPUTE_SHADER_INVOCATIONS:
+            case GL_CLIPPING_INPUT_PRIMITIVES:
+            case GL_CLIPPING_OUTPUT_PRIMITIVES:
+                return true;
+            default:
+                return false;
+            }
+        }
 
         Bool TimerQueryDisabled() {
             return MG_Config::Features.DisableTimerQuery;
@@ -370,6 +401,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                     }
                     queryObject->active = false;
                     g_activeSamplesPassedQueryId = 0;
+                } else if (IsPipelineStatisticsQueryTarget(queryObject->target)) {
+                    queryObject->active = false;
+                    g_activePipelineStatisticsQueryIds[queryObject->target] = 0;
                 } else if (queryObject->target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ||
                            queryObject->target == GL_PRIMITIVES_GENERATED) {
                     queryObject->active = false;
@@ -410,7 +444,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
              target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) &&
             MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;
-        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery) {
+        const Bool isPipelineStatisticsQuery = IsPipelineStatisticsQueryTarget(target);
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery &&
+            !isPipelineStatisticsQuery) {
             // GL_TIMESTAMP is not a valid BeginQuery target; the occlusion targets
             // need backend support.
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
@@ -426,10 +462,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "Query object does not exist.");
             return;
         }
-        GLuint& activeQueryId = isTransformFeedbackQuery
-            ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
-                                                                  : g_activePrimitivesGeneratedQueryId)
-            : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId);
+        GLuint& activeQueryId = isPipelineStatisticsQuery
+            ? g_activePipelineStatisticsQueryIds[target]
+            : (isTransformFeedbackQuery
+                   ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
+                                                                         : g_activePrimitivesGeneratedQueryId)
+                   : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId));
         if (activeQueryId != 0) {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__,
                              "A query is already active on this target.");
@@ -448,7 +486,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         ResetQueryObjectLocked(queryObject); // discard any previous result
         queryObject->target = target;
         queryObject->active = true;
-        if (isTransformFeedbackQuery) {
+        if (isPipelineStatisticsQuery) {
+            // Nothing to start: the counter is uninstrumented and GL_QUERY_COUNTER_BITS says so.
+            // The object still becomes a real, target-latched query so every other rule about it
+            // (re-use with another target, double-begin, EndQuery pairing) keeps holding.
+        } else if (isTransformFeedbackQuery) {
             // Prefer real GPU transform-feedback queries (exact with geometry shaders);
             // the CPU accounting delta stays as the fallback when the backend lacks them.
             const auto beginXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.BeginXfbPrimitivesQuery;
@@ -476,15 +518,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
              target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) &&
             MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;
-        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery) {
+        const Bool isPipelineStatisticsQuery = IsPipelineStatisticsQueryTarget(target);
+        if (target != GL_TIME_ELAPSED && !isTransformFeedbackQuery && !isOcclusionQuery &&
+            !isPipelineStatisticsQuery) {
             RecordQueryError(ErrorCode::InvalidEnum, __FUNCTION__, "Query target is not supported.");
             return;
         }
         const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
-        GLuint& activeQueryId = isTransformFeedbackQuery
-            ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
-                                                                  : g_activePrimitivesGeneratedQueryId)
-            : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId);
+        GLuint& activeQueryId = isPipelineStatisticsQuery
+            ? g_activePipelineStatisticsQueryIds[target]
+            : (isTransformFeedbackQuery
+                   ? (target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN ? g_activePrimitivesWrittenQueryId
+                                                                         : g_activePrimitivesGeneratedQueryId)
+                   : (isOcclusionQuery ? g_activeSamplesPassedQueryId : g_activeTimeElapsedQueryId));
         if (activeQueryId == 0) {
             RecordQueryError(ErrorCode::InvalidOperation, __FUNCTION__, "No query is active on this target.");
             return;
@@ -492,6 +538,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto* queryObject = FindQueryObjectLocked(activeQueryId);
         if (!queryObject) {
             activeQueryId = 0; // should not happen; keep state consistent
+            return;
+        }
+        if (isPipelineStatisticsQuery) {
+            // The result is a definite zero rather than an unread backend handle, so a later
+            // GetQueryObject* answers immediately and never waits on something that was never
+            // started. GL_QUERY_COUNTER_BITS = 0 is what marks that zero indeterminate.
+            queryObject->cachedResult = 0;
+            queryObject->resultCached = true;
+            queryObject->active = false;
+            queryObject->ended = true;
+            activeQueryId = 0;
             return;
         }
         if (isTransformFeedbackQuery) {
@@ -657,7 +714,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = static_cast<GLint>(g_activePrimitivesGeneratedQueryId);
                 break;
             default:
-                *params = 0;
+                if (IsPipelineStatisticsQueryTarget(target)) {
+                    const auto it = g_activePipelineStatisticsQueryIds.find(target);
+                    *params = it != g_activePipelineStatisticsQueryIds.end() ? static_cast<GLint>(it->second) : 0;
+                } else {
+                    *params = 0;
+                }
                 break;
             }
             return;
@@ -668,6 +730,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             // entry points / timestamp valid bits at call time, not at table
             // init), and the MOBILEGL_DISABLE_TIMERQUERY kill switch always
             // wins.
+            if (IsPipelineStatisticsQueryTarget(target)) {
+                // Zero: GL 4.6 core 4.2.1's way of saying the counter is not implemented and its
+                // results are indeterminate. The conformance suite reads exactly this and skips
+                // the functional half of each such target, which is the outcome an uninstrumented
+                // counter should produce.
+                *params = 0;
+                return;
+            }
             if (target == GL_SAMPLES_PASSED || target == GL_ANY_SAMPLES_PASSED ||
                 target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
                 const Bool occlusionSupported = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery != nullptr;

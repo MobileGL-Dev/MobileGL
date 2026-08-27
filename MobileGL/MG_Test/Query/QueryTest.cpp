@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <ios>
 
 #include "Includes.h"
 #include "Init.h"
@@ -813,4 +814,114 @@ TEST_F(QueryTest, DisableTimerQueryFeatureMatchesEnvironment) {
         expected = value != "0" && lowered != "false";
     }
     EXPECT_EQ(MG_Config::Features.DisableTimerQuery, expected);
+}
+
+// ---------------------------------------------------------------------------------------------
+// GL_ARB_pipeline_statistics_query, core since 4.6. The eleven counter targets had no arm in
+// glBeginQuery's accepted-target list, so the very first glBeginQuery(GL_VERTICES_SUBMITTED)
+// raised GL_INVALID_ENUM and killed
+// pipeline_statistics_query_tests_ARB.api_coverage_invalid_glbeginquery_calls before it could
+// check anything. MobileGL instruments none of the counters and says so through the mechanism
+// GL 4.6 core 4.2.1 provides for exactly this: GL_QUERY_COUNTER_BITS = 0, which the conformance
+// suite reads and treats as "skip the functional half of this target".
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(QueryTest, PipelineStatisticsTargetsAreAcceptedAndReportZeroCounterBits) {
+    static constexpr GLenum kTargets[] = {
+        GL_VERTICES_SUBMITTED,          GL_PRIMITIVES_SUBMITTED,
+        GL_VERTEX_SHADER_INVOCATIONS,   GL_TESS_CONTROL_SHADER_PATCHES,
+        GL_TESS_EVALUATION_SHADER_INVOCATIONS, GL_GEOMETRY_SHADER_INVOCATIONS,
+        GL_GEOMETRY_SHADER_PRIMITIVES_EMITTED, GL_FRAGMENT_SHADER_INVOCATIONS,
+        GL_COMPUTE_SHADER_INVOCATIONS,  GL_CLIPPING_INPUT_PRIMITIVES,
+        GL_CLIPPING_OUTPUT_PRIMITIVES,
+    };
+
+    for (const GLenum target: kTargets) {
+        GLuint id = 0;
+        MG_Impl::GLImpl::GenQueries(1, &id);
+        ASSERT_NE(id, 0u);
+
+        MG_Impl::GLImpl::BeginQuery(target, id);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
+            << "glBeginQuery must accept pipeline-statistics target 0x" << std::hex << target;
+
+        GLint current = 0;
+        MG_Impl::GLImpl::GetQueryiv(target, GL_CURRENT_QUERY, &current);
+        EXPECT_EQ(static_cast<GLuint>(current), id) << "GL_CURRENT_QUERY has to track this target too";
+
+        MG_Impl::GLImpl::EndQuery(target);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+        EXPECT_EQ(MG_Impl::GLImpl::IsQuery(id), GL_TRUE);
+
+        GLint counterBits = -1;
+        MG_Impl::GLImpl::GetQueryiv(target, GL_QUERY_COUNTER_BITS, &counterBits);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+        EXPECT_EQ(counterBits, 0) << "an uninstrumented counter reports zero bits, per GL 4.6 core 4.2.1";
+
+        // The result is immediately available (nothing was ever submitted to wait on) and reads
+        // as the zero the zero counter-bit answer marks indeterminate.
+        GLuint available = 0;
+        MG_Impl::GLImpl::GetQueryObjectuiv(id, GL_QUERY_RESULT_AVAILABLE, &available);
+        EXPECT_EQ(available, static_cast<GLuint>(GL_TRUE));
+        GLuint result = 0xDEADBEEFu;
+        MG_Impl::GLImpl::GetQueryObjectuiv(id, GL_QUERY_RESULT, &result);
+        EXPECT_EQ(result, 0u);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+        MG_Impl::GLImpl::DeleteQueries(1, &id);
+    }
+}
+
+// The negative half the conformance case actually asserts: an object already latched onto one
+// pipeline-statistics target must refuse a different one with GL_INVALID_OPERATION. This is what
+// per-target active slots buy - a single shared slot would have reported "a query is already
+// active on this target" for an unrelated target instead.
+TEST_F(QueryTest, PipelineStatisticsQueryObjectRefusesASecondTargetAndTargetsAreIndependent) {
+    GLuint id = 0;
+    MG_Impl::GLImpl::GenQueries(1, &id);
+    ASSERT_NE(id, 0u);
+
+    MG_Impl::GLImpl::BeginQuery(GL_VERTICES_SUBMITTED, id);
+    MG_Impl::GLImpl::EndQuery(GL_VERTICES_SUBMITTED);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BeginQuery(GL_PRIMITIVES_SUBMITTED, id);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+
+    // Two different objects on two different targets are simultaneously active, because each
+    // target owns its own slot.
+    GLuint first = 0;
+    GLuint second = 0;
+    MG_Impl::GLImpl::GenQueries(1, &first);
+    MG_Impl::GLImpl::GenQueries(1, &second);
+    MG_Impl::GLImpl::BeginQuery(GL_VERTICES_SUBMITTED, first);
+    MG_Impl::GLImpl::BeginQuery(GL_PRIMITIVES_SUBMITTED, second);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint current = 0;
+    MG_Impl::GLImpl::GetQueryiv(GL_VERTICES_SUBMITTED, GL_CURRENT_QUERY, &current);
+    EXPECT_EQ(static_cast<GLuint>(current), first);
+    MG_Impl::GLImpl::GetQueryiv(GL_PRIMITIVES_SUBMITTED, GL_CURRENT_QUERY, &current);
+    EXPECT_EQ(static_cast<GLuint>(current), second);
+
+    // Deleting an ACTIVE query implicitly ends it and releases its slot; the sibling target is
+    // untouched.
+    MG_Impl::GLImpl::DeleteQueries(1, &first);
+    MG_Impl::GLImpl::GetQueryiv(GL_VERTICES_SUBMITTED, GL_CURRENT_QUERY, &current);
+    EXPECT_EQ(current, 0);
+    MG_Impl::GLImpl::GetQueryiv(GL_PRIMITIVES_SUBMITTED, GL_CURRENT_QUERY, &current);
+    EXPECT_EQ(static_cast<GLuint>(current), second);
+
+    MG_Impl::GLImpl::EndQuery(GL_PRIMITIVES_SUBMITTED);
+    MG_Impl::GLImpl::DeleteQueries(1, &second);
+    MG_Impl::GLImpl::DeleteQueries(1, &id);
+    while (MG_Impl::GLImpl::GetError() != GL_NO_ERROR) {
+    }
+}
+
+// glCreateQueries keeps its own, shorter accepted-target list on purpose: it is unchanged here,
+// and this pins that the pipeline-statistics addition did not leak into it.
+TEST_F(QueryTest, EndQueryOnAPipelineStatisticsTargetWithNoActiveQueryIsInvalidOperation) {
+    MG_Impl::GLImpl::EndQuery(GL_FRAGMENT_SHADER_INVOCATIONS);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
