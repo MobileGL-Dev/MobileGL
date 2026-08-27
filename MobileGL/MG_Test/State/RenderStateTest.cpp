@@ -26,6 +26,8 @@
 #include "Includes.h"
 #include "Init.h"
 
+#include <limits>
+
 #include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
@@ -695,7 +697,47 @@ TEST_F(RenderStateTest, PatchDefaultLevelsRoundTripThroughEveryGetter) {
     EXPECT_DOUBLE_EQ(outerDoubles[3], 5.25) << "glGetDoublev must widen all four, not just the first";
     ExpectSingleGlError(GL_NO_ERROR);
 
+    // glGetInteger64v shares glGetIntegerv's accepted-pname set (GL 4.6 core 22.1), so it owes the
+    // same component count. Its own table listed neither pname, so three of the four words were
+    // left holding whatever the caller's buffer held - and no error said so.
+    GLint64 outerLongs[4] = {9, 9, 9, 9};
+    MG_Impl::GLImpl::GetInteger64v(GL_PATCH_DEFAULT_OUTER_LEVEL, outerLongs);
+    EXPECT_EQ(outerLongs[0], 2);
+    EXPECT_EQ(outerLongs[3], 5) << "glGetInteger64v must write all four, not just the first";
+    GLint64 innerLongs[2] = {9, 9};
+    MG_Impl::GLImpl::GetInteger64v(GL_PATCH_DEFAULT_INNER_LEVEL, innerLongs);
+    EXPECT_EQ(innerLongs[1], 7);
+    ExpectSingleGlError(GL_NO_ERROR);
+
     // Put the context back where the rest of the binary expects it.
+    const GLfloat defaults4[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const GLfloat defaults2[2] = {1.0f, 1.0f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_OUTER_LEVEL, defaults4);
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_INNER_LEVEL, defaults2);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 2.2.2: a float state comes back through glGetBooleanv as GL_FALSE only when it is
+// zero. Deriving the answer from glGetIntegerv - which rounds - reported GL_FALSE for a level of
+// 0.25, which is neither zero nor anything the application asked to be rounded.
+TEST_F(RenderStateTest, PatchDefaultLevelsBelowHalfAreStillTrueAsBooleans) {
+    const GLfloat fractional[4] = {0.25f, 0.0f, 0.4f, 0.25f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_OUTER_LEVEL, fractional);
+    const GLfloat fractionalInner[2] = {0.25f, 0.0f};
+    MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_INNER_LEVEL, fractionalInner);
+    ExpectSingleGlError(GL_NO_ERROR);
+
+    GLboolean outer[4] = {};
+    MG_Impl::GLImpl::GetBooleanv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
+    EXPECT_EQ(outer[0], GL_TRUE) << "0.25 is not zero";
+    EXPECT_EQ(outer[1], GL_FALSE) << "0.0 is the one value that is false";
+    EXPECT_EQ(outer[2], GL_TRUE);
+    GLboolean inner[2] = {};
+    MG_Impl::GLImpl::GetBooleanv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
+    EXPECT_EQ(inner[0], GL_TRUE);
+    EXPECT_EQ(inner[1], GL_FALSE);
+    ExpectSingleGlError(GL_NO_ERROR);
+
     const GLfloat defaults4[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     const GLfloat defaults2[2] = {1.0f, 1.0f};
     MG_Impl::GLImpl::PatchParameterfv(GL_PATCH_DEFAULT_OUTER_LEVEL, defaults4);
@@ -731,6 +773,31 @@ TEST_F(RenderStateTest, PatchDefaultLevelsAreTreatedAsPipelineState) {
 
     state.SetPatchDefaultInnerLevel(FloatVec2(3.0f, 3.0f));
     EXPECT_GT(state.GetPipelineStateVersion(), settled);
+}
+
+// glPatchParameterfv accepts NaN by design, and NaN is never equal to itself under IEEE `==`. A
+// value-compared redundant-write guard therefore never settles: every re-set of the identical
+// tuple bumps the pipeline-state version, and - one level down - DirectGLES's staleness clause
+// re-transpiles, re-compiles and re-links the synthesized pass-through stage on every draw. Both
+// compare BIT PATTERNS instead, which is what DirectVulkan's module key already hashes.
+TEST_F(RenderStateTest, ARedundantNaNPatchLevelWriteSettlesInsteadOfBumpingForever) {
+    const Float notANumber = std::numeric_limits<Float>::quiet_NaN();
+    MG_State::GLState::RenderState state;
+    state.SetPatchDefaultOuterLevel(FloatVec4(notANumber, 1.0f, 1.0f, 1.0f));
+    const Uint afterFirst = state.GetPipelineStateVersion();
+
+    state.SetPatchDefaultOuterLevel(FloatVec4(notANumber, 1.0f, 1.0f, 1.0f));
+    EXPECT_EQ(state.GetPipelineStateVersion(), afterFirst)
+        << "the identical NaN tuple is not a state change";
+
+    state.SetPatchDefaultInnerLevel(FloatVec2(notANumber, 1.0f));
+    const Uint afterInner = state.GetPipelineStateVersion();
+    state.SetPatchDefaultInnerLevel(FloatVec2(notANumber, 1.0f));
+    EXPECT_EQ(state.GetPipelineStateVersion(), afterInner);
+
+    // A genuinely different tuple still moves, so the guard has not simply gone blind.
+    state.SetPatchDefaultOuterLevel(FloatVec4(notANumber, 2.0f, 1.0f, 1.0f));
+    EXPECT_GT(state.GetPipelineStateVersion(), afterInner);
 }
 
 // --- desktop GL_PRIMITIVE_RESTART state --------------------------------------------------------

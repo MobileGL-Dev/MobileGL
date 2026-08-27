@@ -686,6 +686,21 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = value != 0.0f ? GL_TRUE : GL_FALSE;
             return;
         }
+        // Float-native state, so GL 4.6 core 2.2.2's "zero becomes FALSE, every other value
+        // becomes TRUE" has to be applied to the VALUE. Answering these through the integer getter
+        // below instead - which rounds - reported GL_FALSE for a perfectly non-zero level of 0.25,
+        // and every other float state in this function already reads through GetFloatv for exactly
+        // that reason.
+        case GL_PATCH_DEFAULT_OUTER_LEVEL:
+        case GL_PATCH_DEFAULT_INNER_LEVEL: {
+            const GLsizei componentCount = pname == GL_PATCH_DEFAULT_OUTER_LEVEL ? 4 : 2;
+            GLfloat levels[4] = {};
+            GetFloatv(pname, levels);
+            for (GLsizei i = 0; i < componentCount; ++i) {
+                params[i] = levels[i] != 0.0f ? GL_TRUE : GL_FALSE;
+            }
+            return;
+        }
         default:
             break;
         }
@@ -695,11 +710,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         switch (pname) {
         case GL_COLOR_WRITEMASK:
         case GL_SCISSOR_BOX:
-        case GL_PATCH_DEFAULT_OUTER_LEVEL:
             CopyIntsToBooleans(ints, 4, params);
-            return;
-        case GL_PATCH_DEFAULT_INNER_LEVEL:
-            CopyIntsToBooleans(ints, 2, params);
             return;
         default:
             *params = ints[0] ? GL_TRUE : GL_FALSE;
@@ -1242,12 +1253,17 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLint ints[4] = {};
         GetIntegerv(pname, ints);
 
+        // GL 4.6 core 22.1 gives glGetInteger64v the same accepted-pname set as glGetIntegerv, so
+        // every pname the integer getter answers with several components owes them all here too.
+        // A pname that reaches the `default:` arm writes params[0] and leaves the caller's other
+        // components holding whatever they held, with no error to say so.
         switch (pname) {
         case GL_BLEND_COLOR:
         case GL_COLOR_CLEAR_VALUE:
         case GL_COLOR_WRITEMASK:
         case GL_SCISSOR_BOX:
         case GL_VIEWPORT:
+        case GL_PATCH_DEFAULT_OUTER_LEVEL:
             for (int i = 0; i < 4; ++i) {
                 params[i] = static_cast<GLint64>(ints[i]);
             }
@@ -1257,6 +1273,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_VIEWPORT_DIMS:
         case GL_POINT_SIZE_RANGE:
         case GL_VIEWPORT_BOUNDS_RANGE:
+        case GL_PATCH_DEFAULT_INNER_LEVEL:
             params[0] = static_cast<GLint64>(ints[0]);
             params[1] = static_cast<GLint64>(ints[1]);
             return;
