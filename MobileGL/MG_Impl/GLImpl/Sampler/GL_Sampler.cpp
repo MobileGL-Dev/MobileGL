@@ -30,6 +30,43 @@ namespace MobileGL::MG_Impl::GLImpl {
             return pname == GL_TEXTURE_BORDER_COLOR;
         }
 
+        // A state query returns the value CONVERTED to the type the caller asked for (GL 4.6 core
+        // 2.2.2 / 6.1), never the other type's bits. These two are the sampler side of the numeric
+        // casts GetTexParameterfv_State/GetTexParameteriv_State already do on the texture side; the
+        // sampler path funnels all three spellings through one void* function, which is precisely how
+        // it came to write a fixed type regardless of the caller.
+        //
+        // Truncation rather than rounding for the float -> integer direction, matching the texture
+        // twin (GetTexParameteriv_State's static_cast<GLint> on MIN_LOD/MAX_LOD/LOD_BIAS): the two
+        // spellings of the same state disagreeing is the bug being fixed here, and a texture and a
+        // sampler queried the same way must answer the same number.
+        void StoreSamplerScalar(void* params, Bool isFloat, Bool isUnsignedInteger, Float value) {
+            if (isFloat) {
+                *(GLfloat*)params = value;
+                return;
+            }
+            // Via GLint in both integer spellings: a direct float -> GLuint cast of a negative value
+            // (GL_TEXTURE_MIN_LOD defaults to -1000) is undefined behaviour, while the two-step
+            // conversion is the well-defined modular one, and it is what the texture-side
+            // GetTexParameterIuiv fallback does.
+            const GLint asInt = static_cast<GLint>(value);
+            if (isUnsignedInteger) {
+                *(GLuint*)params = static_cast<GLuint>(asInt);
+            } else {
+                *(GLint*)params = asInt;
+            }
+        }
+
+        void StoreSamplerEnum(void* params, Bool isFloat, Bool isUnsignedInteger, GLenum value) {
+            if (isFloat) {
+                *(GLfloat*)params = static_cast<GLfloat>(value);
+            } else if (isUnsignedInteger) {
+                *(GLuint*)params = value;
+            } else {
+                *(GLint*)params = static_cast<GLint>(value);
+            }
+        }
+
         Bool ValidateSamplerParameterValue(GLenum pname, const void* param, Bool isFloat, Bool isUnsignedInteger) {
             if (param == nullptr) return false;
 
@@ -163,47 +200,56 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!SamplerImpl::ValidateSamplerObject(sampler)) return;
 
         using namespace MG_Util;
+        // Every scalar pname goes through StoreSamplerScalar/StoreSamplerEnum so the CALLER'S form
+        // decides the destination type. Writing a fixed type regardless - which is what these case
+        // labels used to do - hands back the other type's bit pattern rather than a converted value:
+        // glGetSamplerParameterfv(GL_TEXTURE_WRAP_S) deposited the integer 10497 into a GLfloat and
+        // the caller read 1.47e-41, and glGetSamplerParameteriv(GL_TEXTURE_MIN_LOD) deposited the
+        // IEEE bits of -1000.0f and the caller read -998637568. Sixteen (pname, entry-point) pairs
+        // were broken this way; only MAX_ANISOTROPY_EXT and BORDER_COLOR branched correctly, which is
+        // how the same bug class was already found and fixed once for a single pname.
         switch (pname) {
         case GL_TEXTURE_WRAP_S:
-            *(GLuint*)params = MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapS());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapS()));
             break;
         case GL_TEXTURE_WRAP_T:
-            *(GLuint*)params = MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapT());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapT()));
             break;
         case GL_TEXTURE_WRAP_R:
-            *(GLuint*)params = MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapR());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapR()));
             break;
         case GL_TEXTURE_MIN_FILTER:
-            *(GLuint*)params =
-                MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMinFilter(), samplerObj->GetMipmapMode());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMinFilter(),
+                                                                       samplerObj->GetMipmapMode()));
             break;
         case GL_TEXTURE_MAG_FILTER:
-            *(GLuint*)params =
-                MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMagFilter(), SamplerMipmapMode::None);
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMagFilter(),
+                                                                       SamplerMipmapMode::None));
             break;
         case GL_TEXTURE_MIN_LOD:
-            *(GLfloat*)params = samplerObj->GetMinLod();
+            StoreSamplerScalar(params, isFloat, isUnsignedInteger, samplerObj->GetMinLod());
             break;
         case GL_TEXTURE_MAX_LOD:
-            *(GLfloat*)params = samplerObj->GetMaxLod();
+            StoreSamplerScalar(params, isFloat, isUnsignedInteger, samplerObj->GetMaxLod());
             break;
         case GL_TEXTURE_LOD_BIAS:
-            *(GLfloat*)params = samplerObj->GetLodBias();
+            StoreSamplerScalar(params, isFloat, isUnsignedInteger, samplerObj->GetLodBias());
             break;
         case GL_TEXTURE_MAX_ANISOTROPY_EXT:
-            if (isFloat) {
-                *(GLfloat*)params = samplerObj->GetMaxAnisotropy();
-            } else if (isUnsignedInteger) {
-                *(GLuint*)params = static_cast<GLuint>(samplerObj->GetMaxAnisotropy());
-            } else {
-                *(GLint*)params = static_cast<GLint>(samplerObj->GetMaxAnisotropy());
-            }
+            StoreSamplerScalar(params, isFloat, isUnsignedInteger, samplerObj->GetMaxAnisotropy());
             break;
         case GL_TEXTURE_COMPARE_MODE:
-            *(GLuint*)params = MG_Util::ConvertSamplerCompareModeToGLEnum(samplerObj->GetCompareMode());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerCompareModeToGLEnum(samplerObj->GetCompareMode()));
             break;
         case GL_TEXTURE_COMPARE_FUNC:
-            *(GLuint*)params = MG_Util::ConvertSamplerCompareFuncToGLEnum(samplerObj->GetSamplerCompareFunc());
+            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
+                             MG_Util::ConvertSamplerCompareFuncToGLEnum(samplerObj->GetSamplerCompareFunc()));
             break;
         case GL_TEXTURE_BORDER_COLOR: {
             if (isFloat) {
