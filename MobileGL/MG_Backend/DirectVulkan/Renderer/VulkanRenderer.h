@@ -1279,13 +1279,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                                    GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                                                    GLenum filter);
-        // Clears one z slice of a VK_IMAGE_TYPE_3D colour image. See the call site in
-        // MaterializePendingClearForTexture for why a transfer clear cannot do this.
+        // Clears one layer of a colour image through a throwaway render pass whose entire content
+        // is its LOAD_OP_CLEAR. Two callers, both of which a transfer clear cannot serve: a z
+        // slice of a VK_IMAGE_TYPE_3D image (vkCmdClearColorImage cannot name one), and a
+        // MULTISAMPLE image (which carries no TRANSFER_DST usage at all). `finalLayout` is the
+        // layout the caller already tracks for the whole image, so this never has to touch
+        // resource->layout.
         Bool ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
                                            MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                           Uint32 depthSlice, const VkClearValue& clearValue);
+                                           Uint32 depthSlice, const VkClearValue& clearValue,
+                                           VkImageLayout finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
         Bool MaterializePendingClearForTexture(VkCommandBuffer commandBuffer,
                                                MG_State::GLState::ITextureObject& texture);
+        // The multisample arm of the above. Split out rather than branched inline because it
+        // shares none of the transfer path: a multisample image carries no TRANSFER_DST usage, so
+        // neither the TRANSFER_DST transition nor vkCmdClearColorImage is legal on one.
+        Bool MaterializeMultisamplePendingClear(VkCommandBuffer commandBuffer,
+                                                MG_State::GLState::ITextureObject& texture,
+                                                VkTextureManager::TextureResource& resource,
+                                                const Vector<PendingClearEntry>& pendingClears);
         Bool MaterializePendingClearForRenderbuffer(
             VkCommandBuffer commandBuffer,
             const SharedPtr<MG_State::GLState::RenderbufferObject>& renderbuffer);

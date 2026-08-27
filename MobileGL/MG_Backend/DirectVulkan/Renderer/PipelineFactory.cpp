@@ -203,6 +203,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleMask, sizeof(payload.sampleMask)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
         XXHASH_VERIFY(
@@ -443,6 +444,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Ignored by Vulkan unless sampleShadingEnable is set, but written unconditionally so the
         // struct's bytes match the hash the payload was keyed by.
         ms.minSampleShading = payload.minSampleShading;
+        // GL_SAMPLE_MASK / glSampleMaski. Left at nullptr - which Vulkan reads as all-ones - until
+        // now, so glSampleMaski was a silent no-op on this backend while DirectGLES forwarded it.
+        // The pointer has to outlive the vkCreateGraphicsPipelines call, which the payload does.
+        ms.pSampleMask = &payload.sampleMask;
 
         VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depthStencil.depthTestEnable = payload.depthTestEnable ? VK_TRUE : VK_FALSE;

@@ -44,6 +44,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // (VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784).
             Bool sampleShadingEnable = false;
             Float minSampleShading = 0.0f;
+            // glEnable(GL_SAMPLE_MASK) + glSampleMaski, the fixed-function coverage mask. One
+            // word is the whole mask: GL_MAX_SAMPLE_MASK_WORDS is 1 on both backends, and Vulkan
+            // reads ceil(rasterizationSamples / 32) words. Pipeline state like the two above -
+            // Vulkan has no dynamic sample mask before VK_EXT_extended_dynamic_state3 - so it is
+            // hashed with them, and 0xffffffff (the GL default, and what a null pSampleMask
+            // means) has to keep producing the pipeline it always did.
+            Uint32 sampleMask = 0xffffffffu;
             Uint32 subpass = 0;
             VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             Bool primitiveRestartEnable = false;

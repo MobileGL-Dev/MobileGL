@@ -4767,9 +4767,9 @@ void main() {
     // build in GetOrCreatePipeline - any new GL-state read there must be added here:
     //   - capability bits: CullFace, DepthTest, PolygonOffsetFill (mode gating rides
     //     the memo's mode key), RasterizerDiscard, ColorLogicOp, StencilTest,
-    //     PrimitiveRestart(+FixedIndex), SampleShading, plus the depth write mask
+    //     PrimitiveRestart(+FixedIndex), SampleShading, SampleMask, plus the depth write mask
     //   - patch vertices, polygon mode, cull face mode, depth func, logic op,
-    //     min sample shading
+    //     min sample shading, the glSampleMaski word
     //   - front/back stencil ops + compare funcs (ref/mask are dynamic state)
     //   - per draw buffer up to the render pass's colour span: indexed blend enable,
     //     blend factors/equations, indexed colour write mask (broadcast from index 0
@@ -4795,6 +4795,7 @@ void main() {
         capabilityBits |= p.PrimitiveRestartFixedIndexEnabled ? 1ull << 7 : 0;
         capabilityBits |= p.DepthMask ? 1ull << 8 : 0;
         capabilityBits |= p.SampleShadingEnabled ? 1ull << 9 : 0;
+        capabilityBits |= p.SampleMaskEnabled ? 1ull << 10 : 0;
         Uint64 hash = CombinePipelineStateWord(0x243F6A8885A308D3ull, capabilityBits);
         // glMinSampleShading. Hashed by BITS, not by value: this memo compares hashes rather than
         // versions, so an unhashed float would let a pipeline built at one rate be handed back
@@ -4804,6 +4805,13 @@ void main() {
             std::memcpy(&minSampleShadingBits, &p.MinSampleShadingValue, sizeof(minSampleShadingBits));
             hash = CombinePipelineStateWord(hash, static_cast<Uint64>(minSampleShadingBits));
         }
+        // glSampleMaski's word, for the same reason glMinSampleShading's bits are hashed above:
+        // this memo compares hashes, not versions, so a mask that moved between two otherwise
+        // identical draws has to key a different pipeline. Hashed unconditionally rather than only
+        // while GL_SAMPLE_MASK is enabled - the enable bit is already in capabilityBits, and
+        // folding one more word costs nothing on a path that only recomputes when the
+        // pipeline-state version moved.
+        hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.SampleMaskValue));
         hash = CombinePipelineStateWord(hash, static_cast<Uint64>(p.PatchVertices));
         // The default tessellation levels belong here for the same reason PatchVertices does:
         // when a program has an evaluation stage and no control stage, both are compiled into the
@@ -5199,6 +5207,12 @@ void main() {
             .sampleShadingEnable = m_sampleRateShadingFeatureEnabled &&
                                    MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleShading),
             .minSampleShading = MG_State::pGLContext->GetMinSampleShadingValue(),
+            // GL_SAMPLE_MASK off means full coverage, which is what an all-ones mask says and what
+            // a null pSampleMask used to say by omission. One word: MaxSampleMaskWords is clamped
+            // to 1 on both backends, so glSampleMaski only ever writes index 0.
+            .sampleMask = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask)
+                              ? MG_State::pGLContext->GetRenderStateParameters().SampleMaskValue
+                              : 0xffffffffu,
             .subpass = 0,
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
@@ -7610,7 +7624,8 @@ void main() {
 
     Bool VulkanRenderer::ClearDepthSliceWithRenderPass(VkCommandBuffer commandBuffer,
                                                        MG_State::GLState::ITextureObject& texture, Uint32 mipLevel,
-                                                       Uint32 depthSlice, const VkClearValue& clearValue) {
+                                                       Uint32 depthSlice, const VkClearValue& clearValue,
+                                                       VkImageLayout finalLayout) {
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(texture);
         if (resource == nullptr || resource->image == VK_NULL_HANDLE) return false;
         if (m_frameContext.GetCurrentFrameIndex() >= m_deferredDepthMipmapCleanup.size()) return false;
@@ -7623,7 +7638,11 @@ void main() {
 
         VkAttachmentDescription colorAttachment{};
         colorAttachment.format = resource->format;
-        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        // The image's own count, not a hardcoded one: a render-pass attachment must match the
+        // image it is given (VUID-VkFramebufferCreateInfo-pAttachments-00880), and this helper is
+        // now also the multisample path - a multisample image carries no TRANSFER_DST usage, so a
+        // load-op clear is the only legal way to clear it at all.
+        colorAttachment.samples = resource->sampleCount;
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -7631,7 +7650,7 @@ void main() {
         colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         // Hand the slice back in the layout the caller already tracks for the whole image, so its
         // closing barrier stays truthful and resource->layout is never touched from in here.
-        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        colorAttachment.finalLayout = finalLayout;
 
         VkAttachmentReference colorRef{};
         colorRef.attachment = 0;
@@ -7699,9 +7718,26 @@ void main() {
                         "MaterializePendingClearForTexture requires no active render pass on the target buffer");
 
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(texture);
-        MOBILEGL_ASSERT(resource != nullptr,
-                        "MaterializePendingClearForTexture: SyncTextureAndGetDescriptor failed for textureId=%d",
-                        texture.GetExternalIndex());
+        if (resource == nullptr) {
+            // Declined sync (an incomplete texture, say). Nothing to clear into, and every line
+            // below dereferences this - the assert that used to stand here is compiled out of
+            // every build past DEBUG.
+            MGLOG_E_ONCE("MaterializePendingClearForTexture: no texture resource for textureId=%d; the queued clears "
+                         "stay queued",
+                         texture.GetExternalIndex());
+            return false;
+        }
+
+        // A multisample image is not a transfer target: SyncTextureResource deliberately withholds
+        // TRANSFER_DST/TRANSFER_SRC from every one of them, so the vkCmdClearColorImage below -
+        // and the TRANSFER_DST transition ahead of it - are invalid usage
+        // (VUID-vkCmdClearColorImage-image-00002) on exactly the shape a
+        // glClearBufferfv-then-sample sequence produces. Clear it the one way that is legal at
+        // any sample count instead: a throwaway render pass whose whole content is its load-op
+        // clear, which is also what the 3D-slice case below already does.
+        if (resource->sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+            return MaterializeMultisamplePendingClear(commandBuffer, texture, *resource, pendingClears);
+        }
 
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
@@ -7837,6 +7873,77 @@ void main() {
 
         m_clearManager->PopPendingClear(&texture);
         MGLOG_D("MaterializePendingClearForTexture: textureId=%d pending clear materialized",
+                texture.GetExternalIndex());
+        return true;
+    }
+
+    Bool VulkanRenderer::MaterializeMultisamplePendingClear(VkCommandBuffer commandBuffer,
+                                                            MG_State::GLState::ITextureObject& texture,
+                                                            VkTextureManager::TextureResource& resource,
+                                                            const Vector<PendingClearEntry>& pendingClears) {
+        // Colour only. GL can queue a depth/stencil clear on a multisample texture too, and the
+        // load-op idiom would serve it just as well, but this helper attaches its view as a
+        // COLOUR attachment; declining is honest and leaves the queue intact for a later path.
+        if ((resource.aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
+            MGLOG_E_ONCE("MaterializeMultisamplePendingClear: textureId=%d is a multisample depth/stencil texture; "
+                         "its queued clear cannot be materialised out of a render pass yet",
+                         texture.GetExternalIndex());
+            return false;
+        }
+
+        Bool allCleared = true;
+        for (const auto& pendingClear : pendingClears) {
+            if (pendingClear.key.mipLevel >= resource.mipLevels) {
+                MGLOG_E_ONCE("MaterializeMultisamplePendingClear: textureId=%d pending clear mip=%u out of range %u",
+                             texture.GetExternalIndex(), pendingClear.key.mipLevel, resource.mipLevels);
+                allCleared = false;
+                continue;
+            }
+            auto clearPayload = pendingClear.payload;
+            PreCompensateSrgbClearColor(clearPayload, resource.format);
+            VkClearValue clearValue{};
+            clearValue.color = MakeVkClearColorValue(clearPayload, ColorFormatLacksAlpha(&texture));
+
+            // A multisample texture has exactly one level and, for the 2D target, one layer; the
+            // array target's layers are cleared one at a time, which is what this helper's
+            // per-layer view gives us.
+            const Uint32 firstLayer = pendingClear.key.baseArrayLayer;
+            const Uint32 layerCount = std::max(pendingClear.key.layerCount, 1u);
+            for (Uint32 layer = firstLayer; layer < firstLayer + layerCount; ++layer) {
+                if (layer >= resource.arrayLayers) break;
+                // COLOR_ATTACHMENT_OPTIMAL, not TRANSFER_DST: the image never has transfer usage,
+                // and a render target is where it came from and where it is going.
+                if (!ClearDepthSliceWithRenderPass(commandBuffer, texture, pendingClear.key.mipLevel, layer,
+                                                   clearValue, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)) {
+                    MGLOG_E_ONCE("MaterializeMultisamplePendingClear: textureId=%d layer %u could not be cleared",
+                                 texture.GetExternalIndex(), layer);
+                    allCleared = false;
+                }
+            }
+        }
+        if (!allCleared) {
+            return false;
+        }
+
+        // The load-op clear left every touched layer in COLOR_ATTACHMENT_OPTIMAL (each pass's
+        // finalLayout), so that - not the tracked layout on entry - is what the closing barrier
+        // has to start from.
+        // TransitionImageLayout takes the tracked layout by reference and updates it, so seeding
+        // it is both how the barrier learns its source and how resource->layout ends up right.
+        resource.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        const Bool ok = VkTextureManager::TransitionImageLayout(
+            commandBuffer, resource.image, resource.layout,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+            resource.aspect, 0, resource.mipLevels);
+        if (!ok) {
+            MGLOG_E_ONCE("MaterializeMultisamplePendingClear: failed to transition textureId=%d to the sampled layout",
+                         texture.GetExternalIndex());
+            return false;
+        }
+
+        m_clearManager->PopPendingClear(&texture);
+        MGLOG_D("MaterializeMultisamplePendingClear: textureId=%d pending clear materialised through a load-op pass",
                 texture.GetExternalIndex());
         return true;
     }
