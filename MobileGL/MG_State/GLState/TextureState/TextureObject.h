@@ -49,6 +49,12 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetMaxLevel(Uint maxLevel) = 0;
         virtual Bool IsImmutable() const = 0;
         virtual Uint GetImmutableLevels() const = 0;
+        // How many levels THIS object can address, i.e. the bound a level argument has to
+        // stay under. The same number as GetImmutableLevels() for an ordinary immutable
+        // texture, but NOT for a view: GL 4.6 core 8.18 defines TEXTURE_IMMUTABLE_LEVELS on a
+        // view as the ORIGINAL texture's value, which says nothing about what the view itself
+        // can reach, and bounding by it lets a level the view does not have through.
+        virtual Uint GetAddressableLevelCount() const = 0;
         virtual void SetImmutableLevels(Uint levels) = 0;
         virtual Uint16 GetTextureParamsVersion() const = 0;
         // Monotonic counter bumped on every CPU-side pixel mutation (see MarkStorageDirty).
@@ -132,6 +138,10 @@ namespace MobileGL::MG_State::GLState {
         void SetMaxLevel(Uint maxLevel) override;
         Bool IsImmutable() const override;
         Uint GetImmutableLevels() const override;
+        // m_immutableLevels is already the VIEW-relative count for a view (its constructor
+        // stores <numlevels> there so the level-range clamp works in view coordinates), so
+        // this one accessor is correct for both and needs no override.
+        Uint GetAddressableLevelCount() const override { return m_immutableLevels; }
         void SetImmutableLevels(Uint levels) override;
         Uint16 GetTextureParamsVersion() const override;
         Uint64 GetContentVersion() const override;

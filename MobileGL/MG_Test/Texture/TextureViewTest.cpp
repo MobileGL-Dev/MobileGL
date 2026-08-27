@@ -25,6 +25,7 @@
 #include "Init.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
@@ -188,6 +189,36 @@ namespace {
         // 8.18: "TEXTURE_IMMUTABLE_LEVELS is set to the value of TEXTURE_IMMUTABLE_LEVELS from
         // the ORIGINAL texture" - not to <numlevels>.
         EXPECT_EQ(GetViewParameter(view, GL_TEXTURE_2D, GL_TEXTURE_IMMUTABLE_LEVELS), 3);
+    }
+
+    // ...and the level a FRAMEBUFFER may attach is the view's own count, not the inherited
+    // TEXTURE_IMMUTABLE_LEVELS the test above pins. Bounding glFramebufferTexture by the latter
+    // accepted a level the view cannot reach, which attaches a 0x0 image: the framebuffer then
+    // reports COMPLETE and nothing can be drawn into it.
+    TEST_F(TextureViewTest, AFramebufferAttachIsBoundedByTheViewsOwnLevelCount) {
+        const GLuint storage = MakeImmutable2D(4, 32, 32);
+        const GLuint view = GenTexture();
+        MG_Impl::GLImpl::TextureView(view, GL_TEXTURE_2D, storage, GL_RGBA8, /*minlevel=*/2,
+                                     /*numlevels=*/2, 0, 1);
+        ExpectSingleGlError(GL_NO_ERROR);
+        // The inherited query really does report the original's four levels...
+        ASSERT_EQ(GetViewParameter(view, GL_TEXTURE_2D, GL_TEXTURE_IMMUTABLE_LEVELS), 4);
+        // ...while the view itself has two.
+        ASSERT_EQ(GetViewParameter(view, GL_TEXTURE_2D, GL_TEXTURE_VIEW_NUM_LEVELS), 2);
+
+        GLuint framebuffer = 0;
+        MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+        MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+        ExpectSingleGlError(GL_NO_ERROR);
+
+        MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, view, 1);
+        ExpectSingleGlError(GL_NO_ERROR);
+
+        MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, view, 2);
+        ExpectSingleGlError(GL_INVALID_VALUE);
+
+        MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        DrainPendingGlErrors();
     }
 
     TEST_F(TextureViewTest, ViewClampsItsLevelCountToWhatRemains) {

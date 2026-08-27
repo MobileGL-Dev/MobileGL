@@ -1340,3 +1340,106 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsALevelTheTextureDoesNotHave) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
     DrainPendingGlErrors();
 }
+
+// The four conditions above are stated once in GL 4.6 core 9.2.8 for the WHOLE family, and
+// glFramebufferTexture2D / 3D / TextureLayer reach the attachment through their own code rather
+// than through the shared helper - so each of them has to be asked separately or one entry point
+// answers differently from its aliases. glFramebufferTexture2D is the most-used of the five, and
+// the default-framebuffer case is the damaging one: the attach used to succeed and replace
+// framebuffer 0's colour attachment, which nothing ever puts back.
+
+TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAttachments) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 2, GL_RGBA8, 64, 32);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const auto defaultFramebuffer = MG_State::pGLContext->GetFramebufferObject(0);
+    ASSERT_NE(defaultFramebuffer, nullptr);
+    const auto& colorBefore = defaultFramebuffer->GetAttachment(FramebufferAttachmentType::Color0);
+    const Bool hadTextureBefore = colorBefore.IsTexture();
+
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    DrainPendingGlErrors();
+    // ...and, more to the point, the default framebuffer still describes the surface.
+    const auto& colorAfter = defaultFramebuffer->GetAttachment(FramebufferAttachmentType::Color0);
+    EXPECT_EQ(colorAfter.IsTexture(), hadTextureBefore);
+    if (colorAfter.IsTexture() && hadTextureBefore) {
+        EXPECT_NE(colorAfter.GetTexture()->GetExternalIndex(), texture)
+            << "the refused attach must not have replaced framebuffer 0's colour attachment";
+    }
+
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const GLint limit = MG_Backend::pActiveBackendObject
+                            ? static_cast<GLint>(
+                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
+                                          static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), GL_TEXTURE_2D,
+                                          texture, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE) << "the texture has two levels, not three";
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, -1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+
+    // The legal call still works, so the boundary is off-by-none.
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, FramebufferTextureLayerRejectsTheDefaultFramebufferAndBadLevels) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage3D(texture, 2, GL_RGBA8, 16, 16, 4);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The attach path used to bypass every one of these while the DETACH path (texture == 0) went
+    // through the fixed helper, so one entry point answered two different ways.
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::FramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    DrainPendingGlErrors();
+
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::FramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 2, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::FramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 1, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// The DSA sibling is the entry point the bound-target family was aligned WITH, so an out-of-range
+// immutable level has to be rejected there too - otherwise the alignment created a fresh
+// asymmetry in the opposite direction.
+TEST_F(FramebufferTest, NamedFramebufferTextureRejectsALevelTheTextureDoesNotHave) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 2, GL_RGBA8, 64, 32);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+}
