@@ -570,3 +570,155 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
     for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The composite's transform-feedback capture list.
+//
+// Two rules, and getting either wrong turns a working pipeline into one where EVERY draw reports
+// GL_INVALID_OPERATION: an unresolvable capture name fails the composite's own link, and
+// ValidateProgramForExecution rejects every draw through a pipeline whose composite did not link -
+// while glValidateProgramPipeline keeps reporting TRUE.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    const char* kCaptureVs = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+out float v_captured;
+out float v_other;
+void main() { gl_Position = vec4(0.0); v_captured = 1.0; v_other = 2.0; }
+)";
+
+    // A geometry stage that re-emits nothing the vertex stage named, so a capture list taken from
+    // the VERTEX program cannot resolve against it.
+    const char* kPassthroughGs = R"(#version 430 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+out gl_PerVertex { vec4 gl_Position; };
+out float g_only;
+void main() { gl_Position = vec4(0.0); g_only = 1.0; EmitVertex(); EndPrimitive(); }
+)";
+
+    Vector<String> CompositeCaptureNames(MG_State::GLState::ProgramObject& composite) {
+        Vector<String> names;
+        for (SizeT i = 0; i < composite.GetTransformFeedbackVaryingCount(); ++i) {
+            if (const auto* varying = composite.GetTransformFeedbackVarying(i)) {
+                names.push_back(varying->name);
+            }
+        }
+        return names;
+    }
+} // namespace
+
+// glTransformFeedbackVaryings does not take effect until the program's NEXT link (GL 4.6 core
+// 7.3/11.1.2.1) and deliberately bumps no version, so a request written after the stage program's
+// last link is invisible to the composite cache's signature - yet the next rebuild would pick it
+// up. The capture list would then depend on whether some unrelated event happened to invalidate
+// the cache. Reading the LINKED snapshot removes the whole class, and makes the existing cache key
+// sufficient: linked state only moves at a link, which is exactly what the key tracks.
+TEST_F(ProgramPipelineCompositeTest, CompositeCaptureListComesFromTheLinkedSnapshotNotThePendingRequest) {
+    const GLuint vs = CreateProgram();
+    {
+        const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(shader, 1, &kCaptureVs, nullptr);
+        CompileShader(shader);
+        ProgramParameteri(vs, GL_PROGRAM_SEPARABLE, GL_TRUE);
+        AttachShader(vs, shader);
+        const char* captured = "v_captured";
+        TransformFeedbackVaryings(vs, 1, &captured, GL_INTERLEAVED_ATTRIBS);
+        LinkProgram(vs);
+        GLint linked = GL_FALSE;
+        GetProgramiv(vs, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+    }
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    {
+        const auto composite = DrawProgram();
+        ASSERT_NE(composite, nullptr);
+        EXPECT_EQ(CompositeCaptureNames(*composite), (Vector<String>{"v_captured"}));
+    }
+
+    // A NEW request with no relink. GL says the program still captures v_captured.
+    const char* other = "v_other";
+    TransformFeedbackVaryings(vs, 1, &other, GL_INTERLEAVED_ATTRIBS);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // Force a composite rebuild through something entirely unrelated to the capture list: a new
+    // fragment stage program moves that slot's lifetime id, so the cache signature changes.
+    const GLuint fs2 = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs2);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    {
+        const auto composite = DrawProgram();
+        ASSERT_NE(composite, nullptr);
+        EXPECT_TRUE(composite->GetLinkStatus()) << "the composite must still link";
+        EXPECT_EQ(CompositeCaptureNames(*composite), (Vector<String>{"v_captured"}))
+            << "an unlinked request must not reach the composite";
+    }
+
+    // Relinking the stage program IS what makes the new request take effect - and the composite
+    // follows, because the relink moves the link version the cache keys on.
+    LinkProgram(vs);
+    {
+        const auto composite = DrawProgram();
+        ASSERT_NE(composite, nullptr);
+        EXPECT_EQ(CompositeCaptureNames(*composite), (Vector<String>{"v_other"}));
+    }
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+}
+
+// Transform feedback captures the output of the LAST vertex-processing stage (GL 4.6 core
+// 11.1.2.1) - the last stage that EXISTS, not the last one that happens to carry a capture list.
+// Falling through a geometry stage with no request and installing the vertex stage's list instead
+// made the two halves disagree: this loop picks whose list, the link task resolves those names
+// against the geometry intermediate. Either it captures where GL says it must not, or the
+// composite fails to link and every draw through the pipeline reports GL_INVALID_OPERATION.
+TEST_F(ProgramPipelineCompositeTest, CompositeCaptureStageIsTheLastVertexProcessingStageThatExists) {
+    const GLuint vs = CreateProgram();
+    {
+        const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+        ShaderSource(shader, 1, &kCaptureVs, nullptr);
+        CompileShader(shader);
+        ProgramParameteri(vs, GL_PROGRAM_SEPARABLE, GL_TRUE);
+        AttachShader(vs, shader);
+        const char* captured = "v_captured";
+        TransformFeedbackVaryings(vs, 1, &captured, GL_INTERLEAVED_ATTRIBS);
+        LinkProgram(vs);
+        GLint linked = GL_FALSE;
+        GetProgramiv(vs, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+    }
+    // The geometry program was never given a capture list, and "v_captured" is not one of its
+    // outputs - so a composite seeded from the VERTEX program's list cannot resolve it.
+    const GLuint gs = MakeSeparableProgram(GL_GEOMETRY_SHADER, kPassthroughGs);
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_GEOMETRY_SHADER_BIT, gs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const auto composite = DrawProgram();
+    ASSERT_NE(composite, nullptr);
+    EXPECT_TRUE(composite->GetLinkStatus())
+        << "the geometry stage is the capture stage and has no capture list, so the composite links "
+           "with none - it must not inherit the vertex stage's and fail resolving it";
+    EXPECT_EQ(composite->GetTransformFeedbackVaryingCount(), 0u)
+        << "the capture stage is the geometry program, which declared nothing to capture";
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+}

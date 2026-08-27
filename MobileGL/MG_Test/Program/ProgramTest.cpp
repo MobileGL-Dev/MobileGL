@@ -4361,6 +4361,54 @@ TEST_F(ProgramTest, UniformEntryPointsRejectAnUnlinkedProgram) {
     ProgramUniform1f(program, 0, 1.0f);
     EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
 
+    // THE MATRIX FORMS TOO. The reorder originally landed on ProgramUniformv_State alone, so all
+    // thirteen glProgramUniformMatrix* entry points kept the old `if (location == -1) return;`
+    // first statement and stayed silent on exactly the case the rule exists for.
+    const GLfloat m[16] = {};
+    ProgramUniformMatrix2fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2fv";
+    ProgramUniformMatrix3fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3fv";
+    ProgramUniformMatrix4fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4fv";
+    ProgramUniformMatrix2x3fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2x3fv";
+    ProgramUniformMatrix3x2fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3x2fv";
+    ProgramUniformMatrix2x4fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2x4fv";
+    ProgramUniformMatrix4x2fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4x2fv";
+    ProgramUniformMatrix3x4fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3x4fv";
+    ProgramUniformMatrix4x3fv(program, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4x3fv";
+
+    const GLdouble md[16] = {};
+    ProgramUniformMatrix2dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2dv";
+    ProgramUniformMatrix3dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3dv";
+    ProgramUniformMatrix4dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4dv";
+    ProgramUniformMatrix2x3dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2x3dv";
+    ProgramUniformMatrix3x2dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3x2dv";
+    ProgramUniformMatrix2x4dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix2x4dv";
+    ProgramUniformMatrix4x2dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4x2dv";
+    ProgramUniformMatrix3x4dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix3x4dv";
+    ProgramUniformMatrix4x3dv(program, -1, 1, GL_FALSE, md);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "glProgramUniformMatrix4x3dv";
+
+    // A name GL never handed out is INVALID_VALUE, and the -1 location must not swallow that
+    // either - this is the second error the early-out was hiding.
+    ProgramUniformMatrix4fv(0xDEADBEEFu, -1, 1, GL_FALSE, m);
+    EXPECT_EQ(GetError(), GL_INVALID_VALUE);
+
     DrainProgramTestErrors();
 }
 
