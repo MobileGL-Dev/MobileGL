@@ -12,6 +12,7 @@
 
 #include "ShaderCompiler.h"
 
+#include <algorithm>
 #include <format>
 
 #include <cmath>

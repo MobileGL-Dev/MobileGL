@@ -538,75 +538,151 @@ namespace MobileGL {
                 }
             } // namespace
 
+            namespace {
+                // The four gl_PerVertex members, by their GL interface names. These are the only
+                // built-ins GL lets transform feedback capture, and a SPIR-V module names them by
+                // BuiltIn decoration rather than by string - so the mapping has to live somewhere.
+                const char* XfbBuiltInName(SpvBuiltIn builtin) {
+                    switch (builtin) {
+                    case SpvBuiltInPosition:
+                        return "gl_Position";
+                    case SpvBuiltInPointSize:
+                        return "gl_PointSize";
+                    case SpvBuiltInClipDistance:
+                        return "gl_ClipDistance";
+                    case SpvBuiltInCullDistance:
+                        return "gl_CullDistance";
+                    default:
+                        return nullptr;
+                    }
+                }
+            } // namespace
+
             Vector<SpirvXfbCapture> SpvcSession::ReflectTransformFeedbackCaptures() const {
                 Vector<SpirvXfbCapture> captures;
                 if (compiler == nullptr || resources == nullptr) return captures;
 
+                // XfbBuffer/XfbStride sit on the declaring VARIABLE; Offset sits on the variable
+                // for a plain output and on each MEMBER for a block.
+                auto readVariableDecorations = [this](SpvId id, Uint32& outBuffer, Uint32& outStride) {
+                    outBuffer = spvc_compiler_has_decoration(compiler, id, SpvDecorationXfbBuffer) == SPVC_TRUE
+                                    ? spvc_compiler_get_decoration(compiler, id, SpvDecorationXfbBuffer)
+                                    : 0u;
+                    outStride = spvc_compiler_has_decoration(compiler, id, SpvDecorationXfbStride) == SPVC_TRUE
+                                    ? spvc_compiler_get_decoration(compiler, id, SpvDecorationXfbStride)
+                                    : 0u;
+                };
+
+                // ---- application outputs: plain variables and application blocks ----
                 const spvc_reflected_resource* outputs = nullptr;
                 SizeT outputCount = 0;
                 if (spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &outputs,
-                                                              &outputCount) != SPVC_SUCCESS) {
-                    return captures;
+                                                              &outputCount) == SPVC_SUCCESS) {
+                    for (SizeT i = 0; i < outputCount; ++i) {
+                        const spvc_reflected_resource& output = outputs[i];
+                        Uint32 buffer = 0;
+                        Uint32 stride = 0;
+                        readVariableDecorations(output.id, buffer, stride);
+
+                        const spvc_type type = spvc_compiler_get_type_handle(compiler, output.base_type_id);
+                        const unsigned memberCount =
+                            type != nullptr && spvc_type_get_basetype(type) == SPVC_BASETYPE_STRUCT
+                                ? spvc_type_get_num_member_types(type)
+                                : 0u;
+
+                        if (memberCount == 0) {
+                            if (spvc_compiler_has_decoration(compiler, output.id, SpvDecorationOffset) != SPVC_TRUE) {
+                                continue;
+                            }
+                            SpirvXfbCapture capture;
+                            capture.name = output.name ? output.name : "";
+                            capture.buffer = buffer;
+                            capture.stride = stride;
+                            capture.offset = spvc_compiler_get_decoration(compiler, output.id, SpvDecorationOffset);
+                            capture.componentCount = XfbComponentCount(compiler, output.type_id);
+                            if (!capture.name.empty()) captures.push_back(Move(capture));
+                            continue;
+                        }
+
+                        for (unsigned member = 0; member < memberCount; ++member) {
+                            if (spvc_compiler_has_member_decoration(compiler, output.base_type_id, member,
+                                                                    SpvDecorationOffset) != SPVC_TRUE) {
+                                continue;
+                            }
+                            const char* memberName =
+                                spvc_compiler_get_member_name(compiler, output.base_type_id, member);
+                            if (memberName == nullptr || *memberName == '\0') continue;
+                            SpirvXfbCapture capture;
+                            const String blockName = output.name ? String(output.name) : String{};
+                            // GL's capture interface spells an application block's member
+                            // "Block.member"; a redeclared built-in block contributes its members
+                            // by their own names, which the built-in walk below handles.
+                            capture.name = blockName.empty() ? String(memberName)
+                                                             : blockName + "." + String(memberName);
+                            capture.buffer = buffer;
+                            capture.stride = stride;
+                            capture.offset = spvc_compiler_get_member_decoration(compiler, output.base_type_id,
+                                                                                member, SpvDecorationOffset);
+                            capture.componentCount =
+                                XfbComponentCount(compiler, spvc_type_get_member_type(type, member));
+                            captures.push_back(Move(capture));
+                        }
+                    }
                 }
 
-                for (SizeT i = 0; i < outputCount; ++i) {
-                    const spvc_reflected_resource& output = outputs[i];
-                    // XfbBuffer/XfbStride sit on the VARIABLE; Offset sits on the variable for a
-                    // plain output and on each MEMBER for a block (which is how a redeclared
-                    // gl_PerVertex carries it).
-                    const Bool hasBuffer =
-                        spvc_compiler_has_decoration(compiler, output.id, SpvDecorationXfbBuffer) == SPVC_TRUE;
-                    const Uint32 buffer =
-                        hasBuffer ? spvc_compiler_get_decoration(compiler, output.id, SpvDecorationXfbBuffer) : 0u;
-                    const Uint32 stride =
-                        spvc_compiler_has_decoration(compiler, output.id, SpvDecorationXfbStride) == SPVC_TRUE
-                            ? spvc_compiler_get_decoration(compiler, output.id, SpvDecorationXfbStride)
-                            : 0u;
+                // ---- the redeclared built-in block ----
+                // SPIRV-Cross keeps gl_PerVertex out of the STAGE_OUTPUT list and reports it here
+                // instead, one entry per built-in member. That is the shape the conformance suite
+                // feeds in first (`layout(xfb_buffer = 0, xfb_offset = 16) out gl_PerVertex { vec4
+                // gl_Position; }`), so walking only the list above would have found nothing at all.
+                const spvc_reflected_builtin_resource* builtins = nullptr;
+                SizeT builtinCount = 0;
+                if (spvc_resources_get_builtin_resource_list_for_type(
+                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) ==
+                    SPVC_SUCCESS) {
+                    for (SizeT i = 0; i < builtinCount; ++i) {
+                        const spvc_reflected_builtin_resource& entry = builtins[i];
+                        const char* name = XfbBuiltInName(entry.builtin);
+                        if (name == nullptr) continue;
 
-                    const spvc_type type = spvc_compiler_get_type_handle(compiler, output.base_type_id);
-                    const unsigned memberCount =
-                        type != nullptr && spvc_type_get_basetype(type) == SPVC_BASETYPE_STRUCT
-                            ? spvc_type_get_num_member_types(type)
-                            : 0u;
+                        Uint32 buffer = 0;
+                        Uint32 stride = 0;
+                        readVariableDecorations(entry.resource.id, buffer, stride);
 
-                    if (memberCount == 0) {
-                        if (spvc_compiler_has_decoration(compiler, output.id, SpvDecorationOffset) != SPVC_TRUE) {
+                        const spvc_type blockType =
+                            spvc_compiler_get_type_handle(compiler, entry.resource.base_type_id);
+                        if (blockType == nullptr ||
+                            spvc_type_get_basetype(blockType) != SPVC_BASETYPE_STRUCT) {
                             continue;
                         }
-                        SpirvXfbCapture capture;
-                        capture.name = output.name ? output.name : "";
-                        capture.buffer = buffer;
-                        capture.stride = stride;
-                        capture.offset = spvc_compiler_get_decoration(compiler, output.id, SpvDecorationOffset);
-                        capture.componentCount = XfbComponentCount(compiler, output.type_id);
-                        if (!capture.name.empty()) captures.push_back(Move(capture));
-                        continue;
-                    }
-
-                    for (unsigned member = 0; member < memberCount; ++member) {
-                        if (spvc_compiler_has_member_decoration(compiler, output.base_type_id, member,
-                                                                SpvDecorationOffset) != SPVC_TRUE) {
-                            continue;
+                        // The member index is not in the reflection entry, so it is recovered by
+                        // matching the BuiltIn decoration - the same key the entry is keyed on.
+                        const unsigned memberCount = spvc_type_get_num_member_types(blockType);
+                        for (unsigned member = 0; member < memberCount; ++member) {
+                            if (spvc_compiler_has_member_decoration(compiler, entry.resource.base_type_id, member,
+                                                                    SpvDecorationBuiltIn) != SPVC_TRUE) {
+                                continue;
+                            }
+                            if (spvc_compiler_get_member_decoration(compiler, entry.resource.base_type_id, member,
+                                                                    SpvDecorationBuiltIn) !=
+                                static_cast<unsigned>(entry.builtin)) {
+                                continue;
+                            }
+                            if (spvc_compiler_has_member_decoration(compiler, entry.resource.base_type_id, member,
+                                                                    SpvDecorationOffset) != SPVC_TRUE) {
+                                break;   // this built-in is present but not captured
+                            }
+                            SpirvXfbCapture capture;
+                            capture.name = name;
+                            capture.buffer = buffer;
+                            capture.stride = stride;
+                            capture.offset = spvc_compiler_get_member_decoration(
+                                compiler, entry.resource.base_type_id, member, SpvDecorationOffset);
+                            capture.componentCount =
+                                XfbComponentCount(compiler, spvc_type_get_member_type(blockType, member));
+                            captures.push_back(Move(capture));
+                            break;
                         }
-                        const char* memberName =
-                            spvc_compiler_get_member_name(compiler, output.base_type_id, member);
-                        if (memberName == nullptr || *memberName == '\0') continue;
-                        SpirvXfbCapture capture;
-                        // A redeclared built-in block contributes its members by their own names
-                        // ("gl_Position"), which is how GL's capture interface spells them; an
-                        // application block spells them "Block.member".
-                        const String blockName = output.name ? String(output.name) : String{};
-                        const Bool isBuiltInBlock = blockName.compare(0, 3, "gl_") == 0;
-                        capture.name = isBuiltInBlock || blockName.empty()
-                                           ? String(memberName)
-                                           : blockName + "." + String(memberName);
-                        capture.buffer = buffer;
-                        capture.stride = stride;
-                        capture.offset = spvc_compiler_get_member_decoration(compiler, output.base_type_id, member,
-                                                                            SpvDecorationOffset);
-                        capture.componentCount = XfbComponentCount(
-                            compiler, spvc_type_get_member_type(type, member));
-                        captures.push_back(Move(capture));
                     }
                 }
 
@@ -624,28 +700,36 @@ namespace MobileGL {
             void SpvcSession::StripTransformFeedbackDecorations() {
                 if (compiler == nullptr || resources == nullptr) return;
 
+                auto stripVariable = [this](SpvId variableId, spvc_type_id baseTypeId) {
+                    spvc_compiler_unset_decoration(compiler, variableId, SpvDecorationXfbBuffer);
+                    spvc_compiler_unset_decoration(compiler, variableId, SpvDecorationXfbStride);
+                    spvc_compiler_unset_decoration(compiler, variableId, SpvDecorationOffset);
+
+                    const spvc_type type = spvc_compiler_get_type_handle(compiler, baseTypeId);
+                    if (type == nullptr || spvc_type_get_basetype(type) != SPVC_BASETYPE_STRUCT) return;
+                    const unsigned memberCount = spvc_type_get_num_member_types(type);
+                    for (unsigned member = 0; member < memberCount; ++member) {
+                        spvc_compiler_unset_member_decoration(compiler, baseTypeId, member, SpvDecorationOffset);
+                        spvc_compiler_unset_member_decoration(compiler, baseTypeId, member, SpvDecorationXfbBuffer);
+                        spvc_compiler_unset_member_decoration(compiler, baseTypeId, member, SpvDecorationXfbStride);
+                    }
+                };
+
                 const spvc_reflected_resource* outputs = nullptr;
                 SizeT outputCount = 0;
                 if (spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &outputs,
-                                                              &outputCount) != SPVC_SUCCESS) {
-                    return;
+                                                              &outputCount) == SPVC_SUCCESS) {
+                    for (SizeT i = 0; i < outputCount; ++i) {
+                        stripVariable(outputs[i].id, outputs[i].base_type_id);
+                    }
                 }
-                for (SizeT i = 0; i < outputCount; ++i) {
-                    const spvc_reflected_resource& output = outputs[i];
-                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationXfbBuffer);
-                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationXfbStride);
-                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationOffset);
-
-                    const spvc_type type = spvc_compiler_get_type_handle(compiler, output.base_type_id);
-                    if (type == nullptr || spvc_type_get_basetype(type) != SPVC_BASETYPE_STRUCT) continue;
-                    const unsigned memberCount = spvc_type_get_num_member_types(type);
-                    for (unsigned member = 0; member < memberCount; ++member) {
-                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
-                                                              SpvDecorationOffset);
-                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
-                                                              SpvDecorationXfbBuffer);
-                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
-                                                              SpvDecorationXfbStride);
+                const spvc_reflected_builtin_resource* builtins = nullptr;
+                SizeT builtinCount = 0;
+                if (spvc_resources_get_builtin_resource_list_for_type(
+                        resources, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT, &builtins, &builtinCount) ==
+                    SPVC_SUCCESS) {
+                    for (SizeT i = 0; i < builtinCount; ++i) {
+                        stripVariable(builtins[i].resource.id, builtins[i].resource.base_type_id);
                     }
                 }
             }

@@ -4527,38 +4527,124 @@ TEST_F(ProgramTest, SpecializeShaderCompilesTheModuleAndAppliesItsConstants) {
     GetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
     EXPECT_EQ(compiled, GL_TRUE) << infoLog;
 
-    // The module stays attached after specialization: glSpecializeShader may legally run again
-    // with different constants, and it has to re-specialize the ORIGINAL words.
+    // The module stays attached after specialization - GL_SPIR_V_BINARY keeps reading TRUE - but
+    // the shader may NOT be specialized again. ARB_gl_spirv: "Once specialized, a shader may not
+    // be re-specialized without first re-associating the original SPIR-V module with it, through
+    // ShaderBinary."
     GLint isSpirv = GL_FALSE;
     GetShaderiv(shader, GL_SPIR_V_BINARY, &isSpirv);
     EXPECT_EQ(isSpirv, GL_TRUE);
     SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    ExpectOnlyThisGlError(GL_INVALID_OPERATION);
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    EXPECT_EQ(compiled, GL_TRUE) << "the refused call must not have disturbed the first specialization";
+
+    // Re-associating the module is what makes a second specialization legal again - and it is the
+    // only thing that does.
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-    EXPECT_EQ(compiled, GL_TRUE) << "a second specialization of the same module must also compile";
+    EXPECT_EQ(compiled, GL_TRUE);
 
     DrainProgramTestErrors();
 }
 
-TEST_F(ProgramTest, SpecializeShaderReportsBadEntryPointsAndUnknownConstantsThroughCompileStatus) {
+// glShaderSource does the same re-association in the other direction: it turns the object back
+// into a GLSL shader, so a later glShaderBinary + glSpecializeShader pair is legal again.
+TEST_F(ProgramTest, ShaderSourceClearsTheSpecializedLatch) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    const char* source = "#version 450 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    ShaderSource(shader, 1, &source, nullptr);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "the latch must not survive a round trip through glShaderSource";
+
+    DrainProgramTestErrors();
+}
+
+// A shader that came from glShaderBinary has never had glShaderSource called on it, so GL 4.6
+// core 7.1 makes its source the empty string - including AFTER glSpecializeShader, when the
+// object internally holds the GLSL the module was translated into. That text is MobileGL's, not
+// the application's, and handing it back invites an application to cache and re-submit it.
+TEST_F(ProgramTest, ASpirvShaderReportsNoApplicationSource) {
     DrainProgramTestErrors();
 
     const GLuint shader = CreateShader(GL_VERTEX_SHADER);
     ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
     ASSERT_EQ(GetError(), GL_NO_ERROR);
 
-    // A constant id the module does not declare. ARB_gl_spirv routes a failed specialization
-    // through COMPILE_STATUS and the info log, exactly as glCompileShader does - it is not a GL
-    // error, which is why an application that only checks glGetError would see nothing.
+    GLint sourceLength = -1;
+    GetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &sourceLength);
+    EXPECT_EQ(sourceLength, 0);
+
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    GLint compiled = GL_FALSE;
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    ASSERT_EQ(compiled, GL_TRUE) << "the leak this pins only exists on the specialized path";
+
+    sourceLength = -1;
+    GetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &sourceLength);
+    EXPECT_EQ(sourceLength, 0) << "the SPIRV-Cross GLSL is not the application's source";
+
+    char buffer[64];
+    std::memset(buffer, 'x', sizeof(buffer));
+    GLsizei written = -1;
+    GetShaderSource(shader, static_cast<GLsizei>(sizeof(buffer)), &written, buffer);
+    EXPECT_EQ(written, 0);
+    EXPECT_EQ(buffer[0], '\0');
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    // A GLSL shader still answers with what the application gave it.
+    const char* source = "#version 450 core\nvoid main() { gl_Position = vec4(0.0); }\n";
+    ShaderSource(shader, 1, &source, nullptr);
+    GetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &sourceLength);
+    EXPECT_EQ(sourceLength, static_cast<GLint>(std::strlen(source)) + 1);
+
+    DrainProgramTestErrors();
+}
+
+// The two conditions ARB_gl_spirv ENUMERATES are GL_INVALID_VALUE, not compile failures: "an
+// INVALID_VALUE error is generated if pEntryPoint does not name a valid entry point for shader"
+// and "...if any element of pConstantIndex refers to a specialization constant that does not exist
+// in the shader module contained in shader". Both used to be reported as COMPILE_STATUS false with
+// no GL error, which an application checking glGetError could not see at all.
+//
+// The distinction matters beyond the error code: an erroring GL command must have NO OTHER EFFECT,
+// so neither of these may leave the shader object in a failed-compile state. The conformance suite
+// leans on exactly that - it fails specialization twice on one object and then requires the next,
+// well-formed call on that same object to succeed.
+TEST_F(ProgramTest, SpecializeShaderRaisesInvalidValueForBadEntryPointsAndUnknownConstants) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // A constant id the module does not declare.
     const unsigned int unknownId = 4242;
     const unsigned int value = 0;
     SpecializeShader(shader, "main", 1, &unknownId, &value);
-    GLint compiled = GL_TRUE;
-    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-    EXPECT_EQ(compiled, GL_FALSE);
-    GLint logLength = 0;
-    GetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
-    EXPECT_GT(logLength, 0) << "a failed specialization has to say why";
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+
+    // An entry point the module does not carry.
+    SpecializeShader(shader, "notMain", 0, nullptr, nullptr);
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+
+    // Neither of them may name an entry point at all.
+    SpecializeShader(shader, nullptr, 0, nullptr, nullptr);
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
+    SpecializeShader(shader, "", 0, nullptr, nullptr);
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
 
     // A repeated constant index is GL_INVALID_VALUE at the entry point itself.
     const unsigned int repeated[2] = {3, 3};
@@ -4566,10 +4652,35 @@ TEST_F(ProgramTest, SpecializeShaderReportsBadEntryPointsAndUnknownConstantsThro
     SpecializeShader(shader, "main", 2, repeated, values);
     ExpectOnlyThisGlError(GL_INVALID_VALUE);
 
-    // An entry point the module does not carry.
-    SpecializeShader(shader, "notMain", 0, nullptr, nullptr);
+    // AND NOW THE POINT: none of the five refused calls specialized the shader or damaged it, so
+    // the well-formed call that follows must still be accepted. Latching the "specialized" flag on
+    // the failure path - the obvious way to implement the re-specialization rule - breaks exactly
+    // here, which is why the flag is only ever set on the success path.
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "a failed specialization does not make the shader specialized";
+    GLint compiled = GL_FALSE;
     GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-    EXPECT_EQ(compiled, GL_FALSE);
+    EXPECT_EQ(compiled, GL_TRUE);
+
+    DrainProgramTestErrors();
+}
+
+// A GENUINE compile failure of a well-formed request keeps the COMPILE_STATUS surface: the module
+// is a valid SPIR-V module naming a real entry point, it simply cannot be translated for this
+// stage. Nothing about that is one of the enumerated errors.
+TEST_F(ProgramTest, SpecializeShaderStillReportsATranslationFailureThroughCompileStatus) {
+    DrainProgramTestErrors();
+
+    // The vertex module handed to a FRAGMENT shader object: its only entry point carries the
+    // Vertex execution model, so no fragment entry point named "main" exists in it.
+    const GLuint shader = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    // Reported as INVALID_VALUE (there is no such entry point FOR THIS STAGE) - the stage is part
+    // of what "a valid entry point for shader" means.
+    ExpectOnlyThisGlError(GL_INVALID_VALUE);
 
     DrainProgramTestErrors();
 }
@@ -4587,6 +4698,120 @@ TEST_F(ProgramTest, ShaderBinaryFormatsAreAdvertisedConsistently) {
     EXPECT_EQ(GetError(), GL_NO_ERROR);
     EXPECT_EQ(formats[0], static_cast<GLint>(GL_SHADER_BINARY_FORMAT_SPIR_V))
         << "the count and the list have to describe the same thing";
+
+    DrainProgramTestErrors();
+}
+
+// ---------------------------------------------------------------------------------------------
+// ARB_gl_spirv makes XfbBuffer / XfbStride / Offset DECORATIONS the only way a SPIR-V program
+// declares transform feedback - glTransformFeedbackVaryings has no effect on such a program. The
+// decorations were ignored entirely: the link ran off `in.requestedXfbVaryings`, which is empty
+// for a SPIR-V program, so a module that asked for capture captured nothing and
+// GL_TRANSFORM_FEEDBACK_VARYINGS answered zero.
+//
+// glSpecializeShader now reflects the decorations and re-expresses them as the equivalent
+// glTransformFeedbackVaryings request (ARB_transform_feedback3's gl_SkipComponentsN carrying the
+// declared offset), which is the form every consumer downstream already implements.
+//
+// The module below is `layout(xfb_buffer = 0, xfb_offset = 16) out gl_PerVertex { vec4
+// gl_Position; };` over a trivial vertex shader - the exact shape gl4cGlSpirvTests'
+// spirv_modules_state_queries_test feeds in first. Offset 16 with a stride of 32 means the capture
+// is four components in, i.e. one gl_SkipComponents4 ahead of gl_Position.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    // 177 words
+    const unsigned int kXfbVertexModule[] = {
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x00000015u, 0x00000000u, 0x00020011u, 0x00000001u, 0x00020011u,
+        0x00000035u, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu,
+        0x00000000u, 0x00000001u, 0x0009000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000au,
+        0x0000000eu, 0x00000013u, 0x00000014u, 0x00030010u, 0x00000004u, 0x0000000bu, 0x00030003u, 0x00000002u,
+        0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00060005u, 0x00000008u, 0x505f6c67u,
+        0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x00000008u, 0x00000000u, 0x505f6c67u, 0x7469736fu,
+        0x006e6f69u, 0x00030005u, 0x0000000au, 0x00000000u, 0x00050005u, 0x0000000eu, 0x69736f70u, 0x6e6f6974u,
+        0x00000000u, 0x00050005u, 0x00000013u, 0x565f6c67u, 0x65747265u, 0x00444978u, 0x00060005u, 0x00000014u,
+        0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x00000044u, 0x00030047u, 0x00000008u, 0x00000002u, 0x00050048u,
+        0x00000008u, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u, 0x00000008u, 0x00000000u, 0x00000023u,
+        0x00000010u, 0x00040047u, 0x0000000au, 0x00000024u, 0x00000000u, 0x00040047u, 0x0000000au, 0x00000025u,
+        0x00000020u, 0x00040047u, 0x0000000eu, 0x0000001eu, 0x00000000u, 0x00040047u, 0x00000013u, 0x0000000bu,
+        0x00000005u, 0x00040047u, 0x00000014u, 0x0000000bu, 0x00000006u, 0x00020013u, 0x00000002u, 0x00030021u,
+        0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u,
+        0x00000004u, 0x0003001eu, 0x00000008u, 0x00000007u, 0x00040020u, 0x00000009u, 0x00000003u, 0x00000008u,
+        0x0004003bu, 0x00000009u, 0x0000000au, 0x00000003u, 0x00040015u, 0x0000000bu, 0x00000020u, 0x00000001u,
+        0x0004002bu, 0x0000000bu, 0x0000000cu, 0x00000000u, 0x00040020u, 0x0000000du, 0x00000001u, 0x00000007u,
+        0x0004003bu, 0x0000000du, 0x0000000eu, 0x00000001u, 0x00040020u, 0x00000010u, 0x00000003u, 0x00000007u,
+        0x00040020u, 0x00000012u, 0x00000001u, 0x0000000bu, 0x0004003bu, 0x00000012u, 0x00000013u, 0x00000001u,
+        0x0004003bu, 0x00000012u, 0x00000014u, 0x00000001u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
+        0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000007u, 0x0000000fu, 0x0000000eu, 0x00050041u,
+        0x00000010u, 0x00000011u, 0x0000000au, 0x0000000cu, 0x0003003eu, 0x00000011u, 0x0000000fu, 0x000100fdu,
+        0x00010038u,
+    };
+} // namespace
+
+TEST_F(ProgramTest, ASpirvModulesXfbDecorationsBecomeTheProgramsCaptureList) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kXfbVertexModule, sizeof(kXfbVertexModule));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    GLint compiled = GL_FALSE;
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    char shaderLog[2048] = "";
+    GetShaderInfoLog(shader, sizeof(shaderLog), nullptr, shaderLog);
+    ASSERT_EQ(compiled, GL_TRUE) << shaderLog;
+
+    const GLuint program = CreateProgram();
+    AttachShader(program, shader);
+    // NO glTransformFeedbackVaryings anywhere: the declaration is the module's own.
+    LinkProgram(program);
+    GLint linked = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linked);
+    char programLog[2048] = "";
+    GetProgramInfoLog(program, sizeof(programLog), nullptr, programLog);
+    ASSERT_EQ(linked, GL_TRUE) << programLog;
+
+    GLint varyingCount = -1;
+    GetProgramiv(program, GL_TRANSFORM_FEEDBACK_VARYINGS, &varyingCount);
+    EXPECT_GT(varyingCount, 0) << "the module's xfb decorations declared a capture and none was recorded";
+
+    // The captured name is the built-in the block redeclared. It is found by BuiltIn decoration,
+    // not by string, because a stripped module carries no OpMemberName at all.
+    Bool sawPosition = false;
+    for (GLint i = 0; i < varyingCount; ++i) {
+        char name[128] = "";
+        GLsizei nameLength = 0;
+        GLsizei size = 0;
+        GLenum type = 0;
+        GetTransformFeedbackVarying(program, static_cast<GLuint>(i), sizeof(name), &nameLength, &size, &type, name);
+        if (String(name) == "gl_Position") sawPosition = true;
+    }
+    EXPECT_TRUE(sawPosition) << "gl_Position was declared captured by the module's Offset decoration";
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+
+    DrainProgramTestErrors();
+}
+
+// The other half of the same fix: the decorations must NOT survive into the GLSL the module is
+// translated into. SPIRV-Cross re-emits them as layout(xfb_buffer/xfb_stride/xfb_offset), glslang
+// re-encodes them into the regenerated SPIR-V, and the DirectGLES ESSL hop then refuses them
+// outright ("Need GL_ARB_enhanced_layouts for xfb_stride or xfb_buffer") and drops the stage -
+// a program that links clean and draws nothing. Compiling at all is the observable proof they are
+// gone; the ESSL leg is exercised by the integration scenario.
+TEST_F(ProgramTest, ASpirvModulesXfbDecorationsDoNotSurviveIntoTheTranslatedSource) {
+    DrainProgramTestErrors();
+
+    const GLuint shader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kXfbVertexModule, sizeof(kXfbVertexModule));
+    SpecializeShader(shader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    GLint compiled = GL_FALSE;
+    GetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    char shaderLog[2048] = "";
+    GetShaderInfoLog(shader, sizeof(shaderLog), nullptr, shaderLog);
+    EXPECT_EQ(compiled, GL_TRUE) << shaderLog;
 
     DrainProgramTestErrors();
 }

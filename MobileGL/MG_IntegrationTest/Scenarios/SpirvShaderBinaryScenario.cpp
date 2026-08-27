@@ -222,24 +222,39 @@ namespace MGITest {
         glDeleteShader(shader);
     }
 
-    TEST_F(SpirvShaderBinaryScenario, SpecializeShaderRejectsAConstantTheModuleDoesNotDeclare) {
+    TEST_F(SpirvShaderBinaryScenario, SpecializeShaderErrorSurfaceMatchesTheExtension) {
         if (!Ready()) return;
 
         const GLuint shader = glCreateShader(GL_VERTEX_SHADER);
         glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
         ASSERT_EQ(FirstGLError(), 0u);
 
-        // 4242 is not one of the module's constant ids. A specialization failure is a COMPILE
-        // failure, not a GL error - the extension routes it through COMPILE_STATUS.
+        // 4242 is not one of the module's constant ids. ARB_gl_spirv enumerates that as
+        // GL_INVALID_VALUE, and an erroring GL command has no other effect - so the shader is left
+        // untouched rather than pushed into a failed-compile state.
         const unsigned int badId = 4242;
         const unsigned int value = 0;
         glSpecializeShader(shader, "main", 1, &badId, &value);
-        GLint compiled = GL_TRUE;
+        EXPECT_EQ(FirstGLError(), static_cast<unsigned int>(GL_INVALID_VALUE));
+
+        // Same for an entry point the module does not carry.
+        glSpecializeShader(shader, "notMain", 0, nullptr, nullptr);
+        EXPECT_EQ(FirstGLError(), static_cast<unsigned int>(GL_INVALID_VALUE));
+
+        // Neither refusal specialized the shader, so a well-formed call still works.
+        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+        EXPECT_EQ(FirstGLError(), 0u);
+        GLint compiled = GL_FALSE;
         glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
-        EXPECT_EQ(compiled, GL_FALSE);
-        GLint logLength = 0;
-        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
-        EXPECT_GT(logLength, 0) << "a failed specialization has to say why";
+        EXPECT_EQ(compiled, GL_TRUE);
+
+        // But a SECOND specialization of a shader that HAS been specialized is INVALID_OPERATION
+        // until glShaderBinary re-associates the module.
+        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+        EXPECT_EQ(FirstGLError(), static_cast<unsigned int>(GL_INVALID_OPERATION));
+        glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+        glSpecializeShader(shader, "main", 0, nullptr, nullptr);
+        EXPECT_EQ(FirstGLError(), 0u) << "re-associating the module makes specialization legal again";
 
         glDeleteShader(shader);
     }
