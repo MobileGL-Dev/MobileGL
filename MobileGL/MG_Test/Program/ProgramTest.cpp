@@ -3891,3 +3891,85 @@ void main() {
 
     DrainProgramTestErrors();
 }
+
+// gl_NumSamples has no SPIR-V built-in, so the source pipeline lowers it onto a reserved
+// default-block uniform (ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME). Two things have to hold at
+// once: the program has to BUILD (it used to die at compile with "'gl_NumSamples' : undeclared
+// identifier", which is what took all 144 KHR-GL46.sample_variables.mask.* bodies down), and the
+// uniform standing in for the built-in has to stay invisible to GL - gl_NumSamples is a built-in,
+// so a conformant implementation reports nothing for it and no glUniform* may reach it.
+TEST_F(ProgramTest, GlNumSamplesLowersToAHiddenReservedUniform) {
+    const char* vsSource = R"(#version 460 core
+void main() { gl_Position = vec4(0.0); }
+)";
+    const char* fsSource = R"(#version 460 core
+uniform int u_sampleMask;
+layout(location = 0) out vec4 o_color;
+void main() {
+    for (int i = 0; i < (gl_NumSamples + 31) / 32; ++i) {
+        gl_SampleMask[i] = u_sampleMask & gl_SampleMaskIn[i];
+    }
+    o_color = vec4(1.0, 0.0, 0.0, 1.0);
+}
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    // u_sampleMask and nothing else: the stand-in must not enlarge the enumeration.
+    GLint activeUniforms = 0;
+    GetProgramiv(program, GL_ACTIVE_UNIFORMS, &activeUniforms);
+    EXPECT_EQ(activeUniforms, 1);
+    EXPECT_NE(GetUniformLocation(program, "u_sampleMask"), -1);
+    EXPECT_EQ(GetUniformLocation(program, "mg_NumSamples"), -1);
+    EXPECT_EQ(GetUniformLocation(program, "gl_NumSamples"), -1);
+    EXPECT_EQ(GetUniformBlockIndex(program, "MGL_GLOBAL_UBO"), GL_INVALID_INDEX);
+
+    char nameBuf[64] = "";
+    for (GLint i = 0; i < activeUniforms; ++i) {
+        GLsizei nameLen = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        GetActiveUniform(program, static_cast<GLuint>(i), sizeof(nameBuf), &nameLen, &size, &type, nameBuf);
+        EXPECT_TRUE(std::strcmp(nameBuf, "mg_NumSamples") != 0) << nameBuf;
+    }
+
+    // The driver-side write path, which is what the draw path calls. It reports true only when the
+    // program really did take the shim AND the optimized SPIR-V kept the member.
+    const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    EXPECT_TRUE(programObject->UsesReservedNumSamples());
+    EXPECT_TRUE(programObject->WriteReservedNumSamples(4));
+
+    const Uint32 versionAfterFirstWrite = programObject->GetUBOContentVersion();
+    // Value-identical rewrite: no re-upload, so no version bump - a run of draws into one
+    // framebuffer must not dirty the UBO every draw.
+    EXPECT_TRUE(programObject->WriteReservedNumSamples(4));
+    EXPECT_EQ(programObject->GetUBOContentVersion(), versionAfterFirstWrite);
+    // A different framebuffer's sample count does have to reach the GPU.
+    EXPECT_TRUE(programObject->WriteReservedNumSamples(1));
+    EXPECT_NE(programObject->GetUBOContentVersion(), versionAfterFirstWrite);
+
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// A program whose fragment stage never mentions gl_NumSamples pays nothing and has nothing to
+// write - the gate the draw path reads before it touches the SPIR-V join.
+TEST_F(ProgramTest, ProgramWithoutGlNumSamplesHasNoReservedUniform) {
+    const char* vsSource = R"(#version 460 core
+void main() { gl_Position = vec4(0.0); }
+)";
+    const char* fsSource = R"(#version 460 core
+layout(location = 0) out vec4 o_color;
+void main() { o_color = vec4(1.0); }
+)";
+    GLuint vs = CompileShaderChecked(GL_VERTEX_SHADER, vsSource);
+    GLuint fs = CompileShaderChecked(GL_FRAGMENT_SHADER, fsSource);
+    GLuint program = LinkVsFs(vs, fs, GL_TRUE);
+
+    const auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+    ASSERT_NE(programObject, nullptr);
+    EXPECT_FALSE(programObject->UsesReservedNumSamples());
+    EXPECT_FALSE(programObject->WriteReservedNumSamples(4));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}

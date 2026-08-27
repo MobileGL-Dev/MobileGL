@@ -584,6 +584,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
         Bool m_dualSrcBlendFeatureEnabled = false;
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
+        // sampleRateShading gates VkPipelineMultisampleStateCreateInfo::sampleShadingEnable, i.e.
+        // glEnable(GL_SAMPLE_SHADING) + glMinSampleShading. Unlike dualSrcBlend this does NOT
+        // hard-fail the draw when absent: sample shading is a rate hint, and every sample-rate
+        // pipeline is still correct (just not per-sample) at the default rate - so the enable is
+        // dropped and the draw proceeds, which is what a GL implementation with SAMPLES=1 does too.
+        Bool m_sampleRateShadingFeatureEnabled = false;
         // multiViewport gates rasterizing into more than one of ARB_viewport_array's 16 viewports
         // (gl_ViewportIndex). m_maxRasterizableViewports is min(MAX_VIEWPORTS, device limit), or 1
         // when the feature is off, and is the viewportCount a gl_ViewportIndex-writing pipeline

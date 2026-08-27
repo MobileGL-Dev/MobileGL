@@ -278,6 +278,10 @@ namespace MobileGL {
         Float SampleCoverageValue = 1.0f;
         Bool SampleCoverageInvert = false;
         Uint32 SampleMaskValue = 0xffffffffu;
+        // glMinSampleShading (ARB_sample_shading / GL 4.0 core 14.3.1). The fraction of samples
+        // that get their own independent shading when GL_SAMPLE_SHADING is enabled; the initial
+        // value is 0, and the value is clamped to [0, 1] on the way in.
+        Float MinSampleShadingValue = 0.0f;
         Array<StencilFaceState, 2> StencilStates{};
 
         // Cull Face
@@ -326,6 +330,7 @@ namespace MobileGL {
         Bool SampleAlphaToOneEnabled = false;
         Bool SampleCoverageEnabled = false;
         Bool SampleMaskEnabled = false;
+        Bool SampleShadingEnabled = false;
         Bool StencilTestEnabled = false;
         Bool ProgramPointSizeEnabled = false;
         // glEnable(GL_SCISSOR_TEST) enables the test for EVERY viewport, glEnablei for one
@@ -465,6 +470,9 @@ namespace MobileGL {
                 Bool GetSampleCoverageInvert() const;
                 void SetSampleMaskValue(Uint32 mask);
                 Uint32 GetSampleMaskValue() const;
+                // glMinSampleShading. `value` is stored as given; the entry point clamps.
+                void SetMinSampleShadingValue(Float value);
+                Float GetMinSampleShadingValue() const;
 
                 // Pixel Store
                 void SetPixelStoreParam(PixelStoreParam param, Int value);

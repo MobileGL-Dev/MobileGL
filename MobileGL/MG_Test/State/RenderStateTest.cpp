@@ -825,3 +825,63 @@ TEST_F(RenderStateTest, PrimitiveRestartCapAndIndexAreBothQueryable) {
     MG_Impl::GLImpl::PrimitiveRestartIndex(0u);
     DrainPendingGlErrors();
 }
+
+// glMinSampleShading was a logging no-op while ARB_sample_shading was advertised and
+// glEnable(GL_SAMPLE_SHADING) fell through RenderState::SetCapability's default arm, so an
+// application could turn sample shading on, ask for a rate, and get neither - with every query
+// agreeing that nothing had happened.
+TEST_F(RenderStateTest, MinSampleShadingRoundTripsAndClamps) {
+    DrainPendingGlErrors();
+
+    // GL 4.6 core table 23.10: the initial value is 0.
+    GLfloat initial = -1.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_MIN_SAMPLE_SHADING_VALUE, &initial);
+    EXPECT_FLOAT_EQ(initial, 0.0f);
+
+    MG_Impl::GLImpl::MinSampleShading(0.25f);
+    GLfloat value = -1.0f;
+    MG_Impl::GLImpl::GetFloatv(GL_MIN_SAMPLE_SHADING_VALUE, &value);
+    EXPECT_FLOAT_EQ(value, 0.25f);
+
+    // The fraction survives the double query too, and rounds - not truncates - for the integer one.
+    GLdouble asDouble = -1.0;
+    MG_Impl::GLImpl::GetDoublev(GL_MIN_SAMPLE_SHADING_VALUE, &asDouble);
+    EXPECT_NEAR(asDouble, 0.25, 1e-6);
+    GLint asInt = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MIN_SAMPLE_SHADING_VALUE, &asInt);
+    EXPECT_EQ(asInt, 0);
+    // A non-zero fraction is GL_TRUE, which the integer path would have rounded away first.
+    GLboolean asBoolean = GL_FALSE;
+    MG_Impl::GLImpl::GetBooleanv(GL_MIN_SAMPLE_SHADING_VALUE, &asBoolean);
+    EXPECT_EQ(asBoolean, GL_TRUE);
+
+    // "value is clamped to [0, 1]" - not an error, a clamp.
+    MG_Impl::GLImpl::MinSampleShading(2.0f);
+    MG_Impl::GLImpl::GetFloatv(GL_MIN_SAMPLE_SHADING_VALUE, &value);
+    EXPECT_FLOAT_EQ(value, 1.0f);
+    MG_Impl::GLImpl::MinSampleShading(-3.0f);
+    MG_Impl::GLImpl::GetFloatv(GL_MIN_SAMPLE_SHADING_VALUE, &value);
+    EXPECT_FLOAT_EQ(value, 0.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::MinSampleShading(0.0f);
+}
+
+TEST_F(RenderStateTest, SampleShadingEnableIsStoredAndQueryable) {
+    DrainPendingGlErrors();
+
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SAMPLE_SHADING), GL_FALSE);
+
+    MG_Impl::GLImpl::Enable(GL_SAMPLE_SHADING);
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SAMPLE_SHADING), GL_TRUE);
+    GLboolean asBoolean = GL_FALSE;
+    MG_Impl::GLImpl::GetBooleanv(GL_SAMPLE_SHADING, &asBoolean);
+    EXPECT_EQ(asBoolean, GL_TRUE);
+    GLint asInt = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_SAMPLE_SHADING, &asInt);
+    EXPECT_EQ(asInt, GL_TRUE);
+
+    MG_Impl::GLImpl::Disable(GL_SAMPLE_SHADING);
+    EXPECT_EQ(MG_Impl::GLImpl::IsEnabled(GL_SAMPLE_SHADING), GL_FALSE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}

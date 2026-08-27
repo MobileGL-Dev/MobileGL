@@ -201,6 +201,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.renderPass, sizeof(payload.renderPass)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
+        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
         XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
         XXHASH_VERIFY(
@@ -437,6 +439,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         ms.rasterizationSamples = payload.rasterizationSamples;
+        ms.sampleShadingEnable = payload.sampleShadingEnable ? VK_TRUE : VK_FALSE;
+        // Ignored by Vulkan unless sampleShadingEnable is set, but written unconditionally so the
+        // struct's bytes match the hash the payload was keyed by.
+        ms.minSampleShading = payload.minSampleShading;
 
         VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depthStencil.depthTestEnable = payload.depthTestEnable ? VK_TRUE : VK_FALSE;

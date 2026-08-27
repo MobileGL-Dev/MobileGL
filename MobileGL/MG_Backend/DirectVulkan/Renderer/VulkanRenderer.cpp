@@ -5133,6 +5133,13 @@ void main() {
             .renderPass = renderPassEntry.renderPass,
             .colorAttachmentCount = renderPassEntry.colorAttachmentCount,
             .rasterizationSamples = renderPassEntry.sampleCount,
+            // ARB_sample_shading. Dropped on a device without sampleRateShading rather than
+            // hard-failing the draw: the rate is a hint, and the pipeline renders correctly at the
+            // driver's own rate. Both halves move the render state's PIPELINE version, so a cached
+            // pipeline built at the old rate cannot be handed back for the new one.
+            .sampleShadingEnable = m_sampleRateShadingFeatureEnabled &&
+                                   MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleShading),
+            .minSampleShading = MG_State::pGLContext->GetMinSampleShadingValue(),
             .subpass = 0,
             .topology = vkTopology,
             .primitiveRestartEnable = primitiveRestartEnabled,
@@ -12809,6 +12816,11 @@ void main() {
         m_fillModeNonSolidFeatureEnabled = deviceFeatures.fillModeNonSolid == VK_TRUE;
         deviceFeatures.dualSrcBlend = supportedDeviceFeatures.dualSrcBlend;
         m_dualSrcBlendFeatureEnabled = deviceFeatures.dualSrcBlend == VK_TRUE;
+        // ARB_sample_shading. Without this feature a pipeline may not set sampleShadingEnable
+        // (VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784), so the GL enable
+        // has to be dropped rather than forwarded - which is what the flag below records.
+        deviceFeatures.sampleRateShading = supportedDeviceFeatures.sampleRateShading;
+        m_sampleRateShadingFeatureEnabled = deviceFeatures.sampleRateShading == VK_TRUE;
         // ARB_viewport_array rasterization. Without multiViewport a pipeline may declare exactly
         // one viewport (VUID-VkPipelineViewportStateCreateInfo-viewportCount-01216), so a shader's
         // gl_ViewportIndex can only ever select viewport 0 and the other fifteen rectangles are

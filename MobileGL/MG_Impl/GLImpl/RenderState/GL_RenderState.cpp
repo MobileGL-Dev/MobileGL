@@ -328,6 +328,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->SetSampleCoverage(std::clamp(static_cast<Float>(value), 0.0f, 1.0f), invert == GL_TRUE);
     }
 
+    // ARB_sample_shading / GL 4.6 core 14.3.1: "value is clamped to [0, 1] when specified", so
+    // there is no error to raise - a caller that asks for 2.0 gets 1.0 and GL_MIN_SAMPLE_SHADING_-
+    // VALUE reads back 1.0. Was a logging no-op while ARB_sample_shading was advertised, which
+    // let an application enable GL_SAMPLE_SHADING and then quietly get the driver's default rate.
+    void MinSampleShading_State(GLfloat value) {
+        MG_State::pGLContext->SetMinSampleShadingValue(std::clamp(static_cast<Float>(value), 0.0f, 1.0f));
+    }
+
     void PolygonOffset_State(GLfloat factor, GLfloat units) {
         MG_State::pGLContext->SetPolygonOffset(static_cast<Float>(factor), static_cast<Float>(units));
     }
@@ -1011,6 +1019,10 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void SampleCoverage(GLfloat value, GLboolean invert) {
         SampleCoverage_State(value, invert);
+    }
+
+    void MinSampleShading(GLfloat value) {
+        MinSampleShading_State(value);
     }
 
     void PolygonOffset(GLfloat factor, GLfloat units) {

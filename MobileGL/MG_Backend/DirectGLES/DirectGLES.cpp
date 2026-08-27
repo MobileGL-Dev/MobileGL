@@ -2309,6 +2309,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+            if (tailSpanDirty) { // Sample shading (ARB_sample_shading; ES 3.2 core)
+                // Both halves are gated on the same entry point rather than on a version check:
+                // GL_SAMPLE_SHADING and glMinSampleShading arrived together (ES 3.2 core /
+                // OES_sample_shading), so a null pointer means glEnable(GL_SAMPLE_SHADING) would
+                // only push an INVALID_ENUM into the driver's queue. This is NOT part of the
+                // SYNC_CAPABILITY block above for exactly that reason - that macro has nowhere to
+                // put a guard.
+                if (g_GLESFuncs.glMinSampleShading) {
+                    if (forceFullPush ||
+                        parameters.SampleShadingEnabled != g_syncedRenderStateParameters.SampleShadingEnabled) {
+                        if (parameters.SampleShadingEnabled) {
+                            g_GLESFuncs.glEnable(GL_SAMPLE_SHADING);
+                        } else {
+                            g_GLESFuncs.glDisable(GL_SAMPLE_SHADING);
+                        }
+                    }
+                    if (forceFullPush || parameters.MinSampleShadingValue !=
+                                             g_syncedRenderStateParameters.MinSampleShadingValue) {
+                        g_GLESFuncs.glMinSampleShading(parameters.MinSampleShadingValue);
+                    }
+                }
+            }
+
             g_syncedRenderStateVersion = currentRenderStateVersion;
             // Byte copy, not member copy: it also clones the frontend struct's padding bytes,
             // which is what lets the span memcmps above answer "unchanged" exactly instead of

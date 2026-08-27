@@ -682,7 +682,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_MIN_FRAGMENT_INTERPOLATION_OFFSET:
         case GL_MAX_FRAGMENT_INTERPOLATION_OFFSET:
-        case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS: {
+        case GL_FRAGMENT_INTERPOLATION_OFFSET_BITS:
+        // Same reason as the three above: the integer fallback would round the fraction to 0
+        // or 1 first, so a 0.25 sample-shading rate would answer GL_FALSE.
+        case GL_MIN_SAMPLE_SHADING_VALUE: {
             GLfloat value = 0.0f;
             GetFloatv(pname, &value);
             *params = value != 0.0f ? GL_TRUE : GL_FALSE;
@@ -847,6 +850,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_SAMPLE_COVERAGE_VALUE:
             params[0] = MG_State::pGLContext->GetSampleCoverageValue();
+            return;
+        case GL_MIN_SAMPLE_SHADING_VALUE:
+            // Float state, so it has to be answered here rather than through the integer
+            // fallback: glMinSampleShading(0.5) must read back as 0.5 and not as 0.
+            params[0] = MG_State::pGLContext->GetMinSampleShadingValue();
             return;
         case GL_POINT_FADE_THRESHOLD_SIZE:
             // Float state: read it directly so the fractional part is not lost to the integer path.
@@ -1940,6 +1948,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_SAMPLE_MASK:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleMask) ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_SAMPLE_SHADING:
+            *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::SampleShading) ? GL_TRUE : GL_FALSE;
+            return;
+        case GL_MIN_SAMPLE_SHADING_VALUE:
+            // GL 4.6 core 22.2: a floating-point value queried as an integer rounds to nearest.
+            *params = static_cast<GLint>(std::lround(MG_State::pGLContext->GetMinSampleShadingValue()));
             return;
         case GL_SAMPLE_MASK_VALUE:
             *params = static_cast<GLint>(MG_State::pGLContext->GetSampleMaskValue());

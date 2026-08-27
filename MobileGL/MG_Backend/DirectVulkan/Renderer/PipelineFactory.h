@@ -37,6 +37,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkRenderPass renderPass = VK_NULL_HANDLE;
             Uint32 colorAttachmentCount = 1;
             VkSampleCountFlagBits rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            // glEnable(GL_SAMPLE_SHADING) + glMinSampleShading, which Vulkan bakes into the
+            // pipeline rather than exposing as dynamic state - so both are part of the pipeline's
+            // identity and both are hashed. The renderer leaves the enable false unless the
+            // device's sampleRateShading feature was enabled
+            // (VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784).
+            Bool sampleShadingEnable = false;
+            Float minSampleShading = 0.0f;
             Uint32 subpass = 0;
             VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             Bool primitiveRestartEnable = false;

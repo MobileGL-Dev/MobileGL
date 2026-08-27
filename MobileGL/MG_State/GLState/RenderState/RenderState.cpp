@@ -300,6 +300,7 @@ namespace MobileGL {
                     SET_CAPABILITY(SampleAlphaToOne, enabled);
                     SET_CAPABILITY(SampleCoverage, enabled);
                     SET_CAPABILITY(SampleMask, enabled);
+                    SET_CAPABILITY(SampleShading, enabled);
                     SET_CAPABILITY(StencilTest, enabled);
                     SET_CAPABILITY(ProgramPointSize, enabled);
                 case CapabilityInput::Blend: {
@@ -374,6 +375,7 @@ namespace MobileGL {
                     RETURN_CAPABILITY(SampleAlphaToOne);
                     RETURN_CAPABILITY(SampleCoverage);
                     RETURN_CAPABILITY(SampleMask);
+                    RETURN_CAPABILITY(SampleShading);
                     RETURN_CAPABILITY(StencilTest);
                     RETURN_CAPABILITY(ProgramPointSize);
                 case CapabilityInput::Blend:
@@ -765,6 +767,20 @@ namespace MobileGL {
 
             Uint32 RenderState::GetSampleMaskValue() const {
                 return m_parameters.SampleMaskValue;
+            }
+
+            void RenderState::SetMinSampleShadingValue(Float value) {
+                if (m_parameters.MinSampleShadingValue == value) return;
+
+                m_parameters.MinSampleShadingValue = value;
+                // BumpVersions, not just ++m_version: DirectVulkan bakes the fraction into
+                // VkPipelineMultisampleStateCreateInfo::minSampleShading, so a cached pipeline
+                // built with the old value must not be reused.
+                BumpVersions();
+            }
+
+            Float RenderState::GetMinSampleShadingValue() const {
+                return m_parameters.MinSampleShadingValue;
             }
 
             // -------------------- Pixel Store --------------------

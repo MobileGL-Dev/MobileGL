@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <set>
@@ -4569,3 +4570,275 @@ subroutine(FuncType) void Func0(int coord) { fragColor = vec4(float(coord)); }
         << "an inactive #if arm must not have an unconditional forwarding body appended for it";
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// gl_NumSamples: glslang declares the built-in only when it is NOT targeting SPIR-V, and MobileGL
+// always targets SPIR-V, so every fragment shader that reads it used to die at compile time with
+// "'gl_NumSamples' : undeclared identifier". InjectNumSamplesBuiltinShim lowers it onto a reserved
+// default-block uniform instead; the draw path fills that uniform in.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    Bool HasNumSamplesShim(const String& source) {
+        return source.find("uniform int mg_NumSamples;") != String::npos &&
+               source.find("#define gl_NumSamples mg_NumSamples") != String::npos;
+    }
+
+    void ExpectShaderCompiles(GLenum stage, const String& source) {
+        using namespace MG_Util::ShaderTranspiler;
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        if (!res) {
+            FAIL() << "errc: " << res.error().errc << "\nlog: " << res.error().log << "\nsource:\n" << source;
+        }
+    }
+} // namespace
+
+TEST_F(ProgramUtilTest, PreprocessFragmentShaderInjectsNumSamplesShim) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // The shape KHR-GL46.sample_variables.mask.* uses: gl_NumSamples as the bound of the loop that
+    // writes gl_SampleMask.
+    String source = R"(#version 460 core
+layout(location = 0) out highp vec4 o_color;
+uniform int u_sampleMask;
+void main() {
+    for (int i = 0; i < (gl_NumSamples + 31) / 32; ++i) {
+        gl_SampleMask[i] = u_sampleMask & gl_SampleMaskIn[i];
+    }
+    o_color = vec4(1, 0, 0, 1);
+}
+)";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    EXPECT_TRUE(HasNumSamplesShim(source)) << source;
+    ExpectShaderCompiles(GL_FRAGMENT_SHADER, source);
+}
+
+TEST_F(ProgramUtilTest, NumSamplesShimIgnoresCommentedAndPartialTokens) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Comment and string text is masked before the token scan, and the scan is whole-identifier:
+    // "gl_NumSamplesFoo" is a different name and must not drag the shim in.
+    String commented = R"(#version 460 core
+out vec4 fragColor;
+// gl_NumSamples used to be read here
+/* gl_NumSamples */
+void main() { fragColor = vec4(1.0); }
+)";
+    String suffixed = R"(#version 460 core
+out vec4 fragColor;
+uniform int gl_NumSamplesFoo;
+void main() { fragColor = vec4(float(gl_NumSamplesFoo)); }
+)";
+
+    for (String* source : {&commented, &suffixed}) {
+        PreprocessShaderSource(ShaderStage::Fragment, *source);
+        EXPECT_EQ(source->find("mg_NumSamples"), String::npos) << *source;
+    }
+}
+
+TEST_F(ProgramUtilTest, NumSamplesShimDoesNotDoubleInject) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Re-running the preprocessor over its own output must be a no-op for this pass; a second
+    // "uniform int mg_NumSamples;" would not compile.
+    String source = R"(#version 460 core
+out vec4 fragColor;
+void main() { fragColor = vec4(float(gl_NumSamples)); }
+)";
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    ASSERT_TRUE(HasNumSamplesShim(source)) << source;
+
+    const String once = source;
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    EXPECT_EQ(source, once) << "the shim re-fired on an already-shimmed source";
+
+    // Same guard for an application that happens to own the name itself.
+    String applicationOwned = R"(#version 460 core
+uniform int mg_NumSamples;
+out vec4 fragColor;
+void main() { fragColor = vec4(float(gl_NumSamples + mg_NumSamples)); }
+)";
+    const String before = applicationOwned;
+    PreprocessShaderSource(ShaderStage::Fragment, applicationOwned);
+    EXPECT_EQ(applicationOwned, before);
+}
+
+TEST_F(ProgramUtilTest, NumSamplesShimIsFragmentStageOnly) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // gl_NumSamples exists in the fragment stage and nowhere else, so a vertex or geometry source
+    // naming it must be left for glslang to reject rather than quietly legalized.
+    for (const ShaderStage stage : {ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Compute}) {
+        String source = R"(#version 460 core
+out int v;
+void main() { v = gl_NumSamples; }
+)";
+        PreprocessShaderSource(stage, source);
+        EXPECT_EQ(source.find("mg_NumSamples"), String::npos) << static_cast<int>(stage) << ":\n" << source;
+    }
+}
+
+TEST_F(ProgramUtilTest, NumSamplesShimHonoursTheVersionAndExtensionGate) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    struct Case {
+        const char* label;
+        const char* versionBlock;
+        Bool expectShim;
+    };
+    // Mirrors glslang's own gate (Initialize.cpp): desktop from 4.00, or from 1.30 with
+    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables.
+    const Case cases[] = {
+        {"desktop 460 core", "#version 460 core\n", true},
+        {"desktop 400 core", "#version 400 core\n", true},
+        {"desktop 330 core, no extension", "#version 330 core\n", false},
+        {"desktop 330 core + ARB_sample_shading",
+         "#version 330 core\n#extension GL_ARB_sample_shading : require\n", true},
+        {"desktop 120, no extension", "#version 120\n", false},
+        {"ESSL 320", "#version 320 es\n", true},
+        {"ESSL 310, no extension", "#version 310 es\n", false},
+        {"ESSL 310 + OES_sample_variables",
+         "#version 310 es\n#extension GL_OES_sample_variables : require\n", true},
+        {"ESSL 300", "#version 300 es\n", false},
+    };
+
+    for (const Case& testCase : cases) {
+        SCOPED_TRACE(testCase.label);
+        String source = String(testCase.versionBlock) + R"(out vec4 fragColor;
+void main() { fragColor = vec4(float(gl_NumSamples)); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(HasNumSamplesShim(source), testCase.expectShim) << source;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ES preamble extension macros. Rewriting "#version 310 es" to "#version 460 core" makes glslang
+// emit its DESKTOP preamble, which defines none of the OES/AEP extension macros - so a shader's
+// own "#if !GL_OES_sample_variables" guard takes the branch it was written to avoid.
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(ProgramUtilTest, EsSourceRegainsThePreambleMacrosForTheExtensionsItNames) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // KHR-GL46.es_31_compatibility.sample_variables.verification.extension in miniature: the
+    // deliberately-broken arm must stay unreached.
+    String source = R"(#version 310 es
+#extension GL_OES_sample_variables : enable
+precision highp float;
+out vec4 fragColor;
+#if !GL_OES_sample_variables
+this is broken
+#endif
+void main() { fragColor = vec4(1.0); }
+)";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    EXPECT_NE(source.find("#define GL_OES_sample_variables 1"), String::npos) << source;
+    ExpectShaderCompiles(GL_FRAGMENT_SHADER, source);
+}
+
+TEST_F(ProgramUtilTest, EsPreambleMacroInjectionStaysNarrow) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    {
+        SCOPED_TRACE("an extension the source never names is not defined");
+        String source = R"(#version 310 es
+#extension GL_OES_sample_variables : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source.find("#define GL_OES_shader_image_atomic"), String::npos) << source;
+        // GL_ES stays undefined on purpose: the shader really is compiled as desktop now, and
+        // flipping "#ifdef GL_ES" branches would break far more than it fixes.
+        EXPECT_EQ(source.find("#define GL_ES"), String::npos) << source;
+    }
+
+    {
+        SCOPED_TRACE("an extension glslang's DESKTOP preamble already defines is not re-defined");
+        String source = R"(#version 310 es
+#extension GL_EXT_shader_non_constant_global_initializers : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source.find("#define GL_EXT_shader_non_constant_global_initializers"), String::npos) << source;
+    }
+
+    {
+        SCOPED_TRACE("a desktop source is untouched - it keeps the preamble it is entitled to");
+        String source = R"(#version 460 core
+#extension GL_OES_sample_variables : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source.find("#define GL_OES_sample_variables"), String::npos) << source;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A repeated #version directive. glShaderSource concatenates its strings with nothing added
+// between them (GL 4.6 core 7.1), so a caller that heads BOTH strings with a #version splices the
+// second into the tail of the first - which is what VK-GL-CTS's ShaderImageLoadStoreBase::
+// BuildProgram does.
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(ProgramUtilTest, RepeatedIdenticalVersionDirectiveIsElided) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // Byte-for-byte the concatenation the CTS produces: kGLSLPrec ends without a newline, so the
+    // subcase's own "#version 310 es" lands mid-line.
+    String source =
+        "#version 310 es\n\nprecision highp float;\nprecision highp uimage2DArray;#version 310 es\n"
+        "layout(location = 0) in vec4 i_position;\n"
+        "void main() { gl_Position = i_position; }\n";
+
+    const SizeT lineCountBefore = static_cast<SizeT>(std::count(source.begin(), source.end(), '\n'));
+    PreprocessShaderSource(ShaderStage::Vertex, source);
+
+    // Exactly one #version survives, and the line count is untouched so __LINE__ and every
+    // glslang diagnostic still point where the application wrote them.
+    EXPECT_EQ(source.find("#version", source.find("#version") + 1), String::npos) << source;
+    EXPECT_EQ(static_cast<SizeT>(std::count(source.begin(), source.end(), '\n')), lineCountBefore) << source;
+    ExpectShaderCompiles(GL_VERTEX_SHADER, source);
+}
+
+TEST_F(ProgramUtilTest, OnlyAnExactVersionRepeatIsElided) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    {
+        SCOPED_TRACE("a DIFFERENT second version is left for glslang to reject");
+        String source =
+            "#version 310 es\nprecision highp float;\n#version 320 es\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_NE(source.find("#version 320 es"), String::npos) << source;
+    }
+
+    {
+        SCOPED_TRACE("a lone non-first #version is still a lone non-first #version");
+        // KHR-GL33.shaders.preprocessor.directive.version_not_first_statement_1 requires this to
+        // fail to compile, and it only does so because the directive is left where it was.
+        String source =
+            "precision mediump float;\n#version 330\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        const SizeT versionPos = source.find("#version");
+        ASSERT_NE(versionPos, String::npos) << source;
+        EXPECT_NE(versionPos, SizeT{0}) << "the directive must not have been moved to the front:\n" << source;
+
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        auto res = ShaderCompiler::CompileShader(attrib);
+        EXPECT_FALSE(res.has_value()) << "a #version preceded by real tokens must still be rejected:\n" << source;
+    }
+
+    {
+        SCOPED_TRACE("a MALFORMED repeat is left alone");
+        String source =
+            "#version 330 core\nout vec4 c;\n#version 330 foobar\nvoid main() { c = vec4(1.0); }\n";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_NE(source.find("#version 330 foobar"), String::npos) << source;
+    }
+}

@@ -1025,6 +1025,14 @@ namespace MobileGL::MG_State {
             return m_renderState.GetSampleMaskValue();
         }
 
+        void GLContext::SetMinSampleShadingValue(Float value) {
+            m_renderState.SetMinSampleShadingValue(value);
+        }
+
+        Float GLContext::GetMinSampleShadingValue() const {
+            return m_renderState.GetMinSampleShadingValue();
+        }
+
         void GLContext::SetPixelStoreParam(PixelStoreParam param, Int value) {
             m_renderState.SetPixelStoreParam(param, value);
         }

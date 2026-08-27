@@ -280,6 +280,8 @@ namespace MobileGL {
                 Bool GetSampleCoverageInvert() const;
                 void SetSampleMaskValue(Uint32 mask);
                 Uint32 GetSampleMaskValue() const;
+                void SetMinSampleShadingValue(Float value);
+                Float GetMinSampleShadingValue() const;
                 void SetPixelStoreParam(PixelStoreParam param, Int value);
                 Int GetPixelStoreParam(PixelStoreParam param) const;
                 PixelStoreParameters GetPixelStoreParameters(Bool isUnpack) const;
