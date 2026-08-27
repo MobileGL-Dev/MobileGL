@@ -19,7 +19,14 @@ namespace MobileGL::MG_State::GLState {
                 BufferTarget::DrawIndirect, BufferTarget::Parameter, BufferTarget::ShaderStorage);
     constexpr const auto BufferBindPointTargets = ToArray(BufferTarget::Uniform, BufferTarget::TransformFeedback,
                                                           BufferTarget::AtomicCounter, BufferTarget::ShaderStorage);
-    constexpr SizeT BufferBindingPointCount = 36;
+    // How many indexed binding points each of BufferBindPointTargets gets. 84 is the GL 4.5 core
+    // minimum for GL_MAX_UNIFORM_BUFFER_BINDINGS (table 23.64) and this array is the capacity
+    // that limit is clamped against - at 36 the clamp in GL_Getter was degenerate (lo == hi) and
+    // no application could ever be told about, or bind to, a binding point past the 36th. The
+    // other three targets advertise their own, smaller ceilings out of
+    // GetIndexedBufferQueryPointCount, so widening this does not widen what they promise; it only
+    // costs the unused tail of three arrays.
+    constexpr SizeT BufferBindingPointCount = 84;
 
     class BufferState {
     public:

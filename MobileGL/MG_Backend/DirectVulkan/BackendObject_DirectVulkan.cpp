@@ -1006,6 +1006,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // it the limit describes a capacity no shader may use, so report none.
         m_dynamicParameters.MaxClipDistances =
             m_vulkanCaps.SupportsShaderClipDistance ? std::max(m_vulkanCaps.MaxClipDistances, 0) : 0;
+        // The cull pair, gated on its own feature. shaderCullDistance is separate from
+        // shaderClipDistance and VulkanRenderer enables it independently, so it gets its own
+        // gate rather than riding on the clip one.
+        m_dynamicParameters.MaxCullDistances =
+            m_vulkanCaps.SupportsShaderCullDistance ? std::max(m_vulkanCaps.MaxCullDistances, 0) : 0;
+        // GL 4.6 core 11.1.3.10: the combined limit is at least as large as either half. A device
+        // with only one of the two features must not report a combined capacity that implies the
+        // other, so the gate is "either feature" and the value never drops below what is enabled.
+        m_dynamicParameters.MaxCombinedClipAndCullDistances =
+            (m_vulkanCaps.SupportsShaderClipDistance || m_vulkanCaps.SupportsShaderCullDistance)
+                ? std::max({m_vulkanCaps.MaxCombinedClipAndCullDistances, m_dynamicParameters.MaxClipDistances,
+                            m_dynamicParameters.MaxCullDistances})
+                : 0;
         m_dynamicParameters.MaxViewports = m_vulkanCaps.MaxViewports;
         // Assigned explicitly rather than left to the struct's defaults, like every other
         // parameter here, so a second fill cannot inherit a stale value. GL_UNDEFINED_VERTEX is

@@ -23,6 +23,13 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         }
     } // namespace
 
+    Int ResolveMaxVertexAttribs(const Bool hasBackend, const Int backendMaxVertexAttribs) {
+        constexpr Int capacity = static_cast<Int>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
+        if (!hasBackend) return capacity;
+        if (backendMaxVertexAttribs <= 0) return capacity;
+        return std::min(backendMaxVertexAttribs, capacity);
+    }
+
     Uint64 ComputeCompileEnvFingerprint(const CompileEnv& env) {
         Uint64 state = 0x9e3779b97f4a7c15ull;
         HashValue(state, env.maxComputeWorkGroupSize[0]);
@@ -67,6 +74,24 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // and expands gl_MaxClipDistances from the same number, so it decides both whether a
         // shader compiles at all and what a module that reads the constant generates.
         HashValue(state, env.params.MaxClipDistances);
+        // The cull-distance pair, added when the GL 4.6 API-surface wave made them env-derived:
+        // they were bare literals (8/8) in BuildTBuiltInResource while no backend had ever been
+        // asked whether it can host a cull distance. Exactly the MaxClipDistances class - glslang
+        // bounds gl_CullDistance[i] against maxCullDistances at parse and expands
+        // gl_MaxCullDistances / gl_MaxCombinedClipAndCullDistances from the same numbers.
+        HashValue(state, env.params.MaxCullDistances);
+        HashValue(state, env.params.MaxCombinedClipAndCullDistances);
+        // The texture-image-unit family, made env-derived in the same wave. They were stock
+        // glslang defaults (32/32/80) that disagreed with what glGetIntegerv answered, and
+        // gl_MaxTextureImageUnits / gl_MaxVertexTextureImageUnits / gl_MaxCombinedTextureImageUnits
+        // expand from them.
+        HashValue(state, env.params.MaxTextureImageUnits);
+        HashValue(state, env.params.MaxVertexTextureImageUnits);
+        HashValue(state, env.params.MaxCombinedTextureImageUnits);
+        // gl_MaxSamples, which also sizes gl_SampleMask[] / gl_SampleMaskIn[] and bounds a
+        // constant index into them, so a module that touches either generates different SPIR-V
+        // on two backends that report different sample counts.
+        HashValue(state, env.params.MaxSamples);
         // The compute work-group limits, likewise added by wave3 (cb155c5b). They used to be
         // hardcoded maxima in BuildTBuiltInResource, and the L1 key comment said in so many
         // words that the day they became backend-derived they would have to move in here -

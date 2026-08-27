@@ -1577,8 +1577,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              std::to_string(id) + " is not a transform feedback object name."));
             return;
         }
-        // GL_MAX_VERTEX_STREAMS is 1, so stream 0 is the only one that exists.
-        if (stream != 0) {
+        // GL 4.6 core 10.3.7 bounds `stream` by GL_MAX_VERTEX_STREAMS, which is 4. Only stream 0
+        // can ever have been written - nothing in the shader pipeline supports
+        // layout(stream = N) - so a higher stream captured zero vertices and the draw is a legal
+        // no-op rather than an error. The bound is read from the getter so the two cannot drift.
+        GLint maxVertexStreams = 1;
+        GetIntegerv(GL_MAX_VERTEX_STREAMS, &maxVertexStreams);
+        if (stream >= static_cast<GLuint>(std::max(maxVertexStreams, 1))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
@@ -1596,7 +1601,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        const Uint64 vertices = MG_State::pGLContext->GetTransformFeedbackRecordedVertices(id);
+        // Only stream 0 ever records anything (see the stream bound above), so a higher stream
+        // replays nothing.
+        const Uint64 vertices = stream == 0 ? MG_State::pGLContext->GetTransformFeedbackRecordedVertices(id) : 0;
         if (vertices == 0) return;
         const auto count = static_cast<GLsizei>(vertices);
         AccountTransformFeedbackPrimitives(mode, count);

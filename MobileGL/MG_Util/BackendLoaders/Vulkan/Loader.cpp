@@ -199,6 +199,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxDrawBuffers = SaturateToInt(p.limits.maxFragmentOutputAttachments);
         caps.MaxColorAttachments = SaturateToInt(p.limits.maxColorAttachments);
         caps.MaxClipDistances = SaturateToInt(p.limits.maxClipDistances);
+        caps.MaxCullDistances = SaturateToInt(p.limits.maxCullDistances);
+        caps.MaxCombinedClipAndCullDistances = SaturateToInt(p.limits.maxCombinedClipAndCullDistances);
         caps.MaxViewports = SaturateToInt(p.limits.maxViewports);
         caps.MaxViewportWidth = SaturateToInt(p.limits.maxViewportDimensions[0]);
         caps.MaxViewportHeight = SaturateToInt(p.limits.maxViewportDimensions[1]);
@@ -239,6 +241,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
         caps.SupportsGeometryShader = supportedFeatures.geometryShader == VK_TRUE;
         caps.SupportsShaderClipDistance = supportedFeatures.shaderClipDistance == VK_TRUE;
+        caps.SupportsShaderCullDistance = supportedFeatures.shaderCullDistance == VK_TRUE;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(p.limits.maxStorageBufferRange);
         const Bool supportsShaderSubgroup = vk.vkGetPhysicalDeviceProperties2 &&
                                             HasUsableShaderSubgroupSupport(subgroupProps);
@@ -319,6 +322,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxDrawBuffers = SaturateToInt(properties.limits.maxFragmentOutputAttachments);
         caps.MaxColorAttachments = SaturateToInt(properties.limits.maxColorAttachments);
         caps.MaxClipDistances = SaturateToInt(properties.limits.maxClipDistances);
+        caps.MaxCullDistances = SaturateToInt(properties.limits.maxCullDistances);
+        caps.MaxCombinedClipAndCullDistances = SaturateToInt(properties.limits.maxCombinedClipAndCullDistances);
         caps.MaxViewports = SaturateToInt(properties.limits.maxViewports);
         caps.MaxViewportWidth = SaturateToInt(properties.limits.maxViewportDimensions[0]);
         caps.MaxViewportHeight = SaturateToInt(properties.limits.maxViewportDimensions[1]);
@@ -336,6 +341,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsFragmentStoresAndAtomics = false;
         caps.SupportsGeometryShader = false;
         caps.SupportsShaderClipDistance = false;
+        caps.SupportsShaderCullDistance = false;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(properties.limits.maxStorageBufferRange);
         caps.SupportsShaderSubgroup = false;
         caps.SubgroupSize = 0;

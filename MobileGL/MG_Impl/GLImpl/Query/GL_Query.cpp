@@ -40,6 +40,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             // stand in for the backend's.
             Uint64 accountedCaptureDrawSnapshot = 0;
             Uint64 geometryCaptureDrawSnapshot = 0;
+            // Set when glBeginQueryIndexed named a vertex stream above 0. MobileGL advertises
+            // GL_MAX_VERTEX_STREAMS = 4 because GL 4.5 requires it, and nothing in the shader
+            // pipeline can emit to a stream other than 0 - so the primitive count on any other
+            // stream is provably zero, and this makes the object report that instead of
+            // aliasing stream 0's backend counter.
+            Bool emptyVertexStream = false;
         };
 
         // Query calls may arrive from any thread (launchers migrate the context
@@ -116,6 +122,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             queryObject->ended = false;
             queryObject->resultCached = false;
             queryObject->cachedResult = 0;
+            queryObject->emptyVertexStream = false;
         }
 
         // Callers must hold g_queryObjectsMutex.
@@ -186,6 +193,23 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (queryObject->active) {
                 RecordQueryError(ErrorCode::InvalidOperation, function, "Query object is still active.");
                 return false;
+            }
+
+            // A span begun on a vertex stream this implementation can never emit to. The answer
+            // is zero, and it is available immediately - the backend query that ran alongside it
+            // counted stream 0 and must not be reported here.
+            if (queryObject->emptyVertexStream) {
+                switch (pname) {
+                case GL_QUERY_RESULT:
+                case GL_QUERY_RESULT_NO_WAIT:
+                    outValue = 0;
+                    return true;
+                case GL_QUERY_RESULT_AVAILABLE:
+                    outValue = GL_TRUE;
+                    return true;
+                default:
+                    break;
+                }
             }
 
             switch (pname) {
@@ -741,14 +765,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     namespace {
+        Bool IsPerVertexStreamQueryTarget(GLenum target) {
+            return target == GL_PRIMITIVES_GENERATED || target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN;
+        }
+
         // The indexed query entry points differ from the plain ones only in the vertex
         // stream they address (GL 4.6 core 4.2.1): index must be below GL_MAX_VERTEX_STREAMS
-        // for the two transform feedback targets and zero for every other target. With a
-        // single vertex stream both bounds are 1, so a valid call is always index 0 and
-        // forwards to the unindexed implementation.
+        // for the two transform feedback targets and zero for every other target.
         Bool ValidateQueryStreamIndex(const char* function, GLenum target, GLuint index) {
-            const Bool perStreamTarget =
-                target == GL_PRIMITIVES_GENERATED || target == GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN;
+            const Bool perStreamTarget = IsPerVertexStreamQueryTarget(target);
             GLint maxVertexStreams = 1;
             if (perStreamTarget) {
                 GetIntegerv(GL_MAX_VERTEX_STREAMS, &maxVertexStreams);
@@ -761,11 +786,29 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              : "index must be zero for this query target.");
             return false;
         }
+
+        // Streams 1..GL_MAX_VERTEX_STREAMS-1 exist but nothing can emit to them, so a span begun
+        // on one counts zero primitives. Flagging the object is what keeps that answer honest:
+        // BeginQuery below still opens a real backend query (it is the only way to reuse the
+        // whole target/object state machine), and that query counts STREAM 0.
+        //
+        // Known simplification, spelled out rather than hidden: because the backend query is
+        // shared, only ONE query may be active per target here, while GL allows one per
+        // (target, stream) pair. A program running a stream-0 and a stream-2
+        // GL_PRIMITIVES_GENERATED query at the same time gets GL_INVALID_OPERATION on the
+        // second. Nothing can produce a non-zero stream-2 result to be worth more than that
+        // until the shader pipeline grows layout(stream = N).
+        void MarkQueryEmptyVertexStream(GLuint id) {
+            const std::lock_guard<std::mutex> lock(g_queryObjectsMutex);
+            auto* queryObject = FindQueryObjectLocked(id);
+            if (queryObject && queryObject->active) queryObject->emptyVertexStream = true;
+        }
     } // namespace
 
     void BeginQueryIndexed(GLenum target, GLuint index, GLuint id) {
         if (!ValidateQueryStreamIndex(__FUNCTION__, target, index)) return;
         BeginQuery(target, id);
+        if (index != 0 && IsPerVertexStreamQueryTarget(target)) MarkQueryEmptyVertexStream(id);
     }
 
     void EndQueryIndexed(GLenum target, GLuint index) {

@@ -101,16 +101,11 @@ namespace MobileGL {
                 Resources.maxClipPlanes = 6;
                 Resources.maxTextureUnits = 32;
                 Resources.maxTextureCoords = 32;
-                Resources.maxVertexAttribs = 64;
-                Resources.maxVertexUniformComponents = 4096;
-                Resources.maxVaryingFloats = 64;
-                Resources.maxVertexTextureImageUnits = 32;
-                Resources.maxCombinedTextureImageUnits = 80;
-                Resources.maxTextureImageUnits = 32;
+                Resources.maxVertexUniformComponents = MAX_VERTEX_UNIFORM_COMPONENTS;
+                Resources.maxVaryingFloats = MAX_VARYING_COMPONENTS;
                 Resources.maxFragmentUniformComponents = 4096;
-                Resources.maxDrawBuffers = 32;
-                Resources.maxVertexUniformVectors = 128;
-                Resources.maxVaryingVectors = 8;
+                Resources.maxVertexUniformVectors = MAX_VERTEX_UNIFORM_VECTORS;
+                Resources.maxVaryingVectors = MAX_VARYING_VECTORS;
                 Resources.maxFragmentUniformVectors = 256;
                 Resources.maxVertexOutputVectors = 16;
                 Resources.maxFragmentInputVectors = 15;
@@ -121,14 +116,12 @@ namespace MobileGL {
                 Resources.maxComputeImageUniforms = 8;
                 Resources.maxComputeAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
                 Resources.maxComputeAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
-                Resources.maxVaryingComponents = 60;
+                Resources.maxVaryingComponents = MAX_VARYING_COMPONENTS;
                 Resources.maxVertexOutputComponents = 64;
                 Resources.maxGeometryInputComponents = 64;
                 Resources.maxGeometryOutputComponents = 128;
                 Resources.maxFragmentInputComponents = 128;
                 Resources.maxImageUnits = 8;
-                Resources.maxCombinedImageUnitsAndFragmentOutputs = 8;
-                Resources.maxCombinedShaderOutputResources = 8;
                 Resources.maxImageSamples = 0;
                 Resources.maxVertexImageUniforms = 0;
                 Resources.maxTessControlImageUniforms = 0;
@@ -141,16 +134,18 @@ namespace MobileGL {
                 Resources.maxGeometryTotalOutputComponents = 1024;
                 Resources.maxGeometryUniformComponents = 1024;
                 Resources.maxGeometryVaryingComponents = 64;
-                Resources.maxTessControlInputComponents = 128;
-                Resources.maxTessControlOutputComponents = 128;
-                Resources.maxTessControlTextureImageUnits = 16;
-                Resources.maxTessControlUniformComponents = 1024;
-                Resources.maxTessControlTotalOutputComponents = 4096;
-                Resources.maxTessEvaluationInputComponents = 128;
-                Resources.maxTessEvaluationOutputComponents = 128;
-                Resources.maxTessEvaluationTextureImageUnits = 16;
-                Resources.maxTessEvaluationUniformComponents = 1024;
-                Resources.maxTessPatchComponents = 120;
+                // The tessellation block is shared with glGetIntegerv through Types.h; see the
+                // "Never move one of these without the other" note there.
+                Resources.maxTessControlInputComponents = MAX_TESS_CONTROL_INPUT_COMPONENTS;
+                Resources.maxTessControlOutputComponents = MAX_TESS_CONTROL_OUTPUT_COMPONENTS;
+                Resources.maxTessControlTextureImageUnits = MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS;
+                Resources.maxTessControlUniformComponents = MAX_TESS_CONTROL_UNIFORM_COMPONENTS;
+                Resources.maxTessControlTotalOutputComponents = MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS;
+                Resources.maxTessEvaluationInputComponents = MAX_TESS_EVALUATION_INPUT_COMPONENTS;
+                Resources.maxTessEvaluationOutputComponents = MAX_TESS_EVALUATION_OUTPUT_COMPONENTS;
+                Resources.maxTessEvaluationTextureImageUnits = MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS;
+                Resources.maxTessEvaluationUniformComponents = MAX_TESS_EVALUATION_UNIFORM_COMPONENTS;
+                Resources.maxTessPatchComponents = MAX_TESS_PATCH_COMPONENTS;
                 Resources.maxPatchVertices = 32;
                 Resources.maxTessGenLevel = 64;
                 Resources.maxViewports = 16;
@@ -176,9 +171,6 @@ namespace MobileGL {
                 Resources.maxAtomicCounterBufferSize = MAX_ATOMIC_COUNTER_BUFFER_SIZE;
                 Resources.maxTransformFeedbackBuffers = 4;
                 Resources.maxTransformFeedbackInterleavedComponents = 64;
-                Resources.maxCullDistances = 8;
-                Resources.maxCombinedClipAndCullDistances = 8;
-                Resources.maxSamples = 4;
                 Resources.maxMeshOutputVerticesNV = 256;
                 Resources.maxMeshOutputPrimitivesNV = 512;
                 Resources.maxMeshWorkGroupSizeX_NV = 32;
@@ -208,12 +200,37 @@ namespace MobileGL {
                 Resources.maxImageUnits = dynamicParameters.MaxImageUnits;
                 Resources.maxCombinedImageUnitsAndFragmentOutputs =
                     dynamicParameters.MaxImageUnits + dynamicParameters.MaxDrawBuffers;
+                // GL_MAX_COMBINED_SHADER_OUTPUT_RESOURCES and
+                // GL_MAX_COMBINED_IMAGE_UNITS_AND_FRAGMENT_OUTPUTS are the SAME token (0x8F39), so
+                // the two glslang fields have to carry the same value: glGetIntegerv answers this
+                // expression while gl_MaxCombinedShaderOutputResources expanded from a stale
+                // literal 8, and the CTS compares the two directly.
+                Resources.maxCombinedShaderOutputResources =
+                    Resources.maxCombinedImageUnitsAndFragmentOutputs;
                 Resources.maxVertexImageUniforms = dynamicParameters.MaxVertexImageUniforms;
                 Resources.maxGeometryImageUniforms = dynamicParameters.MaxGeometryImageUniforms;
                 Resources.maxFragmentImageUniforms = dynamicParameters.MaxFragmentImageUniforms;
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;
                 Resources.maxCombinedImageUniforms = dynamicParameters.MaxCombinedImageUniforms;
                 Resources.maxComputeTextureImageUnits = dynamicParameters.MaxComputeTextureImageUnits;
+                // The texture-image-unit family and the draw-buffer count. These were stock
+                // glslang defaults (32 / 32 / 80 / 32) that had nothing to do with what
+                // glGetIntegerv answers off the same backend, and the divergence is a live
+                // correctness bug rather than a reporting one: gl_MaxDrawBuffers = 32 makes
+                // glslang ACCEPT a fragment output at location 8..31 that the runtime cannot
+                // bind, and gl_MaxCombinedTextureImageUnits = 80 under-reports a device that
+                // really has 96.
+                Resources.maxTextureImageUnits = dynamicParameters.MaxTextureImageUnits;
+                Resources.maxVertexTextureImageUnits = dynamicParameters.MaxVertexTextureImageUnits;
+                Resources.maxCombinedTextureImageUnits = dynamicParameters.MaxCombinedTextureImageUnits;
+                Resources.maxDrawBuffers = dynamicParameters.MaxDrawBuffers;
+                // The same number glGetIntegerv(GL_MAX_VERTEX_ATTRIBS) reports and the same one
+                // reflection records vertex inputs against - see ResolveMaxVertexAttribs.
+                Resources.maxVertexAttribs = ResolveMaxVertexAttribs(
+                    env ? env->HasBackend() : (activeBackend != nullptr), dynamicParameters.MaxVertexAttribs);
+                // gl_MaxSamples, floored exactly as GL_Getter::GetAdvertisedMaxSamples floors
+                // GL_MAX_SAMPLES. It also sizes gl_SampleMask[] / gl_SampleMaskIn[].
+                Resources.maxSamples = std::max(dynamicParameters.MaxSamples, MIN_ADVERTISED_MAX_SAMPLES);
                 // Load-bearing, not cosmetic. glslang rejects gl_ClipDistance[i] for
                 // i >= maxClipDistances (ParseHelper.cpp) and expands gl_MaxClipDistances from the
                 // same number, so tracking the backend limit is what turns "the program links,
@@ -222,6 +239,14 @@ namespace MobileGL {
                 // also what makes glGetIntegerv(GL_MAX_CLIP_DISTANCES) and gl_MaxClipDistances
                 // agree, which KHR-GLxx.clip_distance.coverage compares directly.
                 Resources.maxClipDistances = dynamicParameters.MaxClipDistances;
+                // The cull pair, for the same reason and with a sharper edge: cull distance
+                // discards the WHOLE primitive, so a shader that gets to declare gl_CullDistance
+                // on a backend that cannot host one does not render subtly wrong pixels, it
+                // renders nothing at all. These were literal 8s that no backend was ever asked
+                // about; a backend without cull distances now reports 0 and glslang rejects the
+                // declaration with a diagnostic the application can read.
+                Resources.maxCullDistances = dynamicParameters.MaxCullDistances;
+                Resources.maxCombinedClipAndCullDistances = dynamicParameters.MaxCombinedClipAndCullDistances;
 
                 // The compute work-group limits are the env's, not the backend parameters': they
                 // are the only ones that come from a REAL indexed driver query, which

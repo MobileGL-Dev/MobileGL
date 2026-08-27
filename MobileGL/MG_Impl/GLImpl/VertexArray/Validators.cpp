@@ -12,15 +12,15 @@
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Converters/MGToGL/DataTypeConverter.h>
 #include <MG_Util/Converters/MGToStr/DataTypeConverter.h>
+#include <MG_Util/ShaderTranspiler/CompileEnv.h>
 
 namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
     Uint GetMaxVertexAttribs() {
-        constexpr Uint capacity = static_cast<Uint>(MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
-        if (!MG_Backend::pActiveBackendObject) return capacity;
-
-        const Int backendLimit = MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxVertexAttribs;
-        if (backendLimit <= 0) return capacity;
-        return std::min(static_cast<Uint>(backendLimit), capacity);
+        // Shared with reflection's limit and with gl_MaxVertexAttribs; see ResolveMaxVertexAttribs.
+        const Bool hasBackend = MG_Backend::pActiveBackendObject != nullptr;
+        const Int backendLimit =
+            hasBackend ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxVertexAttribs : 0;
+        return static_cast<Uint>(MG_Util::ShaderTranspiler::ResolveMaxVertexAttribs(hasBackend, backendLimit));
     }
 
     Uint GetMaxVertexAttribBindings() {

@@ -688,16 +688,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     // GL_MAX_SAMPLES is the ceiling over all formats; an integer format has its own
     // (GL_MAX_INTEGER_SAMPLES) and GL 4.6 core 9.2.4 makes exceeding it INVALID_OPERATION.
     // The multisample TEXTURE path resolves the limit per format the same way
-    // (GL_Texture.cpp, GetMaxSupportedTextureSamples). Both are floored to the value MobileGL
-    // advertises: on a driver where the two differ - Adreno reports GL_MAX_SAMPLES 4 and
-    // GL_MAX_INTEGER_SAMPLES 1 - rejecting the advertised count here only moves the failure
-    // from the driver into MobileGL, so the frontend accepts it and the backend clamps the
-    // count it actually hands the driver.
+    // (GL_Texture.cpp, GetMaxSupportedTextureSamples), and both now enforce exactly what their
+    // pname advertises. The integer ceiling used to be floored at GL_MAX_SAMPLES so that the
+    // frontend would accept a count it had advertised globally - but on Adreno and Mali the
+    // integer path is genuinely one sample, and accepting four only moved the failure from an
+    // honest INVALID_OPERATION here to a silently under-allocated renderbuffer.
     Int GetMaxRenderbufferSamplesForFormat_State(TextureInternalFormat format) {
         if (MG_Backend::pActiveBackendObject == nullptr) {
             return std::numeric_limits<Int>::max();
         }
-        const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
 
         GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(format);
         GLenum normalizedFormat = GL_RGBA;
@@ -711,10 +710,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!isIntegerFormat) {
             return GetMaxRenderbufferSamples_State();
         }
-        // Per-format still, but never below the ceiling glGetIntegerv(GL_MAX_SAMPLES) promised:
-        // the driver's raw GL_MAX_INTEGER_SAMPLES stays the *backend* limit and the backend
-        // clamps to it, while the frontend honours what it advertised.
-        return std::max(dynamicParameters.MaxIntegerSamples, GetAdvertisedMaxSamples());
+        // Exactly what glGetIntegerv(GL_MAX_INTEGER_SAMPLES) reports.
+        return GetAdvertisedIntegerMaxSamples();
     }
 
     Bool ValidateRenderbufferStorageSize_State(GLsizei width, GLsizei height, const char* caller) {

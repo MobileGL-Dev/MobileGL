@@ -563,7 +563,12 @@ namespace {
         // BuildTBuiltInResource does not read it.
         a.maxComputeWorkGroupInvocations = 128;
         b.maxComputeWorkGroupInvocations = 2048;
-        // (4) a spread of DynamicBackendParameters fields the front end never reads
+        // (4) a spread of DynamicBackendParameters fields the front end never reads.
+        // MaxTextureImageUnits used to be here and is NOT any more: the GL 4.6 API-surface wave
+        // made BuildTBuiltInResource read it (gl_MaxTextureImageUnits expands from it), so it
+        // moved to TheFrontendFingerprintMovesWithEveryFrontendLimit. That migration is the
+        // third one this helper has survived; check BuildTBuiltInResource before adding a field
+        // here.
         a.params.MaxColorTextureSamples = 1;
         b.params.MaxColorTextureSamples = 8;
         a.params.MaxTextureSize = 4096;
@@ -572,8 +577,8 @@ namespace {
         b.params.MaxViewports = 16;
         a.params.MaxUniformBufferBindings = 24;
         b.params.MaxUniformBufferBindings = 84;
-        a.params.MaxTextureImageUnits = 16;
-        b.params.MaxTextureImageUnits = 32;
+        a.params.MaxRenderbufferSize = 4096;
+        b.params.MaxRenderbufferSize = 16384;
         return {a, b};
     }
 } // namespace
@@ -677,6 +682,20 @@ TEST_F(TranslationCacheTest, TheFrontendFingerprintMovesWithEveryFrontendLimit) 
         // wave4's 4fc3531d: glslang rejects gl_ClipDistance[i] past this at parse AND expands
         // gl_MaxClipDistances from it, so it is both a compile gate and a baked constant.
         {"params.MaxClipDistances", [](CompileEnv& e) { e.params.MaxClipDistances += 1; }},
+        // The GL 4.6 API-surface wave: six more TBuiltInResource fields that used to be stock
+        // glslang literals. The cull pair is the MaxClipDistances story exactly (parse gate plus
+        // gl_MaxCullDistances / gl_MaxCombinedClipAndCullDistances); the texture-image-unit three
+        // and MaxSamples are baked constants (gl_MaxTextureImageUnits,
+        // gl_MaxVertexTextureImageUnits, gl_MaxCombinedTextureImageUnits, gl_MaxSamples - the
+        // last of which also sizes gl_SampleMask[]).
+        {"params.MaxCullDistances", [](CompileEnv& e) { e.params.MaxCullDistances += 1; }},
+        {"params.MaxCombinedClipAndCullDistances",
+         [](CompileEnv& e) { e.params.MaxCombinedClipAndCullDistances += 1; }},
+        {"params.MaxTextureImageUnits", [](CompileEnv& e) { e.params.MaxTextureImageUnits += 1; }},
+        {"params.MaxVertexTextureImageUnits", [](CompileEnv& e) { e.params.MaxVertexTextureImageUnits += 1; }},
+        {"params.MaxCombinedTextureImageUnits",
+         [](CompileEnv& e) { e.params.MaxCombinedTextureImageUnits += 1; }},
+        {"params.MaxSamples", [](CompileEnv& e) { e.params.MaxSamples += 1; }},
         {"maxComputeWorkGroupSize[0]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[0] += 1; }},
         {"maxComputeWorkGroupSize[1]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[1] += 1; }},
         {"maxComputeWorkGroupSize[2]", [](CompileEnv& e) { e.maxComputeWorkGroupSize[2] += 1; }},

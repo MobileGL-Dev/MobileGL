@@ -29,13 +29,11 @@ namespace {
     // capacity, which is also the width of the Uint32 masks backends build from it.
     static MobileGL::Int GetReflectionVertexAttribLimit(
         const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
-        constexpr MobileGL::Int capacity =
-            static_cast<MobileGL::Int>(MobileGL::MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS);
-        if (!env.HasBackend()) return capacity;
-
-        const MobileGL::Int backendLimit = env.params.MaxVertexAttribs;
-        if (backendLimit <= 0) return capacity;
-        return std::min(backendLimit, capacity);
+        // One shared definition with glGetIntegerv(GL_MAX_VERTEX_ATTRIBS) and with
+        // BuildTBuiltInResource's gl_MaxVertexAttribs - the three used to carry three copies of
+        // this formula and glslang's copy was a hardcoded 64.
+        return MobileGL::MG_Util::ShaderTranspiler::ResolveMaxVertexAttribs(env.HasBackend(),
+                                                                            env.params.MaxVertexAttribs);
     }
 
     // Everything the post-link query surface ever asks a glslang::TType, flattened into a

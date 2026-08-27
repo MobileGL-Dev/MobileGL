@@ -389,6 +389,19 @@ namespace MobileGL {
             // where there is no device to be honest about and BuildTBuiltInResource still has to
             // hand glslang a workable gl_MaxClipDistances.
             Int MaxClipDistances = 8;
+            // GL_MAX_CULL_DISTANCES and GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES, under exactly
+            // the contract stated for MaxClipDistances above: ZERO IS A LEGAL ANSWER and a
+            // backend that cannot host a cull distance MUST report it. The failure this prevents
+            // is worse than the clip one, because cull distance discards the whole primitive:
+            // glslang bounds gl_CullDistance[i] against maxCullDistances and expands
+            // gl_MaxCullDistances from it, SPIRV-Cross then emits
+            // `#extension GL_EXT_clip_cull_distance : require` into the ESSL, and a host driver
+            // without that extension rejects the program in an info log nobody surfaces. These
+            // used to be bare 8s inside BuildTBuiltInResource with no backend consulted at all.
+            // The DEFAULTS are the GL 4.5 core minimums for the same reason MaxClipDistances'
+            // is: they describe the no-backend case (standalone compiles, unit tests).
+            Int MaxCullDistances = 8;
+            Int MaxCombinedClipAndCullDistances = 8;
             Int MaxViewports = 16;
             // GL_LAYER_PROVOKING_VERTEX / GL_VIEWPORT_INDEX_PROVOKING_VERTEX: which vertex of a
             // primitive supplies gl_Layer and gl_ViewportIndex. GL 4.6 table 23.65 makes

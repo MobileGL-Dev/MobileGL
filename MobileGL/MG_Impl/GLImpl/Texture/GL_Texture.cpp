@@ -522,44 +522,46 @@ namespace MobileGL::MG_Impl::GLImpl {
             return sampleCounts.empty() ? 0 : sampleCounts.front();
         }
 
-        // The ceiling the frontend enforces, which must never be lower than the one MobileGL
-        // advertises: the CTS - and real applications - read GL_MAX_SAMPLES once and hand that
-        // exact count to glTexImage*Multisample for every format. Answering 4 there and then
-        // rejecting 4 here because the ES driver reports GL_MAX_INTEGER_SAMPLES 1 (Adreno) is a
-        // self-inconsistency, not a spec-mandated error. The backends clamp the count they hand
-        // the driver; the shadow state keeps reporting what the application asked for.
+        // The ceiling the frontend enforces, which is EXACTLY the one MobileGL advertises for
+        // this format's category - GL_MAX_DEPTH_TEXTURE_SAMPLES, GL_MAX_INTEGER_SAMPLES or
+        // GL_MAX_COLOR_TEXTURE_SAMPLES, all three of which have a GL 4.6 minimum of one and are
+        // reported as probed. It used to floor all three at GL_MAX_SAMPLES (4) on the reasoning
+        // that an application reads GL_MAX_SAMPLES once and hands that count to every
+        // glTexStorage*Multisample. That reasoning had it backwards: on Adreno and on Mali an
+        // integer multisample texture is backed by ONE sample, so accepting four here did not
+        // make four samples exist - ClampSamplesToBackendSupport quietly allocated one and the
+        // application wrote per-sample data it could never read back. Raising INVALID_OPERATION
+        // is what a real driver does, and it is what makes that silent squeeze unreachable for
+        // application-visible storage.
         Int GetMaxSupportedTextureSamples(TextureTarget textureTarget,
                                           TextureInternalFormat textureInternalFormat) {
             if (MG_Backend::pActiveBackendObject == nullptr) {
                 return std::numeric_limits<Int>::max();
             }
 
-            const Int advertisedMaxSamples = GetAdvertisedMaxSamples();
+            const Bool isDepthOrStencil = MG_Util::IsDepthFormatInternalFormat(textureInternalFormat) ||
+                                          MG_Util::IsStencilFormatInternalFormat(textureInternalFormat);
+            Bool isIntegerFormat = false;
+            if (!isDepthOrStencil) {
+                GLenum normalizedInternalFormat =
+                    MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
+                GLenum normalizedFormat = GL_RGBA;
+                GLenum normalizedType = GL_UNSIGNED_BYTE;
+                MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                    normalizedInternalFormat, PixelFormatNormalizeOptionBit::None, &normalizedInternalFormat,
+                    &normalizedFormat, &normalizedType);
+                isIntegerFormat = normalizedFormat == GL_RED_INTEGER || normalizedFormat == GL_RG_INTEGER ||
+                                  normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
+            }
+            const Int categoryMaxSamples = isDepthOrStencil ? GetAdvertisedDepthTextureMaxSamples()
+                                           : isIntegerFormat ? GetAdvertisedIntegerMaxSamples()
+                                                             : GetAdvertisedColorTextureMaxSamples();
+
             // glGetInternalformativ(GL_SAMPLES) is answered from this very list (GetInternalformativ
             // below), and GL 4.6 core 8.8 makes that query the definition of the per-format
             // maximum - validating against anything else is how the two answers drifted apart.
             const Int probedMaxSamples = GetProbedMaxTextureSamples(textureTarget, textureInternalFormat);
-            if (probedMaxSamples > 0) {
-                return std::max(probedMaxSamples, advertisedMaxSamples);
-            }
-
-            const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
-            if (MG_Util::IsDepthFormatInternalFormat(textureInternalFormat) ||
-                MG_Util::IsStencilFormatInternalFormat(textureInternalFormat)) {
-                return std::max(dynamicParameters.MaxDepthTextureSamples, advertisedMaxSamples);
-            }
-
-            GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
-            GLenum normalizedFormat = GL_RGBA;
-            GLenum normalizedType = GL_UNSIGNED_BYTE;
-            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
-                normalizedInternalFormat, PixelFormatNormalizeOptionBit::None, &normalizedInternalFormat,
-                &normalizedFormat, &normalizedType);
-            const Bool isIntegerFormat = normalizedFormat == GL_RED_INTEGER || normalizedFormat == GL_RG_INTEGER ||
-                                         normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
-            return std::max(isIntegerFormat ? dynamicParameters.MaxIntegerSamples
-                                            : dynamicParameters.MaxColorTextureSamples,
-                            advertisedMaxSamples);
+            return probedMaxSamples > 0 ? std::max(probedMaxSamples, categoryMaxSamples) : categoryMaxSamples;
         }
 
         Bool ValidateTextureMultisampleStorage(TextureTarget textureTarget, GLsizei samples, GLsizei width,

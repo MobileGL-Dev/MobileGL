@@ -68,6 +68,11 @@ namespace MobileGL {
             Int MaxDrawBuffers = 8;
             Int MaxColorAttachments = 8;
             Int MaxClipDistances = 8;
+            // VkPhysicalDeviceLimits::maxCullDistances / maxCombinedClipAndCullDistances, gated
+            // by SupportsShaderCullDistance exactly as the clip pair is gated by
+            // SupportsShaderClipDistance.
+            Int MaxCullDistances = 8;
+            Int MaxCombinedClipAndCullDistances = 8;
             Int MaxViewports = 16;
             Int MaxViewportWidth = 16384;
             Int MaxViewportHeight = 16384;
@@ -106,6 +111,11 @@ namespace MobileGL {
             // device has it, and without it a shader writing gl_ClipDistance is invalid. Very
             // widely supported, hence read from the device features and never assumed false.
             Bool SupportsShaderClipDistance = false;
+            // VkPhysicalDeviceFeatures::shaderCullDistance, the same story one field down:
+            // VulkanRenderer already ENABLES this feature where the device has it, but nobody
+            // ever read the limits it unlocks, so the frontend advertised eight cull distances
+            // from a literal instead of from the device.
+            Bool SupportsShaderCullDistance = false;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Bool SupportsShaderSubgroup = false;
             Uint32 SubgroupSize = 0;

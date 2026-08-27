@@ -1465,6 +1465,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;
+        // The loader already gated both on GL_EXT_clip_cull_distance and left 0 without it, which
+        // is the answer that keeps glslang from accepting a gl_CullDistance the ESSL compiler
+        // would reject.
+        m_dynamicParameters.MaxCullDistances = m_GLESCapabilities.MaxCullDistances;
+        m_dynamicParameters.MaxCombinedClipAndCullDistances = m_GLESCapabilities.MaxCombinedClipAndCullDistances;
         m_dynamicParameters.MaxViewports = m_GLESCapabilities.MaxViewports;
         // Whatever the driver said about which vertex supplies gl_Layer, and GL_UNDEFINED_VERTEX
         // for gl_ViewportIndex on every driver without GL_OES_viewport_array - which is both test

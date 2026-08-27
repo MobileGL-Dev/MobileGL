@@ -25,9 +25,17 @@ namespace MobileGL::MG_Impl::GLImpl {
     GLenum GetError();
     GLenum GetGraphicsResetStatus();
     // The GL_MAX_SAMPLES value MobileGL advertises, i.e. the driver's value floored to the GL
-    // core minimum. Frontend multisample validators have to honour this ceiling for every
-    // format, otherwise MobileGL rejects a sample count it advertised itself.
+    // core minimum of 4. This is the RENDERBUFFER ceiling; the three per-category texture
+    // ceilings below have a minimum of one and are reported as probed.
     GLint GetAdvertisedMaxSamples();
+    // Exactly what GL_MAX_COLOR_TEXTURE_SAMPLES / GL_MAX_DEPTH_TEXTURE_SAMPLES /
+    // GL_MAX_INTEGER_SAMPLES report: the probed backend limit floored at the GL 4.6 core minimum
+    // of ONE (table 23.53). Exported so the frontend's storage validation enforces exactly what
+    // the query promised - it used to floor both at 4 and then let the backend quietly
+    // under-allocate whatever the driver could not actually provide.
+    GLint GetAdvertisedColorTextureMaxSamples();
+    GLint GetAdvertisedDepthTextureMaxSamples();
+    GLint GetAdvertisedIntegerMaxSamples();
     // What glGetIntegerv(GL_SAMPLES) answers for the CURRENT draw framebuffer: the largest sample
     // count over its attachments, and 0 for a single-sample or default framebuffer (GL 4.6 core
     // 9.2.3 / 22.2 - GL_SAMPLE_BUFFERS is 1 exactly when this is non-zero).

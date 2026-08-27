@@ -351,9 +351,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            // Only sync up to the high-water mark of app-touched points; the fixed array is 36
+            // Only sync up to the high-water mark of app-touched points; the fixed array is 84
             // deep but apps bind a handful, so the never-touched tail is already at GL default 0.
             auto bindingPointCnt = MG_State::pGLContext->GetTouchedBufferBindingPointCount(target);
+            // ...and never past what the ES driver itself can hold. MobileGL advertises the GL 4.5
+            // minimum of 84 uniform binding points while the ES 3.2 minimum is 72, so a frontend
+            // index in that gap would reach glBindBufferBase as GL_INVALID_VALUE. Nothing is lost
+            // by stopping: this frontend-indexed pass exists for the compute path, and the
+            // per-program rebind in BindCurrentProgramWithResources - which is what actually feeds
+            // a shader - remaps every block a program declares onto a compacted ES point, so a
+            // block bound at GL point 83 still reaches its shader.
+            if (target == BufferTarget::Uniform && g_GLESCapabilities.MaxUniformBufferBindings > 0) {
+                bindingPointCnt = std::min(bindingPointCnt,
+                                           static_cast<SizeT>(g_GLESCapabilities.MaxUniformBufferBindings));
+            }
             for (SizeT i = 0; i < bindingPointCnt; ++i) {
                 auto& point = MG_State::pGLContext->GetBufferBindingPoint(target, i);
                 auto& obj = point.GetBoundObject();

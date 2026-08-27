@@ -1139,6 +1139,11 @@ namespace MobileGL::MG_Util::BackendLoader {
         // optimistic 8 behind, so the frontend promised eight clip planes and every draw with a
         // clipping program silently rendered nothing. The guarded probe below only ever widens it.
         GLint maxClipDistances = 0;
+        // The cull half of the same extension, and the same "zero is a legal answer" rule: a cull
+        // distance discards the whole primitive, so promising eight on a driver that has none does
+        // not fail loudly, it drops every draw of a culling program.
+        GLint maxCullDistances = 0;
+        GLint maxCombinedClipAndCullDistances = 0;
         GLint maxViewports = 16;
         // GL_UNDEFINED_VERTEX is what stands when the probes below cannot run, and it is a legal
         // answer rather than a placeholder: with neither geometry shaders nor a viewport array
@@ -1332,6 +1337,23 @@ namespace MobileGL::MG_Util::BackendLoader {
                 MGLOG_W("GL_EXT_clip_cull_distance is advertised but GL_MAX_CLIP_DISTANCES was "
                         "rejected; reporting no clip distances");
                 maxClipDistances = 0;
+            }
+            // GL_MAX_CULL_DISTANCES_EXT (0x82F9) and GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES_EXT
+            // (0x82FA) are the same tokens as their desktop spellings and arrive with the same
+            // extension, so they are probed under the same guard and the same drain sandwich.
+            drainErrors();
+            glesFuncs.glGetIntegerv(GL_MAX_CULL_DISTANCES, &maxCullDistances);
+            if (drainErrors()) {
+                MGLOG_W("GL_EXT_clip_cull_distance is advertised but GL_MAX_CULL_DISTANCES was "
+                        "rejected; reporting no cull distances");
+                maxCullDistances = 0;
+            }
+            drainErrors();
+            glesFuncs.glGetIntegerv(GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES, &maxCombinedClipAndCullDistances);
+            if (drainErrors()) {
+                MGLOG_W("GL_EXT_clip_cull_distance is advertised but "
+                        "GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES was rejected; deriving it from the pair");
+                maxCombinedClipAndCullDistances = 0;
             }
         }
         glesFuncs.glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxViewportDims);
@@ -1562,6 +1584,14 @@ namespace MobileGL::MG_Util::BackendLoader {
         // A driver is free to write nonsense into an out-param it then rejects, and without the
         // extension the probe above never ran at all - so the flag, not the local, decides.
         caps.MaxClipDistances = caps.SupportsClipDistance ? std::max(maxClipDistances, 0) : 0;
+        caps.MaxCullDistances = caps.SupportsClipDistance ? std::max(maxCullDistances, 0) : 0;
+        // The combined limit can never be smaller than either half (GL 4.6 core 11.1.3.10 / the
+        // EXT spec say so), so a driver that rejected the combined query but answered the other
+        // two still gets a usable - and never over-stated - number.
+        caps.MaxCombinedClipAndCullDistances =
+            caps.SupportsClipDistance
+                ? std::max({maxCombinedClipAndCullDistances, caps.MaxClipDistances, caps.MaxCullDistances})
+                : 0;
         caps.MaxViewports = maxViewports;
         caps.LayerProvokingVertex = layerProvokingVertex;
         caps.ViewportIndexProvokingVertex = viewportIndexProvokingVertex;
@@ -1651,6 +1681,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         // and "this driver has no clip distances".
         MGLOG_I("    GL_MAX_CLIP_DISTANCES: %d%s", caps.MaxClipDistances,
                 caps.SupportsClipDistance ? "" : " (no GL_EXT_clip_cull_distance on this driver)");
+        MGLOG_I("    GL_MAX_CULL_DISTANCES: %d", caps.MaxCullDistances);
+        MGLOG_I("    GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES: %d", caps.MaxCombinedClipAndCullDistances);
         MGLOG_I("    GL_MAX_VIEWPORTS: %d", caps.MaxViewports);
         MGLOG_I("    GL_MAX_VIEWPORT_DIMS: [%d, %d]", caps.MaxViewportWidth, caps.MaxViewportHeight);
         MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin,

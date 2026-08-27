@@ -84,11 +84,14 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //   * the DynamicBackendParameters fields BuildTBuiltInResource copies into
         //     TBuiltInResource - MaxImageUnits, MaxDrawBuffers, MaxVertexImageUniforms,
         //     MaxGeometryImageUniforms, MaxFragmentImageUniforms, MaxComputeImageUniforms,
-        //     MaxCombinedImageUniforms, MaxComputeTextureImageUnits, MaxClipDistances. glslang
+        //     MaxCombinedImageUniforms, MaxComputeTextureImageUnits, MaxClipDistances,
+        //     MaxCullDistances, MaxCombinedClipAndCullDistances, MaxTextureImageUnits,
+        //     MaxVertexTextureImageUnits, MaxCombinedTextureImageUnits, MaxSamples. glslang
         //     enforces those at parse, so they decide whether a shader compiles at all and can
-        //     change the link result. MaxClipDistances moved in at the wave4 merge (4fc3531d),
-        //     the third time in three waves that a hardcoded TBuiltInResource field became
-        //     env-derived - assume the next wave does it again and re-audit.
+        //     change the link result. MaxClipDistances moved in at the wave4 merge (4fc3531d)
+        //     and the six after it at the GL 4.6 API-surface wave - the fourth time in four
+        //     waves that a hardcoded TBuiltInResource field became env-derived. Assume the next
+        //     wave does it again and re-audit.
         //   * maxComputeWorkGroupSize and maxComputeWorkGroupCount, all three components each.
         //     These moved IN at the dev merge that brought wave3's cb155c5b, which made
         //     BuildTBuiltInResource read them from the env instead of hardcoding a permissive
@@ -159,6 +162,18 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
                    advertisedExtensions.end();
         }
     };
+
+    // How many vertex input locations exist, from the frontend's point of view: the backend's
+    // advertised count bounded by the state layer's current-value storage capacity
+    // (VertexArrayObject::MAX_VERTEX_ATTRIBS). ONE definition, because three places have to
+    // agree on it and used to carry three copies of the formula - glGetIntegerv
+    // (VertexArrayImpl::GetMaxVertexAttribs), the limit reflection records vertex inputs
+    // against (ProgramLinkTask), and gl_MaxVertexAttribs (BuildTBuiltInResource, which had a
+    // hardcoded 64 the other two never saw). A disagreement there is not cosmetic: glslang
+    // ACCEPTS a vertex input at a location the runtime cannot bind, and the draw then silently
+    // reads nothing. `hasBackend` false means "no backend to be bounded by" and yields the
+    // storage capacity, matching what all three did before.
+    Int ResolveMaxVertexAttribs(Bool hasBackend, Int backendMaxVertexAttribs);
 
     // Hashes every semantically relevant member. Public so a test can assert that two
     // different envs really do produce different P0b cache keys.

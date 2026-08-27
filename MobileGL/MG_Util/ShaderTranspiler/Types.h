@@ -80,6 +80,53 @@ namespace MobileGL {
             inline constexpr Int MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE = 8;
             inline constexpr Int MAX_ATOMIC_COUNTERS_PER_STAGE = 8;
 
+            // ---- Tessellation per-stage resource limits ----
+            //
+            // Here for exactly the reason the atomic-counter block above is here. GL 4.6 requires
+            // glGetIntegerv and the matching gl_MaxTess* built-in constant to report the same
+            // number (KHR-GL45.limits.max_tess_* reads the query and then compiles a shader that
+            // writes the built-in into an SSBO and demands equality), and these numbers used to
+            // exist ONLY inside BuildTBuiltInResource - so gl_MaxTessControlInputComponents
+            // compiled fine while glGetIntegerv of the same limit had no case at all and answered
+            // GL_INVALID_ENUM. Never move one of these without the other.
+            //
+            // The values are the GL 4.6 core minimums (table 23.55), which is what a frontend that
+            // synthesizes the tessellation stages onto ES/Vulkan can honestly promise.
+            inline constexpr Int MAX_TESS_CONTROL_INPUT_COMPONENTS = 128;
+            inline constexpr Int MAX_TESS_CONTROL_OUTPUT_COMPONENTS = 128;
+            inline constexpr Int MAX_TESS_CONTROL_TEXTURE_IMAGE_UNITS = 16;
+            inline constexpr Int MAX_TESS_CONTROL_UNIFORM_COMPONENTS = 1024;
+            inline constexpr Int MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS = 4096;
+            inline constexpr Int MAX_TESS_EVALUATION_INPUT_COMPONENTS = 128;
+            inline constexpr Int MAX_TESS_EVALUATION_OUTPUT_COMPONENTS = 128;
+            inline constexpr Int MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS = 16;
+            inline constexpr Int MAX_TESS_EVALUATION_UNIFORM_COMPONENTS = 1024;
+            inline constexpr Int MAX_TESS_PATCH_COMPONENTS = 120;
+
+            // ---- Varying and default-block uniform capacities ----
+            //
+            // The *_VECTORS limits are the *_COMPONENTS ones counted in vec4s, so they are DERIVED
+            // rather than typed independently: GL_MAX_VARYING_COMPONENTS said 64 while
+            // GL_MAX_VARYING_VECTORS said 8, and GL_MAX_VERTEX_UNIFORM_COMPONENTS said 4096 while
+            // GL_MAX_VERTEX_UNIFORM_VECTORS said 128 - two pairs that cannot both describe the
+            // same capacity, and both *_VECTORS answers were below the GL 4.5 core minimum
+            // (15 and 256 respectively). Shared with BuildTBuiltInResource because
+            // gl_MaxVaryingVectors and gl_MaxVertexUniformVectors expand from the same numbers.
+            inline constexpr Int MAX_VARYING_COMPONENTS = 64;
+            inline constexpr Int MAX_VARYING_VECTORS = MAX_VARYING_COMPONENTS / 4;
+            inline constexpr Int MAX_VERTEX_UNIFORM_COMPONENTS = 4096;
+            inline constexpr Int MAX_VERTEX_UNIFORM_VECTORS = MAX_VERTEX_UNIFORM_COMPONENTS / 4;
+
+            // GL 4.6 core table 23.53 sets the GL_MAX_SAMPLES minimum at 4, and MobileGL floors
+            // the backend's answer at it (GL_Getter's GetAdvertisedMaxSamples). gl_MaxSamples has
+            // to expand to the SAME number - it is also what sizes gl_SampleMask[] /
+            // gl_SampleMaskIn[] and what bounds a constant index into them - so the floor lives
+            // here and both sides apply it. NOTE the deliberate asymmetry: only MAX_SAMPLES has a
+            // floor of 4. MAX_INTEGER_SAMPLES, MAX_COLOR_TEXTURE_SAMPLES and
+            // MAX_DEPTH_TEXTURE_SAMPLES have a minimum of ONE in the same table and are reported
+            // as the backend probed them.
+            inline constexpr Int MIN_ADVERTISED_MAX_SAMPLES = 4;
+
             struct EmptyType {};
 
             enum class ShaderCompileBits : Uint {

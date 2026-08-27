@@ -1299,6 +1299,11 @@ namespace MobileGL {
             // GL_EXT_clip_cull_distance, so a driver without it has none. See the guarded probe
             // in FillInGLESCapabilities.
             Int MaxClipDistances = 0;
+            // Same contract, same reason, same extension: GL_MAX_CULL_DISTANCES_EXT and
+            // GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES_EXT exist in ES only under
+            // GL_EXT_clip_cull_distance, so zero is the honest answer without it.
+            Int MaxCullDistances = 0;
+            Int MaxCombinedClipAndCullDistances = 0;
             Int MaxViewports = 16;
             // GL_LAYER_PROVOKING_VERTEX (ES 3.2 core) and GL_VIEWPORT_INDEX_PROVOKING_VERTEX
             // (GL_OES_viewport_array). GL_UNDEFINED_VERTEX is a legal answer for both and is what
