@@ -121,6 +121,42 @@ void main() {
 }
 )";
 
+        // A plain sampler2D on a unit the test leaves alone. Two cases point at it: a unit with
+        // nothing bound at all, and a unit whose DEFAULT texture (name 0) has been given a base
+        // level and no mip chain - GL calls the second one incomplete for the initial
+        // NEAREST_MIPMAP_LINEAR filter, and both must resolve to the fallback rather than to a
+        // texture the backend then fails to back.
+        constexpr const char* kSampler2DFragmentSource = R"(#version 430 core
+uniform sampler2D u_unbound;
+uniform int u_readUnbound;
+out vec4 o_color;
+void main() {
+    vec4 color = vec4(0.0, 1.0, 0.0, 1.0);
+    if (u_readUnbound != 0) {
+        color = texture(u_unbound, vec2(0.0));
+    }
+    o_color = color;
+}
+)";
+
+        // The multisample spelling of the same thing. GL_ARB_sample_variables' own conformance
+        // cases declare a sampler2D and a sampler2DMS side by side and deliberately point the
+        // unused one at an empty unit, so whichever of the two is unused has to have a
+        // placeholder - a multisample descriptor demands a multisample view, so the 2D fallback
+        // cannot stand in for it.
+        constexpr const char* kSampler2DMSFragmentSource = R"(#version 430 core
+uniform sampler2DMS u_unbound;
+uniform int u_readUnbound;
+out vec4 o_color;
+void main() {
+    vec4 color = vec4(0.0, 1.0, 0.0, 1.0);
+    if (u_readUnbound != 0) {
+        color = texelFetch(u_unbound, ivec2(0), 0);
+    }
+    o_color = color;
+}
+)";
+
         constexpr const char* kImage2DFragmentSource = R"(#version 430 core
 layout(binding = 0, rgba8) uniform writeonly image2D u_unbound;
 out vec4 o_color;
@@ -367,6 +403,55 @@ void main() {
             GTEST_SKIP() << "the fragment stage has no image uniforms";
         }
         ExpectDrawStillRuns(kImage2DFragmentSource, "image2D");
+    }
+
+    // ---- sampler2D / sampler2DMS (VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ----------------
+
+    TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundSampler2DDoesNotLoseTheDraw) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectDrawStillRuns(kSampler2DFragmentSource, "sampler2D");
+    }
+
+    // The regression this file exists for, in its sharpest form: a sampler pointing at a texture
+    // unit whose DEFAULT texture object has an image but no mip chain.
+    //
+    // DirectVulkan resolved such a binding twice, through two different predicates that
+    // disagreed. The collect pass (CollectSampledTextures -> ResolveSampledBinding), which
+    // pre-syncs and transitions every texture the draw will sample, asked only whether the
+    // default texture was UNDEFINED - texture 0 with an image is not - and kept it. The
+    // descriptor pass (ResolveSamplerDescriptor) asked the real GL question, whether it
+    // SAMPLES AS INCOMPLETE for the filter in effect, and swapped it for the fallback. So the
+    // collect pass synced a texture no descriptor would ever hold, VkTextureManager declined it
+    // ("mipmap not complete") and returned nullptr, and SetupDraw dereferenced that nullptr -
+    // a SIGSEGV inside the draw, not a degraded picture.
+    //
+    // The GL-CTS reaches this on its own: its between-case state reset gives the default 2D
+    // texture a base level, so the FIRST case in a process survived and every later one with an
+    // unbound sampler2D died. That is the whole of the 380-record sample_variables crash family
+    // on Mali-G1-Ultra. Any application that uploads to texture 0 has the same shape.
+    TEST_F(UnboundImageDescriptorScenario, ASamplerOnAUnitWhoseDefaultTextureIsIncompleteDoesNotLoseTheDraw) {
+        if (!Ready() || IsSkipped()) return;
+
+        // Unit 0 is where the sampler's default uniform value points. Give the DEFAULT texture
+        // object bound there a FORMAT and a zero-sized level - which is what a bare
+        // glTexImage2D(..., 0, 0, ...) with no data does, and what the GL-CTS's between-case
+        // state reset issues for every texture target. That combination is the whole point:
+        //   * it is DEFINED, so IsUndefinedDefaultTexture (the collect path's old test) is false
+        //     and the texture stays in the sampled set;
+        //   * it is INCOMPLETE, so SamplesAsIncompleteTexture (the descriptor path's test) is
+        //     true and the descriptor holds the fallback instead;
+        //   * and it has no valid mip level, so the sync declines and hands back nullptr.
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 0, 0, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        ASSERT_EQ(FirstGLError(), 0u) << "defining a zero-sized level 0 on the default texture raised a GL error";
+
+        ExpectDrawStillRuns(kSampler2DFragmentSource, "sampler2D on an incomplete default texture");
+    }
+
+    TEST_F(UnboundImageDescriptorScenario, ADeclaredButUnboundSampler2DMSDoesNotLoseTheDraw) {
+        if (!Ready() || IsSkipped()) return;
+        ExpectDrawStillRuns(kSampler2DMSFragmentSource, "sampler2DMS");
     }
 
     TEST_F(UnboundImageDescriptorScenario, AFormatlessWriteonlyImage2DLeftUnboundDoesNotLoseTheDispatch) {
