@@ -2642,8 +2642,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             // DirectGLES rebinds the blocks a program declares onto COMPACTED ES points
             // (BindCurrentProgramWithResources maps block i to ES point i+1) and DirectVulkan
             // resolves each block to a descriptor. So what the host driver's count bounds is how
-            // many blocks ONE PROGRAM may use, which is GL_MAX_COMBINED_UNIFORM_BLOCKS (70) -
-            // inside the ES 3.2 minimum of 72 - and not how many points an application may bind.
+            // many blocks ONE PROGRAM may use, not how many points an application may bind.
+            //
+            // That per-program number is NOT GL_MAX_COMBINED_UNIFORM_BLOCKS (84, the six-stage
+            // sum): no single program can reach it. A graphics program is bounded by the five
+            // graphics stages' per-stage counts, 14 each, so 70 blocks plus the global UBO at ES
+            // point 0 = 71 - inside the ES 3.2 minimum of 72. A compute program is bounded by
+            // GL_MAX_COMPUTE_UNIFORM_BLOCKS, which on DirectGLES is the ES driver's own count
+            // (GL-scale, ~14) and on DirectVulkan is served from descriptors with no ES binding
+            // points involved. Raising any per-stage graphics count past 14 is what would break
+            // this, so that is the edit to check against the ES ceiling - not this one.
             static_assert(static_cast<GLint>(MG_State::GLState::BufferBindingPointCount) >=
                               kFrontendMinUniformBufferBindings,
                           "the indexed-binding array must be able to hold every advertised uniform binding point");
