@@ -1468,6 +1468,86 @@ TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFou
     MG_State::pGLContext = Move(previousContext);
 }
 
+// GL_ARB_cull_distance below #version 450, which is the band the conformance suite actually
+// compiles in: cull_distance.coverage emits its compute shader at "#version 420 core" with
+// `#extension GL_ARB_cull_distance : require` and reads gl_MaxCullDistances. Registering the
+// extension name alone was not enough - `require` started succeeding while the constants stayed
+// gated on 450, so the shader traded one error for another.
+//
+// The three cases below are the whole contract: the macro must be true exactly where the feature
+// is, the constants must exist under the extension, and using the feature WITHOUT the extension
+// must still fail (otherwise the gate is decorative).
+TEST(ShaderCompilerSanity, ArbCullDistanceIsUsableBelow450) {
+    using namespace MobileGL;
+
+    auto previousContext = Move(MG_State::pGLContext);
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+    const auto env = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+
+    const auto compileFragment = [&env](const String& source) {
+        return MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+            .shaderType = GL_FRAGMENT_SHADER,
+            .sourceStr = source,
+            .env = env.get(),
+        });
+    };
+
+    // The coverage shader's shape, reduced to a fragment stage: require the extension, then read
+    // the constant it brings.
+    const String withExtension = R"(#version 420 core
+#extension GL_ARB_cull_distance : require
+out vec4 mgColor;
+void main() { mgColor = vec4(float(gl_MaxCullDistances + gl_MaxCombinedClipAndCullDistances)); }
+)";
+    auto extensionCompiled = compileFragment(withExtension);
+    EXPECT_TRUE(extensionCompiled) << (extensionCompiled ? String() : extensionCompiled.error().log);
+
+    // The macro has to agree with that, or the standard `#ifdef` probe lies in one direction or
+    // the other. It is defined from 400 up, where the built-ins exist...
+    const String macroProbe420 = R"(#version 420 core
+out vec4 mgColor;
+#ifndef GL_ARB_cull_distance
+#error GL_ARB_cull_distance should be defined at 420
+#endif
+void main() { mgColor = vec4(0.0); }
+)";
+    auto macro420 = compileFragment(macroProbe420);
+    EXPECT_TRUE(macro420) << (macro420 ? String() : macro420.error().log);
+
+    // ...and NOT below it, where they do not. A shader whose `#ifdef GL_ARB_cull_distance` branch
+    // reads gl_MaxCullDistances used to take that branch at 330 and fail to compile.
+    const String macroProbe330 = R"(#version 330 core
+out vec4 mgColor;
+#ifdef GL_ARB_cull_distance
+#error GL_ARB_cull_distance must not be advertised where the built-ins do not exist
+#endif
+void main() { mgColor = vec4(0.0); }
+)";
+    auto macro330 = compileFragment(macroProbe330);
+    EXPECT_TRUE(macro330) << (macro330 ? String() : macro330.error().log);
+
+    // The gate is real: below 450 the constants are reachable ONLY through the extension.
+    const String withoutExtension = R"(#version 420 core
+out vec4 mgColor;
+void main() { mgColor = vec4(float(gl_MaxCullDistances)); }
+)";
+    EXPECT_FALSE(compileFragment(withoutExtension))
+        << "gl_MaxCullDistances must require GL_ARB_cull_distance below #version 450";
+
+    // ...and at 450 it is core, so no directive is needed.
+    const String core450 = R"(#version 450 core
+out vec4 mgColor;
+void main() { mgColor = vec4(float(gl_MaxCullDistances)); }
+)";
+    auto coreCompiled = compileFragment(core450);
+    EXPECT_TRUE(coreCompiled) << (coreCompiled ? String() : coreCompiled.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     using namespace MobileGL;
 

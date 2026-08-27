@@ -2506,6 +2506,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // A float compare here would never settle for a NaN level - NaN != NaN - and every
                 // draw of that program would re-transpile, re-compile and re-link a byte-identical
                 // shader. glPatchParameterfv accepts NaN by design.
+                //
+                // The gl_PerVertex MEMBER SET needs no clause of its own here, and that asymmetry
+                // with DirectVulkan is deliberate rather than an omission. It can only change with
+                // the evaluation stage, i.e. across a relink - which the link-version test at the
+                // top of this condition already catches - and this backend never invents the shape
+                // in the first place: AttachPassthroughTessControlStage extracts the member text
+                // out of the neighbouring stages' emitted ESSL on every rebuild
+                // (ExtractPerVertexBlockMembers, "mirrored, never invented"). DirectVulkan needs
+                // the mask in its key precisely because it does NOT mirror - it redeclares from a
+                // member set it has to be told.
                 (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
                  (twin->GetPassthroughTessControlPatchVertices() !=
                       static_cast<Int>(MG_State::pGLContext->GetPatchVertices()) ||

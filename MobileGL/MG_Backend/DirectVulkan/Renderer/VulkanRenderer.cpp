@@ -5216,9 +5216,11 @@ void main() {
             const FloatVec4& defaultOuterLevel = MG_State::pGLContext->GetPatchDefaultOuterLevel();
             const FloatVec2& defaultInnerLevel = MG_State::pGLContext->GetPatchDefaultInnerLevel();
             payload.passthroughTessControlKey = ProgramFactory::ComputePassthroughTessControlKey(
-                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel);
+                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel,
+                programObj.passthroughPerVertexMembers);
             payload.passthroughTessControlStage = m_programFactory->GetOrCreatePassthroughTessControlStage(
-                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel);
+                payload.patchControlPoints, defaultOuterLevel, defaultInnerLevel,
+                programObj.passthroughPerVertexMembers);
         }
         if (!payload.stencilTestEnable) {
             payload.frontStencilFailOp = VK_STENCIL_OP_KEEP;

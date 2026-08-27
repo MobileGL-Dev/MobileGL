@@ -245,6 +245,30 @@ namespace MobileGL::MG_Impl::GLImpl {
         return true;
     }
 
+    // GL 4.6 core 7.6.3: INVALID_VALUE when uniformBlockBinding >= MAX_UNIFORM_BUFFER_BINDINGS.
+    // The storage-block twin below has always had this check; the uniform one never did, and the
+    // value it stores is used as a RAW SUBSCRIPT into the state layer's fixed indexed-binding
+    // array on every draw and dispatch (DirectGLES's per-program UBO rebind, DirectVulkan's
+    // descriptor resolve, whose only guard is a MOBILEGL_ASSERT that compiles away in release).
+    // An out-of-range binding therefore did not merely go unreported - it read past the array and
+    // dereferenced whatever SharedPtr it found there.
+    bool ValidateUniformBlockBinding(GLuint binding) {
+        // Exactly what glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS) advertises: the state
+        // layer's array width, which the getter clamps to as well.
+        const SizeT maxBindingCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::Uniform);
+        if (binding < maxBindingCount) {
+            return true;
+        }
+
+        MG_State::pGLContext->RecordError(
+            ErrorCode::InvalidValue,
+            MakeUnique<GenericErrorInfo>(
+                "MG_Impl/GLImpl", __func__,
+                std::format("Uniform block binding {} is not less than GL_MAX_UNIFORM_BUFFER_BINDINGS ({}).", binding,
+                            maxBindingCount)));
+        return false;
+    }
+
     bool ValidateShaderStorageBlockBinding(GLuint binding) {
         SizeT maxBindingCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::ShaderStorage);
         if (MG_Backend::pActiveBackendObject) {
@@ -1898,6 +1922,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Program object" + std::to_string(program) + " that has been linked."));
             return;
         }
+        if (!ValidateUniformBlockBinding(uniformBlockBinding)) return;
         if (!programObject->IsActiveGlUniformBlock(uniformBlockIndex)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,

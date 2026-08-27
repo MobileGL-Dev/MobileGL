@@ -3599,24 +3599,125 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Uint64 ProgramFactory::ComputePassthroughTessControlKey(Uint32 patchVertices,
                                                             const FloatVec4& defaultOuterLevel,
-                                                            const FloatVec2& defaultInnerLevel) {
-        // A plain 28-byte blob of exactly what the generator reads, hashed once. Deliberately over
+                                                            const FloatVec2& defaultInnerLevel,
+                                                            Uint32 perVertexMembers) {
+        // A plain 32-byte blob of exactly what the generator reads, hashed once. Deliberately over
         // the RAW BITS rather than the values: two levels that compare unequal must key apart, and
         // a NaN level - which glPatchParameterfv accepts - compares unequal to itself.
         struct Blob {
             Uint32 patchVertices;
             Uint32 outerBits[4];
             Uint32 innerBits[2];
+            Uint32 perVertexMembers;
         } blob{};
         blob.patchVertices = patchVertices;
         for (Uint32 i = 0; i < 4; ++i) blob.outerBits[i] = std::bit_cast<Uint32>(defaultOuterLevel[i]);
         for (Uint32 i = 0; i < 2; ++i) blob.innerBits[i] = std::bit_cast<Uint32>(defaultInnerLevel[i]);
+        blob.perVertexMembers = perVertexMembers;
         return XXH64(&blob, sizeof(blob), 0);
+    }
+
+    // The member list a gl_PerVertex redeclaration must spell, derived from the mask. Order is
+    // glslang's declaration order and is load-bearing: a redeclaration whose members are the same
+    // set in a different order is a different block.
+    static String BuildPerVertexMemberDeclarations(Uint32 perVertexMembers) {
+        using Bit = ProgramFactory::PerVertexMemberBit;
+        String members;
+        if (perVertexMembers & static_cast<Uint32>(Bit::Position)) members += "    vec4 gl_Position;\n";
+        if (perVertexMembers & static_cast<Uint32>(Bit::PointSize)) members += "    float gl_PointSize;\n";
+        // Sized at one, not left unsized: an unsized built-in array in a redeclared block is
+        // implicitly sized by use, and this stage never indexes either distance array.
+        if (perVertexMembers & static_cast<Uint32>(Bit::ClipDistance)) members += "    float gl_ClipDistance[1];\n";
+        if (perVertexMembers & static_cast<Uint32>(Bit::CullDistance)) members += "    float gl_CullDistance[1];\n";
+        return members;
+    }
+
+    Uint32 ProgramFactory::ReflectPerVertexInputMembers(const Vector<Uint>& spirv) {
+        // Minimal, self-contained SPIR-V walk. SPIRV-Reflect is deliberately NOT used: for an
+        // array of interface blocks it reports built_in == -1 on the block and leaves every
+        // member's built_in at 0 (which is SpvBuiltInPosition), so a member walk through it reads
+        // "Position, Position, Position" - the same trap ReflectPassthroughTessControlNeed
+        // documents. The decorations below are unambiguous.
+        constexpr SizeT kHeaderWords = 5;
+        constexpr Uint32 kOpName = 5;
+        constexpr Uint32 kOpDecorate = 71;
+        constexpr Uint32 kOpMemberDecorate = 72;
+        constexpr Uint32 kOpTypeArray = 28;
+        constexpr Uint32 kOpTypePointer = 32;
+        constexpr Uint32 kOpVariable = 59;
+        constexpr Uint32 kDecorationBlock = 2;
+        constexpr Uint32 kDecorationBuiltIn = 11;
+        constexpr Uint32 kStorageClassInput = 1;
+        constexpr Uint32 kBuiltInPosition = 0;
+        constexpr Uint32 kBuiltInPointSize = 1;
+        constexpr Uint32 kBuiltInClipDistance = 3;
+        constexpr Uint32 kBuiltInCullDistance = 4;
+        (void)kOpName;
+
+        if (spirv.size() <= kHeaderWords) return 0;
+
+        UnorderedMap<Uint32, Uint32> arrayElementType;             // array id   -> element type id
+        UnorderedMap<Uint32, Pair<Uint32, Uint32>> pointerPointee; // pointer id -> (storage class, pointee)
+        UnorderedMap<Uint32, Uint32> structMembers;                // struct id  -> PerVertexMemberBit mask
+        std::set<Uint32> blockStructs;
+        Vector<Uint32> inputVariablePointerTypes;
+
+        for (SizeT i = kHeaderWords; i < spirv.size();) {
+            const Uint32 wordCount = spirv[i] >> 16;
+            const Uint32 opcode = spirv[i] & 0xFFFFu;
+            if (wordCount == 0 || i + wordCount > spirv.size()) break;
+            const Uint32* words = &spirv[i];
+            switch (opcode) {
+            case kOpTypeArray:
+                if (wordCount >= 4) arrayElementType[words[1]] = words[2];
+                break;
+            case kOpTypePointer:
+                if (wordCount >= 4) pointerPointee[words[1]] = {words[2], words[3]};
+                break;
+            case kOpVariable:
+                if (wordCount >= 4 && words[3] == kStorageClassInput) inputVariablePointerTypes.push_back(words[1]);
+                break;
+            case kOpDecorate:
+                if (wordCount >= 3 && words[2] == kDecorationBlock) blockStructs.insert(words[1]);
+                break;
+            case kOpMemberDecorate:
+                if (wordCount >= 5 && words[3] == kDecorationBuiltIn) {
+                    Uint32 bit = 0;
+                    switch (words[4]) {
+                    case kBuiltInPosition: bit = static_cast<Uint32>(PerVertexMemberBit::Position); break;
+                    case kBuiltInPointSize: bit = static_cast<Uint32>(PerVertexMemberBit::PointSize); break;
+                    case kBuiltInClipDistance: bit = static_cast<Uint32>(PerVertexMemberBit::ClipDistance); break;
+                    case kBuiltInCullDistance: bit = static_cast<Uint32>(PerVertexMemberBit::CullDistance); break;
+                    default: break;
+                    }
+                    structMembers[words[1]] |= bit;
+                }
+                break;
+            default:
+                break;
+            }
+            i += wordCount;
+        }
+
+        // The one Input variable whose type is an array of a Block-decorated struct IS gl_in;
+        // gl_TessCoord and friends are plain scalars/vectors and never match.
+        for (const Uint32 pointerType : inputVariablePointerTypes) {
+            const auto pointer = pointerPointee.find(pointerType);
+            if (pointer == pointerPointee.end()) continue;
+            const auto array = arrayElementType.find(pointer->second.second);
+            if (array == arrayElementType.end()) continue;
+            if (!blockStructs.contains(array->second)) continue;
+            const auto members = structMembers.find(array->second);
+            if (members == structMembers.end()) continue;
+            return members->second;
+        }
+        return 0;
     }
 
     String ProgramFactory::BuildPassthroughTessControlSource(Uint32 patchVertices,
                                                              const FloatVec4& defaultOuterLevel,
-                                                             const FloatVec2& defaultInnerLevel) {
+                                                             const FloatVec2& defaultInnerLevel,
+                                                             Uint32 perVertexMembers) {
         // The stage GL 4.6 core 11.2.2 describes when a program has an evaluation shader and no
         // control shader: "the input patch is passed through unmodified", the output patch has
         // as many vertices as the input one (PATCH_VERTICES), and the levels come from the
@@ -3639,33 +3740,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // this from having to know the domain.
         String source = "#version 450 core\n";
         source += "layout(vertices = " + std::to_string(patchVertices) + ") out;\n";
-        // gl_in and gl_out are redeclared to the exact gl_PerVertex the FRONTEND's linked programs
-        // carry - gl_Position, gl_PointSize, gl_ClipDistance[1], in that order - because Vulkan
-        // matches built-in interface blocks by their whole shape, and the two obvious spellings
-        // are both wrong:
+        // gl_in and gl_out are redeclared to the exact gl_PerVertex the NEIGHBOURING EVALUATION
+        // STAGE carries, because Vulkan matches built-in interface blocks by their whole shape,
+        // and the two obvious spellings are both wrong:
         //   * narrowing the block to gl_Position alone makes the evaluation stage read a patch of
         //     zeroes (degenerate triangles, nothing rasterized), and
-        //   * taking glslang's DEFAULT block for a standalone control stage yields FOUR members -
-        //     it appends gl_CullDistance - where a linked vertex+evaluation program has three.
-        // PassthroughTessControlTest.MatchesTheFrontendPerVertexBlock is the latch: it links a
-        // vertex+evaluation program through this same compiler and fails if the two shapes ever
-        // stop agreeing, rather than letting the mismatch show up as a black frame.
+        //   * taking glslang's DEFAULT block for a standalone control stage yields whatever THIS
+        //     source's #version implies, which is unrelated to the evaluation stage's.
+        //
+        // The member set is a PARAMETER rather than a constant, and that is the whole point: it
+        // was hardcoded to {gl_Position, gl_PointSize, gl_ClipDistance[1]}, which is the shape a
+        // program carries only below #version 450. glslang appends gl_CullDistance to the block
+        // from 450 upward, so every 450/460 program - and every ESSL program, which the source
+        // processor rewrites to "#version 460 core" - carried FOUR members against this stage's
+        // three and got the black-frame-no-error case described above. The mask comes from
+        // ReflectPerVertexInputMembers, read off the evaluation stage's own SPIR-V.
+        // PassthroughTessControlTest.MatchesTheFrontendPerVertexBlock is the latch, and it now
+        // links the program at both 430 and 460.
         //
         // Only gl_Position is written. gl_PointSize is declared but left alone deliberately:
         // writing it from a tessellation stage requires the shaderTessellationAndGeometryPointSize
         // feature, which this renderer does not enable, so a program whose evaluation stage reads
         // gl_in[].gl_PointSize gets an undefined point size instead of the vertex stage's - a gap
         // this trades for not making every tessellated pipeline depend on an optional feature.
-        source += "in gl_PerVertex {\n"
-                  "    vec4 gl_Position;\n"
-                  "    float gl_PointSize;\n"
-                  "    float gl_ClipDistance[1];\n"
-                  "} gl_in[gl_MaxPatchVertices];\n";
-        source += "out gl_PerVertex {\n"
-                  "    vec4 gl_Position;\n"
-                  "    float gl_PointSize;\n"
-                  "    float gl_ClipDistance[1];\n"
-                  "} gl_out[];\n";
+        const String perVertexBody = BuildPerVertexMemberDeclarations(perVertexMembers);
+        source += "in gl_PerVertex {\n" + perVertexBody + "} gl_in[gl_MaxPatchVertices];\n";
+        source += "out gl_PerVertex {\n" + perVertexBody + "} gl_out[];\n";
         source += "void main() {\n";
         source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
         for (Uint32 i = 0; i < 4; ++i) {
@@ -3681,12 +3781,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkPipelineShaderStageCreateInfo ProgramFactory::GetOrCreatePassthroughTessControlStage(
-        Uint32 patchVertices, const FloatVec4& defaultOuterLevel, const FloatVec2& defaultInnerLevel) {
+        Uint32 patchVertices, const FloatVec4& defaultOuterLevel, const FloatVec2& defaultInnerLevel,
+        Uint32 perVertexMembers) {
         // Everything compiled into the stage, folded into one key. The patch size alone stopped
         // being enough once glPatchParameterfv could change the levels: two modules that differ
         // only in a baked-in level are different modules, and pipelines built from either may be
-        // alive at the same time.
-        const Uint64 key = ComputePassthroughTessControlKey(patchVertices, defaultOuterLevel, defaultInnerLevel);
+        // alive at the same time. The gl_PerVertex member set joins it for the same reason - two
+        // programs at different GLSL versions need differently-shaped blocks.
+        const Uint64 key =
+            ComputePassthroughTessControlKey(patchVertices, defaultOuterLevel, defaultInnerLevel, perVertexMembers);
         // A cached VK_NULL_HANDLE is a remembered failure, not a miss: returning it keeps a
         // generator that cannot compile from re-running glslang on every draw.
         const auto cached = m_passthroughTessControlStages.find(key);
@@ -3720,7 +3823,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         stage.pName = "main";
 
         using namespace MG_Util::ShaderTranspiler;
-        const String source = BuildPassthroughTessControlSource(patchVertices, defaultOuterLevel, defaultInnerLevel);
+        const String source =
+            BuildPassthroughTessControlSource(patchVertices, defaultOuterLevel, defaultInnerLevel, perVertexMembers);
         // Same compile configuration as every other stage of every other program: this runs on
         // the GL thread (the draw path), so the live compile env is the right one, and flags=0
         // is the Vulkan-targeting form (CompileForOpenGL is what the GLES backend adds).
@@ -3792,6 +3896,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkProgramObject& entry) const {
         entry.needsPassthroughTessControl = false;
         entry.passthroughTessControlEmulatable = false;
+        entry.passthroughPerVertexMembers = 0;
 
         Bool hasTessEval = false;
         Bool hasTessControl = false;
@@ -3810,6 +3915,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         if (tessEvalModuleIndex >= spirv.size() || spirv[tessEvalModuleIndex].empty()) return;
         const auto& module = spirv[tessEvalModuleIndex];
+
+        // The shape the synthesized control stage has to redeclare. Read here because this is the
+        // only place that holds the evaluation stage's module; a zero mask means the walk found
+        // no input per-vertex block at all, in which case the pre-450 shape is the safe stand-in
+        // (it is what every program carried before gl_CullDistance joined the block).
+        const Uint32 perVertexMembers = ReflectPerVertexInputMembers(module);
+        entry.passthroughPerVertexMembers = perVertexMembers != 0 ? perVertexMembers : kDefaultPerVertexMembers;
+        if (perVertexMembers == 0) {
+            MGLOG_W("ProgramFactory: could not read the evaluation stage's gl_PerVertex block shape; the "
+                    "pass-through control stage falls back to the pre-450 three-member form");
+        }
 
         SpvReflectShaderModule reflectModule{};
         const SpvReflectResult createResult =

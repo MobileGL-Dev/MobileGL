@@ -10,6 +10,7 @@
 
 #include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
 
+#include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
@@ -1683,6 +1684,25 @@ namespace MobileGL::MG_State::GLState {
                 artifacts.uniformBlocksWithoutBinding.contains(blockTypeName) ? 0 : ubo.getBinding();
             artifacts.uniformBlockBinding[i] =
                 declaredBinding < 0 ? declaredBinding : declaredBinding + BlockArrayElement(ubo.name);
+            // The second way a binding reaches the state layer's indexed-binding array, and the
+            // one glUniformBlockBinding's new bound cannot see. glslang does not range-check a
+            // uniform block's layout(binding = N) against anything - TBuiltInResource has no
+            // maxUniformBufferBindings field at all, and ParseHelper bounds only samplers and
+            // atomic counters - so `layout(binding = 5000) uniform Blk {...}` compiled and linked
+            // clean and then had both backends subscript the array at 5000 on the first draw.
+            // Stated against the same ceiling glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS)
+            // advertises; an instance array whose LAST element passes it is a link error even
+            // though its base fits, same rule as the explicit-location check above.
+            if (artifacts.uniformBlockBinding[i] >=
+                static_cast<Int>(MG_State::GLState::BufferBindingPointCount)) {
+                artifacts.infoLog =
+                    std::format("Uniform block '{}' declares binding {}, which is not less than "
+                                "GL_MAX_UNIFORM_BUFFER_BINDINGS ({}).",
+                                ubo.name, artifacts.uniformBlockBinding[i],
+                                static_cast<Int>(MG_State::GLState::BufferBindingPointCount));
+                ProgramObject::ResetLinkArtifacts(artifacts);
+                return false;
+            }
             MGLOG_D("ProgramObject %u: Reflection - UBO[%d] name='%s' size=%u binding=%d", in.externalIndex, i,
                     ubo.name.c_str(), ubo.size, ubo.getBinding());
         }

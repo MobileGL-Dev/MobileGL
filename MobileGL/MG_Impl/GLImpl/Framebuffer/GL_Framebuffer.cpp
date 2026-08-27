@@ -693,6 +693,24 @@ namespace MobileGL::MG_Impl::GLImpl {
     // frontend would accept a count it had advertised globally - but on Adreno and Mali the
     // integer path is genuinely one sample, and accepting four only moved the failure from an
     // honest INVALID_OPERATION here to a silently under-allocated renderbuffer.
+    // The head of the per-format renderbuffer sample list the backend probed, or 0 when nothing
+    // was probed for it. Same shape as GetProbedMaxTextureSamples in GL_Texture.cpp, and reads
+    // the same cache glGetInternalformativ(GL_RENDERBUFFER, ..., GL_SAMPLES) answers from.
+    static Int GetProbedMaxRenderbufferSamples(TextureInternalFormat format) {
+        if (MG_Backend::pActiveBackendObject == nullptr) {
+            return 0;
+        }
+        const SizeT targetIndex = MG_Backend::GetRenderbufferFormatCapabilityTargetIndex();
+        const SizeT formatIndex = static_cast<SizeT>(format);
+        if (targetIndex >= MG_Backend::kFormatCapabilityTargetCount ||
+            formatIndex >= MG_Backend::kFormatCapabilityFormatCount) {
+            return 0;
+        }
+        const auto& sampleCounts =
+            MG_Backend::pActiveBackendObject->GetFormatCapabilities().SampleCounts[targetIndex][formatIndex];
+        return sampleCounts.empty() ? 0 : sampleCounts.front();
+    }
+
     Int GetMaxRenderbufferSamplesForFormat_State(TextureInternalFormat format) {
         if (MG_Backend::pActiveBackendObject == nullptr) {
             return std::numeric_limits<Int>::max();
@@ -707,6 +725,19 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                               &normalizedType);
         const Bool isIntegerFormat = normalizedFormat == GL_RED_INTEGER || normalizedFormat == GL_RG_INTEGER ||
                                      normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
+        // The per-format probe first, for the same reason the texture path takes it first: GL 4.6
+        // core 9.2.4 words the error as "samples is greater than the maximum number of samples
+        // supported for internalformat (see GetInternalformativ)", and
+        // glGetInternalformativ(GL_RENDERBUFFER, ..., GL_SAMPLES) is answered from exactly this
+        // list. It was never consulted here - the TODO that deferred it was written before the
+        // query was backed and had gone stale - so a format whose multisample probes fail inside
+        // a category that allows four was accepted at four, quietly allocated at one by
+        // ClampSamplesToBackendSupport, and then reported as four by
+        // glGetRenderbufferParameteriv(GL_RENDERBUFFER_SAMPLES).
+        const Int probedMaxSamples = GetProbedMaxRenderbufferSamples(format);
+        if (probedMaxSamples > 0) {
+            return probedMaxSamples;
+        }
         if (!isIntegerFormat) {
             return GetMaxRenderbufferSamples_State();
         }
@@ -743,8 +774,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        // TODO: Resolve the remaining per-internalformat renderbuffer sample limits once
-        // glGetInternalformativ is backed; integer formats are handled below.
+        // Per-internalformat, from the probe list glGetInternalformativ answers with, falling back
+        // to the format's category pname where nothing was probed. (This carried a TODO deferring
+        // the per-format resolution "once glGetInternalformativ is backed"; it has been backed for
+        // both renderbuffers and multisample textures since, so the deferral was collected.)
         const Int maxSamples = GetMaxRenderbufferSamplesForFormat_State(format);
         if (samples > maxSamples) {
             // GL 4.6 core 9.2.4 makes asking for more samples than the format supports

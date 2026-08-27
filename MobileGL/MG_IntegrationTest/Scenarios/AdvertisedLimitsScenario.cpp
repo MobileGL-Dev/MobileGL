@@ -139,6 +139,49 @@ namespace MGITest {
                     << relation.blocksName << " = " << blocks << " exceeds " << relation.bindingsName << " = "
                     << bindings << "; a shader may declare more blocks than there are binding points to bind them to";
             }
+
+            // THE MIDDLE TERM, which the relation quoted above always had and this case never
+            // checked. It is the one that actually broke: widening the binding-point array to 84
+            // raised what every PER-STAGE count clamps to, while the combined value was a
+            // five-stage sum of 70 - so a device reporting descriptor-indexing-scale uniform
+            // buffers (Adreno: maxPerStageDescriptorUniformBuffers = 16777216) advertised 84
+            // compute uniform blocks inside a combined limit of 70. Per-stage <= combined is
+            // exactly the assertion that says so, and it costs one glGetIntegerv per row.
+            struct StageAgainstCombined {
+                GLenum stage;
+                const char* stageName;
+                GLenum combined;
+                const char* combinedName;
+            };
+            const StageAgainstCombined stageRelations[] = {
+                {GL_MAX_COMPUTE_UNIFORM_BLOCKS, "GL_MAX_COMPUTE_UNIFORM_BLOCKS", GL_MAX_COMBINED_UNIFORM_BLOCKS,
+                 "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_VERTEX_UNIFORM_BLOCKS, "GL_MAX_VERTEX_UNIFORM_BLOCKS", GL_MAX_COMBINED_UNIFORM_BLOCKS,
+                 "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_TESS_CONTROL_UNIFORM_BLOCKS, "GL_MAX_TESS_CONTROL_UNIFORM_BLOCKS",
+                 GL_MAX_COMBINED_UNIFORM_BLOCKS, "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS, "GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS",
+                 GL_MAX_COMBINED_UNIFORM_BLOCKS, "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_GEOMETRY_UNIFORM_BLOCKS, "GL_MAX_GEOMETRY_UNIFORM_BLOCKS", GL_MAX_COMBINED_UNIFORM_BLOCKS,
+                 "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_FRAGMENT_UNIFORM_BLOCKS, "GL_MAX_FRAGMENT_UNIFORM_BLOCKS", GL_MAX_COMBINED_UNIFORM_BLOCKS,
+                 "GL_MAX_COMBINED_UNIFORM_BLOCKS"},
+                {GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS, "GL_MAX_COMPUTE_SHADER_STORAGE_BLOCKS",
+                 GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, "GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS"},
+                {GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, "GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS",
+                 GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, "GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS"},
+            };
+            for (const StageAgainstCombined& relation : stageRelations) {
+                GLint stage = -1;
+                GLint combined = -1;
+                glGetIntegerv(relation.stage, &stage);
+                glGetIntegerv(relation.combined, &combined);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << relation.stageName;
+                EXPECT_LE(stage, combined)
+                    << relation.stageName << " = " << stage << " exceeds " << relation.combinedName << " = "
+                    << combined << "; GL 4.6 table 23.64 orders MAX_*_BUFFER_BINDINGS >= MAX_COMBINED_*_BLOCKS >= "
+                       "every per-stage count, and a single-stage program may use its whole per-stage allowance";
+            }
         }
 
         // KHR-GL44.multi_bind.functional_bind_buffers_range sizes each of an indexed target's
@@ -217,7 +260,12 @@ namespace MGITest {
                 {GL_MAX_VARYING_VECTORS, "GL_MAX_VARYING_VECTORS", 15, 256},
                 {GL_MAX_VERTEX_UNIFORM_VECTORS, "GL_MAX_VERTEX_UNIFORM_VECTORS", 256, 1 << 20},
                 {GL_MAX_VARYING_COMPONENTS, "GL_MAX_VARYING_COMPONENTS", 60, 1 << 20},
-                {GL_MAX_VERTEX_STREAMS, "GL_MAX_VERTEX_STREAMS", 4, 64},
+                // GL_MAX_VERTEX_STREAMS is deliberately absent. GL 4.5 requires 4 and MobileGL
+                // answers 1, which is a KNOWN non-conformance rather than an oversight: raising
+                // the number un-gates two transform-feedback CTS cases per package across
+                // KHR-GL40..GL46 that then fail, because no part of the shader pipeline supports
+                // layout(stream = N). See the GL_MAX_VERTEX_STREAMS case in GL_Getter.cpp. Adding
+                // a row here would pin a number the implementation cannot back.
                 {GL_MAX_GEOMETRY_SHADER_INVOCATIONS, "GL_MAX_GEOMETRY_SHADER_INVOCATIONS", 32, 256},
                 {GL_MAX_SUBROUTINES, "GL_MAX_SUBROUTINES", 256, 1 << 20},
                 {GL_MAX_SUBROUTINE_UNIFORM_LOCATIONS, "GL_MAX_SUBROUTINE_UNIFORM_LOCATIONS", 1024, 1 << 20},

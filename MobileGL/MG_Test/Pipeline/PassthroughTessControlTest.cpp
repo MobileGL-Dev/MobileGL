@@ -104,10 +104,11 @@ namespace {
     const FloatVec4 kDefaultOuter(1.0f, 1.0f, 1.0f, 1.0f);
     const FloatVec2 kDefaultInner(1.0f, 1.0f);
 
-    Vector<Uint32> CompileGeneratedSource(Uint32 patchVertices) {
+    Vector<Uint32> CompileGeneratedSource(Uint32 patchVertices,
+                                          Uint32 perVertexMembers = ProgramFactory::kDefaultPerVertexMembers) {
         using namespace MG_Util::ShaderTranspiler;
-        const String source =
-            ProgramFactory::BuildPassthroughTessControlSource(patchVertices, kDefaultOuter, kDefaultInner);
+        const String source = ProgramFactory::BuildPassthroughTessControlSource(patchVertices, kDefaultOuter,
+                                                                                kDefaultInner, perVertexMembers);
 
         ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER, .sourceStr = source};
         auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
@@ -166,7 +167,8 @@ TEST_F(PassthroughTessControlTest, ForwardsPositionAndWritesBothLevelArrays) {
 // user-defined varying, ReflectPassthroughTessControlNeed's "built-ins only" refusal stops being
 // the right gate and both have to move together.
 TEST_F(PassthroughTessControlTest, InterfaceIsBuiltInsOnly) {
-    const String source = ProgramFactory::BuildPassthroughTessControlSource(4, kDefaultOuter, kDefaultInner);
+    const String source = ProgramFactory::BuildPassthroughTessControlSource(
+        4, kDefaultOuter, kDefaultInner, ProgramFactory::kDefaultPerVertexMembers);
     EXPECT_EQ(source.find("layout(location"), String::npos) << source;
     EXPECT_NE(source.find("layout(vertices = 4) out;"), String::npos) << source;
 }
@@ -176,20 +178,30 @@ TEST_F(PassthroughTessControlTest, InterfaceIsBuiltInsOnly) {
 // Without the second half a pipeline memoised at one set of levels would be handed back after the
 // application changed them, and the tessellation would silently stay at the old levels.
 TEST_F(PassthroughTessControlTest, BakesTheDefaultTessLevelsInAndKeysOnThem) {
+    constexpr Uint32 kMembers = ProgramFactory::kDefaultPerVertexMembers;
     const FloatVec4 outer(2.0f, 3.0f, 4.0f, 5.0f);
     const FloatVec2 inner(6.5f, 7.25f);
-    const String source = ProgramFactory::BuildPassthroughTessControlSource(4, outer, inner);
+    const String source = ProgramFactory::BuildPassthroughTessControlSource(4, outer, inner,
+                                                                             ProgramFactory::kDefaultPerVertexMembers);
     EXPECT_NE(source.find("gl_TessLevelOuter[0] = 2.0;"), String::npos) << source;
     EXPECT_NE(source.find("gl_TessLevelOuter[3] = 5.0;"), String::npos) << source;
     EXPECT_NE(source.find("gl_TessLevelInner[0] = 6.5;"), String::npos) << source;
     EXPECT_NE(source.find("gl_TessLevelInner[1] = 7.25;"), String::npos) << source;
 
     const Uint64 defaultKey =
-        ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner);
-    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, outer, inner), defaultKey);
-    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, inner), defaultKey);
-    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(3, kDefaultOuter, kDefaultInner), defaultKey);
-    EXPECT_EQ(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner), defaultKey);
+        ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner, kMembers);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, outer, inner, kMembers), defaultKey);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, inner, kMembers), defaultKey);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(3, kDefaultOuter, kDefaultInner, kMembers), defaultKey);
+    EXPECT_EQ(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner, kMembers), defaultKey);
+    // ...and the gl_PerVertex member set is in the same key, for the same reason: two programs at
+    // different GLSL versions need differently-shaped modules, and a pipeline memoised against one
+    // shape must not be handed back for the other.
+    constexpr Uint32 kMembersWithCull =
+        ProgramFactory::kDefaultPerVertexMembers |
+        static_cast<Uint32>(ProgramFactory::PerVertexMemberBit::CullDistance);
+    EXPECT_NE(ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner, kMembersWithCull),
+              defaultKey);
 }
 
 // The generated stage still has to COMPILE with non-default levels: an integral level spelled
@@ -198,10 +210,40 @@ TEST_F(PassthroughTessControlTest, CompilesWithNonDefaultLevels) {
     using namespace MG_Util::ShaderTranspiler;
     const String source =
         ProgramFactory::BuildPassthroughTessControlSource(4, FloatVec4(2.0f, 2.0f, 2.0f, 2.0f),
-                                                          FloatVec2(2.0f, 2.0f));
+                                                          FloatVec2(2.0f, 2.0f),
+                                                          ProgramFactory::kDefaultPerVertexMembers);
     ShaderAttrib shaderAttrib{.shaderType = GL_TESS_CONTROL_SHADER, .sourceStr = source};
     auto shaderResult = ShaderCompiler::CompileShader(shaderAttrib);
     EXPECT_TRUE(shaderResult) << (shaderResult ? String{} : shaderResult.error().log) << source;
+}
+
+// The generator honours the mask it is given, in both directions. This is what covers the
+// pre-cutoff three-member form now that no authorable tessellation evaluation stage produces it
+// (ARB_tessellation_shader is GL 4.0 and gl_CullDistance joins the block at 400), and it is also
+// the fallback ReflectPassthroughTessControlNeed uses when it cannot read a module's block.
+TEST_F(PassthroughTessControlTest, RedeclaresExactlyTheRequestedMembers) {
+    using Bit = ProgramFactory::PerVertexMemberBit;
+    constexpr Uint32 kWithCull = ProgramFactory::kDefaultPerVertexMembers | static_cast<Uint32>(Bit::CullDistance);
+    constexpr Uint32 kBuiltInCullDistance = 4;
+    constexpr Uint32 kBuiltInClipDistance = 3;
+
+    const Vector<Uint32> withoutCull = CompileGeneratedSource(4, ProgramFactory::kDefaultPerVertexMembers);
+    ASSERT_FALSE(withoutCull.empty());
+    const std::set<Uint32> withoutCullBuiltIns = DeclaredBuiltIns(withoutCull);
+    EXPECT_TRUE(withoutCullBuiltIns.contains(kBuiltInClipDistance));
+    EXPECT_FALSE(withoutCullBuiltIns.contains(kBuiltInCullDistance))
+        << "the three-member mask must not emit gl_CullDistance";
+    for (const auto& [structId, shape] : BuiltInBlockShapes(withoutCull)) {
+        EXPECT_EQ(StructMemberCount(withoutCull, structId), 3u) << "structId=" << structId;
+    }
+
+    const Vector<Uint32> withCull = CompileGeneratedSource(4, kWithCull);
+    ASSERT_FALSE(withCull.empty());
+    EXPECT_TRUE(DeclaredBuiltIns(withCull).contains(kBuiltInCullDistance))
+        << "the four-member mask must emit gl_CullDistance";
+    for (const auto& [structId, shape] : BuiltInBlockShapes(withCull)) {
+        EXPECT_EQ(StructMemberCount(withCull, structId), 4u) << "structId=" << structId;
+    }
 }
 
 // THE load-bearing test. Vulkan matches built-in interface blocks by their whole shape, and this
@@ -216,13 +258,33 @@ TEST_F(PassthroughTessControlTest, CompilesWithNonDefaultLevels) {
 TEST_F(PassthroughTessControlTest, MatchesTheFrontendPerVertexBlock) {
     using namespace MG_Util::ShaderTranspiler;
 
-    // Deliberately the shape of KHR-GL43.shader_storage_buffer_object.advanced-write-tessellation:
-    // a vertex stage feeding an evaluation stage with no control stage in between.
-    static const char* kVs = R"(#version 430 core
+    // MORE THAN ONE VERSION, because the shape is a function of the neighbour's GLSL version and
+    // a single-version case cannot see that. glslang gates gl_PerVertex's gl_CullDistance member
+    // on a version cutoff, and this case used to link #version 430 ONLY - which is exactly why a
+    // generator hardcoded to the pre-cutoff three-member form looked correct while every program
+    // above it, including every ESSL program (the source processor rewrites those to
+    // "#version 460 core"), was silently mismatched.
+    //
+    // The expected member COUNT is deliberately not spelled per version any more. It moved once
+    // already (the fork's GL_ARB_cull_distance work lowered the cutoff from 450 to 400, so 430
+    // went from three members to four), and pinning it here only produced a test that failed for
+    // being right. What must hold - and is what this case now asserts - is that the generator
+    // reproduces whatever glslang produced, at every version, plus the floor that a per-vertex
+    // block always has at least gl_Position. A tessellation evaluation stage cannot be authored
+    // below #version 400 at all (ARB_tessellation_shader is GL 4.0), so 400 is the bottom of the
+    // reachable range; the pre-cutoff three-member form is covered through the explicit-mask case
+    // below instead.
+    for (const char* version : {"#version 400 core", "#version 430 core", "#version 460 core"}) {
+        SCOPED_TRACE(version);
+
+        // Deliberately the shape of
+        // KHR-GL43.shader_storage_buffer_object.advanced-write-tessellation: a vertex stage
+        // feeding an evaluation stage with no control stage in between.
+        const String vs = String(version) + R"(
 layout(location = 0) in vec4 g_in_position;
 void main() { gl_Position = g_in_position; }
 )";
-    static const char* kTes = R"(#version 430 core
+        const String tes = String(version) + R"(
 layout(quads) in;
 void main() {
   vec4 p0 = mix(gl_in[0].gl_Position, gl_in[1].gl_Position, gl_TessCoord.x);
@@ -230,55 +292,62 @@ void main() {
   gl_Position = mix(p0, p1, gl_TessCoord.y);
 }
 )";
-    static const char* kFs = R"(#version 430 core
+        const String fs = String(version) + R"(
 layout(location = 0) out vec4 g_fs_out;
 void main() { g_fs_out = vec4(0, 1, 0, 1); }
 )";
 
-    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
-    const Vector<const char*> sources{kVs, kTes, kFs};
-    Vector<SharedPtr<glslang::TShader>> shaders;
-    for (SizeT i = 0; i < types.size(); ++i) {
-        ShaderAttrib attrib{.shaderType = types[i], .sourceStr = sources[i]};
-        auto compiled = ShaderCompiler::CompileShader(attrib);
-        ASSERT_TRUE(compiled) << compiled.error().log;
-        shaders.push_back(compiled.value());
-    }
-    ProgramAttrib programAttrib{.shaders = shaders};
-    auto linked = ShaderCompiler::LinkProgram(programAttrib);
-    ASSERT_TRUE(linked) << linked.error().log;
-    ProgramBinaryAttrib binaryAttrib{.shaderTypes = types, .program = *linked.value()};
-    auto binary = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
-    ASSERT_TRUE(binary);
-    ASSERT_EQ(binary->size(), types.size());
+        const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
+        const Vector<const String*> sources{&vs, &tes, &fs};
+        Vector<SharedPtr<glslang::TShader>> shaders;
+        for (SizeT i = 0; i < types.size(); ++i) {
+            ShaderAttrib attrib{.shaderType = types[i], .sourceStr = *sources[i]};
+            auto compiled = ShaderCompiler::CompileShader(attrib);
+            ASSERT_TRUE(compiled) << (compiled ? String{} : compiled.error().log);
+            shaders.push_back(compiled.value());
+        }
+        ProgramAttrib programAttrib{.shaders = shaders};
+        auto linked = ShaderCompiler::LinkProgram(programAttrib);
+        ASSERT_TRUE(linked) << (linked ? String{} : linked.error().log);
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = types, .program = *linked.value()};
+        auto binary = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+        ASSERT_TRUE(binary);
+        ASSERT_EQ(binary->size(), types.size());
 
-    // The evaluation stage's gl_in is the block the pass-through has to feed. It is the only
-    // built-in block that stage declares as an input, so the module holds exactly one such shape
-    // besides its own gl_PerVertex output - and both are the same shape, which is the point.
-    const auto tesShapes = BuiltInBlockShapes((*binary)[1]);
-    ASSERT_FALSE(tesShapes.empty());
-    const Vector<Uint32> frontendShape = tesShapes.begin()->second;
-    const Uint32 frontendMembers = StructMemberCount((*binary)[1], tesShapes.begin()->first);
-    for (const auto& [structId, shape] : tesShapes) {
-        EXPECT_EQ(shape, frontendShape) << "the evaluation stage's own built-in blocks disagree";
-        EXPECT_EQ(StructMemberCount((*binary)[1], structId), frontendMembers);
-    }
+        // The evaluation stage's gl_in is the block the pass-through has to feed. It is the only
+        // built-in block that stage declares as an input, so the module holds exactly one such
+        // shape besides its own gl_PerVertex output - and both are the same shape, which is the
+        // point.
+        const auto tesShapes = BuiltInBlockShapes((*binary)[1]);
+        ASSERT_FALSE(tesShapes.empty());
+        const Vector<Uint32> frontendShape = tesShapes.begin()->second;
+        const Uint32 frontendMembers = StructMemberCount((*binary)[1], tesShapes.begin()->first);
+        EXPECT_GE(frontendMembers, 1u) << "a gl_PerVertex block always carries at least gl_Position";
+        for (const auto& [structId, shape] : tesShapes) {
+            EXPECT_EQ(shape, frontendShape) << "the evaluation stage's own built-in blocks disagree";
+            EXPECT_EQ(StructMemberCount((*binary)[1], structId), frontendMembers);
+        }
 
-    const Vector<Uint32> passthrough = CompileGeneratedSource(4);
-    ASSERT_FALSE(passthrough.empty());
-    const auto passthroughShapes = BuiltInBlockShapes(passthrough);
-    ASSERT_FALSE(passthroughShapes.empty());
+        // ...and the generator is driven the way PRODUCTION drives it: the mask comes from the
+        // evaluation stage's own module, not from a constant the test picked.
+        const Uint32 reflectedMembers = ProgramFactory::ReflectPerVertexInputMembers((*binary)[1]);
+        EXPECT_NE(reflectedMembers, 0u) << "the input per-vertex block walk found nothing to match against";
+        const Vector<Uint32> passthrough = CompileGeneratedSource(4, reflectedMembers);
+        ASSERT_FALSE(passthrough.empty());
+        const auto passthroughShapes = BuiltInBlockShapes(passthrough);
+        ASSERT_FALSE(passthroughShapes.empty());
 
-    Uint32 perVertexBlocksChecked = 0;
-    for (const auto& [structId, shape] : passthroughShapes) {
-        // gl_TessLevelOuter/Inner are decorated on plain variables, not on a block, so every
-        // struct that reaches here is a gl_PerVertex - gl_in's and gl_out's.
-        EXPECT_EQ(shape, frontendShape)
-            << "the pass-through control stage's gl_PerVertex no longer matches the one the "
-               "frontend gives a linked vertex+evaluation program";
-        EXPECT_EQ(StructMemberCount(passthrough, structId), frontendMembers)
-            << "the pass-through control stage's gl_PerVertex has a different member count";
-        ++perVertexBlocksChecked;
+        Uint32 perVertexBlocksChecked = 0;
+        for (const auto& [structId, shape] : passthroughShapes) {
+            // gl_TessLevelOuter/Inner are decorated on plain variables, not on a block, so every
+            // struct that reaches here is a gl_PerVertex - gl_in's and gl_out's.
+            EXPECT_EQ(shape, frontendShape)
+                << "the pass-through control stage's gl_PerVertex no longer matches the one the "
+                   "frontend gives a linked vertex+evaluation program";
+            EXPECT_EQ(StructMemberCount(passthrough, structId), frontendMembers)
+                << "the pass-through control stage's gl_PerVertex has a different member count";
+            ++perVertexBlocksChecked;
+        }
+        EXPECT_EQ(perVertexBlocksChecked, 2u) << "expected both gl_in and gl_out to be gl_PerVertex blocks";
     }
-    EXPECT_EQ(perVertexBlocksChecked, 2u) << "expected both gl_in and gl_out to be gl_PerVertex blocks";
 }

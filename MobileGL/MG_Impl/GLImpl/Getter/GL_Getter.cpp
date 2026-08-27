@@ -119,13 +119,24 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxGeometryShaderInvocations = 32;
         constexpr GLint kFrontendMaxTessControlUniformBlocks = 14;
         constexpr GLint kFrontendMaxTessEvaluationUniformBlocks = 14;
-        // GL 4.6's minimum is 14 uniform blocks on each of the FIVE graphics stages (70), not
-        // three: the two tessellation stages were simply missing from this sum, so even a
-        // frontend with enough binding points advertised 42.
+        // The compute stage's share of the combined sum below. Compute's own per-stage answer is
+        // backend-derived (GL_MAX_COMPUTE_UNIFORM_BLOCKS reads dynamicParameters), so this is not
+        // what that query returns - it is the GL 4.3 core minimum, present here only so the
+        // combined total covers all SIX stages.
+        constexpr GLint kFrontendMaxComputeUniformBlocksShare = 14;
+        // GL 4.6 table 23.64 orders MAX_UNIFORM_BUFFER_BINDINGS >= MAX_COMBINED_UNIFORM_BLOCKS >=
+        // every per-stage count, and the sum has to run over SIX stages, not three and not five.
+        // Three (42) was the original bug. Five (70) replaced it and broke the middle term the
+        // other way: compute's per-stage count is backend-derived and clamps at the binding count,
+        // so a device reporting descriptor-indexing-scale uniform buffers (Adreno reports
+        // maxPerStageDescriptorUniformBuffers = 16777216) advertised 84 compute blocks against a
+        // combined 70. Six stages x 14 = 84, which is also exactly the binding-point count and the
+        // arithmetic the GL 4.5 minimum of 84 bindings is built from, so the ordering is now tight
+        // rather than accidental.
         constexpr GLint kFrontendMaxCombinedUniformBlocks =
             kFrontendMaxVertexUniformBlocks + kFrontendMaxTessControlUniformBlocks +
             kFrontendMaxTessEvaluationUniformBlocks + kFrontendMaxGeometryUniformBlocks +
-            kFrontendMaxFragmentUniformBlocks;
+            kFrontendMaxFragmentUniformBlocks + kFrontendMaxComputeUniformBlocksShare;
         constexpr GLint kFrontendMaxVaryingComponents =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VARYING_COMPONENTS);
         constexpr GLint kFrontendMaxVaryingVectors =
@@ -135,9 +146,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLint kFrontendMaxTransformFeedbackInterleavedComponents = 64;
         constexpr GLint kFrontendMaxTransformFeedbackSeparateAttribs = 4;
         constexpr GLint kFrontendMaxTransformFeedbackSeparateComponents = 4;
-        // ARB_transform_feedback3's vertex-stream count; see the GL_MAX_VERTEX_STREAMS case for
-        // what streams 1..3 mean in an implementation that can only emit to stream 0.
-        constexpr GLint kFrontendMaxVertexStreams = 4;
+        // ARB_transform_feedback3's vertex-stream count. One is what this implementation can
+        // actually emit to; see the GL_MAX_VERTEX_STREAMS case for why it is not four.
+        constexpr GLint kFrontendMaxVertexStreams = 1;
         constexpr GLint kFrontendMaxGeometryOutputVertices = 256;
         constexpr GLint kFrontendMaxGeometryTotalOutputComponents = 1024;
         // GL 4.5 core table 23.64 requires 84 indexed uniform binding points, and that is exactly
@@ -2366,8 +2377,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = dynamicParameters.MaxComputeTextureImageUnits;
             break;
         case GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS:
+            // The CLAMPED block count, i.e. exactly what GL_MAX_COMPUTE_UNIFORM_BLOCKS answers.
+            // GL 4.6 table 23.64 defines this as the components reachable through the blocks a
+            // stage may declare, so deriving it from the raw backend number described 256 blocks
+            // an application is only ever allowed 84 of.
             *params = GetMaxCombinedUniformComponents(kFrontendMaxComputeUniformComponents,
-                                                      dynamicParameters.MaxComputeUniformBlocks,
+                                                      ClampUniformBlockCount(dynamicParameters.MaxComputeUniformBlocks),
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS:
@@ -2415,12 +2430,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(kFrontendMaxFragmentUniformComponents,
-                                                      kFrontendMaxFragmentUniformBlocks,
+                                                      ClampUniformBlockCount(kFrontendMaxFragmentUniformBlocks),
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(kFrontendMaxGeometryUniformComponents,
-                                                      kFrontendMaxGeometryUniformBlocks,
+                                                      ClampUniformBlockCount(kFrontendMaxGeometryUniformBlocks),
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_GEOMETRY_OUTPUT_VERTICES:
@@ -2434,7 +2449,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(kFrontendMaxVertexUniformComponents,
-                                                      kFrontendMaxVertexUniformBlocks,
+                                                      ClampUniformBlockCount(kFrontendMaxVertexUniformBlocks),
                                                       dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_CUBE_MAP_TEXTURE_SIZE:
@@ -2511,12 +2526,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(
                 static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_TESS_CONTROL_UNIFORM_COMPONENTS),
-                kFrontendMaxTessControlUniformBlocks, dynamicParameters.MaxUniformBlockSize);
+                ClampUniformBlockCount(kFrontendMaxTessControlUniformBlocks), dynamicParameters.MaxUniformBlockSize);
             break;
         case GL_MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS:
             *params = GetMaxCombinedUniformComponents(
                 static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_TESS_EVALUATION_UNIFORM_COMPONENTS),
-                kFrontendMaxTessEvaluationUniformBlocks, dynamicParameters.MaxUniformBlockSize);
+                ClampUniformBlockCount(kFrontendMaxTessEvaluationUniformBlocks), dynamicParameters.MaxUniformBlockSize);
             break;
         // ARB_cull_distance. Backend-derived exactly like GL_MAX_CLIP_DISTANCES beside it, and
         // for a stronger reason: a cull distance discards the whole primitive, so advertising
@@ -2579,14 +2594,24 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxTransformFeedbackSeparateAttribs;
             break;
         case GL_MAX_VERTEX_STREAMS:
-            // GL 4.5 core table 23.62 requires four. MobileGL can only ever EMIT to stream 0 -
-            // nothing in the shader pipeline supports layout(stream = N), EmitStreamVertex or a
-            // per-stream capture layout - but that is a statement about what a geometry shader
-            // may produce, not about which stream indices exist. Streams 1..3 exist and are
-            // permanently empty, and the two entry points that address a stream say so: an
-            // indexed primitive query on one answers zero (GL_Query's emptyVertexStream) and
-            // glDrawTransformFeedbackStream on one draws nothing. Answering 1 instead used to
-            // make both of them GL_INVALID_VALUE.
+            // ONE, which is under the GL 4.5 core table 23.62 minimum of four and is a known,
+            // deliberate non-conformance. It was briefly raised to 4 on the theory that streams
+            // 1..3 could exist and be permanently empty; measuring that decision refuted it.
+            // Raising the limit un-gates two CTS cases per package across KHR-GL40..GL46 -
+            // transform_feedback.draw_xfb_stream_test (which stops being skipped) and
+            // transform_feedback3.multiple_streams (which stops reporting NotSupported) - and
+            // both then fail, because nothing in the shader pipeline supports layout(stream = N),
+            // EmitStreamVertex or EndStreamPrimitive, and because the query state machine tracks
+            // one active query per TARGET rather than per (target, stream). That is 14 new
+            // failures against 2 gained limits passes, and a 4 nothing can back is the
+            // advertised-caps lie with the sign flipped.
+            //
+            // The real fix is the feature, not the number: per-stream capture needs
+            // layout(stream = N) through the transpiler plus per-(target, stream) query slots,
+            // which DirectVulkan could back with VK_EXT_transform_feedback's geometryStreams and
+            // DirectGLES cannot back at all (ES has no vertex streams). Until that lands, one is
+            // the honest count and every stream-addressing entry point bounds itself by THIS
+            // query, so raising it later moves them all together.
             *params = kFrontendMaxVertexStreams;
             break;
         case GL_TRANSFORM_FEEDBACK_ACTIVE:

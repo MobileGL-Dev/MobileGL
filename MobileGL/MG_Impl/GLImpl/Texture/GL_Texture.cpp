@@ -557,11 +557,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                                            : isIntegerFormat ? GetAdvertisedIntegerMaxSamples()
                                                              : GetAdvertisedColorTextureMaxSamples();
 
-            // glGetInternalformativ(GL_SAMPLES) is answered from this very list (GetInternalformativ
-            // below), and GL 4.6 core 8.8 makes that query the definition of the per-format
-            // maximum - validating against anything else is how the two answers drifted apart.
+            // glGetInternalformativ(GL_SAMPLES) is answered from this very list
+            // (GetInternalformativ below), and GL 4.6 core 8.8 makes that query the definition of
+            // the per-format maximum - so when the probe has an answer it IS the ceiling, and the
+            // category limit only stands in where nothing was probed.
+            //
+            // This used to be max(probed, category), which made the probe dead: the walk starts
+            // AT the category limit (BackendObject_DirectGLES's ProbeTextureSampleCounts) so its
+            // head can never exceed it, and max() therefore always collapsed to the category
+            // value. A format whose 4- and 2-sample probes fail inside a 4-sample category - a
+            // float colour format under EXT_color_buffer_float is the natural instance - was
+            // still accepted at 4, silently squeezed to 1 by ClampSamplesToBackendSupport, and
+            // then reported as 4 by GL_TEXTURE_SAMPLES while glGetInternalformativ said 1.
             const Int probedMaxSamples = GetProbedMaxTextureSamples(textureTarget, textureInternalFormat);
-            return probedMaxSamples > 0 ? std::max(probedMaxSamples, categoryMaxSamples) : categoryMaxSamples;
+            return probedMaxSamples > 0 ? probedMaxSamples : categoryMaxSamples;
         }
 
         Bool ValidateTextureMultisampleStorage(TextureTarget textureTarget, GLsizei samples, GLsizei width,

@@ -307,6 +307,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return capabilities.MaxColorTextureSamples;
         }
 
+        // The RENDERBUFFER twin, and it is a different set of pnames on purpose.
+        // GL_MAX_{COLOR,DEPTH}_TEXTURE_SAMPLES bound multisample TEXTURES; a renderbuffer is
+        // bounded by GL_MAX_SAMPLES (GL 4.6 core 9.2.4), with GL_MAX_INTEGER_SAMPLES for the
+        // integer formats. Using the texture ceilings here - which is what the renderbuffer probe
+        // did - is not merely untidy: the two texture pnames are ES 3.1 state, so on an ES 3.0
+        // context the loader's rejected-probe clamp leaves them at 1 (see the multisample clamps
+        // in the GLES loader) and the walk below would never run past one sample, recording {1}
+        // for EVERY colour format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
+        // reports 4. Once the frontend validates against this list, that would reject every
+        // multisample renderbuffer on such a context.
+        Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities,
+                                                GLenum imageFormat) {
+            const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
+                                   imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
+            return isInteger ? capabilities.MaxIntegerSamples : capabilities.MaxSamples;
+        }
+
         Bool ProbeFramebufferCompletenessForTexture(const MG_External::GLESFunctionsTable& gl, TextureTarget target,
                                                     GLuint texture, TextureInternalFormat format) {
             GLuint framebuffer = 0;
@@ -717,7 +734,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         AddFullFormatCaps(cache, renderbufferTargetIndex, formatIndex,
                                           GetRenderbufferFeatureCaps(logicalFormat));
                         const Int maxSamples =
-                            GetGLESFormatMaxSamples(capabilities, logicalFormat, nativeInfo.ImageFormat);
+                            GetGLESRenderbufferFormatMaxSamples(capabilities, nativeInfo.ImageFormat);
                         cache.SampleCounts[renderbufferTargetIndex][formatIndex] =
                             ProbeRenderbufferSampleCounts(gl, nativeInfo.InternalFormat, logicalFormat, maxSamples);
                     } else {
@@ -731,7 +748,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         LogGLESFormatCaveat(logicalFormat, renderbufferTargetIndex, renderbufferFallbackInfo);
                     }
                     const Int maxSamples =
-                        GetGLESFormatMaxSamples(capabilities, logicalFormat, renderbufferFallbackInfo.ImageFormat);
+                        GetGLESRenderbufferFormatMaxSamples(capabilities, renderbufferFallbackInfo.ImageFormat);
                     cache.SampleCounts[renderbufferTargetIndex][formatIndex] = ProbeRenderbufferSampleCounts(
                         gl, renderbufferFallbackInfo.InternalFormat, logicalFormat, maxSamples);
                 }
