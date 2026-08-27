@@ -1875,15 +1875,45 @@ namespace MobileGL::MG_State::GLState {
             const Int location = explicitLocation != in.explicitFragDataLocation.end()
                                      ? static_cast<Int>(explicitLocation->second)
                                      : static_cast<Int>(output.layoutLocation());
-            // glBindFragDataLocationIndexed wins over the shader's own qualifier, the same
-            // precedence the location above follows and the same one ProgramInterface applies.
+            // The colour INDEX, under the one precedence rule the whole codebase uses: a NON-ZERO
+            // glBindFragDataLocationIndexed index wins, and a zero (or absent) one falls back to
+            // the shader's own layout(index = N).
+            //
+            // Zero has to mean "no override" rather than "index 0", because glBindFragDataLocation
+            // IS glBindFragDataLocationIndexed with index 0 (GL_Program.cpp) and writes a real 0
+            // into this map. Reading that 0 as an override made a blanket
+            // `glBindFragDataLocation(prog, 0, "b")` over a shader that declares
+            // `layout(location = 0, index = 1) out vec4 b;` collapse b onto slot (0,0) next to the
+            // index-0 output and fail the link as an alias - while the IO resolver had left b's
+            // qualifier at 1, the SPIR-V still carried Index 1, and glGetProgramResourceLocationIndex
+            // still answered 1. Validation was rejecting a program the backend had already emitted
+            // correctly, which is the one case where this branch can change the answer at all: this
+            // runs AFTER ShaderCompiler::LinkProgram/mapIO, so for every other shape the qualifier
+            // already carries the resolver's verdict.
+            //
+            // The two other consumers spell the same rule: TMglGlslIoResolver only writes the API
+            // index into the qualifier when it is non-zero, and ProgramInterface falls back to
+            // type.layoutIndex when GetFragmentDataIndex answers 0. All three now agree.
+            //
+            // Against the spec (GL 4.6 core 15.2.3): where a fragment output's index is given by a
+            // shader layout qualifier, that value is used and anything bound through
+            // BindFragDataLocation(Indexed) is IGNORED - the same precedence layout(location) has
+            // over glBindAttribLocation. That is stricter than "non-zero API wins", and the two
+            // differ in exactly one shape: an explicit `index = 0` in the shader against an API
+            // index of 1, where the spec keeps 0 and this codebase takes 1. That divergence lives
+            // in the resolver (it decides what is emitted); it is pre-existing, out of scope here,
+            // and deliberately not re-litigated in a third place - matching the resolver is what
+            // keeps validation checking what was actually built.
             Int colorIndex = 0;
             if (const auto explicitIndex = in.explicitFragDataIndex.find(outputName);
                 explicitIndex != in.explicitFragDataIndex.end()) {
                 colorIndex = static_cast<Int>(explicitIndex->second);
-            } else if (const glslang::TType* outputType = output.getType();
-                       outputType != nullptr && outputType->getQualifier().hasIndex()) {
-                colorIndex = static_cast<Int>(outputType->getQualifier().layoutIndex);
+            }
+            if (colorIndex == 0) {
+                if (const glslang::TType* outputType = output.getType();
+                    outputType != nullptr && outputType->getQualifier().hasIndex()) {
+                    colorIndex = static_cast<Int>(outputType->getQualifier().layoutIndex);
+                }
             }
             const Int span = std::max<Int>(output.size, 1);
 

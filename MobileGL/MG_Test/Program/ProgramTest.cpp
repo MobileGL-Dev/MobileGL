@@ -4097,6 +4097,57 @@ void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
     }
 }
 
+// An API colour index of ZERO is "no override", not "index 0". glBindFragDataLocation is
+// glBindFragDataLocationIndexed with index 0 (GL_Program.cpp), so the blanket-bind pattern -
+// portable code that binds every output name it knows about, without caring about dual-source -
+// writes a real 0 into the frag-data index map for an output whose shader qualifier says 1.
+// Reading that 0 as an override collapsed both outputs onto slot (0,0) and failed the link as an
+// alias, while the IO resolver had left the qualifier at 1 and the emitted SPIR-V still carried
+// Index 1 - validation rejecting a program the backend had already built correctly.
+//
+// The rule pinned here is the codebase's (non-zero API index wins, zero falls back to the shader
+// qualifier), which is also what GL 4.6 core 15.2.3 gives for THIS shape: a shader layout
+// qualifier is used and the bound value ignored.
+TEST_F(ProgramTest, AnApiColorIndexOfZeroDoesNotOverrideTheShaderIndexQualifier) {
+    constexpr const char* dualSourceFs = R"(#version 460 core
+layout(location = 0, index = 0) out vec4 fragColor0;
+layout(location = 0, index = 1) out vec4 fragColor1;
+void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
+)";
+    const GLuint program = CreateProgram();
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &kPassthroughVs, nullptr);
+    CompileShader(vs);
+    AttachShader(program, vs);
+    DeleteShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &dualSourceFs, nullptr);
+    CompileShader(fs);
+    AttachShader(program, fs);
+    DeleteShader(fs);
+
+    // The blanket bind: colour number 0, index 0, on the output the shader put at index 1.
+    BindFragDataLocation(program, 0, "fragColor0");
+    BindFragDataLocation(program, 0, "fragColor1");
+    LinkProgram(program);
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    EXPECT_EQ(linkStatus, GL_TRUE) << [&] {
+        char log[512] = "";
+        GetProgramInfoLog(program, sizeof(log), nullptr, log);
+        return std::string(log);
+    }();
+
+    // The explicit indexed form with a NON-zero index is still an override, and still links.
+    BindFragDataLocationIndexed(program, 0, 1, "fragColor1");
+    LinkProgram(program);
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    EXPECT_EQ(linkStatus, GL_TRUE);
+    EXPECT_EQ(GetFragDataIndex(program, "fragColor1"), 1);
+    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
+    }
+}
+
 TEST_F(ProgramTest, GetProgramivReportsTheGeometryStageLinkProperties) {
     constexpr const char* gs = R"(#version 460 core
 layout(triangles, invocations = 3) in;
