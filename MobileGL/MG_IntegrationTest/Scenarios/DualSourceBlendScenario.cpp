@@ -104,6 +104,22 @@ void main()
                 glViewport(0, 0, kExtent, kExtent);
                 glDisable(GL_SCISSOR_TEST);
                 glDisable(GL_DEPTH_TEST);
+
+                // Capability probe, not an assertion. A GL link that succeeded is not proof that
+                // the BACKEND can run the program: DirectGLES transpiles to ESSL lazily at first
+                // use, and GLSL ES has no `index` layout qualifier outside
+                // GL_EXT_blend_func_extended, so on a driver without it the stage never compiles
+                // and the draw renders nothing. One unblended white draw tells the two apart, and
+                // the cases skip rather than measure a picture the driver never produced.
+                if (m_program != 0) {
+                    glDisable(GL_BLEND);
+                    glBlendFunc(GL_ONE, GL_ZERO);
+                    Draw(/*src0=*/1.0f, /*src1=*/1.0f);
+                    glFinish();
+                    const Image probe = ReadPixels(kExtent, kExtent);
+                    m_programRenders =
+                        !probe.Empty() && static_cast<int>(probe.At(kExtent / 2, kExtent / 2).r) > 245;
+                }
                 for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
                 }
             }
@@ -129,10 +145,23 @@ void main()
                 glUseProgram(0);
             }
 
+            // Both cases share this gate: nothing below can be measured on a backend that cannot
+            // run a dual-source fragment program at all.
+            void SkipUnlessTheProgramRuns() {
+                if (m_program == 0) {
+                    GTEST_SKIP() << "this driver cannot build a dual-source fragment shader: " << m_programError;
+                }
+                if (!m_programRenders) {
+                    GTEST_SKIP() << "this backend links a dual-source fragment program but renders nothing with "
+                                    "it (GLSL ES needs GL_EXT_blend_func_extended for the `index` qualifier)";
+                }
+            }
+
             GLuint m_renderbuffer = 0;
             GLuint m_fbo = 0;
             GLuint m_vao = 0;
             unsigned int m_program = 0;
+            bool m_programRenders = false;
             std::string m_programError;
         };
 
@@ -147,11 +176,10 @@ void main()
     // Anything else means the factors were mistranslated rather than either honoured or declined.
     TEST_F(DualSourceBlendScenario, DualSourceBlendDrawProducesOneOfTheTwoDefinedResults) {
         if (!Ready()) GTEST_SKIP();
-        if (m_program == 0) {
-            GTEST_SKIP() << "this driver cannot build a dual-source fragment shader: " << m_programError;
-        }
+        SkipUnlessTheProgramRuns();
 
         glDisable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ZERO);
         Draw(/*src0=*/0.0f, /*src1=*/0.0f);
 
         glEnable(GL_BLEND);
@@ -180,11 +208,10 @@ void main()
     // source either way, so this case is really "no crash, no error, no surprise".
     TEST_F(DualSourceBlendScenario, DualSourceFactorsWithBlendingDisabledJustWriteTheSource) {
         if (!Ready()) GTEST_SKIP();
-        if (m_program == 0) {
-            GTEST_SKIP() << "this driver cannot build a dual-source fragment shader: " << m_programError;
-        }
+        SkipUnlessTheProgramRuns();
 
         glDisable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ZERO);
         Draw(/*src0=*/0.0f, /*src1=*/0.0f);
 
         glBlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);

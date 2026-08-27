@@ -1856,7 +1856,13 @@ namespace MobileGL::MG_State::GLState {
         // them to the draw-buffer range fails the link of every such program.
         if (artifacts.program->getIntermediate(EShLangFragment) == nullptr) return true;
 
-        UnorderedMap<Int, String> colorNumberOwners;
+        // Keyed on (colour number, COLOUR INDEX), not on the colour number alone. Two fragment
+        // outputs may share a location as long as their index differs - that pair IS dual-source
+        // blending (GL 4.6 core 11.1.3 / ARB_blend_func_extended, core since 3.3), spelled either
+        // `layout(location = 0, index = 0)` + `layout(location = 0, index = 1)` in the shader or
+        // through two glBindFragDataLocationIndexed calls. Aliasing on the number alone made every
+        // such program fail to link with "alias color number 0", which is the whole feature.
+        UnorderedMap<Int64, String> colorSlotOwners;
         const Int outputCount = artifacts.program->getNumPipeOutputs();
         for (Int index = 0; index < outputCount; ++index) {
             const auto& output = artifacts.program->getPipeOutput(index);
@@ -1869,6 +1875,16 @@ namespace MobileGL::MG_State::GLState {
             const Int location = explicitLocation != in.explicitFragDataLocation.end()
                                      ? static_cast<Int>(explicitLocation->second)
                                      : static_cast<Int>(output.layoutLocation());
+            // glBindFragDataLocationIndexed wins over the shader's own qualifier, the same
+            // precedence the location above follows and the same one ProgramInterface applies.
+            Int colorIndex = 0;
+            if (const auto explicitIndex = in.explicitFragDataIndex.find(outputName);
+                explicitIndex != in.explicitFragDataIndex.end()) {
+                colorIndex = static_cast<Int>(explicitIndex->second);
+            } else if (const glslang::TType* outputType = output.getType();
+                       outputType != nullptr && outputType->getQualifier().hasIndex()) {
+                colorIndex = static_cast<Int>(outputType->getQualifier().layoutIndex);
+            }
             const Int span = std::max<Int>(output.size, 1);
 
             if (location < 0 || location + span > in.maxFragmentOutputColorNumber) {
@@ -1881,10 +1897,16 @@ namespace MobileGL::MG_State::GLState {
             }
 
             for (Int colorNumber = location; colorNumber < location + span; ++colorNumber) {
-                auto [owner, inserted] = colorNumberOwners.emplace(colorNumber, outputName);
+                const Int64 slot = (static_cast<Int64>(colorIndex) << 32) |
+                                   static_cast<Int64>(static_cast<Uint32>(colorNumber));
+                auto [owner, inserted] = colorSlotOwners.emplace(slot, outputName);
                 if (!inserted) {
-                    artifacts.infoLog = std::format("Fragment outputs '{}' and '{}' alias color number {}.",
-                                                    owner->second, outputName, colorNumber);
+                    artifacts.infoLog =
+                        colorIndex == 0
+                            ? std::format("Fragment outputs '{}' and '{}' alias color number {}.", owner->second,
+                                          outputName, colorNumber)
+                            : std::format("Fragment outputs '{}' and '{}' alias color number {} at index {}.",
+                                          owner->second, outputName, colorNumber, colorIndex);
                     DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
                     ProgramObject::ResetLinkArtifacts(artifacts);
                     return false;

@@ -4023,6 +4023,80 @@ void main() { mgColor = vec4(1.0); }
 )";
 } // namespace
 
+// Two fragment outputs on ONE location with DIFFERENT colour indices is not an aliasing error -
+// it is dual-source blending (GL 4.6 core 11.1.3 / ARB_blend_func_extended, core since 3.3), and
+// the GL_SRC1_* blend factors have nothing to read without it. The link-time aliasing check keyed
+// on the colour number alone, so every such program failed to link with "alias color number 0"
+// and the whole feature was unreachable from shader-side GLSL.
+TEST_F(ProgramTest, FragmentOutputsMayShareALocationWhenTheirColorIndexDiffers) {
+    constexpr const char* dualSourceFs = R"(#version 460 core
+layout(location = 0, index = 0) out vec4 fragColor0;
+layout(location = 0, index = 1) out vec4 fragColor1;
+void main() { fragColor0 = vec4(1.0); fragColor1 = vec4(0.5); }
+)";
+    const GLuint program = LinkStages({{GL_VERTEX_SHADER, kPassthroughVs}, {GL_FRAGMENT_SHADER, dualSourceFs}});
+    GLint linkStatus = GL_FALSE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    ASSERT_EQ(linkStatus, GL_TRUE) << [&] {
+        char log[512] = "";
+        GetProgramInfoLog(program, sizeof(log), nullptr, log);
+        return std::string(log);
+    }();
+    // Both outputs are active and both sit on colour number 0 - which is the shape that used to be
+    // refused. (glGetFragDataIndex still answers 0 for the index-1 output: it reports only what
+    // glBindFragDataLocationIndexed bound, and reflecting the shader-side qualifier is a separate
+    // gap, so it is deliberately not asserted here.)
+    EXPECT_EQ(GetFragDataLocation(program, "fragColor0"), 0);
+    EXPECT_EQ(GetFragDataLocation(program, "fragColor1"), 0);
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+// The check it must NOT stop making: two outputs on the same colour number AND the same index
+// really do alias, and that link has to fail. Aliased through glBindFragDataLocation rather than
+// through two `layout(location = 0)` qualifiers on purpose - the qualifier form is caught by
+// glslang at COMPILE time, so it would never reach the link-time rule this pins.
+TEST_F(ProgramTest, FragmentOutputsSharingAColorNumberAtTheSameIndexStillFailToLink) {
+    constexpr const char* twoOutputFs = R"(#version 460 core
+out vec4 fragColorA;
+out vec4 fragColorB;
+void main() { fragColorA = vec4(1.0); fragColorB = vec4(0.5); }
+)";
+    const GLuint program = CreateProgram();
+    const GLuint vs = CreateShader(GL_VERTEX_SHADER);
+    ShaderSource(vs, 1, &kPassthroughVs, nullptr);
+    CompileShader(vs);
+    AttachShader(program, vs);
+    DeleteShader(vs);
+    const GLuint fs = CreateShader(GL_FRAGMENT_SHADER);
+    ShaderSource(fs, 1, &twoOutputFs, nullptr);
+    CompileShader(fs);
+    AttachShader(program, fs);
+    DeleteShader(fs);
+
+    BindFragDataLocation(program, 0, "fragColorA");
+    BindFragDataLocation(program, 0, "fragColorB");
+    LinkProgram(program);
+    GLint linkStatus = GL_TRUE;
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    EXPECT_EQ(linkStatus, GL_FALSE);
+    char infoLog[512] = "";
+    GetProgramInfoLog(program, sizeof(infoLog), nullptr, infoLog);
+    EXPECT_NE(std::string(infoLog).find("alias color number"), std::string::npos) << infoLog;
+
+    // ...and the same pair separated by the colour INDEX links, which is the whole point of the
+    // key being a pair.
+    BindFragDataLocationIndexed(program, 0, 1, "fragColorB");
+    LinkProgram(program);
+    GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+    EXPECT_EQ(linkStatus, GL_TRUE) << [&] {
+        char log[512] = "";
+        GetProgramInfoLog(program, sizeof(log), nullptr, log);
+        return std::string(log);
+    }();
+    for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
+    }
+}
+
 TEST_F(ProgramTest, GetProgramivReportsTheGeometryStageLinkProperties) {
     constexpr const char* gs = R"(#version 460 core
 layout(triangles, invocations = 3) in;
