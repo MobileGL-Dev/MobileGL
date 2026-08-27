@@ -31,6 +31,7 @@
 #include "Init.h"
 #include "MG_Impl/GLImpl/Getter/GL_Getter.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
+#include "MG_Impl/GLImpl/Drawing/GL_Drawing.h"
 #include "MG_Impl/GLImpl/Program/GL_ProgramPipeline.h"
 #include "MG_State/GLState/Core.h"
 
@@ -502,4 +503,54 @@ void main() { o_color = u_shared; }
     EXPECT_EQ(ReadVec4(*drawProgram, "u_shared"), (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
 
     UseProgram(0);
+}
+
+// ---------------------------------------------------------------------------------------
+// The vertex stage a pre-rasterization pipeline must have
+// ---------------------------------------------------------------------------------------
+
+// GL 4.6 core 7.4.1: a pipeline whose tessellation-control, tessellation-evaluation or geometry
+// stage has an executable, but which supplies no executable VERTEX shader, makes every command
+// that transfers vertices an INVALID_OPERATION. MobileGL checked only "a program is current" and
+// "it linked", so a geometry+fragment pipeline drew happily and rendered nothing -
+// KHR-GL4x.geometry_shader.api.fs_gs_draw_call and .pipeline_program_without_active_vs.
+TEST_F(ProgramPipelineCompositeTest, AGeometryPipelineWithNoVertexStageRefusesToDraw) {
+    const char* kGs = R"(#version 430 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
+)";
+    const GLuint gs = MakeSeparableProgram(GL_GEOMETRY_SHADER, kGs);
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    UseProgramStages(pipeline, GL_GEOMETRY_SHADER_BIT, gs);
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // Not vacuous: the composite has to be a healthy linked program, so that the refusal below
+    // can only be the missing vertex stage and not a link that fell over on its own.
+    const auto composite = DrawProgram();
+    ASSERT_NE(composite, nullptr);
+    ASSERT_TRUE(composite->GetLinkStatus()) << "the composite itself must link for this test to mean anything";
+    ASSERT_TRUE(composite->HasLinkedShaderStage(ShaderStage::Geometry));
+    ASSERT_FALSE(composite->HasLinkedShaderStage(ShaderStage::Vertex));
+
+    DrawArrays(GL_POINTS, 0, 1);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
+        << "a geometry stage with no vertex stage must refuse the draw";
+
+    // A dispatch shares the same "is there a program, did it link" helper and legitimately has no
+    // vertex stage; the rule must not have leaked onto it. There is no compute stage here, so the
+    // error is the compute check's own - what matters is that the draw rule did not fire first
+    // with a different meaning.
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+    }
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+    }
 }

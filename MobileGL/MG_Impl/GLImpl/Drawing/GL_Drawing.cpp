@@ -35,7 +35,38 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     static Bool ValidateCurrentProgramForExecution(const char* functionName) {
-        return ValidateProgramForExecution(MG_State::pGLContext->GetProgramForDraw(), functionName);
+        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        if (!ValidateProgramForExecution(currentProgram, functionName)) return false;
+
+        // GL 4.6 core 7.4.1, the pipeline validation rule every vertex-transferring command
+        // inherits: it is an INVALID_OPERATION when a tessellation control, tessellation
+        // evaluation or geometry stage has an executable but no program supplies an executable
+        // VERTEX shader. A non-separable program cannot reach this - the link rule forbids the
+        // shape - so in practice it catches a program pipeline assembled out of stage programs,
+        // which today draws happily and renders nothing.
+        //
+        // Asked of the EXECUTABLE, like the compute check below: for a pipeline the resolved
+        // program is the graphics composite, whose linked-shader snapshot is built out of exactly
+        // the pipeline's own graphics stage programs (GLContext::GetProgramForDraw), and the only
+        // stage compositing ever invents is a default FRAGMENT shader. A fragment-only pipeline is
+        // deliberately NOT rejected: the rule above names the three pre-rasterization stages, and
+        // nothing else here should start refusing draws GL accepts.
+        //
+        // Only ValidateCurrentProgramForExecution, never ValidateProgramForExecution itself, so a
+        // dispatch - which shares that helper and legitimately has no vertex stage - is untouched.
+        const Bool hasPreRasterizationStage = currentProgram->HasLinkedShaderStage(ShaderStage::Geometry) ||
+                                              currentProgram->HasLinkedShaderStage(ShaderStage::TessControl) ||
+                                              currentProgram->HasLinkedShaderStage(ShaderStage::TessEval);
+        if (hasPreRasterizationStage && !currentProgram->HasLinkedShaderStage(ShaderStage::Vertex)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    "The program in use runs a geometry or tessellation stage but has no vertex shader stage."));
+            return false;
+        }
+
+        return true;
     }
 
     // A dispatch resolves its program through the DISPATCH accessor: with a pipeline bound
