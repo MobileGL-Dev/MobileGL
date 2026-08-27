@@ -1136,6 +1136,20 @@ namespace MobileGL::MG_State::GLState {
                         in.externalIndex, uniform.name.c_str());
                 continue;
             }
+            // The gl_NumSamples stand-in InjectNumSamplesBuiltinShim declared. It is a driver
+            // uniform, not the application's: gl_NumSamples is a BUILT-IN, so a conformant
+            // implementation reports nothing for it in GL_ACTIVE_UNIFORMS, glGetActiveUniform or
+            // glGetUniformLocation, and nothing may write it through glUniform* either. Filtering
+            // it here does both, and costs it no storage: BuildGlobalUboRouting takes its offset
+            // from the SPIR-V metadata by name, not from the GL location space.
+            if (isGlobalUboMember(uniform) &&
+                uniform.name == MG_Util::ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME) {
+                artifacts.usesReservedNumSamples = true;
+                MGLOG_D("ProgramObject %u: Reflection - reserved gl_NumSamples stand-in '%s' hidden from the GL "
+                        "uniform surface",
+                        in.externalIndex, uniform.name.c_str());
+                continue;
+            }
             if (isBufferVariable(uniform)) {
                 MGLOG_D("ProgramObject %u: Reflection - buffer variable '%s' filtered from the GL uniform "
                         "surface",

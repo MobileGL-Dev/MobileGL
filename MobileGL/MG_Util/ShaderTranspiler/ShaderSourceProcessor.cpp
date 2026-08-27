@@ -234,6 +234,17 @@ namespace {
         // Whether the parsed #version directive is a well-formed one MobileGL should rewrite. A
         // malformed directive (see IsRecognizedGlslVersion) is left alone for glslang to reject.
         bool hasValidVersionDirective = false;
+        // Every extension the source NAMES in an "#extension <name> : <behavior>" directive, and
+        // the subset whose behavior switches it on. Both are needed and they are not the same
+        // question: glslang's ES preamble defines an extension's macro whatever behavior the
+        // shader later asks for (it is a preamble, it runs first), while whether gl_NumSamples is
+        // a legal identifier depends on the extension actually being ENABLED.
+        std::set<MobileGL::String> namedExtensions;
+        std::set<MobileGL::String> enabledExtensions;
+        // Byte ranges [begin, end) of every #version directive AFTER the first that repeats it
+        // exactly - same version number, same profile, both well-formed. See
+        // BlankRedundantVersionDirectives for why these are tolerated and nothing else is.
+        Vector<std::pair<SizeT, SizeT>> redundantVersionDirectives;
 
         bool HasVersionDirective() const { return versionDirectiveStart != MobileGL::String::npos; }
     };
@@ -262,7 +273,7 @@ namespace {
                 SkipDirectiveWhitespace(code, probe, lineEnd);
                 const MobileGL::String directive = ReadDirectiveIdentifier(code, probe, lineEnd);
 
-                if (directive == "version" && !info.HasVersionDirective()) {
+                if (directive == "version") {
                     SkipDirectiveWhitespace(code, probe, lineEnd);
                     unsigned version = 0;
                     bool hasVersionDigits = false;
@@ -272,30 +283,39 @@ namespace {
                         probe++;
                     }
                     if (hasVersionDigits) {
-                        info.version = version;
-                        info.versionDirectiveStart = directiveStart;
-                        info.versionDirectiveEnd = lineEnd + (hasLineBreak ? 1 : 0);
                         SkipDirectiveWhitespace(code, probe, lineEnd);
-                        const MobileGL::String profile = ReadDirectiveIdentifier(code, probe, lineEnd);
+                        const MobileGL::String profileToken = ReadDirectiveIdentifier(code, probe, lineEnd);
+                        MobileGL::ShaderProfile profile = MobileGL::ShaderProfile::Core;
                         bool profileTokenValid = true;
-                        if (profile.empty() || profile == "core") {
-                            info.profile = MobileGL::ShaderProfile::Core;
-                        } else if (profile == "es" || profile == "ES") {
-                            info.profile = MobileGL::ShaderProfile::ES;
-                        } else if (profile == "compatibility") {
-                            info.profile = MobileGL::ShaderProfile::Compatibility;
+                        if (profileToken.empty() || profileToken == "core") {
+                            profile = MobileGL::ShaderProfile::Core;
+                        } else if (profileToken == "es" || profileToken == "ES") {
+                            profile = MobileGL::ShaderProfile::ES;
+                        } else if (profileToken == "compatibility") {
+                            profile = MobileGL::ShaderProfile::Compatibility;
                         } else {
                             // "#version 330 foo": an unrecognized profile keyword. Keep Core for any
                             // downstream routing, but mark the directive malformed.
-                            info.profile = MobileGL::ShaderProfile::Core;
+                            profile = MobileGL::ShaderProfile::Core;
                             profileTokenValid = false;
                         }
                         // Comments are already masked to spaces, so anything non-blank left on the
                         // line is real trailing garbage: "#version 330 foobar" / "#version 330.0".
                         SkipDirectiveWhitespace(code, probe, lineEnd);
                         const bool hasTrailingTokens = probe < lineEnd;
-                        info.hasValidVersionDirective =
-                            IsRecognizedGlslVersion(info.version) && profileTokenValid && !hasTrailingTokens;
+                        const bool directiveIsValid =
+                            IsRecognizedGlslVersion(version) && profileTokenValid && !hasTrailingTokens;
+
+                        if (!info.HasVersionDirective()) {
+                            info.version = version;
+                            info.profile = profile;
+                            info.versionDirectiveStart = directiveStart;
+                            info.versionDirectiveEnd = lineEnd + (hasLineBreak ? 1 : 0);
+                            info.hasValidVersionDirective = directiveIsValid;
+                        } else if (directiveIsValid && info.hasValidVersionDirective && version == info.version &&
+                                   profile == info.profile) {
+                            info.redundantVersionDirectives.push_back({directiveStart, lineEnd});
+                        }
                     }
                 } else if (directive == "extension") {
                     SkipDirectiveWhitespace(code, probe, lineEnd);
@@ -309,6 +329,10 @@ namespace {
                                                   extension == "GL_NV_gpu_shader5";
                         const bool enablesExtension = behavior == "enable" || behavior == "require" ||
                                                       behavior == "warn";
+                        if (!extension.empty()) {
+                            info.namedExtensions.insert(extension);
+                            if (enablesExtension) info.enabledExtensions.insert(extension);
+                        }
                         // Gate the whole source if it ever opts into either extension. This is deliberately
                         // conservative around conditional directives and keeps legal sample qualifiers intact.
                         info.enablesGpuShader5 = info.enablesGpuShader5 || (isGpuShader5 && enablesExtension);
@@ -367,8 +391,39 @@ namespace {
     // (FindAfterVersionDirective -> InspectShaderLanguage). Each branch below leaves the bytes
     // ahead of the directive untouched apart from the BOM erase, and each replacement text is
     // exactly one newline-terminated line, so the arithmetic is exact in all three cases.
+    // An exact repeat of the #version directive the shader already declared, blanked out.
+    //
+    // Strictly a repeat: InspectShaderLanguage only records a range here when the FIRST directive
+    // was well-formed and the later one is well-formed, names the same version number and the same
+    // profile, and is therefore semantically a no-op. Everything else - a differing version, a
+    // malformed one, or a lone #version that is simply not first - is left exactly where the
+    // application put it, so KHR-GL33.shaders.preprocessor.directive.version_not_first_statement_*
+    // and the version_invalid_token_* family keep failing to compile the way they must.
+    //
+    // Why tolerate even the repeat: glShaderSource concatenates its strings with nothing added
+    // between them (GL 4.6 core 7.1), and a caller that puts a #version at the head of BOTH strings
+    // gets the second one spliced into the tail of the first - which is exactly what VK-GL-CTS's
+    // ShaderImageLoadStoreBase::BuildProgram does (kGLSLPrec ends without a newline, and
+    // NegativeUniform's own sources begin with "#version 310 es"). Desktop drivers accept it; the
+    // duplicate says nothing new, so honouring it costs no semantics.
+    //
+    // Blanked rather than erased so that every offset in `info` - which was measured against this
+    // same source - stays valid, and so the line count, and with it __LINE__ and every glslang
+    // diagnostic, is untouched.
+    void BlankRedundantVersionDirectives(MobileGL::String& source, const ShaderLanguageInfo& info) {
+        for (const auto& [begin, end] : info.redundantVersionDirectives) {
+            if (begin >= source.size() || end > source.size() || begin >= end) continue;
+            std::fill(source.begin() + static_cast<std::ptrdiff_t>(begin),
+                      source.begin() + static_cast<std::ptrdiff_t>(end), ' ');
+        }
+    }
+
     SizeT NormalizeVersionDirective(MobileGL::String& source, const ShaderLanguageInfo& info) {
         const SizeT bomBytes = info.hasUtf8Bom ? 3 : 0;
+
+        // First, while every offset in `info` still refers to the untouched source. Each range
+        // lies strictly after the first directive, so nothing below has to account for it.
+        BlankRedundantVersionDirectives(source, info);
 
         // A malformed #version (329, 331, bad profile, float/trailing tokens) is left exactly as the
         // application wrote it so glslang rejects it - rewriting it to "#version 330 core" would
@@ -1435,6 +1490,158 @@ namespace {
             "#define gl_DepthRange mg_DepthRange\n";
         source.insert(afterVersion.Get(source), shim);
     }
+
+    // Whole-identifier search over an already-masked source. A bare find() would fire on
+    // "mg_NumSamplesFoo" and on the word inside a comment; this fires only on the token.
+    bool MaskedSourceHasIdentifier(const MobileGL::String& masked, MobileGL::StringView identifier) {
+        SizeT pos = 0;
+        while ((pos = masked.find(identifier.data(), pos, identifier.size())) != MobileGL::String::npos) {
+            const SizeT end = pos + identifier.size();
+            const bool hasLeftBoundary = pos == 0 || !IsIdentifierChar(masked[pos - 1]);
+            const bool hasRightBoundary = end >= masked.size() || !IsIdentifierChar(masked[end]);
+            if (hasLeftBoundary && hasRightBoundary) return true;
+            pos = end;
+        }
+        return false;
+    }
+
+    // The extension macros glslang's ES preamble defines and its DESKTOP preamble does not
+    // (TParseVersions::getPreamble, Versions.cpp). Transcribed rather than derived because the
+    // preamble is a string literal inside glslang with no programmatic accessor; the SET is what
+    // matters, and it is stable - these are the AEP/OES/EXT names ESSL has carried since 3.10.
+    //
+    // GL_ES and GL_FRAGMENT_PRECISION_HIGH are DELIBERATELY absent. The shader really is being
+    // compiled as desktop by the time this runs, so flipping an `#ifdef GL_ES` branch would hand
+    // glslang the ESSL half of a shader written to be portable - which is the branch that does not
+    // parse under core 4.60. (GL_FRAGMENT_PRECISION_HIGH is in glslang's desktop preamble anyway.)
+    bool IsEsOnlyPreambleExtensionMacro(const MobileGL::String& name, unsigned version) {
+        // Guarded by an ES version in glslang's preamble; the rest are unconditional.
+        if (name == "GL_NV_shader_noperspective_interpolation") return version >= 300;
+
+        static const std::set<MobileGL::String> kEsOnlyPreambleMacros = {
+            "GL_ANDROID_extension_pack_es31a",
+            "GL_EXT_YUV_target",
+            "GL_EXT_blend_func_extended",
+            "GL_EXT_frag_depth",
+            "GL_EXT_geometry_point_size",
+            "GL_EXT_geometry_shader",
+            "GL_EXT_gpu_shader5",
+            "GL_EXT_primitive_bounding_box",
+            "GL_EXT_shader_implicit_conversions",
+            "GL_EXT_shader_io_blocks",
+            "GL_EXT_shader_texture_lod",
+            "GL_EXT_shadow_samplers",
+            "GL_EXT_tessellation_point_size",
+            "GL_EXT_tessellation_shader",
+            "GL_EXT_texture_buffer",
+            "GL_EXT_texture_cube_map_array",
+            "GL_OES_EGL_image_external",
+            "GL_OES_EGL_image_external_essl3",
+            "GL_OES_geometry_point_size",
+            "GL_OES_geometry_shader",
+            "GL_OES_gpu_shader5",
+            "GL_OES_primitive_bounding_box",
+            "GL_OES_sample_variables",
+            "GL_OES_shader_image_atomic",
+            "GL_OES_shader_io_blocks",
+            "GL_OES_shader_multisample_interpolation",
+            "GL_OES_standard_derivatives",
+            "GL_OES_tessellation_point_size",
+            "GL_OES_tessellation_shader",
+            "GL_OES_texture_3D",
+            "GL_OES_texture_buffer",
+            "GL_OES_texture_cube_map_array",
+            "GL_OES_texture_storage_multisample_2d_array",
+        };
+        return kEsOnlyPreambleMacros.count(name) != 0;
+    }
+
+    // GetNormalizedVersionDirective rewrites every ES-profile shader to "#version 460 core", so
+    // glslang deduces a desktop profile and emits its DESKTOP preamble - and every ES-only
+    // extension macro the shader is entitled to disappears with it. A CTS shader guarded by
+    // `#if !GL_OES_sample_variables / this is broken / #endif` then takes the broken branch.
+    //
+    // The extension BEHAVIOUR survives the rewrite (glslang honours "#extension X : require" under
+    // either profile), so this is a preamble-fidelity gap and nothing more; restoring the macro is
+    // the whole fix.
+    //
+    // Strictly limited to extensions the source itself NAMES in an #extension directive. Any macro
+    // injected into a desktop parse can flip a preprocessor branch, and the ES preamble carries
+    // three dozen of them - defining the lot would rewrite shaders that never asked.
+    void InjectEsPreambleExtensionMacros(const ShaderLanguageInfo& info, MobileGL::String& source,
+                                         AfterVersionAnchor& afterVersion) {
+        // Only where the rewrite actually happened: a malformed directive is left for glslang to
+        // reject, and a desktop source already gets the preamble it is entitled to.
+        if (info.profile != MobileGL::ShaderProfile::ES) return;
+        if (!info.hasValidVersionDirective) return;
+        if (info.namedExtensions.empty()) return;
+
+        MobileGL::String shim;
+        // std::set iteration order, so the injected block is deterministic for the translation
+        // cache and for the byte-exact preprocessor tests.
+        for (const MobileGL::String& extension : info.namedExtensions) {
+            if (!IsEsOnlyPreambleExtensionMacro(extension, info.version)) continue;
+            shim += "#define " + extension + " 1\n";
+        }
+        if (shim.empty()) return;
+        source.insert(afterVersion.Get(source), shim);
+    }
+
+    // gl_NumSamples is legal in this source only where glslang would have declared it with a
+    // non-SPIR-V target (Initialize.cpp): desktop from 4.00 core, or from 1.30 with
+    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables.
+    //
+    // The gate matters because the shim ends in "#define gl_NumSamples mg_NumSamples", and a
+    // #define is not scoped by anything: defining it for a source where the built-in does not
+    // exist would silently legalize a shader a conformant implementation rejects.
+    bool SourceMayUseSampleVariables(const ShaderLanguageInfo& info) {
+        if (!info.HasVersionDirective() || !info.hasValidVersionDirective) return false;
+        if (info.profile == MobileGL::ShaderProfile::ES) {
+            if (info.version >= 320) return true;
+            return info.version >= 310 && info.enabledExtensions.count("GL_OES_sample_variables") != 0;
+        }
+        if (info.version >= 400) return true;
+        return info.version >= 130 && info.enabledExtensions.count("GL_ARB_sample_shading") != 0;
+    }
+
+    // gl_NumSamples has no SPIR-V built-in to lower to, so glslang declares it only when it is NOT
+    // targeting SPIR-V - both the desktop branch and the ES branch of Initialize.cpp wrap the
+    // `uniform int gl_NumSamples;` line in `if (spvVersion.spv == 0)`. MobileGL always targets
+    // SPIR-V (ShaderCompiler sets EShTargetSpv on the OpenGL path as well as the Vulkan one), so
+    // the symbol is never in the table and every shader that reads it dies at compile time with
+    // "'gl_NumSamples' : undeclared identifier".
+    //
+    // Lower it to a real uniform instead. `uniform int mg_NumSamples;` is a default-block uniform,
+    // which the relaxed parse folds into MGL_GLOBAL_UBO - the one buffer BOTH backends already
+    // upload per draw - and the draw path writes the current draw framebuffer's sample count into
+    // it. Deliberately not a link-time constant: one program may be drawn into framebuffers of
+    // different sample counts, and baking the count at link would quietly hand it the wrong one.
+    //
+    // The alternative - deleting the `spvVersion.spv == 0` guard in the glslang fork - is worse,
+    // and not only because it is a fork change: glslang would then place a `gl_`-prefixed member
+    // inside MGL_GLOBAL_UBO, and ESSL reserves `gl_`, so the ES driver would reject SPIRV-Cross's
+    // output on the DirectGLES path.
+    void InjectNumSamplesBuiltinShim(MobileGL::ShaderStage stage, const ShaderLanguageInfo& info,
+                                     MobileGL::String& source, AfterVersionAnchor& afterVersion) {
+        // gl_NumSamples exists in the fragment stage only, in every profile.
+        if (stage != MobileGL::ShaderStage::Fragment) return;
+        if (!SourceMayUseSampleVariables(info)) return;
+        // Cheap reject before paying for the mask; the token cannot be there if the bytes are not.
+        if (source.find("gl_NumSamples") == MobileGL::String::npos) return;
+
+        const MobileGL::String masked = MaskCommentsAndQuotedText(source);
+        if (!MaskedSourceHasIdentifier(masked, "gl_NumSamples")) return;
+        // Someone already occupies the name - a re-preprocess of an already-shimmed source, or an
+        // application that happens to use it. Either way a second declaration would not compile.
+        if (MaskedSourceHasIdentifier(masked, MobileGL::MG_Util::ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME)) {
+            return;
+        }
+
+        constexpr const char* shim =
+            "uniform int mg_NumSamples;\n"
+            "#define gl_NumSamples mg_NumSamples\n";
+        source.insert(afterVersion.Get(source), shim);
+    }
 } // namespace
 
 namespace MobileGL {
@@ -1463,6 +1670,12 @@ namespace MobileGL {
                 // via MaskCommentsAndQuotedText/TokenizeCode, so the source we hand glslang keeps them.
                 NormalizeLineDirectives(source, afterVersion.Get(source));
 
+                // Before anything that could branch on one: an ES source rewritten to desktop has
+                // lost glslang's ES preamble, and the macros it carried are what the shader's own
+                // #if guards read. Keyed off originalLanguage because the directive has already
+                // been rewritten by now and no longer says "es".
+                InjectEsPreambleExtensionMacros(originalLanguage, source, afterVersion);
+
                 // noperspective is intentionally NOT touched here. It is core in desktop GLSL (1.30+)
                 // and maps to the core SPIR-V NoPerspective decoration, which DirectVulkan renders
                 // natively and SPIRV-Cross turns into ESSL `noperspective` + the
@@ -1487,6 +1700,7 @@ namespace MobileGL {
 
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
+                InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
 
             }
 

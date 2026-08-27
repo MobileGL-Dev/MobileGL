@@ -14,6 +14,20 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             inline const char* GLOBAL_UBO_NAME = "MGL_GLOBAL_UBO";
+            // The default-block uniform InjectNumSamplesBuiltinShim declares to stand in for the
+            // gl_NumSamples built-in, which glslang does not put in the symbol table under a
+            // SPIR-V target (Initialize.cpp guards both the desktop and the ES declaration on
+            // `spvVersion.spv == 0`, and MobileGL always targets SPIR-V). The relaxed parse folds
+            // it into GLOBAL_UBO_NAME like any other default-block uniform, which is what lets
+            // BOTH backends pick the value up from the one buffer they already upload; the link
+            // task keeps it out of the GL-visible uniform surface, and the draw path writes the
+            // current draw framebuffer's sample count into it.
+            //
+            // RESERVED, not merely conventional: a shader that declares this name itself keeps
+            // the shim from firing (the injector bails on it), but if it declares the name AND
+            // uses gl_NumSamples the link task will still hide its uniform. That is the same
+            // bargain every mg_-prefixed rewrite in this pipeline strikes.
+            inline const char* NUM_SAMPLES_UNIFORM_NAME = "mg_NumSamples";
             // glslang's Vulkan-relaxed parse rewrites every atomic_uint into a member of a
             // synthesized storage block named "<this>_<GL atomic-counter binding>"
             // (ParseContextBase::growAtomicCounterBlock). That block IS the GL atomic counter

@@ -304,24 +304,6 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
-        GLint ResolveDrawFramebufferSampleCount() {
-            const auto& drawFbo =
-                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-            if (!drawFbo) return 0;
-
-            GLint maxSamples = 0;
-            for (const auto& attachment : drawFbo->GetAllAttachmentObjects()) {
-                if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
-                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetRenderbuffer()->GetSamples()));
-                } else if (attachment.IsTexture() && attachment.GetTexture()) {
-                    // Multisample texture attachments count too (GL_SAMPLE_BUFFERS must
-                    // report 1 for any multisampled draw framebuffer).
-                    maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetTexture()->GetSamples()));
-                }
-            }
-            return maxSamples;
-        }
-
         void RecordIndexedOnlyGetterError(const char* functionName, GLenum pname) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
@@ -482,6 +464,26 @@ namespace MobileGL::MG_Impl::GLImpl {
             return kFrontendMaxSamples;
         }
         return std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, kFrontendMaxSamples);
+    }
+
+    // Declared in GL_Getter.h, so that the draw path can feed the same number to the reserved
+    // gl_NumSamples stand-in that glGetIntegerv(GL_SAMPLES) reports.
+    GLint ResolveDrawFramebufferSampleCount() {
+        const auto& drawFbo =
+            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+        if (!drawFbo) return 0;
+
+        GLint maxSamples = 0;
+        for (const auto& attachment : drawFbo->GetAllAttachmentObjects()) {
+            if (attachment.IsRenderbuffer() && attachment.GetRenderbuffer()) {
+                maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetRenderbuffer()->GetSamples()));
+            } else if (attachment.IsTexture() && attachment.GetTexture()) {
+                // Multisample texture attachments count too (GL_SAMPLE_BUFFERS must
+                // report 1 for any multisampled draw framebuffer).
+                maxSamples = std::max(maxSamples, static_cast<GLint>(attachment.GetTexture()->GetSamples()));
+            }
+        }
+        return maxSamples;
     }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */

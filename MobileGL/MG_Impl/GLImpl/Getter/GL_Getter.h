@@ -28,4 +28,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     // core minimum. Frontend multisample validators have to honour this ceiling for every
     // format, otherwise MobileGL rejects a sample count it advertised itself.
     GLint GetAdvertisedMaxSamples();
+    // What glGetIntegerv(GL_SAMPLES) answers for the CURRENT draw framebuffer: the largest sample
+    // count over its attachments, and 0 for a single-sample or default framebuffer (GL 4.6 core
+    // 9.2.3 / 22.2 - GL_SAMPLE_BUFFERS is 1 exactly when this is non-zero).
+    //
+    // Shared rather than duplicated because two callers need the identical number and disagreeing
+    // would be a silent bug: the query itself, and the draw path's write of the reserved
+    // gl_NumSamples stand-in - a shader comparing gl_NumSamples against glGetIntegerv(GL_SAMPLES)
+    // is exactly what the sample_variables CTS does.
+    GLint ResolveDrawFramebufferSampleCount();
 } // namespace MobileGL::MG_Impl::GLImpl

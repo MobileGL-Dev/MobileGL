@@ -278,6 +278,7 @@ namespace MobileGL::MG_State::GLState {
 
         artifacts.uniformOffsets.clear();
         artifacts.globalUboScratch.clear();
+        artifacts.reservedNumSamplesOffset = ProgramObject::kInvalidUniformOffset;
         // kInvalidUniformOffset marks locations that end up without global-UBO backing
         // (e.g. the optimizer eliminated every use of the uniform); the fallback pass
         // below gives those locations tail storage so glUniform* always has a target.
@@ -311,6 +312,18 @@ namespace MobileGL::MG_State::GLState {
                     artifacts.globalUboScratch.resize(size);
                 }
                 for (const auto& [name, offset] : meta.plainUniformOffsetsInUBO) {
+                    // The gl_NumSamples stand-in is routed by NAME and nothing else. It has no GL
+                    // location to look up - DoReflection hides it from the GL uniform index space
+                    // precisely so no application can address it - so the lookup below would find
+                    // nothing and log it as unbacked. Only the fragment stage declares it, and
+                    // every stage's copy sits at the same offset in the one shared global UBO.
+                    if (name == NUM_SAMPLES_UNIFORM_NAME) {
+                        artifacts.reservedNumSamplesOffset = offset;
+                        MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - reserved gl_NumSamples stand-in '%s' "
+                                "backed at UBO offset %u",
+                                externalIndex, name.c_str(), offset);
+                        continue;
+                    }
                     // SPIRV-Reflect leaf names never carry a "[0]" suffix; frontend
                     // reflection keys arrays as "arr[0]" (GL naming), so retry with the
                     // suffix before declaring the uniform unbacked.

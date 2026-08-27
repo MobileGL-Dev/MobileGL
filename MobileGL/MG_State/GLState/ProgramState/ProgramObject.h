@@ -787,6 +787,33 @@ namespace MobileGL::MG_State::GLState {
         void MarkUBOContentDirty() const {
             if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
         }
+
+        // ---- the reserved gl_NumSamples stand-in (ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME) ----
+        //
+        // PHASE A: answerable without joining the SPIR-V job, which is what lets the draw path ask
+        // every program this question and pay nothing for the overwhelming majority that say no.
+        Bool UsesReservedNumSamples() const { return Artifacts().usesReservedNumSamples; }
+
+        // Publishes `samples` into the global-UBO shadow. Returns false when there is nowhere to
+        // put it - no shim in this program, no SPIR-V (a cancelled phase B), or the optimizer
+        // dropped the member because nothing read it after all - all of which are ordinary states,
+        // not errors. A value-identical write is dropped without bumping the content version, so a
+        // steady stream of draws into one framebuffer does not force a re-upload per draw.
+        Bool WriteReservedNumSamples(Int samples) {
+            if (!UsesReservedNumSamples()) return false;
+            SpirvArtifacts& spirv = Spirv();
+            const Uint offset = spirv.reservedNumSamplesOffset;
+            if (offset == kInvalidUniformOffset) return false;
+            if (static_cast<SizeT>(offset) + sizeof(Int) > spirv.globalUboScratch.size()) return false;
+
+            Uint8* const slot = spirv.globalUboScratch.data() + offset;
+            Int current = 0;
+            Memcpy(&current, slot, sizeof(Int));
+            if (current == samples) return true;
+            Memcpy(slot, &samples, sizeof(Int));
+            MarkUBOContentDirty();
+            return true;
+        }
         // ---- glUniform* inside the phase-A -> phase-B window ----
         //
         // True while the program is fully linked and fully queryable but its uniform shadow's
@@ -1296,6 +1323,14 @@ namespace MobileGL::MG_State::GLState {
             std::set<String> uniformBlocksWithoutBinding;
 
             Uint activeUniformCount = 0;
+            // This program's fragment stage read gl_NumSamples, so the source pipeline lowered it
+            // onto the reserved default-block uniform (ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME)
+            // and the draw path owes it the draw framebuffer's sample count before every draw.
+            //
+            // PHASE A on purpose, even though the byte offset it needs is phase-B output: the
+            // gate has to be answerable without joining the SPIR-V job, or every draw of every
+            // program would pay a join to discover it has nothing to write.
+            Bool usesReservedNumSamples = false;
             Uint maxUniformLocation = 0;
             Int uniformNameMaxLength = 0;
             Int attribInNameMaxLength = 0;
@@ -1348,6 +1383,11 @@ namespace MobileGL::MG_State::GLState {
             // kInvalidUniformOffset. Sized maxUniformLocation + 1 by the routing pass.
             Vector<Uint> uniformOffsets;
             Vector<Uint8> globalUboScratch;
+            // Byte offset of the reserved gl_NumSamples stand-in inside globalUboScratch, or
+            // kInvalidUniformOffset. Taken by NAME from the SPIR-V metadata rather than through
+            // uniformOffsets, because the member has no GL location at all: the link task keeps
+            // it out of the GL-visible uniform index space so no application can see or write it.
+            Uint reservedNumSamplesOffset = kInvalidUniformOffset;
             // False for a program whose SPIR-V was never produced (phase B cancelled at
             // teardown or by a relink) or whose optimizer run failed. GL has no way to
             // retract a LINK_STATUS it already reported true, so such a program stays
