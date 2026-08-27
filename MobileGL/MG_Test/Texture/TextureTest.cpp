@@ -5697,3 +5697,81 @@ TEST_F(TextureTest, CopyTexSubImage1DRejectsAnythingButTexture1D) {
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The buffer-texture entry points' error taxonomy (GL 4.6 core 8.9 / GL_EXT_texture_buffer).
+// esextcTextureBufferErrors walks every OTHER texture target through glTexBuffer and
+// glTexBufferRange and reads the code back each time, then does the same for a format a buffer
+// texture cannot take. glTexBuffer carried `// TODO: make sure internalformat is in one of
+// supported format for TexBuffer` and never checked, and the wrong-target code came out of a
+// deeper "the bound object is not a buffer texture" arm whose code depends on which entry point
+// reached it - GL_INVALID_OPERATION, which belongs only to the name-taking DSA forms.
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(TextureTest, TexBufferAndTexBufferRangeRejectANonBufferTargetWithInvalidEnum) {
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_TEXTURE_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+    DrainPendingGlErrors();
+
+    static constexpr GLenum kWrongTargets[] = {
+        GL_TEXTURE_2D, GL_TEXTURE_2D_ARRAY, GL_TEXTURE_3D, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP_ARRAY,
+    };
+    for (const GLenum target : kWrongTargets) {
+        MG_Impl::GLImpl::TexBuffer(target, GL_RGBA32I, buffer);
+        ExpectSingleGlError(GL_INVALID_ENUM);
+        MG_Impl::GLImpl::TexBufferRange(target, GL_RGBA32I, buffer, 0, 64);
+        ExpectSingleGlError(GL_INVALID_ENUM);
+    }
+
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+TEST_F(TextureTest, TexBufferRejectsAnInternalFormatABufferTextureCannotTake) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, texture);
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_TEXTURE_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+    DrainPendingGlErrors();
+
+    // GL_DEPTH_COMPONENT32F is the one the conformance suite passes: a sized format, just not one
+    // of the sized formats table 8.15 lists for a buffer texture.
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_DEPTH_COMPONENT32F, buffer);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::TexBufferRange(GL_TEXTURE_BUFFER, GL_DEPTH_COMPONENT32F, buffer, 0, 64);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    // A format the table DOES list still goes through.
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32I, buffer);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
+// The DSA form keeps its own, DIFFERENT code for the corresponding shape: a texture that is not a
+// buffer texture is a wrong OBJECT, not a wrong token. The two must not be unified.
+TEST_F(TextureTest, TextureBufferKeepsInvalidOperationForANonBufferTexture) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_TEXTURE_BUFFER, 64, nullptr, GL_STATIC_DRAW);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::TextureBuffer(texture, GL_RGBA32I, buffer);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    MG_Impl::GLImpl::BindBuffer(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}

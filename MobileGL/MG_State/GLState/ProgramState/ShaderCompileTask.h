@@ -40,15 +40,21 @@ namespace MobileGL::MG_State::GLState {
         // binding array in the getter and its floor (the GL 4.5 core minimum of 84) is that same
         // array's width, so the backend's own number never moves it.
         limits.MaxUniformBufferBindings = bindingPoints;
+        // The storage-buffer ceiling has the same shape as GetIndexedBufferQueryPointCount's: the
+        // backend's count capped by the array, and the array alone when there is no backend. That
+        // "no backend" arm is not a detail - it is what the GPU-free test binary runs under, and
+        // it has to keep matching what glGetIntegerv answers there.
+        limits.MaxShaderStorageBufferBindings =
+            env.HasBackend()
+                ? std::min<Int>(bindingPoints, std::max<Int>(env.params.MaxShaderStorageBufferBindings, 0))
+                : bindingPoints;
         if (!env.HasBackend()) {
-            // No backend: the two backend-derived ceilings have nothing to be measured against,
-            // and zero means "do not enforce this kind" rather than "reject everything".
+            // The two genuinely per-DEVICE ceilings have nothing to be measured against here, and
+            // zero means "do not enforce this kind" rather than "reject everything".
             return limits;
         }
         limits.MaxSamplerBindings = std::max<Int>(env.params.MaxCombinedTextureImageUnits, 0);
         limits.MaxImageBindings = std::max<Int>(env.params.MaxImageUnits, 0);
-        limits.MaxShaderStorageBufferBindings =
-            std::min<Int>(bindingPoints, std::max<Int>(env.params.MaxShaderStorageBufferBindings, 0));
         return limits;
     }
 
