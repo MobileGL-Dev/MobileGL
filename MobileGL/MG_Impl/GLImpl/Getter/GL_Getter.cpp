@@ -7,7 +7,9 @@
 // End of Source File Header
 
 #include "GL_Getter.h"
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <Config.h>
 #include <MGGitHash.h>
 #include <MG_Impl/GLImpl/Debug/GL_Debug.h>
@@ -181,9 +183,19 @@ namespace MobileGL::MG_Impl::GLImpl {
             return index < 3 ? static_cast<GLint>(MG_Util::ShaderTranspiler::MIN_COMPUTE_WORK_GROUP_SIZE[index]) : 0;
         }
 
+        // GL 4.6 core table 23.64: components + blocks * (blockSize / 4). The product has to be
+        // formed in 64 bits and saturated on the way out - it overflowed a signed 32-bit int on
+        // every Vulkan host that reports a large maxUniformBufferRange. A Mali driver answering
+        // 0xFFFFFFFF saturates to INT32_MAX in the loader, and 14 * (2147483647 / 4) + 4096 wraps
+        // to -1073737742, which the conformance suite read back as a limit "smaller than 58368".
+        // Saturating instead of wrapping is also the only honest answer: an implementation that
+        // can serve more components than a GLint holds still has to report a GLint.
         GLint GetMaxCombinedUniformComponents(GLint maxDefaultUniformComponents, GLint maxUniformBlocks,
                                               GLint maxUniformBlockSizeBytes) {
-            return maxDefaultUniformComponents + maxUniformBlocks * (maxUniformBlockSizeBytes / 4);
+            const Int64 blocks = std::max<Int64>(static_cast<Int64>(maxUniformBlocks), 0);
+            const Int64 componentsPerBlock = std::max<Int64>(static_cast<Int64>(maxUniformBlockSizeBytes), 0) / 4;
+            const Int64 total = static_cast<Int64>(maxDefaultUniformComponents) + blocks * componentsPerBlock;
+            return static_cast<GLint>(std::min<Int64>(total, std::numeric_limits<GLint>::max()));
         }
 
         bool TryDecodeIndexedBufferQuery(GLenum pname, BufferTarget& bufferTarget, IndexedBufferQueryKind& queryKind) {
@@ -915,6 +927,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_POLYGON_OFFSET_UNITS:
             params[0] = MG_State::pGLContext->GetPolygonOffsetUnits();
             return;
+        case GL_POLYGON_OFFSET_CLAMP:
+            // Float-native state, so it is answered here rather than through the integer
+            // fallback: glPolygonOffsetClamp(1, 1, 0.5) must read back as 0.5, not as 0.
+            params[0] = MG_State::pGLContext->GetPolygonOffsetClamp();
+            return;
         case GL_SMOOTH_LINE_WIDTH_RANGE: {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             params[0] = dynamicParameters.SmoothLineWidthRangeMin;
@@ -1449,6 +1466,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = 0;
             return;
         }
+        // GL_TEXTURE_BUFFER_BINDING and GL_TEXTURE_BUFFER are the same token (0x8C2A): as a
+        // glGetIntegerv pname it asks which BUFFER object is bound to the buffer-texture target,
+        // not which texture is (that one is GL_TEXTURE_BINDING_BUFFER, handled by the texture-unit
+        // decoder above).
+        case GL_TEXTURE_BUFFER_BINDING: {
+            auto& obj = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Texture).GetBoundObject();
+            *params = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
+            return;
+        }
         case GL_BLEND:
             *params = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::Blend) ? GL_TRUE : GL_FALSE;
             return;
@@ -1503,6 +1529,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             // enum; GetFloatv/GetDoublev widen it and GetBooleanv converts nonzero to GL_TRUE, so
             // this single case serves every getter flavor.
             *params = static_cast<GLint>(MG_State::pGLContext->GetClampReadColor());
+            return;
+        // glClipControl's two state variables (GL 4.5 core table 23.7). They answer from the
+        // state the entry point records, which is what the conformance suite's initial-value and
+        // set-then-get cases read - the RASTERIZATION half of clip control is a separate,
+        // backend-side question and does not gate the query.
+        case GL_CLIP_ORIGIN:
+            *params = static_cast<GLint>(MG_State::pGLContext->GetClipOrigin());
+            return;
+        case GL_CLIP_DEPTH_MODE:
+            *params = static_cast<GLint>(MG_State::pGLContext->GetClipDepthMode());
             return;
         case GL_COLOR_CLEAR_VALUE: {
             const FloatVec4& clearColor = MG_State::pGLContext->GetClearColor();
@@ -1946,6 +1982,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_NUM_PROGRAM_BINARY_FORMATS:
             *params = 0;
             return;
+        // GL_ARB_spirv_extensions / GL 4.6 core 22.2. An implementation that advertises no
+        // SPIR-V extension answers zero here, and glGetStringi(GL_SPIR_V_EXTENSIONS, i) is then
+        // never legally called - MobileGL runs the module through its own translation pipeline
+        // and relies on no SPIR-V extension to do it, so zero is the true answer rather than a
+        // placeholder.
+        case GL_NUM_SPIR_V_EXTENSIONS:
+            *params = 0;
+            return;
         case GL_NUM_SHADER_BINARY_FORMATS:
             *params = 0; // ShaderBinary entrypoints are stubbed
             return;
@@ -2005,6 +2049,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         case GL_PRIMITIVE_RESTART_INDEX:
             *params = static_cast<GLint>(MG_State::pGLContext->GetPrimitiveRestartIndex());
+            return;
+        case GL_POLYGON_OFFSET_CLAMP:
+            // Float state (see GetFloatv); rounded to nearest for the integer query per GL 4.6
+            // core 22.1's float-to-integer rule.
+            *params = static_cast<GLint>(std::lround(MG_State::pGLContext->GetPolygonOffsetClamp()));
             return;
         case GL_PROGRAM_BINARY_FORMATS:
             *params = 0; // program-binary entrypoints are stubbed

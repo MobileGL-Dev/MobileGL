@@ -36,6 +36,7 @@
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Types.h>
+#include <limits>
 #include <set>
 
 namespace {
@@ -3058,4 +3059,59 @@ TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMi
     EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 2, GL_READ_ONLY));
     EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 0, GL_WRITE_ONLY));
     EXPECT_FALSE(UniformManager::SamplerOverlapsWritableImageSubresource(1, 3, 4, GL_WRITE_ONLY));
+}
+
+// GL_MAX_COMBINED_*_UNIFORM_COMPONENTS is components + blocks * (blockSize / 4). The product was
+// formed in signed 32-bit, and a Vulkan host that reports a large VkPhysicalDeviceLimits::
+// maxUniformBufferRange (a Mali driver answers 0xFFFFFFFF, which the loader saturates to
+// INT32_MAX) made 14 * (2147483647 / 4) + 4096 wrap to -1073737742 - which is byte for byte what
+// the conformance suite read back as "Limit value is: -1073737742 when it should not be smaller
+// than 58368". GLES escaped it only because the ES driver answers 65536 for the block size.
+TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
+    using namespace MobileGL;
+
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+
+    static constexpr GLenum kCombinedPnames[] = {
+        GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,   GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
+        GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS, GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS,
+        GL_MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS, GL_MAX_COMPUTE_UNIFORM_COMPONENTS,
+    };
+    // The GL 4.6 core table 23.64 floors for the five combined pnames above; compute's per-stage
+    // GL_MAX_COMPUTE_UNIFORM_COMPONENTS is not a combined limit and carries its own, much smaller
+    // floor, so only the sign of its answer is asserted.
+    static constexpr GLint kCombinedFloor = 58368;
+
+    {
+        MG_Backend::DynamicBackendParameters params;
+        params.MaxUniformBlockSize = std::numeric_limits<GLint>::max();
+        MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+        for (const GLenum pname: kCombinedPnames) {
+            GLint reported = 0;
+            MG_Impl::GLImpl::GetIntegerv(pname, &reported);
+            EXPECT_GT(reported, 0) << "pname 0x" << pname << " wrapped to a negative combined component count";
+            if (pname != GL_MAX_COMPUTE_UNIFORM_COMPONENTS) {
+                EXPECT_GE(reported, kCombinedFloor) << "pname 0x" << pname << " fell under the GL 4.6 floor";
+            }
+        }
+        MG_Backend::pActiveBackendObject.reset();
+    }
+
+    // An ordinary 64 KiB block size still produces the plain arithmetic, not a saturated value:
+    // saturation must be the ceiling, never the answer.
+    {
+        MG_Backend::DynamicBackendParameters params;
+        params.MaxUniformBlockSize = 65536;
+        MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+        GLint reported = 0;
+        MG_Impl::GLImpl::GetIntegerv(GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS, &reported);
+        // 4096 default-block components + 14 blocks x (65536 / 4) components each.
+        EXPECT_EQ(reported, 4096 + 14 * (65536 / 4));
+        EXPECT_LT(reported, std::numeric_limits<GLint>::max());
+        MG_Backend::pActiveBackendObject.reset();
+    }
+
+    MG_State::pGLContext.reset();
 }
