@@ -570,11 +570,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         IEvictionObserver* m_evictionObserver = nullptr;
         // Pass-through tessellation control stages by the identity of what was compiled into
         // them - the input patch size and the six default tessellation levels, folded into one
-        // 64-bit key by PassthroughTessControlKey below (the levels are float state, so the map
-        // cannot simply be keyed on the patch size any more). Never evicted: a handful of entries
-        // exist for the lifetime of the device, and every pipeline ever built from one keeps
-        // referencing its module. A failed build is cached as VK_NULL_HANDLE so a broken generator
-        // costs one compile, not one per draw.
+        // 64-bit key by ComputePassthroughTessControlKey (the levels are float state, so the map
+        // cannot simply be keyed on the patch size any more). A failed build is cached as
+        // VK_NULL_HANDLE so a broken generator costs one compile, not one per draw.
+        //
+        // Hard-capped, because the key is application-controlled: glPatchParameterfv clamps
+        // nothing, so an application that recomputes a level per frame mints a new key per frame.
+        // Reaching the cap destroys every module and starts over (see the flush in
+        // GetOrCreatePassthroughTessControlStage); the cap is far above what any program that
+        // holds its levels still will ever need.
+        static constexpr SizeT kMaxPassthroughTessControlStages = 64;
         UnorderedMap<Uint64, VkPipelineShaderStageCreateInfo> m_passthroughTessControlStages;
         static inline XXH64_state_t* m_hashState = XXH64_createState();
     };

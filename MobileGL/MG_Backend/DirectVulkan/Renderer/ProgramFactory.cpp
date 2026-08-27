@@ -3597,19 +3597,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    namespace {
-        // A GLSL float literal for a tessellation level. Always spelled with a decimal point,
-        // because an integral value written without one is an INT literal and
-        // `gl_TessLevelOuter[0] = 1;` does not compile. A non-finite value is baked as 0.0:
-        // glPatchParameterfv accepts any float, and a level that is not a positive number
-        // discards the patch - which is what a NaN level does in GL too - whereas emitting "nan"
-        // would make the synthesized stage fail to compile and take the whole program down.
-        String TessLevelLiteral(Float value) {
-            if (!std::isfinite(value)) return "0.0";
-            return std::format("{:.6f}", value);
-        }
-    } // namespace
-
     Uint64 ProgramFactory::ComputePassthroughTessControlKey(Uint32 patchVertices,
                                                             const FloatVec4& defaultOuterLevel,
                                                             const FloatVec2& defaultInnerLevel) {
@@ -3683,11 +3670,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         source += "    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;\n";
         for (Uint32 i = 0; i < 4; ++i) {
             source += "    gl_TessLevelOuter[" + std::to_string(i) +
-                      "] = " + TessLevelLiteral(defaultOuterLevel[i]) + ";\n";
+                      "] = " + MG_Util::ShaderTranspiler::TessellationLevelLiteral(defaultOuterLevel[i]) + ";\n";
         }
         for (Uint32 i = 0; i < 2; ++i) {
             source += "    gl_TessLevelInner[" + std::to_string(i) +
-                      "] = " + TessLevelLiteral(defaultInnerLevel[i]) + ";\n";
+                      "] = " + MG_Util::ShaderTranspiler::TessellationLevelLiteral(defaultInnerLevel[i]) + ";\n";
         }
         source += "}\n";
         return source;
@@ -3705,6 +3692,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto cached = m_passthroughTessControlStages.find(key);
         if (cached != m_passthroughTessControlStages.end()) {
             return cached->second;
+        }
+
+        // The key stopped being bounded when the levels joined it: patchVertices alone could only
+        // take 32 values, but six unclamped application floats can take any number, and an
+        // application that ramps a level per frame would retain one VkShaderModule per frame for
+        // the lifetime of the device. Flushed wholesale rather than aged: a module is not
+        // referenced by the pipelines built from it (Vulkan copies what it needs at
+        // vkCreateGraphicsPipelines), everything here runs on the GL thread, and an application
+        // that can overflow this cap is already recompiling every frame - so the flush costs it
+        // nothing it was not paying anyway.
+        if (m_passthroughTessControlStages.size() >= kMaxPassthroughTessControlStages) {
+            MGLOG_D("ProgramFactory: flushing %zu pass-through tessellation control stages; the application has "
+                    "used more than %zu distinct (patch size, default level) combinations",
+                    m_passthroughTessControlStages.size(), kMaxPassthroughTessControlStages);
+            for (auto& entry : m_passthroughTessControlStages) {
+                if (entry.second.module != VK_NULL_HANDLE) {
+                    vkDestroyShaderModule(m_device, entry.second.module, nullptr);
+                }
+            }
+            m_passthroughTessControlStages.clear();
         }
 
         VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};

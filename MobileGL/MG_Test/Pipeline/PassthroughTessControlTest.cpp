@@ -179,10 +179,10 @@ TEST_F(PassthroughTessControlTest, BakesTheDefaultTessLevelsInAndKeysOnThem) {
     const FloatVec4 outer(2.0f, 3.0f, 4.0f, 5.0f);
     const FloatVec2 inner(6.5f, 7.25f);
     const String source = ProgramFactory::BuildPassthroughTessControlSource(4, outer, inner);
-    EXPECT_NE(source.find("gl_TessLevelOuter[0] = 2.000000;"), String::npos) << source;
-    EXPECT_NE(source.find("gl_TessLevelOuter[3] = 5.000000;"), String::npos) << source;
-    EXPECT_NE(source.find("gl_TessLevelInner[0] = 6.500000;"), String::npos) << source;
-    EXPECT_NE(source.find("gl_TessLevelInner[1] = 7.250000;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelOuter[0] = 2.0;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelOuter[3] = 5.0;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelInner[0] = 6.5;"), String::npos) << source;
+    EXPECT_NE(source.find("gl_TessLevelInner[1] = 7.25;"), String::npos) << source;
 
     const Uint64 defaultKey =
         ProgramFactory::ComputePassthroughTessControlKey(4, kDefaultOuter, kDefaultInner);

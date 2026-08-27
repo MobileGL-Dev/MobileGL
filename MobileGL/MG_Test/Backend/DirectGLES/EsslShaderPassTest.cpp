@@ -1314,7 +1314,7 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
     // legal and ignored, and it saves the generator from having to know the domain.
     for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
                               "gl_TessLevelOuter[3]", "gl_TessLevelInner[0]", "gl_TessLevelInner[1]"}) {
-        EXPECT_TRUE(Contains(out, String(level) + " = 1.000000;")) << level << "\n" << out;
+        EXPECT_TRUE(Contains(out, String(level) + " = 1.0;")) << level << "\n" << out;
     }
     // Nothing redeclared when the neighbours redeclared nothing - the driver's own built-in
     // gl_in/gl_out is then what both sides agree on, and redeclaring is what would break it.
@@ -1327,12 +1327,12 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
 TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
     const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f),
                                                        FloatVec2(6.5f, 7.25f));
-    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 2.000000;")) << out;
-    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 3.000000;")) << out;
-    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[2] = 4.000000;")) << out;
-    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[3] = 5.000000;")) << out;
-    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[0] = 6.500000;")) << out;
-    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[1] = 7.250000;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 2.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 3.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[2] = 4.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[3] = 5.0;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[0] = 6.5;")) << out;
+    EXPECT_TRUE(Contains(out, "gl_TessLevelInner[1] = 7.25;")) << out;
 }
 
 // Every level literal carries a decimal point even when the value is integral: ESSL reads
@@ -1344,20 +1344,34 @@ TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
     EXPECT_FALSE(Contains(out, "= 2;")) << out;
 }
 
-// glPatchParameterfv accepts any float, NaN and infinity included. Emitting "nan" would make the
-// synthesized stage fail to compile; 0.0 is the honest stand-in, because a level that is not a
-// positive number discards the patch in GL too.
-TEST(PassthroughTessControlEsslTest, NonFiniteLevelsBecomeZero) {
+// glPatchParameterfv accepts any float, NaN and infinity included, and GL 4.6 core 11.2.2
+// discards a patch ONLY when a relevant outer level is <= 0 - everything else is clamped into
+// [1, MAX_TESS_GEN_LEVEL]. So the three non-finite inputs do not share one answer: NaN is
+// unspecified and 0.0 is the safe reading, -inf really does discard, and +inf must tessellate at
+// the maximum. Baking 0.0 for +inf inverted "as finely as possible" into "draw nothing".
+TEST(PassthroughTessControlEsslTest, NonFiniteLevelsFollowTheDiscardRule) {
     const Float notANumber = std::numeric_limits<Float>::quiet_NaN();
     const Float infinity = std::numeric_limits<Float>::infinity();
     const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
-                                                       FloatVec4(notANumber, infinity, 1.0f, 1.0f),
+                                                       FloatVec4(notANumber, -infinity, infinity, 1.0f),
                                                        FloatVec2(notANumber, 1.0f));
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 0.0;")) << out;
+    EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[2] = 0.0;"))
+        << "a positive infinity clamps to GL_MAX_TESS_GEN_LEVEL, not to a discarded patch" << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelInner[0] = 0.0;")) << out;
     EXPECT_FALSE(Contains(out, "nan")) << out;
     EXPECT_FALSE(Contains(out, "inf")) << out;
+}
+
+// A level below the old six-decimal format's resolution is still a POSITIVE level, which GL clamps
+// to 1 and draws; rendering it as "0.000000" discarded the patch instead.
+TEST(PassthroughTessControlEsslTest, TinyPositiveLevelsDoNotFlushToZero) {
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
+                                                       FloatVec4(1e-7f, 1.0f, 1.0f, 1.0f),
+                                                       FloatVec2(1.0f, 1.0f));
+    EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
+    EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.000000;")) << out;
 }
 
 // ES 3.1 reaches tessellation only through the extension; the caller has already established

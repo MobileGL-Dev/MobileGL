@@ -18,6 +18,18 @@
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
+            // A GLSL float literal for a tessellation level, for the pass-through tessellation
+            // control stage both backends synthesize when a program has an evaluation stage and no
+            // control stage. Shared so the two generators cannot disagree about what a level means.
+            //
+            // GL 4.6 core 11.2.2 discards a patch only when a relevant OUTER level is <= 0; every
+            // other value is CLAMPED into [1, MAX_TESS_GEN_LEVEL]. So "draw nothing" is reserved
+            // for the values that really mean it, and everything else has to survive the trip
+            // through text: a shortest-round-trip spelling, because a fixed-decimal one flushes
+            // small positive levels to zero, and always with a '.' or an exponent, because a bare
+            // digit sequence is an INT literal and `gl_TessLevelOuter[0] = 1;` does not compile.
+            String TessellationLevelLiteral(Float value);
+
             class ShaderCompiler {
             public:
                 static Result<SharedPtr<glslang::TShader>> CompileShader(const ShaderAttrib& attrib);

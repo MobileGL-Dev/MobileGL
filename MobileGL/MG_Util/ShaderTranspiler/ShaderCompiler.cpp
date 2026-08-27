@@ -12,6 +12,10 @@
 
 #include "ShaderCompiler.h"
 
+#include <format>
+
+#include <cmath>
+
 #include "SpirvPasses/EliminateFloatEqualsZeroPass.h"
 #include "SpirvPasses/FlattenInterfaceStructPass.h"
 #include "SpirvPasses/RenameSamplerFunctionParameterPass.h"
@@ -64,6 +68,30 @@
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
+            // Above every plausible GL_MAX_TESS_GEN_LEVEL (the GL core minimum is 64), so it lands on the
+            // same clamped result the device's own maximum would. +inf has to reach the tessellator as
+            // "as finely as possible", not as "discard".
+            static constexpr const char* kClampedHighTessLevelLiteral = "65536.0";
+
+            String TessellationLevelLiteral(Float value) {
+                // GL leaves a NaN level unspecified; 0.0 is the safe reading, and unlike "nan" it compiles.
+                if (std::isnan(value)) return "0.0";
+                // -inf is <= 0 and discards the patch, exactly like 0.0. +inf clamps to the maximum.
+                if (std::isinf(value)) return value > 0.0f ? kClampedHighTessLevelLiteral : "0.0";
+
+                // Shortest round-trip, not a fixed six decimals: "{:.6f}" renders every level below ~5e-7
+                // as "0.000000", which turns a positive level GL would clamp to 1 into a discarded patch.
+                String text = std::format("{}", value);
+                // ...but shortest round-trip spells an integral value as a bare digit sequence, which GLSL
+                // reads as an INT literal, so the decimal point has to be put back when nothing else marks
+                // the literal as floating point.
+                if (text.find('.') == String::npos && text.find('e') == String::npos &&
+                    text.find('E') == String::npos) {
+                    text += ".0";
+                }
+                return text;
+            }
+
             // `env` is the compile-time backend snapshot; null means "resolve from the live
             // backend", which is what the standalone/test entry points do. The pipeline always
             // passes one, so a worker never reaches pActiveBackendObject through here.
