@@ -78,10 +78,33 @@ namespace MobileGL {
             // checks explicitly.
             void SetSpirvBinary(Vector<Uint32>&& binary);
             Bool HasSpirvBinary() const { return m_hasSpirvBinary; }
+            // ARB_gl_spirv: "Once specialized, a shader may not be re-specialized without first
+            // re-associating the original SPIR-V module with it, through ShaderBinary." A second
+            // glSpecializeShader is GL_INVALID_OPERATION, and this latch is what answers that.
+            //
+            // Set ONLY on the success path. A specialization that FAILED did not specialize the
+            // shader, and the conformance suite relies on that distinction: it deliberately fails
+            // specialization (a bad entry point, then an unknown constant id) on one shader object
+            // and then requires the next, well-formed call on that same object to be accepted.
+            Bool HasBeenSpecialized() const { return m_specialized; }
             const Vector<Uint32>& GetSpirvBinary() const { return m_spirvBinary; }
             // glSpecializeShader's half: hand the object the GLSL its module specializes to and
             // let the ordinary pipeline compile it.
-            void SpecializeFromSpirv(String&& glsl);
+            void SpecializeFromSpirv(String&& glsl, Vector<String>&& xfbVaryings, GLenum xfbBufferMode);
+            // The capture the object's SPIR-V module DECLARED, as the equivalent
+            // glTransformFeedbackVaryings request. Empty for a GLSL shader and for a SPIR-V module
+            // that declares no transform feedback. ProgramObject::Link picks this up from the
+            // program's last vertex-processing stage, because ARB_gl_spirv makes decorations the
+            // only declaration form for a SPIR-V program and glTransformFeedbackVaryings has no
+            // effect on one.
+            const Vector<String>& GetSpirvXfbVaryings() const { return m_spirvXfbVaryings; }
+            GLenum GetSpirvXfbBufferMode() const { return m_spirvXfbBufferMode; }
+            // What glGetShaderSource / GL_SHADER_SOURCE_LENGTH must answer. A shader created from
+            // glShaderBinary never had glShaderSource called on it, so GL 4.6 core 7.1 makes its
+            // source the empty string - even after glSpecializeShader, when m_source holds the
+            // SPIRV-Cross GLSL the module was translated into. That text is MobileGL's, not the
+            // application's, and handing it back invites an application to cache and re-submit it.
+            const String& GetApplicationShaderSource() const;
             // The other half: specialization itself failed (a bad entry point, a constant id the
             // module does not declare, a module spirv-val rejects). There is nothing to compile,
             // so the verdict is recorded directly - COMPILE_STATUS false with this log - and both
@@ -278,6 +301,13 @@ namespace MobileGL {
             // the ORIGINAL words rather than the ones the first call folded.
             Vector<Uint32> m_spirvBinary;
             Bool m_hasSpirvBinary = false;
+            // "This shader has been specialized"; see HasBeenSpecialized. Cleared by anything that
+            // re-associates a module (SetSpirvBinary) or turns the object back into a GLSL shader
+            // (either SetShaderSource overload) - which is exactly the re-association ARB_gl_spirv
+            // names as the way to make a second specialization legal again.
+            Bool m_specialized = false;
+            Vector<String> m_spirvXfbVaryings;
+            GLenum m_spirvXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
             // A specialization that failed before any compile could start. Kept beside the
             // compile artifacts rather than inside them because there is no compile job to hang
             // it on - see RecordSpecializationFailure. Cleared by anything that gives the object

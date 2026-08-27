@@ -403,10 +403,46 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
         }
 
-        // Array targets store their layer count in z; layers never participate in mip
-        // reduction (GL 3.3 §3.8.14), only true 3D textures halve their depth per level.
+        // How many components of a GL-space texel size actually halve down the mip chain.
+        //
+        // An array texture's LAYER COUNT is not a dimension of the image (GL 4.6 core 8.14.3): it
+        // stays put all the way down, and it is stored in whichever component sits after the
+        // image's own dimensions - z for a 2D array or a cube array, and HEIGHT for a 1D array,
+        // whose level is recorded as {width, layers, 1}.
+        //
+        // THE one statement of that rule on the frontend side, because three readers have to agree
+        // on it or a chain is allocated under one and judged under another: this allocator,
+        // ComputeMipmapCompleteForFilter (MG_State/GLState/TextureState/TextureObject.cpp, which
+        // uses the identical 1/2/3 split) and DirectVulkan's MipShrinkingComponentCount. It used to
+        // be a two-way `depthMips` flag, which had no way to say "height is not a dimension" - so
+        // glGenerateMipmap on a GL_TEXTURE_1D_ARRAY allocated a chain whose LAYER COUNT halved,
+        // and the completeness rule then rejected the texture the generate was supposed to make
+        // complete. The backend allocator could not repair it either: it only ever GROWS a chain,
+        // and the frontend's (wrong) count is always the longer of the two.
+        Int MipShrinkingAxisCount(TextureTarget target) {
+            switch (target) {
+            case TextureTarget::Texture1D:
+                // {width, 1, 1} - the other two are already 1, but say so rather than rely on it.
+                return 1;
+            case TextureTarget::Texture1DArray:
+                // {width, layers, 1}: height IS the layer count.
+                return 1;
+            case TextureTarget::Texture2DArray:
+            case TextureTarget::TextureCubeMapArray:
+                // {width, height, layers}: depth IS the layer count.
+                return 2;
+            case TextureTarget::Texture3D:
+                return 3;
+            default:
+                // 2D, cube faces, rectangle, multisample: a plain two-dimensional image.
+                return 2;
+            }
+        }
+
+        // Only true 3D textures halve their depth per level; every array target keeps its layer
+        // count. Expressed through the rule above so the two cannot drift.
         Bool DepthParticipatesInMipmapping(TextureTarget target) {
-            return target == TextureTarget::Texture3D;
+            return MipShrinkingAxisCount(target) == 3;
         }
 
         // Which targets each glTextureStorage*D accepts (GL 4.6 core 8.19). A texture whose target
@@ -427,20 +463,20 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        // The longest mip chain the level-0 size admits. A 1D array keeps its layer count in
-        // height, so unlike a 2D texture its height takes no part in the reduction.
-        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Bool depthMips);
+        // The longest mip chain the level-0 size admits, over the axes that actually reduce.
+        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Int shrinkingAxes);
 
         Uint MaxTextureStorageLevels(TextureTarget target, GLsizei width, GLsizei height, GLsizei depth) {
-            const Int mipHeight = (target == TextureTarget::Texture1DArray) ? 1 : std::max<Int>(height, 1);
-            return ComputeFullMipmapLevelCount({std::max<Int>(width, 1), mipHeight, std::max<Int>(depth, 1)},
-                                               DepthParticipatesInMipmapping(target));
+            return ComputeFullMipmapLevelCount(
+                {std::max<Int>(width, 1), std::max<Int>(height, 1), std::max<Int>(depth, 1)},
+                MipShrinkingAxisCount(target));
         }
 
-        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Bool depthMips) {
-            Int maxDimension = std::max<Int>(
-                baseTexelSize.x(),
-                std::max<Int>(baseTexelSize.y(), depthMips ? std::max<Int>(baseTexelSize.z(), 1) : 1));
+        Uint ComputeFullMipmapLevelCount(const IntVec3& baseTexelSize, Int shrinkingAxes) {
+            Int maxDimension = 1;
+            for (Int axis = 0; axis < shrinkingAxes && axis < 3; ++axis) {
+                maxDimension = std::max<Int>(maxDimension, baseTexelSize[axis]);
+            }
             Uint mipLevelCount = 1;
             while (maxDimension > 1) {
                 maxDimension = std::max<Int>(maxDimension / 2, 1);
@@ -449,13 +485,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return mipLevelCount;
         }
 
-        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel, Bool depthMips) {
-            return {
-                std::max<Int>(baseTexelSize.x() >> static_cast<Int>(relativeLevel), 1),
-                std::max<Int>(baseTexelSize.y() >> static_cast<Int>(relativeLevel), 1),
-                depthMips ? std::max<Int>(baseTexelSize.z() >> static_cast<Int>(relativeLevel), 1)
-                          : std::max<Int>(baseTexelSize.z(), 1),
-            };
+        IntVec3 ComputeMipmapTexelSize(const IntVec3& baseTexelSize, Uint relativeLevel, Int shrinkingAxes) {
+            IntVec3 size = {std::max<Int>(baseTexelSize.x(), 1), std::max<Int>(baseTexelSize.y(), 1),
+                            std::max<Int>(baseTexelSize.z(), 1)};
+            for (Int axis = 0; axis < shrinkingAxes && axis < 3; ++axis) {
+                size[axis] = std::max<Int>(size[axis] >> static_cast<Int>(relativeLevel), 1);
+            }
+            return size;
         }
 
         Bool EnsureGeneratedMipmapStorageAllocated(
@@ -477,10 +513,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             const SizeT bytesPerTexel = baseByteSize / baseTexelCount;
-            const Bool depthMips = DepthParticipatesInMipmapping(texture.GetTarget());
-            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize, depthMips);
+            const Int shrinkingAxes = MipShrinkingAxisCount(texture.GetTarget());
+            const Uint requiredLevelCount = ComputeFullMipmapLevelCount(baseTexelSize, shrinkingAxes);
             for (Uint level = 1; level < requiredLevelCount; ++level) {
-                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level, depthMips);
+                const IntVec3 levelTexelSize = ComputeMipmapTexelSize(baseTexelSize, level, shrinkingAxes);
                 const SizeT levelByteSize = bytesPerTexel * static_cast<SizeT>(levelTexelSize.x()) *
                                             static_cast<SizeT>(levelTexelSize.y()) *
                                             static_cast<SizeT>(levelTexelSize.z());
@@ -3686,6 +3722,59 @@ namespace MobileGL::MG_Impl::GLImpl {
                                      GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height,
                                      GLsizei depth, const char* caller);
 
+    // The destination box of a copy has to lie inside the storage the copy actually WRITES, which
+    // is the requested (uploadTarget, level) pair's - not level 0's.
+    //
+    // This exists because the general-purpose ValidateTextureSubImageOffsets bounds everything by
+    // ITextureObject::GetBaseSize(), which is hardcoded to level 0 (TextureObject::GetBaseSize ->
+    // GetTexelSize(0, 0)). CopyReadFramebufferIntoMipmapRegion, meanwhile, sizes its rows and
+    // slices from GetMipmapTexelSize(uploadTarget, level) and memcpys into the exact-sized
+    // std::vector MipmapStorage allocated for that level, with no clamp of its own. A box that is
+    // legal at level 0 and out of range at level N therefore passed validation and wrote past the
+    // end of the heap allocation - e.g. a 4x4 copy at offset (4,4) into level 2 of an 8x8x4
+    // GL_RGBA8 array texture ran 24 bytes past a 64-byte buffer. Every level > 0 of every
+    // mipmapped texture was reachable that way, and both entry points had been no-ops before, so
+    // the whole exposure arrived with their implementation.
+    static Bool ValidateCopySubImageRegionAtLevel(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                  TextureUploadTarget uploadTarget, GLint level, GLint xoffset,
+                                                  GLint yoffset, GLint zoffset, GLsizei width, GLsizei height,
+                                                  GLsizei depth, const char* caller) {
+        const auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(textureObject.get());
+        if (mipmapTexture == nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "The destination texture has no mipmap storage."));
+            return false;
+        }
+        const IntVec3 levelSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
+        // A level that was never defined reports a degenerate extent. GL 4.6 core 8.6 makes
+        // copying into an undefined texture image INVALID_OPERATION, and it is also what keeps the
+        // writer below from indexing an empty allocation.
+        if (levelSize.x() <= 0 || levelSize.y() <= 0 || levelSize.z() <= 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "The requested texture level has no storage."));
+            return false;
+        }
+        // Signed 64-bit sums: xoffset and width are both GLint and an application may pass values
+        // whose sum overflows a GLint, which would otherwise compare as negative and pass.
+        const Int64 lastX = static_cast<Int64>(xoffset) + static_cast<Int64>(width);
+        const Int64 lastY = static_cast<Int64>(yoffset) + static_cast<Int64>(height);
+        const Int64 lastZ = static_cast<Int64>(zoffset) + static_cast<Int64>(depth);
+        if (xoffset < 0 || yoffset < 0 || zoffset < 0 || lastX > levelSize.x() || lastY > levelSize.y() ||
+            lastZ > levelSize.z()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", caller,
+                    std::format("The destination region does not lie inside level {} ({}x{}x{}).", level,
+                                levelSize.x(), levelSize.y(), levelSize.z())));
+            return false;
+        }
+        return true;
+    }
+
     // The shared body of glCopyTexSubImage3D and glCopyTextureSubImage3D once the caller has
     // resolved the destination texture. `allowCubeFaceFromZOffset` is the ONE difference between
     // the two forms: the DSA form takes a cube map and selects the face with zoffset (GL 4.6 core
@@ -3696,18 +3785,70 @@ namespace MobileGL::MG_Impl::GLImpl {
                                               GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
                                               GLint y, GLsizei width, GLsizei height, Bool allowCubeFaceFromZOffset,
                                               const char* caller) {
-        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, zoffset, width, height, 1, caller)) {
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
+        if (width < 0 || height < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Copy dimensions must be non-negative."));
             return;
         }
+
+        // THE FACE MAPPING HAS TO HAPPEN BEFORE THE BOUNDS CHECK, not after it. A cube map stores
+        // its six faces as six upload targets of ONE z-slice each, so its GetBaseSize().z() is 1 -
+        // and the generic offset validator, whose z bound always comes from that, rejected every
+        // zoffset in 1..5 with GL_INVALID_VALUE before the mapping below could run. Five of six
+        // faces were unreachable through glCopyTextureSubImage3D even though the entry point
+        // documents zoffset as the face selector (GL 4.6 core 8.6). The cube bound is the FACE
+        // COUNT, which the generic validator has no way to express because its `depth` parameter
+        // is the copy extent; glClearTexSubImage already special-cases the same shape.
         TextureUploadTarget uploadTarget = GetPrimaryUploadTarget(textureObject);
         GLint sliceOffset = zoffset;
         if (allowCubeFaceFromZOffset && textureObject->GetTarget() == TextureTarget::TextureCubeMap) {
+            const SizeT faceCount = textureObject->GetUploadTargets().size();
+            if (zoffset < 0 || static_cast<SizeT>(zoffset) >= faceCount) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", caller,
+                        "zoffset selects the cube map face and must be in [0, " + std::to_string(faceCount) + ")."));
+                return;
+            }
             uploadTarget = static_cast<TextureUploadTarget>(
                 static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) + static_cast<SizeT>(zoffset));
             sliceOffset = 0;
         }
+
+        if (!ValidateCopySubImageRegionAtLevel(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset,
+                                               width, height, /*depth=*/1, caller)) {
+            return;
+        }
+        if (!FramebufferImpl::ValidateReadFramebufferForCopy(caller)) return;
         CopyReadFramebufferIntoMipmapRegion(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset, x, y,
                                             width, height, caller);
+    }
+
+    // The same for the one-dimensional pair. A 1D level is {width, 1, 1}, so the y and z arms of
+    // the check above are trivially satisfied and the x arm is the whole rule - which is exactly
+    // the one that overflowed: level 2 of an 8-texel GL_RGBA8 1D texture is 8 bytes, and a 4-texel
+    // copy at xoffset 4 wrote 16 bytes starting 16 bytes in, entirely outside the allocation.
+    static void CopyTextureSubImage1DResolved(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                              GLint level, GLint xoffset, GLint x, GLint y, GLsizei width,
+                                              const char* caller) {
+        if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
+        if (width < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Copy dimensions must be non-negative."));
+            return;
+        }
+        const TextureUploadTarget uploadTarget = GetPrimaryUploadTarget(textureObject);
+        if (!ValidateCopySubImageRegionAtLevel(textureObject, uploadTarget, level, xoffset, /*yoffset=*/0,
+                                               /*zoffset=*/0, width, /*height=*/1, /*depth=*/1, caller)) {
+            return;
+        }
+        if (!FramebufferImpl::ValidateReadFramebufferForCopy(caller)) return;
+        CopyReadFramebufferIntoMipmapRegion(textureObject, uploadTarget, level, xoffset, /*yoffset=*/0,
+                                            /*zoffset=*/0, x, y, width, /*height=*/1, caller);
     }
 
     void CopyTexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
@@ -4108,9 +4249,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
         auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
         if (!textureObject) return;
-        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, 0, 0, width, 1, 1, __func__)) return;
-        CopyReadFramebufferIntoMipmapRegion(textureObject, GetPrimaryUploadTarget(textureObject), level, xoffset,
-                                            /*yoffset=*/0, /*zoffset=*/0, x, y, width, /*height=*/1, __func__);
+        CopyTextureSubImage1DResolved(textureObject, level, xoffset, x, y, width, __func__);
     }
 
     Bool CopyTexImage2D_State(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
@@ -6725,9 +6864,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "CopyTextureSubImage1D requires a 1D texture."));
             return;
         }
-        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, 0, 0, width, 1, 1, __func__)) return;
-        CopyReadFramebufferIntoMipmapRegion(textureObject, GetPrimaryUploadTarget(textureObject), level, xoffset,
-                                            /*yoffset=*/0, /*zoffset=*/0, x, y, width, /*height=*/1, __func__);
+        CopyTextureSubImage1DResolved(textureObject, level, xoffset, x, y, width, __func__);
     }
 
     void CopyTextureSubImage3D(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,

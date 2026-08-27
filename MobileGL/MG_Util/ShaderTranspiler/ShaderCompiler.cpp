@@ -1702,6 +1702,54 @@ namespace MobileGL {
                         return SpvExecutionModelFragment;
                     }
                 }
+                // The decorated capture layout, as the equivalent glTransformFeedbackVaryings
+                // request. GL 4.6 core 11.1.2.1 / ARB_transform_feedback3 give the name list two
+                // pseudo-varyings that are exactly what a decoration layout needs: gl_NextBuffer
+                // moves to the next capture buffer, and gl_SkipComponentsN (N in 1..4) advances the
+                // cursor without capturing. Together they can express any offset/stride layout
+                // whose offsets are component-aligned, which SPIR-V's are (Offset is in bytes and
+                // xfb offsets are four-byte aligned by rule).
+                Vector<String> BuildXfbVaryingRequest(const Vector<SpirvXfbCapture>& captures) {
+                    Vector<String> names;
+                    if (captures.empty()) return names;
+
+                    auto emitSkip = [&names](Uint32 components) {
+                        while (components > 0) {
+                            const Uint32 step = std::min<Uint32>(components, 4);
+                            names.push_back("gl_SkipComponents" + std::to_string(step));
+                            components -= step;
+                        }
+                    };
+
+                    Uint32 currentBuffer = captures.front().buffer;
+                    Uint32 cursorComponents = 0;
+                    Uint32 currentStride = 0;
+                    // Buffers below the first captured one still have to be stepped over, so the
+                    // Nth gl_NextBuffer really does land on buffer N.
+                    for (Uint32 buffer = 0; buffer < currentBuffer; ++buffer) {
+                        names.push_back("gl_NextBuffer");
+                    }
+                    for (const SpirvXfbCapture& capture : captures) {
+                        if (capture.buffer != currentBuffer) {
+                            // Pad the buffer being left out to its declared stride, so the record
+                            // size the module asked for survives.
+                            if (currentStride / 4 > cursorComponents) emitSkip(currentStride / 4 - cursorComponents);
+                            for (Uint32 buffer = currentBuffer; buffer < capture.buffer; ++buffer) {
+                                names.push_back("gl_NextBuffer");
+                            }
+                            currentBuffer = capture.buffer;
+                            cursorComponents = 0;
+                            currentStride = 0;
+                        }
+                        const Uint32 offsetComponents = capture.offset / 4;
+                        if (offsetComponents > cursorComponents) emitSkip(offsetComponents - cursorComponents);
+                        names.push_back(capture.name);
+                        cursorComponents = offsetComponents + capture.componentCount;
+                        currentStride = std::max(currentStride, capture.stride);
+                    }
+                    if (currentStride / 4 > cursorComponents) emitSkip(currentStride / 4 - cursorComponents);
+                    return names;
+                }
             } // namespace
 
             Result<void> ShaderCompiler::ValidateSpirvModule(const Vector<Uint32>& spirv) {
@@ -1734,15 +1782,29 @@ namespace MobileGL {
                 return {};
             }
 
-            Result<String> ShaderCompiler::SpecializeAndDecompileSpirvModule(const Vector<Uint32>& spirv,
-                                                                             GLenum shaderType,
-                                                                             const String& entryPoint,
-                                                                             const Vector<Uint32>& constantIds,
-                                                                             const Vector<Uint32>& constantValues) {
+            Result<ShaderCompiler::SpecializedModule> ShaderCompiler::SpecializeAndDecompileSpirvModule(
+                const Vector<Uint32>& spirv, GLenum shaderType, const String& entryPoint,
+                const Vector<Uint32>& constantIds, const Vector<Uint32>& constantValues,
+                SpecializationFailure& outFailure) {
+                outFailure = SpecializationFailure::None;
+
                 SpvcSession session(spirv, SessionUsageBit::Transpile);
+                if (!session.IsTranspileReady()) {
+                    // SPIRV-Cross could not parse the module. glShaderBinary's spirv-val pass is a
+                    // validity check, not a parseability one, so this is reachable with a module
+                    // that validates - hence a diagnosis rather than the null dereference the
+                    // unchecked constructor used to walk into.
+                    outFailure = SpecializationFailure::ModuleRejected;
+                    ResultInfo r;
+                    r.errc = -11;
+                    r.log = "Error: [ARB_gl_spirv] the module could not be parsed:\n" +
+                            String(session.GetLastErrorString());
+                    return std::unexpected(r);
+                }
 
                 Uint32 unknownConstantId = 0;
                 if (!session.SetSpecializationConstants(constantIds, constantValues, unknownConstantId)) {
+                    outFailure = SpecializationFailure::UnknownConstantId;
                     ResultInfo r;
                     r.errc = -7;
                     r.log = "Error: [ARB_gl_spirv] constant index " + std::to_string(unknownConstantId) +
@@ -1750,19 +1812,32 @@ namespace MobileGL {
                     return std::unexpected(r);
                 }
 
-                if (!entryPoint.empty()) {
-                    if (session.SetEntryPoint(entryPoint.c_str(), ExecutionModelForShaderType(shaderType)) !=
-                        SPVC_SUCCESS) {
-                        ResultInfo r;
-                        r.errc = -8;
-                        r.log = "Error: [ARB_gl_spirv] the module has no entry point named '" + entryPoint +
-                                "' for this shader stage:\n" + String(session.GetLastErrorString());
-                        return std::unexpected(r);
-                    }
+                // No `if (!entryPoint.empty())` guard any more. ARB_gl_spirv makes pEntryPoint the
+                // name of the entry point to specialize, and no module carries one named ""; the
+                // guard turned an empty name into "whichever entry point happens to be default",
+                // which is neither what the application asked for nor an error it was told about.
+                if (session.SetEntryPoint(entryPoint.c_str(), ExecutionModelForShaderType(shaderType)) !=
+                    SPVC_SUCCESS) {
+                    outFailure = SpecializationFailure::UnknownEntryPoint;
+                    ResultInfo r;
+                    r.errc = -8;
+                    r.log = "Error: [ARB_gl_spirv] the module has no entry point named '" + entryPoint +
+                            "' for this shader stage:\n" + String(session.GetLastErrorString());
+                    return std::unexpected(r);
                 }
+
+                // Read the declared capture layout, then REMOVE the decorations that describe it.
+                // Both halves matter: without the read a SPIR-V program captures nothing, and
+                // without the strip the decorations round-trip through the emitted GLSL back into
+                // the regenerated SPIR-V, where DirectGLES's ESSL hop refuses them outright and
+                // loses the stage. See SpvcSession::StripTransformFeedbackDecorations.
+                SpecializedModule specialized;
+                specialized.xfbVaryings = BuildXfbVaryingRequest(session.ReflectTransformFeedbackCaptures());
+                session.StripTransformFeedbackDecorations();
 
                 spvc_compiler_options options;
                 if (session.CreateOptions(&options) != SPVC_SUCCESS) {
+                    outFailure = SpecializationFailure::ModuleRejected;
                     ResultInfo r;
                     r.errc = -9;
                     r.log = "Error: [ARB_gl_spirv] could not create SPIRV-Cross options for the module.";
@@ -1786,13 +1861,15 @@ namespace MobileGL {
                 const char* emitted = nullptr;
                 session.Compile(&emitted);
                 if (!emitted) {
+                    outFailure = SpecializationFailure::ModuleRejected;
                     ResultInfo r;
                     r.errc = -10;
                     r.log = "Error: [ARB_gl_spirv] could not translate the module to GLSL:\n" +
                             String(session.GetLastErrorString());
                     return std::unexpected(r);
                 }
-                return String(emitted);
+                specialized.glsl = String(emitted);
+                return specialized;
             }
 
             Result<String> ShaderCompiler::DecompileShader(SpvcSession& session) {

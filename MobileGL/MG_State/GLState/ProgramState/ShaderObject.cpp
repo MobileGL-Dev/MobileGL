@@ -21,16 +21,31 @@ namespace MobileGL::MG_State::GLState {
         ReleaseCompileNode();
         m_spirvBinary = Move(binary);
         m_hasSpirvBinary = true;
+        m_specialized = false;
         m_specializationFailed = false;
         m_specializationInfoLog.clear();
+        m_spirvXfbVaryings.clear();
+        m_spirvXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
         m_source = MakeShared<const String>(String{});
         InvalidateCompiledState();
     }
 
-    void ShaderObject::SpecializeFromSpirv(String&& glsl) {
+    const String& ShaderObject::GetApplicationShaderSource() const {
+        static const String kNoSource;
+        // Both the unspecialized and the specialized windows answer empty: in the first m_source
+        // already is empty, in the second it holds generated GLSL that the application never wrote.
+        return m_hasSpirvBinary ? kNoSource : *m_source;
+    }
+
+    void ShaderObject::SpecializeFromSpirv(String&& glsl, Vector<String>&& xfbVaryings, GLenum xfbBufferMode) {
         ReleaseCompileNode();
+        // The latch goes up HERE and nowhere else - this is the one path that actually specialized
+        // the shader.
+        m_specialized = true;
         m_specializationFailed = false;
         m_specializationInfoLog.clear();
+        m_spirvXfbVaryings = Move(xfbVaryings);
+        m_spirvXfbBufferMode = xfbBufferMode;
         // The GLSL the module specializes to enters the ORDINARY pipeline from here: preprocess,
         // glslang parse, reflection, transpile, both backends. Nothing downstream needs to know
         // the source was not written by the application - which is the whole reason this hop
@@ -61,8 +76,11 @@ namespace MobileGL::MG_State::GLState {
             m_hasSpirvBinary = false;
             m_spirvBinary.clear();
             m_spirvBinary.shrink_to_fit();
+            m_specialized = false;
             m_specializationFailed = false;
             m_specializationInfoLog.clear();
+            m_spirvXfbVaryings.clear();
+            m_spirvXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
             ReleaseCompileNode();
             m_source = MakeShared<const String>(source);
             InvalidateCompiledState();

@@ -5775,3 +5775,232 @@ TEST_F(TextureTest, TextureBufferKeepsInvalidOperationForANonBufferTexture) {
     MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
     DrainPendingGlErrors();
 }
+
+// ---------------------------------------------------------------------------------------------
+// The destination box of a copy is bounded by the LEVEL it writes, not by level 0.
+//
+// glCopyTexSubImage3D/1D validated through ValidateTextureSubImageOffsets, whose bound is
+// ITextureObject::GetBaseSize() - hardcoded to level 0 - while CopyReadFramebufferIntoMipmapRegion
+// indexes GetMipmapTexelSize(uploadTarget, level) and memcpys into the exact-sized allocation
+// MipmapStorage made for that level. A box legal at level 0 and out of range at level N wrote past
+// the end of the heap buffer. Both entry points were `// TODO: implement` no-ops before this
+// branch, so implementing them is what opened the path.
+//
+// The region check runs BEFORE the read-framebuffer check on purpose, which is what lets this
+// GPU-free binary assert it: no complete read FBO is needed to prove the box was rejected.
+// ---------------------------------------------------------------------------------------------
+
+TEST_F(TextureTest, CopyTexSubImage3DBoundsTheDestinationByTheRequestedLevelNotLevelZero) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &texture);
+    // 4 levels of an 8x8x4 array: level 0 is 8x8, level 1 4x4, level 2 2x2; the layer count stays
+    // 4 at every level.
+    MG_Impl::GLImpl::TextureStorage3D(texture, 4, GL_RGBA8, 8, 8, 4);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, texture);
+    DrainPendingGlErrors();
+
+    // THE OVERFLOW: 4+4 <= 8 and 4+4 <= 8 against level 0, but level 2 is only 2x2. This used to
+    // pass validation and write 24 bytes past a 64-byte allocation.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 2, 4, 4, 0, 0, 0, 4, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // The same box one axis at a time, so a check that only looked at x or only at y cannot pass.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 3, 0, 0, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 3, 0, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A box that IS inside level 1 (4x4) must get past the region check. It cannot complete here -
+    // this binary has no complete read framebuffer - but it must not be the box that is refused.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 2, 2, 3, 0, 0, 2, 2);
+    EXPECT_NE(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE)
+        << "an in-range level-1 box must reach the framebuffer check, not be rejected as out of range";
+    DrainPendingGlErrors();
+
+    // The layer axis is bounded by the level's layer count, which does NOT shrink down the chain.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 1, 0, 0, 4, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A level the texture never had is INVALID_OPERATION, not a write into an empty allocation.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D_ARRAY, 5, 0, 0, 0, 0, 0, 1, 1);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    DrainPendingGlErrors();
+}
+
+TEST_F(TextureTest, CopyTexSubImage1DBoundsTheDestinationByTheRequestedLevel) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage1D(texture, 4, GL_RGBA8, 8);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D, texture);
+    DrainPendingGlErrors();
+
+    // Level 2 is two texels, i.e. eight bytes; this used to write sixteen bytes starting sixteen
+    // bytes in - entirely outside the allocation.
+    MG_Impl::GLImpl::CopyTexSubImage1D(GL_TEXTURE_1D, 2, 4, 0, 0, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // In range at level 1 (four texels).
+    MG_Impl::GLImpl::CopyTexSubImage1D(GL_TEXTURE_1D, 1, 2, 0, 0, 2);
+    EXPECT_NE(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D, 0);
+    DrainPendingGlErrors();
+}
+
+// glCopyTextureSubImage3D documents zoffset as the cube-map FACE selector, but the face mapping
+// ran AFTER a z-bounds check taken from GetBaseSize().z(), which for a cube map is one face's
+// depth - i.e. 1. Every zoffset in 1..5 was rejected with GL_INVALID_VALUE, so five of the six
+// faces were unreachable. The mapping now runs first and is bounded by the face count.
+TEST_F(TextureTest, CopyTextureSubImage3DCanAddressEveryCubeMapFace) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 2, GL_RGBA8, 4, 4);
+    DrainPendingGlErrors();
+
+    for (GLint face = 0; face < 6; ++face) {
+        MG_Impl::GLImpl::CopyTextureSubImage3D(texture, 0, 0, 0, face, 0, 0, 4, 4);
+        EXPECT_NE(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE)
+            << "face " << face << " must be reachable; the z bound is the face count, not a face's depth";
+        DrainPendingGlErrors();
+    }
+
+    // Past the last face is still GL_INVALID_VALUE.
+    MG_Impl::GLImpl::CopyTextureSubImage3D(texture, 0, 0, 0, 6, 0, 0, 4, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    MG_Impl::GLImpl::CopyTextureSubImage3D(texture, 0, 0, 0, -1, 0, 0, 4, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // And the per-FACE extent still bounds x/y at the requested level: level 1 of a 4x4 cube is
+    // 2x2, so a 4x4 box into face 3 is out of range even though it fits level 0.
+    MG_Impl::GLImpl::CopyTextureSubImage3D(texture, 1, 0, 0, 3, 0, 0, 4, 4);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    DrainPendingGlErrors();
+}
+
+// ---------------------------------------------------------------------------------------------
+// glGenerateMipmap allocates the chain in the FRONTEND before it dispatches to the backend, and
+// that allocator used a two-way "does depth mip?" flag which had no way to say that a 1D array's
+// HEIGHT is its layer count. It therefore both counted the layer axis into the chain length and
+// halved it per level. The backend allocator cannot repair that - it only ever GROWS a chain, and
+// the frontend's (wrong) count is always the longer one - so the layer-shrinking chain survived on
+// both backends, and ComputeMipmapCompleteForFilter (which knows height is not a dimension for
+// this target) then judged the texture mipmap-INCOMPLETE, i.e. sampling returns (0,0,0,1).
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+    // glGenerateMipmap dispatches to the backend after the frontend allocation; this binary has no
+    // GL context, so the hook is stubbed for the duration of the case. What is under test is the
+    // frontend allocation the stub cannot influence.
+    struct ScopedNoOpGenerateMipmap {
+        ScopedNoOpGenerateMipmap(): m_snapshot(MobileGL::MG_Backend::gBackendFunctionsTable) {
+            MobileGL::MG_Backend::gBackendFunctionsTable.GL.GenerateMipmap = [](GLenum) {};
+        }
+        ~ScopedNoOpGenerateMipmap() { MobileGL::MG_Backend::gBackendFunctionsTable = m_snapshot; }
+        ScopedNoOpGenerateMipmap(const ScopedNoOpGenerateMipmap&) = delete;
+        ScopedNoOpGenerateMipmap& operator=(const ScopedNoOpGenerateMipmap&) = delete;
+
+    private:
+        MobileGL::MG_Backend::GlobalBackendFunctionsTable m_snapshot;
+    };
+
+    GLint LevelParam(GLenum target, GLint level, GLenum pname) {
+        GLint value = -1;
+        MG_Impl::GLImpl::GetTexLevelParameteriv(target, level, pname, &value);
+        return value;
+    }
+} // namespace
+
+TEST_F(TextureTest, GenerateMipmapKeepsA1DArrayLayerCountAtEveryLevel) {
+    ScopedNoOpGenerateMipmap noOpBackend;
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, texture);
+    // Width 8, FOUR layers. The layer count is carried in `height` for this target.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, 8, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::GenerateMipmap(GL_TEXTURE_1D_ARRAY);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The chain length comes from the WIDTH alone: 8 -> 4 -> 2 -> 1 is four levels. Counting the
+    // layer axis too would give the same four here, so the width is chosen larger than the layer
+    // count on purpose and the layer assertions below are what actually discriminate.
+    for (GLint level = 0; level < 4; ++level) {
+        EXPECT_EQ(LevelParam(GL_TEXTURE_1D_ARRAY, level, GL_TEXTURE_WIDTH), std::max(8 >> level, 1))
+            << "level " << level << " width";
+        EXPECT_EQ(LevelParam(GL_TEXTURE_1D_ARRAY, level, GL_TEXTURE_HEIGHT), 4)
+            << "level " << level << " must keep all four layers; height is the layer count for a 1D array";
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, 0);
+    DrainPendingGlErrors();
+}
+
+// The mirror case: more layers than texels. The chain must be as long as the WIDTH admits, not as
+// long as the layer count admits - a chain sized off the layers would allocate levels whose width
+// has already bottomed out at 1 while the layer count kept halving.
+TEST_F(TextureTest, GenerateMipmapSizesA1DArrayChainFromWidthAloneEvenWithMoreLayersThanTexels) {
+    ScopedNoOpGenerateMipmap noOpBackend;
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, texture);
+    // Width 2, sixteen layers: counting the layer axis would ask for five levels, the width for two.
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, 2, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::GenerateMipmap(GL_TEXTURE_1D_ARRAY);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    EXPECT_EQ(LevelParam(GL_TEXTURE_1D_ARRAY, 1, GL_TEXTURE_WIDTH), 1);
+    EXPECT_EQ(LevelParam(GL_TEXTURE_1D_ARRAY, 1, GL_TEXTURE_HEIGHT), 16);
+    // Level 2 must not exist: the chain ends where the width does.
+    EXPECT_EQ(LevelParam(GL_TEXTURE_1D_ARRAY, 2, GL_TEXTURE_WIDTH), 0);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_1D_ARRAY, 0);
+    DrainPendingGlErrors();
+}
+
+// The 2D-array/cube-array side of the same rule, so a fix that swung the other way (making depth
+// mip-able again) cannot pass. Depth is the layer count for these; only width and height reduce.
+TEST_F(TextureTest, GenerateMipmapKeepsA2DArrayLayerCountAtEveryLevel) {
+    ScopedNoOpGenerateMipmap noOpBackend;
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, texture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 8, 8, 3, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::GenerateMipmap(GL_TEXTURE_2D_ARRAY);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    for (GLint level = 0; level < 4; ++level) {
+        EXPECT_EQ(LevelParam(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_WIDTH), std::max(8 >> level, 1));
+        EXPECT_EQ(LevelParam(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_HEIGHT), std::max(8 >> level, 1));
+        EXPECT_EQ(LevelParam(GL_TEXTURE_2D_ARRAY, level, GL_TEXTURE_DEPTH), 3)
+            << "level " << level << " must keep all three layers";
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // And a true 3D texture still halves all three, which is the case the layer rule must not eat.
+    GLuint volume = 0;
+    MG_Impl::GLImpl::GenTextures(1, &volume);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, volume);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+    MG_Impl::GLImpl::GenerateMipmap(GL_TEXTURE_3D);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(LevelParam(GL_TEXTURE_3D, 1, GL_TEXTURE_DEPTH), 4);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_3D, 0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    DrainPendingGlErrors();
+}

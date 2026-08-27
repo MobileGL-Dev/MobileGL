@@ -32,10 +32,22 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     static bool CheckShaderNameValidity(Uint shader) {
         if (shader == 0 || !MG_State::pGLContext->ValidateShaderName(shader)) {
+            // The mirror of CheckProgramNameValidity below, and for the same reason: programs and
+            // shaders are drawn from ONE name space (ProgramState hands both out of a single
+            // generator), so a name that exists but belongs to a PROGRAM is the wrong kind of
+            // object - GL 3.3 core 2.11.x makes that INVALID_OPERATION - while a name GL never
+            // handed out is INVALID_VALUE. This half of the split was missing, so every shader
+            // entry point handed a program name reported INVALID_VALUE; the conformance suite
+            // reads exactly that code back from glSpecializeShader.
+            const ErrorCode error = (shader != 0 && MG_State::pGLContext->ValidateProgramName(shader))
+                ? ErrorCode::InvalidOperation
+                : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
+                error,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(shader) + " is not a valid name."));
+                                             std::to_string(shader) +
+                                                 (error == ErrorCode::InvalidOperation ? " is not a shader object."
+                                                                                       : " is not a valid name.")));
             return false;
         }
         return true;
@@ -451,6 +463,25 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                  " has no SPIR-V binary; call glShaderBinary first."));
             return;
         }
+        // ARB_gl_spirv: a shader that has already been specialized may not be specialized again
+        // until glShaderBinary re-associates a module with it.
+        if (shaderObject->HasBeenSpecialized()) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "shader " + std::to_string(shader) +
+                                                 " has already been specialized; re-associate its module with "
+                                                 "glShaderBinary before specializing it again."));
+            return;
+        }
+        // pEntryPoint names the entry point to specialize; there is no default. A null pointer
+        // cannot name one, and neither can the empty string.
+        if (pEntryPoint == nullptr || *pEntryPoint == '\0') {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "pEntryPoint must name an entry point."));
+            return;
+        }
         if (numSpecializationConstants > 0 && (pConstantIndex == nullptr || pConstantValue == nullptr)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -475,20 +506,32 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        const String entryPoint = pEntryPoint ? String(pEntryPoint) : String{};
+        const String entryPoint(pEntryPoint);
         const GLenum shaderType = MG_Util::ConvertShaderStageToGLEnum(shaderObject->GetShaderStage());
+        using SpecializationFailure = MG_Util::ShaderTranspiler::ShaderCompiler::SpecializationFailure;
+        SpecializationFailure failure = SpecializationFailure::None;
         auto specialized = MG_Util::ShaderTranspiler::ShaderCompiler::SpecializeAndDecompileSpirvModule(
-            shaderObject->GetSpirvBinary(), shaderType, entryPoint, constantIds, constantValues);
+            shaderObject->GetSpirvBinary(), shaderType, entryPoint, constantIds, constantValues, failure);
         if (!specialized) {
-            // Specialization failure is a COMPILE failure, not a GL error: ARB_gl_spirv routes it
-            // through COMPILE_STATUS and the info log exactly as glCompileShader does, so an
-            // application that checks the status the usual way sees it.
             MGLOG_D("%s: specialization failed for shader %u: %s", __func__, shader,
                     specialized.error().log.c_str());
+            // The two conditions ARB_gl_spirv ENUMERATES are GL errors, and an erroring GL command
+            // must have no other effect - so the shader object is left exactly as it was rather
+            // than being pushed into a failed-compile state. Anything else is a genuine compile
+            // failure of a well-formed request, which the extension routes through COMPILE_STATUS
+            // and the info log exactly as glCompileShader does.
+            if (failure == SpecializationFailure::UnknownEntryPoint ||
+                failure == SpecializationFailure::UnknownConstantId) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, specialized.error().log));
+                return;
+            }
             shaderObject->RecordSpecializationFailure(String(specialized.error().log));
             return;
         }
-        shaderObject->SpecializeFromSpirv(Move(specialized.value()));
+        shaderObject->SpecializeFromSpirv(Move(specialized.value().glsl), Move(specialized.value().xfbVaryings),
+                                          specialized.value().xfbBufferMode);
     }
 
     // glMaxShaderCompilerThreadsKHR / glMaxShaderCompilerThreadsARB - one implementation,
@@ -1057,9 +1100,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             *params = shaderObject->GetInfoLog().empty() ? 0 : (GLint)shaderObject->GetInfoLog().length() + 1;
             break;
-        case GL_SHADER_SOURCE_LENGTH:
-            *params = shaderObject->GetShaderSource().empty() ? 0 : (GLint)shaderObject->GetShaderSource().length() + 1;
+        case GL_SHADER_SOURCE_LENGTH: {
+            // The APPLICATION's source, which is empty for a shader that came from glShaderBinary -
+            // see ShaderObject::GetApplicationShaderSource.
+            const auto& source = shaderObject->GetApplicationShaderSource();
+            *params = source.empty() ? 0 : (GLint)source.length() + 1;
             break;
+        }
         // GL_ARB_gl_spirv. GL_SPIR_V_BINARY and GL_SPIR_V_BINARY_ARB are the same token: TRUE
         // while the object stands for an application-supplied module. It is the FIRST thing the
         // conformance suite asks after glShaderBinary, and it used to fall into the terminal
@@ -1111,7 +1158,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& shaderObject = TryToGetShaderObject(shader);
         if (!shaderObject) return;
 
-        auto& src = shaderObject->GetShaderSource();
+        auto& src = shaderObject->GetApplicationShaderSource();
         CopyStr(bufSize, length, source, src.c_str(), (GLsizei)src.length());
     }
 
@@ -1968,8 +2015,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix2fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                        const GLfloat* value) {
-        if (location == -1) return;
-
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
 
@@ -1980,6 +2025,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+
+        if (location == -1) return;
 
         UniformMatrixfv_Object(*programObject, __func__, location, count, transpose, value, 2, 2,
                                "program " + std::to_string(program));
@@ -1987,8 +2034,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix3fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                        const GLfloat* value) {
-        if (location == -1) return;
-
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
 
@@ -1999,6 +2044,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+
+        if (location == -1) return;
 
         for (GLint i = 0; i < count; i++) {
             if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
@@ -2025,8 +2072,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix4fv_State(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                        const GLfloat* value) {
-        if (location == -1) return;
-
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
 
@@ -2037,6 +2082,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+
+        if (location == -1) return;
 
         for (GLint i = 0; i < count; i++) {
             if (i > 0 && !programObject->UniformLocationsAliasSameUniform(location, location + i)) {
@@ -2059,8 +2106,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrixNonSquarefv_State(const char* caller, GLuint program, GLint location, GLsizei count,
                                                GLboolean transpose, const GLfloat* value, Int columns, Int rows) {
-        if (location == -1) return;
-
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
 
@@ -2071,6 +2116,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+
+        if (location == -1) return;
 
         UniformMatrixfv_Object(*programObject, caller, location, count, transpose, value, columns, rows,
                                "program " + std::to_string(program));
@@ -2621,7 +2668,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2631,6 +2677,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 2);
     }
     void UniformMatrix3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2647,7 +2694,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2657,6 +2703,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 3);
     }
     void UniformMatrix4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2673,7 +2720,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2683,6 +2729,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 4);
     }
     void UniformMatrix2x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2699,7 +2746,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix2x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2709,6 +2755,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 3);
     }
     void UniformMatrix2x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2725,7 +2772,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix2x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2735,6 +2781,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 2, 4);
     }
     void UniformMatrix3x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2751,7 +2798,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix3x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2761,6 +2807,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 2);
     }
     void UniformMatrix3x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2777,7 +2824,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix3x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2787,6 +2833,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 3, 4);
     }
     void UniformMatrix4x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2803,7 +2850,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix4x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2813,6 +2859,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 2);
     }
     void UniformMatrix4x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value) {
@@ -2829,7 +2876,6 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ProgramUniformMatrix4x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
                                       const GLdouble* value) {
-        if (location == -1) return;
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2839,6 +2885,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "program " + std::to_string(program) + " is not linked."));
             return;
         }
+        if (location == -1) return;
         UniformMatrixdv_Object(*programObject, location, count, transpose, value, 4, 3);
     }
     void GetUniformdv(GLuint program, GLint location, GLdouble* params) {

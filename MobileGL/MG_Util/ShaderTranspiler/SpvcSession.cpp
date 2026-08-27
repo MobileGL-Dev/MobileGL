@@ -8,6 +8,8 @@
 
 #include "SpvcSession.h"
 
+#include <algorithm>
+
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
@@ -184,11 +186,29 @@ namespace MobileGL {
                     const SpvId* p_spirv = spirv.data();
                     size_t word_count = spirv.size();
 
-                    spvc_context_create(&context);
-                    spvc_context_parse_spirv(context, p_spirv, word_count, &ir);
-                    spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir, SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
-                                                 &compiler);
-                    spvc_compiler_create_shader_resources(compiler, &resources);
+                    // Every step is checked, and each guards the next: the C API writes its
+                    // out-param only on success, so passing a failed step's null handle to the
+                    // step after it is a raw dereference (spvc_context_create_compiler does
+                    // `parsed_ir->parsed`, spvc_compiler_create_shader_resources does
+                    // `compiler->context`). IsTranspileReady() is how a caller asks whether this
+                    // sequence got all the way through.
+                    if (spvc_context_create(&context) != SPVC_SUCCESS) {
+                        context = nullptr;
+                        return;
+                    }
+                    if (spvc_context_parse_spirv(context, p_spirv, word_count, &ir) != SPVC_SUCCESS) {
+                        ir = nullptr;
+                        return;
+                    }
+                    if (spvc_context_create_compiler(context, SPVC_BACKEND_GLSL, ir,
+                                                     SPVC_CAPTURE_MODE_TAKE_OWNERSHIP, &compiler) != SPVC_SUCCESS) {
+                        compiler = nullptr;
+                        return;
+                    }
+                    if (spvc_compiler_create_shader_resources(compiler, &resources) != SPVC_SUCCESS) {
+                        resources = nullptr;
+                        return;
+                    }
                 } else if (usage & SessionUsageBit::Reflection) {
                     SpvReflectResult result = spvReflectCreateShaderModule(
                         spirv.size() * sizeof(uint32_t), spirv.data(), &reflectModule);
@@ -496,8 +516,144 @@ namespace MobileGL {
                 SPVC_CHK_RETURN
             }
 
+            namespace {
+                // How many 32-bit components a captured variable occupies, which is what the
+                // gl_SkipComponentsN padding below is counted in. Matrices and arrays multiply.
+                Uint32 XfbComponentCount(spvc_compiler compiler, spvc_type_id typeId) {
+                    const spvc_type type = spvc_compiler_get_type_handle(compiler, typeId);
+                    if (type == nullptr) return 0;
+                    Uint32 components = spvc_type_get_vector_size(type) * spvc_type_get_columns(type);
+                    const unsigned dimensions = spvc_type_get_num_array_dimensions(type);
+                    for (unsigned d = 0; d < dimensions; ++d) {
+                        const unsigned length = spvc_type_get_array_dimension(type, d);
+                        if (length != 0) components *= length;
+                    }
+                    // A double occupies two component slots per scalar (GL 4.6 core 11.1.2.1).
+                    const spvc_basetype base = spvc_type_get_basetype(type);
+                    if (base == SPVC_BASETYPE_FP64 || base == SPVC_BASETYPE_INT64 ||
+                        base == SPVC_BASETYPE_UINT64) {
+                        components *= 2;
+                    }
+                    return components;
+                }
+            } // namespace
+
+            Vector<SpirvXfbCapture> SpvcSession::ReflectTransformFeedbackCaptures() const {
+                Vector<SpirvXfbCapture> captures;
+                if (compiler == nullptr || resources == nullptr) return captures;
+
+                const spvc_reflected_resource* outputs = nullptr;
+                SizeT outputCount = 0;
+                if (spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &outputs,
+                                                              &outputCount) != SPVC_SUCCESS) {
+                    return captures;
+                }
+
+                for (SizeT i = 0; i < outputCount; ++i) {
+                    const spvc_reflected_resource& output = outputs[i];
+                    // XfbBuffer/XfbStride sit on the VARIABLE; Offset sits on the variable for a
+                    // plain output and on each MEMBER for a block (which is how a redeclared
+                    // gl_PerVertex carries it).
+                    const Bool hasBuffer =
+                        spvc_compiler_has_decoration(compiler, output.id, SpvDecorationXfbBuffer) == SPVC_TRUE;
+                    const Uint32 buffer =
+                        hasBuffer ? spvc_compiler_get_decoration(compiler, output.id, SpvDecorationXfbBuffer) : 0u;
+                    const Uint32 stride =
+                        spvc_compiler_has_decoration(compiler, output.id, SpvDecorationXfbStride) == SPVC_TRUE
+                            ? spvc_compiler_get_decoration(compiler, output.id, SpvDecorationXfbStride)
+                            : 0u;
+
+                    const spvc_type type = spvc_compiler_get_type_handle(compiler, output.base_type_id);
+                    const unsigned memberCount =
+                        type != nullptr && spvc_type_get_basetype(type) == SPVC_BASETYPE_STRUCT
+                            ? spvc_type_get_num_member_types(type)
+                            : 0u;
+
+                    if (memberCount == 0) {
+                        if (spvc_compiler_has_decoration(compiler, output.id, SpvDecorationOffset) != SPVC_TRUE) {
+                            continue;
+                        }
+                        SpirvXfbCapture capture;
+                        capture.name = output.name ? output.name : "";
+                        capture.buffer = buffer;
+                        capture.stride = stride;
+                        capture.offset = spvc_compiler_get_decoration(compiler, output.id, SpvDecorationOffset);
+                        capture.componentCount = XfbComponentCount(compiler, output.type_id);
+                        if (!capture.name.empty()) captures.push_back(Move(capture));
+                        continue;
+                    }
+
+                    for (unsigned member = 0; member < memberCount; ++member) {
+                        if (spvc_compiler_has_member_decoration(compiler, output.base_type_id, member,
+                                                                SpvDecorationOffset) != SPVC_TRUE) {
+                            continue;
+                        }
+                        const char* memberName =
+                            spvc_compiler_get_member_name(compiler, output.base_type_id, member);
+                        if (memberName == nullptr || *memberName == '\0') continue;
+                        SpirvXfbCapture capture;
+                        // A redeclared built-in block contributes its members by their own names
+                        // ("gl_Position"), which is how GL's capture interface spells them; an
+                        // application block spells them "Block.member".
+                        const String blockName = output.name ? String(output.name) : String{};
+                        const Bool isBuiltInBlock = blockName.compare(0, 3, "gl_") == 0;
+                        capture.name = isBuiltInBlock || blockName.empty()
+                                           ? String(memberName)
+                                           : blockName + "." + String(memberName);
+                        capture.buffer = buffer;
+                        capture.stride = stride;
+                        capture.offset = spvc_compiler_get_member_decoration(compiler, output.base_type_id, member,
+                                                                            SpvDecorationOffset);
+                        capture.componentCount = XfbComponentCount(
+                            compiler, spvc_type_get_member_type(type, member));
+                        captures.push_back(Move(capture));
+                    }
+                }
+
+                // Capture order IS buffer-then-offset order: that is the order the equivalent
+                // glTransformFeedbackVaryings request has to name them in for the frontend's
+                // packer to reproduce the declared layout.
+                std::stable_sort(captures.begin(), captures.end(),
+                                 [](const SpirvXfbCapture& a, const SpirvXfbCapture& b) {
+                                     if (a.buffer != b.buffer) return a.buffer < b.buffer;
+                                     return a.offset < b.offset;
+                                 });
+                return captures;
+            }
+
+            void SpvcSession::StripTransformFeedbackDecorations() {
+                if (compiler == nullptr || resources == nullptr) return;
+
+                const spvc_reflected_resource* outputs = nullptr;
+                SizeT outputCount = 0;
+                if (spvc_resources_get_resource_list_for_type(resources, SPVC_RESOURCE_TYPE_STAGE_OUTPUT, &outputs,
+                                                              &outputCount) != SPVC_SUCCESS) {
+                    return;
+                }
+                for (SizeT i = 0; i < outputCount; ++i) {
+                    const spvc_reflected_resource& output = outputs[i];
+                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationXfbBuffer);
+                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationXfbStride);
+                    spvc_compiler_unset_decoration(compiler, output.id, SpvDecorationOffset);
+
+                    const spvc_type type = spvc_compiler_get_type_handle(compiler, output.base_type_id);
+                    if (type == nullptr || spvc_type_get_basetype(type) != SPVC_BASETYPE_STRUCT) continue;
+                    const unsigned memberCount = spvc_type_get_num_member_types(type);
+                    for (unsigned member = 0; member < memberCount; ++member) {
+                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
+                                                              SpvDecorationOffset);
+                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
+                                                              SpvDecorationXfbBuffer);
+                        spvc_compiler_unset_member_decoration(compiler, output.base_type_id, member,
+                                                              SpvDecorationXfbStride);
+                    }
+                }
+            }
+
             spvc_result SpvcSession::SetEntryPoint(const char* name, SpvExecutionModel model) {
-                if (compiler == nullptr || name == nullptr || *name == '\0') return SPVC_SUCCESS;
+                // A null compiler or a null/empty name is a FAILURE, not a silent success: the
+                // caller is asking for a specific entry point and there is none to give it.
+                if (compiler == nullptr || name == nullptr || *name == '\0') return SPVC_ERROR_INVALID_ARGUMENT;
                 return spvc_compiler_set_entry_point(compiler, name, model);
             }
 

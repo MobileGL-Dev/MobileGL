@@ -3072,14 +3072,19 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
 
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
+    // GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS (0x8266), NOT the per-stage
+    // GL_MAX_COMPUTE_UNIFORM_COMPONENTS (0x8263) this list used to name. The per-stage token is
+    // answered by a frontend constant and never reaches GetMaxCombinedUniformComponents at all, so
+    // both assertions on it were vacuous - and it displaced the ONE reader whose block count comes
+    // from the backend (ClampUniformBlockCount(dynamicParameters.MaxComputeUniformBlocks)) rather
+    // than from a frontend constant, i.e. the only call site where the saturation actually depends
+    // on data a driver supplies.
     static constexpr GLenum kCombinedPnames[] = {
         GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,   GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
         GL_MAX_COMBINED_GEOMETRY_UNIFORM_COMPONENTS, GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS,
-        GL_MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS, GL_MAX_COMPUTE_UNIFORM_COMPONENTS,
+        GL_MAX_COMBINED_TESS_EVALUATION_UNIFORM_COMPONENTS, GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS,
     };
-    // The GL 4.6 core table 23.64 floors for the five combined pnames above; compute's per-stage
-    // GL_MAX_COMPUTE_UNIFORM_COMPONENTS is not a combined limit and carries its own, much smaller
-    // floor, so only the sign of its answer is asserted.
+    // The GL 4.6 core table 23.64 floor, which all six combined pnames carry.
     static constexpr GLint kCombinedFloor = 58368;
 
     {
@@ -3091,9 +3096,7 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
             GLint reported = 0;
             MG_Impl::GLImpl::GetIntegerv(pname, &reported);
             EXPECT_GT(reported, 0) << "pname 0x" << pname << " wrapped to a negative combined component count";
-            if (pname != GL_MAX_COMPUTE_UNIFORM_COMPONENTS) {
-                EXPECT_GE(reported, kCombinedFloor) << "pname 0x" << pname << " fell under the GL 4.6 floor";
-            }
+            EXPECT_GE(reported, kCombinedFloor) << "pname 0x" << pname << " fell under the GL 4.6 floor";
         }
         MG_Backend::pActiveBackendObject.reset();
     }

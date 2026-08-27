@@ -248,11 +248,12 @@ namespace MobileGL {
             }
 
             void RenderState::SetPolygonOffset(Float factor, Float units) {
-                if (m_parameters.PolygonOffsetFactor == factor && m_parameters.PolygonOffsetUnits == units) return;
-
-                m_parameters.PolygonOffsetFactor = factor;
-                m_parameters.PolygonOffsetUnits = units;
-                ++m_version;
+                // GL 4.6 core 14.6.5 defines PolygonOffset(factor, units) as EQUIVALENT to
+                // PolygonOffsetClamp(factor, units, 0) - the equivalence is total, so the clamp is
+                // written too, not merely left alone. Leaving it meant a glPolygonOffsetClamp(1, 1,
+                // 0.5) followed by a plain glPolygonOffset(3, 4) still reported a clamp of 0.5, and
+                // the early-out below could even skip the version bump while doing it.
+                SetPolygonOffsetClamped(factor, units, 0.0f);
             }
 
             Float RenderState::GetPolygonOffsetFactor() const {

@@ -1536,14 +1536,14 @@ namespace MobileGL::MG_State::GLState {
             m_requestedXfbVaryings = Move(names);
             m_requestedXfbBufferMode = bufferMode;
         }
-        // The REQUEST, not the linked result: what glTransformFeedbackVaryings last recorded,
-        // which the next link will try to resolve. A program pipeline's draw composite reads it
-        // off the capturing stage program and re-issues it on itself, because the composite is
-        // built from the stage programs' SHADERS and would otherwise inherit no capture list at
-        // all - which made glBeginTransformFeedback reject every separable-program capture
-        // (glcSeparableProgramsTransformFeedbackTests).
-        const Vector<String>& GetRequestedTransformFeedbackVaryings() const { return m_requestedXfbVaryings; }
-        GLenum GetRequestedTransformFeedbackBufferMode() const { return m_requestedXfbBufferMode; }
+        // NO ACCESSOR FOR THE PENDING REQUEST, deliberately. A program pipeline's draw composite
+        // needs the capture list of the stage program it flattens, and the obvious source - what
+        // glTransformFeedbackVaryings last recorded - is the wrong one: that request does not take
+        // effect until the stage program's next link, and it bumps no version, so reading it makes
+        // the composite's capture list depend on when the composite cache happened to be
+        // invalidated. GetTransformFeedbackInterfaceNames() below is the source that is correct
+        // AND cache-safe, because linked state only moves at a link and the composite signature
+        // already keys on the link version. See GLContext::GetProgramForDraw.
         GLenum GetTransformFeedbackBufferMode() const { return Artifacts().xfbBufferMode; }
         SizeT GetTransformFeedbackVaryingCount() const { return Artifacts().xfbVaryings.size(); }
         const XfbVarying* GetTransformFeedbackVarying(SizeT index) const {

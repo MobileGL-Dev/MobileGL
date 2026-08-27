@@ -434,10 +434,43 @@ namespace MobileGL {
                 // `constantIds` and `constantValues` are the parallel arrays the entry point
                 // takes. A constant id the module does not declare is GL_INVALID_VALUE per the
                 // extension; it is reported through the error log rather than silently ignored.
-                static Result<String> SpecializeAndDecompileSpirvModule(const Vector<Uint32>& spirv,
-                                                                        GLenum shaderType, const String& entryPoint,
-                                                                        const Vector<Uint32>& constantIds,
-                                                                        const Vector<Uint32>& constantValues);
+                // Why the caller needs a REASON and not just a failure: ARB_gl_spirv splits the
+                // ways specialization can fail into two groups with different GL surfaces. A bad
+                // entry-point name and a constant id the module does not declare are enumerated
+                // errors - GL_INVALID_VALUE, and, being errors, they must leave the shader object
+                // exactly as it was. Everything else (a module SPIRV-Cross cannot translate) is a
+                // COMPILE failure, reported through COMPILE_STATUS and the info log like any other
+                // glCompileShader outcome. Returning one undifferentiated error is what made both
+                // groups look like the second.
+                enum class SpecializationFailure {
+                    None,
+                    UnknownConstantId,   // GL_INVALID_VALUE
+                    UnknownEntryPoint,   // GL_INVALID_VALUE
+                    ModuleRejected,      // COMPILE_STATUS false + info log
+                };
+
+                // What a specialized module turns into: the GLSL the ordinary pipeline compiles,
+                // plus the transform-feedback capture the module DECLARED, re-expressed as the
+                // glTransformFeedbackVaryings request that produces the same layout.
+                //
+                // The re-expression is the whole design. ARB_gl_spirv makes XfbBuffer/XfbStride/
+                // Offset decorations the only way a SPIR-V program declares capture, and MobileGL's
+                // capture machinery - the frontend packer, DirectGLES's forwarding to the ES
+                // driver, DirectVulkan's XfbCaptureDecoratePass - is driven entirely by a name
+                // list. Translating the decorations into the equivalent name list (with
+                // ARB_transform_feedback3's gl_NextBuffer / gl_SkipComponentsN spelling carrying
+                // the buffer breaks and the gaps) hands a SPIR-V program to the machinery that
+                // already exists, instead of teaching every consumer a second declaration form.
+                struct SpecializedModule {
+                    String glsl;
+                    Vector<String> xfbVaryings;
+                    GLenum xfbBufferMode = GL_INTERLEAVED_ATTRIBS;
+                };
+
+                static Result<SpecializedModule> SpecializeAndDecompileSpirvModule(
+                    const Vector<Uint32>& spirv, GLenum shaderType, const String& entryPoint,
+                    const Vector<Uint32>& constantIds, const Vector<Uint32>& constantValues,
+                    SpecializationFailure& outFailure);
 
                 // spirv-val over an application-supplied module, against the environment MobileGL
                 // parses and emits under. glShaderBinary is where a malformed module has to be

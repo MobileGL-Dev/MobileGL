@@ -980,15 +980,25 @@ TEST_F(RenderStateTest, PolygonOffsetClampStoresTheClampAndTheFactorUnitsPair) {
     EXPECT_NEAR(asDouble, 0.5, 1e-6);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
-    // glPolygonOffset is the clamp = 0 case of the same state, but it must not DISTURB the clamp
-    // it does not take - GL 4.6 core 14.6.5 defines it as PolygonOffsetClamp(factor, units, 0)
-    // only in the sense that the clamp it leaves is whatever glPolygonOffset itself sets, which
-    // for MobileGL is "unchanged". Assert the factor/units half instead, which is unambiguous.
+    // GL 4.6 core 14.6.5 defines glPolygonOffset(factor, units) as EQUIVALENT to
+    // glPolygonOffsetClamp(factor, units, 0) - totally, not "except for the clamp". So it writes
+    // all three, and a clamp left over from an earlier glPolygonOffsetClamp must be gone.
     MG_Impl::GLImpl::PolygonOffset(3.0f, 4.0f);
     MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_FACTOR, &factor);
     MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_UNITS, &units);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_CLAMP, &clamp);
     EXPECT_FLOAT_EQ(factor, 3.0f);
     EXPECT_FLOAT_EQ(units, 4.0f);
+    EXPECT_FLOAT_EQ(clamp, 0.0f) << "glPolygonOffset IS PolygonOffsetClamp(factor, units, 0)";
+
+    // The same rule when factor and units do NOT change: the clamp still has to be cleared, which
+    // an early-out keyed on the factor/units pair alone would skip.
+    MG_Impl::GLImpl::PolygonOffsetClamp(3.0f, 4.0f, 0.75f);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_CLAMP, &clamp);
+    ASSERT_FLOAT_EQ(clamp, 0.75f);
+    MG_Impl::GLImpl::PolygonOffset(3.0f, 4.0f);
+    MG_Impl::GLImpl::GetFloatv(GL_POLYGON_OFFSET_CLAMP, &clamp);
+    EXPECT_FLOAT_EQ(clamp, 0.0f) << "a no-op factor/units write must still clear the clamp";
 
     MG_Impl::GLImpl::PolygonOffsetClamp(0.0f, 0.0f, 0.0f);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);

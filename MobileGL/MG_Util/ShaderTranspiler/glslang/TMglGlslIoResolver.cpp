@@ -176,11 +176,17 @@ namespace MobileGL {
     // memo keys. The conformance suite accepts a link-time rejection: its predicate is
     // compiledAndLinked(), which is the AND of the two.
     //
-    // ONE enforcement point for all five kinds, on purpose. Before this, exactly one kind -
-    // shader-storage blocks - was checked, by a bespoke lexical scan of the shader source, which
-    // is why the storage sub-family was the one that passed while sampler, image, uniform-block
-    // and atomic-counter bindings sailed past every ceiling. That scanner is retired; a second
-    // enforcement point is a second thing to drift.
+    // FIVE KINDS HERE, AND ONE OF THEM IS ALSO CHECKED EARLIER. Before this, exactly one kind -
+    // shader-storage blocks - was checked at all, by a bespoke lexical scan of the shader source,
+    // which is why the storage sub-family was the one that passed while sampler, image,
+    // uniform-block and atomic-counter bindings sailed past every ceiling.
+    //
+    // That scan is deliberately KEPT (ShaderCompileTask.cpp's MaxShaderStorageBufferBindings
+    // explains why: GLSL makes an over-range binding a COMPILE-time error, and the relaxed Vulkan
+    // parse leaves the scan as the only place MobileGL can raise one). So the storage arm has two
+    // enforcement points and the other four have this one. What keeps them from drifting is not
+    // that there is only one site but that both read the SAME numbers - ResolveResourceBindingLimits
+    // is the single derivation, and neither site computes a ceiling of its own.
     void TMglGlslIoResolver::CheckDeclaredBindingRange(const glslang::TType& type, const glslang::TString& name) {
         if (m_bindingLimits == nullptr || m_bindingViolation == nullptr) return;
         if (!m_bindingViolation->empty()) return;   // first violation wins; the link is already lost
@@ -229,10 +235,17 @@ namespace MobileGL {
         // The ARRAYED-INSTANCE rule: an array of N takes bindings base .. base + N - 1, and every
         // one of them has to fit. getCumulativeArraySize() folds a multi-dimensional array into
         // the count of leaf elements, which is exactly how many consecutive bindings GL hands out.
-        // An unsized or implicitly-sized array reports 0; treat it as one binding rather than
-        // guess, since it cannot be the shape the rule is about.
+        //
+        // isSizedArray() is MANDATORY, not defensive. glslang's TArraySizes::getCumulativeSize()
+        // asserts `sizes.getDimSize(d) != UnsizedArraySize` ("this only makes sense in paths that
+        // have a known array size"), so calling it on a run-time-sized array - the ordinary shape
+        // of a storage block's trailing member, and legal on the block instance itself - aborts
+        // the process inside mapIO's collect callback in any build with assertions live. The
+        // repo defines no NDEBUG of its own, so a CMake Debug build is exactly such a build; the
+        // "reports 0" behaviour the previous comment relied on is only what NDEBUG happens to do.
+        // An unsized array occupies one binding here, which is also what GL means by it.
         long long elementCount = 1;
-        if (type.isArray()) {
+        if (type.isArray() && type.isSizedArray()) {
             const int cumulative = static_cast<int>(type.getCumulativeArraySize());
             if (cumulative > 1) elementCount = cumulative;
         }
