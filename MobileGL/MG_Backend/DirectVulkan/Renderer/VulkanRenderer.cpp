@@ -5469,8 +5469,21 @@ void main() {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 } else if (colorAttachmentRenderbuffer != nullptr) {
                     textureExternalIndex = static_cast<Int>(colorAttachmentRenderbuffer->GetExternalIndex());
-                    colorAttachmentFormat = MG_Util::ConvertTextureInternalFormatToVkEnum(
-                        colorAttachmentRenderbuffer->GetInternalFormat());
+                    // The SAME resolver GetOrCreateRenderbufferResource backs the image with, so the
+                    // probe cannot ask about a format the attachment does not have. The strict 1:1
+                    // converter is the wrong question here and answered VK_FORMAT_UNDEFINED for
+                    // RGBA2/RGBA12/RGB10/RGB12/RGB16 and the packed 16-bit formats for RGBA4/RGB5_A1
+                    // - and VkFormatProperties for UNDEFINED are all zero, so blending was
+                    // force-disabled forever on attachments that blend perfectly well. Every
+                    // three-channel colour renderbuffer was in that set too (R8G8B8_UNORM is rarely
+                    // supported), which is the more ordinary shape.
+                    //
+                    // Resolved rather than looked up: GetOrCreateRenderbufferResource creates images
+                    // and bumps epochs, which a pipeline-state query must not do as a side effect.
+                    // A renderbuffer has no device-fallback step after the resolver (unlike the
+                    // texture path's D24 -> D32 substitution), so the resolver IS its live format.
+                    colorAttachmentFormat =
+                        ResolveTextureFormatInfo(colorAttachmentRenderbuffer->GetInternalFormat()).format;
                 } else {
                     auto* texture = colorAttachmentTexture;
                     MOBILEGL_ASSERT(texture != nullptr,
@@ -9330,6 +9343,21 @@ void main() {
         // assertions compile out of the release build that the CTS and shipping both run, which is
         // exactly where the corruption was observed.
         if (srcImage.format != dstImage.format) {
+            // Size-compatibility is the COLOUR rule. Vulkan makes each depth/stencil format compatible
+            // only with ITSELF, and the texel block sizes cannot tell them apart: X8_D24_UNORM_PACK32,
+            // D32_SFLOAT and D24_UNORM_S8_UINT are all 4 bytes and all in different compatibility
+            // classes, so a raw block-size test waves through exactly the pairs Vulkan forbids. The
+            // frontend cannot filter them either - its own texel-block resolver is byte-size only, so
+            // glCopyImageSubData between a GL_DEPTH_COMPONENT24 texture and a GL_DEPTH_COMPONENT32F
+            // one reaches here with two different depth formats and 4 == 4.
+            const Bool eitherIsDepthStencil =
+                ((srcImage.aspect | dstImage.aspect) & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+            if (eitherIsDepthStencil) {
+                MGLOG_E_ONCE("%s: depth/stencil formats are compatible only with themselves, and source format "
+                             "%d differs from destination format %d; declining the copy",
+                             __func__, static_cast<Int>(srcImage.format), static_cast<Int>(dstImage.format));
+                return;
+            }
             const Uint32 srcBlockSize = vkuGetFormatInfo(srcImage.format).texel_block_size;
             const Uint32 dstBlockSize = vkuGetFormatInfo(dstImage.format).texel_block_size;
             if (srcBlockSize == 0 || dstBlockSize == 0 || srcBlockSize != dstBlockSize) {
@@ -10412,21 +10440,35 @@ void main() {
         }
 
         auto* resource = m_textureManager->SyncTextureAndGetDescriptor(*textureObject);
-        if (resource == nullptr || resource->image == VK_NULL_HANDLE) {
-            // No VkImage exists for this texture, so by construction nothing GPU-side has ever
-            // written it and the CPU shadow IS its content - answer from there instead of leaving
-            // the caller's buffer untouched. Gated on "no image at all", never on "the image exists
-            // but syncing it was inconvenient": a blanket shadow answer would silently return stale
-            // bytes for every render-to-texture result.
-            //
-            // The live shape that lands here is a mutable texture whose GL level 0 was never defined
-            // - glTexImage2D(GL_TEXTURE_2D, 5, ...) and nothing else, which is exactly what the
-            // clear_tex_image conformance cases build. VkTextureManager refuses to back such a
-            // texture (CheckMipmapCompleteness takes storage mip 0 as the image extent), so it is
-            // invisible to sampling and rendering as well; this fallback fixes the readback only.
-            MGLOG_D("DirectVulkan::GetTexImage: textureId=%u has no VkImage (GL level 0 undefined?); "
-                    "answering from the CPU shadow",
-                    textureObject->GetExternalIndex());
+        // Two shapes end up in the same place, and for the same reason: the GL level being read has
+        // no GPU storage, so UploadDirtyMipLevels never wrote it and the CPU shadow is the ONLY copy
+        // of its bytes - which makes the shadow both the safe answer and the correct one.
+        //
+        //   (a) No VkImage at all. A mutable texture whose GL level 0 was never defined -
+        //       glTexImage2D(GL_TEXTURE_2D, 5, ...) and nothing else, exactly what the
+        //       clear_tex_image conformance cases build. VkTextureManager takes storage mip 0 as the
+        //       physical image extent (CheckMipmapCompleteness), so it refuses to back the texture.
+        //   (b) A VkImage with FEWER mip levels than the GL level count. GetUploadMipLevelCount
+        //       breaks at the first level with a zero extent, so "level 0 defined, a gap, level 3
+        //       defined" produces a one-mip image while GL_TEXTURE_MAX_LEVEL-style state still
+        //       reports four levels. The same clamp also fires on a base level small enough that the
+        //       full chain is shorter than the levels the application defined.
+        //
+        // (b) is the dangerous one and is why the level is bounded against the RESOURCE and not only
+        // against the GL-side count above: writing that level into imageSubresource.mipLevel is an
+        // out-of-range subresource, which is the promise the driver takes at face value. The
+        // glCopyImageSubData path two functions up carries the same guard for the same reason, added
+        // after it SIGSEGV'd inside the Adreno driver; the readback never had one.
+        const Bool hasImage = resource != nullptr && resource->image != VK_NULL_HANDLE;
+        const Bool levelIsBacked =
+            hasImage && ToStorageMipLevel(textureObject.get(), level) < resource->mipLevels;
+        if (!levelIsBacked) {
+            // Never gated on "syncing was inconvenient": a blanket shadow answer would silently
+            // return stale bytes for every render-to-texture result.
+            MGLOG_D("DirectVulkan::GetTexImage: textureId=%u level %d has no GPU storage (%s); answering "
+                    "from the CPU shadow",
+                    textureObject->GetExternalIndex(), level,
+                    hasImage ? "the image has fewer mip levels" : "the texture has no VkImage");
             MG_Impl::GLImpl::CopyTextureImageToClientOrPBO_State(textureObject, textureUploadTarget, level, format,
                                                                  type, bufSize, pixels,
                                                                  "DirectVulkan::GetTextureImage");
