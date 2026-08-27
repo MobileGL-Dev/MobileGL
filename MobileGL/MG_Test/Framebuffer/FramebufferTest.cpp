@@ -1252,3 +1252,91 @@ TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffe
     EXPECT_EQ(g_driverIndexedColorMasks[2].a, GL_TRUE) << "a native buffer keeps its alpha writes";
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
+
+// --- glFramebufferTexture error conditions (GL 4.6 core 9.2.8) ---------------------------------
+//
+// Four of them were missing from the bound-target path while its DSA sibling
+// (glNamedFramebufferTexture) implemented all four, which is what KHR-GL4x.geometry_shader.
+// layered_fbo.fb_texture_* fails on. Two of them - the attachment-range check and the
+// default-framebuffer rejection - newly REFUSE calls that used to succeed, so they are pinned
+// here rather than left to the conformance suite.
+
+TEST_F(FramebufferTest, FramebufferTextureRejectsTheDefaultFramebuffer) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 64, 32);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // MobileGL models framebuffer 0 as a real FramebufferObject, so the null test that used to
+    // stand in for this could never fire and the attach silently "succeeded".
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    DrainPendingGlErrors();
+}
+
+TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_RGBA8, 64, 32);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // The same limit ValidateColorAttachmentInRange reads, so the test cannot disagree with the
+    // implementation about where the boundary is.
+    const GLint limit = MG_Backend::pActiveBackendObject
+                            ? static_cast<GLint>(
+                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    ASSERT_GT(limit, 0);
+    ASSERT_LT(limit, 32) << "the test needs a colour attachment enum past the limit to exist";
+
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
+                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    DrainPendingGlErrors();
+
+    // The last legal one still attaches, so the boundary is off-by-none.
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
+                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit - 1), texture, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, FramebufferTextureReportsInvalidValueForANameThatWasNeverGenerated) {
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // INVALID_VALUE, not INVALID_OPERATION: the entry point used to resolve the texture object
+    // first and report the miss with the wrong code, pre-empting ValidateTextureName.
+    const GLuint neverGenerated = std::numeric_limits<GLuint>::max();
+    ASSERT_FALSE(MG_State::pGLContext->ValidateTextureName(neverGenerated));
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, neverGenerated, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+}
+
+TEST_F(FramebufferTest, FramebufferTextureRejectsALevelTheTextureDoesNotHave) {
+    GLuint framebuffer = 0;
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    // Two levels of immutable storage: level 1 is legal, level 2 is not.
+    MG_Impl::GLImpl::TextureStorage2D(texture, 2, GL_RGBA8, 64, 32);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "the last level the texture has is legal";
+
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, -1);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+    DrainPendingGlErrors();
+}

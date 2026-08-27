@@ -492,21 +492,46 @@ namespace MobileGL::MG_Impl::GLImpl {
             const FramebufferAttachmentType attachmentType = MG_Util::ConvertGLEnumToFramebufferAttachmentType(attachment);
             const FramebufferTarget framebufferTarget = MG_Util::ConvertGLEnumToFramebufferTarget(target);
             if (!FramebufferImpl::ValidateFramebufferAttachmentType(attachmentType)) return;
+            // GL 4.6 core 9.2.8: COLOR_ATTACHMENTm with m >= MAX_COLOR_ATTACHMENTS is an
+            // INVALID_OPERATION. The DSA sibling (NamedFramebufferTexture_State) has always asked
+            // this; the bound-target family did not, so an attachment one past the limit was
+            // accepted and then silently ignored.
+            if (!FramebufferImpl::ValidateColorAttachmentInRange(attachmentType, functionName)) return;
             if (!FramebufferImpl::ValidateFramebufferTarget(framebufferTarget)) return;
             if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
             auto& bindingSlot = MG_State::pGLContext->GetFramebufferBindingSlot(framebufferTarget);
             auto& framebufferObject = bindingSlot.GetBoundObject();
-            if (!framebufferObject) {
+            // GL 4.6 core 9.2.8: an INVALID_OPERATION error is generated if ZERO is bound to
+            // target. MobileGL keeps a real FramebufferObject for framebuffer 0, so the null test
+            // this replaced could never fire - the object is always there. Framebuffer 0 has to be
+            // recognised by identity instead, the same comparison DrawBuffers_State makes.
+            const auto& defaultFramebufferInfo = FramebufferImpl::pDefaultFramebufferInfo;
+            if (!framebufferObject ||
+                (defaultFramebufferInfo && framebufferObject == defaultFramebufferInfo->defaultFBO)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                                 "Framebuffer target is bound to no framebuffer object."));
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", functionName,
+                        "No framebuffer object is bound to the target; the default framebuffer's attachments "
+                        "cannot be named."));
                 return;
             }
 
             if (texture == 0) {
                 framebufferObject->Detach(attachmentType);
+                return;
+            }
+
+            // GL 4.6 core 9.2.8: a negative level is INVALID_VALUE, and so is a level a texture
+            // with immutable storage does not have. Asked here rather than in each entry point so
+            // the whole glFramebufferTexture* family answers the same way, which is what the DSA
+            // sibling already did for the negative half.
+            if (level < 0) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                 "Texture level must be non-negative."));
                 return;
             }
 
@@ -516,6 +541,17 @@ namespace MobileGL::MG_Impl::GLImpl {
                     ErrorCode::InvalidOperation,
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
                                                  std::format("Texture object {} is not valid.", texture)));
+                return;
+            }
+
+            if (textureObject->IsImmutable() &&
+                level >= static_cast<GLint>(textureObject->GetImmutableLevels())) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidValue,
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", functionName,
+                        std::format("Texture level {} is beyond the {} level(s) immutable texture {} has.", level,
+                                    textureObject->GetImmutableLevels(), texture)));
                 return;
             }
 
@@ -1240,6 +1276,12 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                      TextureUploadTarget::Texture2D);
             return;
         }
+
+        // The name's validity is an INVALID_VALUE condition (GL 4.6 core 9.2.8), and it has to be
+        // asked BEFORE the object is resolved: reporting the miss as the INVALID_OPERATION below
+        // pre-empted the shared helper's ValidateTextureName and answered the wrong error code for
+        // every texture name that was never generated.
+        if (!TextureImpl::ValidateTextureName(texture, true)) return;
 
         auto& textureObject = MG_State::pGLContext->GetTextureObject(texture);
         if (!textureObject) {
