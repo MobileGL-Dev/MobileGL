@@ -4689,19 +4689,43 @@ TEST_F(ProgramUtilTest, NumSamplesShimHonoursTheVersionAndExtensionGate) {
         Bool expectShim;
     };
     // Mirrors glslang's own gate (Initialize.cpp): desktop from 4.00, or from 1.30 with
-    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables.
+    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables - which
+    // GL_ANDROID_extension_pack_es31a and `#extension all : warn` also turn on
+    // (TParseVersions::updateExtensionBehavior).
     const Case cases[] = {
         {"desktop 460 core", "#version 460 core\n", true},
         {"desktop 400 core", "#version 400 core\n", true},
         {"desktop 330 core, no extension", "#version 330 core\n", false},
         {"desktop 330 core + ARB_sample_shading",
          "#version 330 core\n#extension GL_ARB_sample_shading : require\n", true},
+        {"desktop 330 core + all : warn",
+         "#version 330 core\n#extension all : warn\n", true},
         {"desktop 120, no extension", "#version 120\n", false},
+        {"desktop 120 + all : warn (below the 1.30 floor)",
+         "#version 120\n#extension all : warn\n", false},
         {"ESSL 320", "#version 320 es\n", true},
         {"ESSL 310, no extension", "#version 310 es\n", false},
         {"ESSL 310 + OES_sample_variables",
          "#version 310 es\n#extension GL_OES_sample_variables : require\n", true},
+        // The AEP spellings. glslang applies the directive's behavior to all twelve AEP members,
+        // GL_OES_sample_variables among them, so these are legal ES 3.1 shaders.
+        {"ESSL 310 + AEP : require",
+         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : require\n", true},
+        {"ESSL 310 + AEP : enable",
+         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : enable\n", true},
+        {"ESSL 310 + AEP : warn",
+         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : warn\n", true},
+        // ...but `disable` is not an opt-in, and the implication carries the behavior with it.
+        {"ESSL 310 + AEP : disable",
+         "#version 310 es\n#extension GL_ANDROID_extension_pack_es31a : disable\n", false},
+        {"ESSL 310 + all : warn",
+         "#version 310 es\n#extension all : warn\n", true},
+        // An AEP member that does NOT imply sample variables must not open the gate.
+        {"ESSL 310 + EXT_geometry_shader only",
+         "#version 310 es\n#extension GL_EXT_geometry_shader : require\n", false},
         {"ESSL 300", "#version 300 es\n", false},
+        {"ESSL 300 + AEP (below the 3.10 floor)",
+         "#version 300 es\n#extension GL_ANDROID_extension_pack_es31a : require\n", false},
     };
 
     for (const Case& testCase : cases) {
@@ -4872,4 +4896,119 @@ TEST_F(ProgramUtilTest, OnlyAnExactVersionRepeatIsElided) {
         PreprocessShaderSource(ShaderStage::Fragment, source);
         EXPECT_NE(source.find("#version 330 foobar"), String::npos) << source;
     }
+}
+
+// glslang applies an #extension directive's behavior to every extension the named one IMPLIES
+// (TParseVersions::updateExtensionBehavior, Versions.cpp:1039-1064). Both consumers of the
+// extension sets have to see that expansion or the AEP spelling of a shader behaves differently
+// from the byte-equivalent one that names its members directly.
+TEST_F(ProgramUtilTest, AepFansOutToItsMemberExtensionMacros) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    // The CTS-shaped guard, opted in the AEP way. Before the fan-out this took the broken arm.
+    String source = R"(#version 310 es
+#extension GL_ANDROID_extension_pack_es31a : require
+precision highp float;
+out vec4 fragColor;
+#if !GL_OES_sample_variables
+this is broken
+#endif
+#if !GL_OES_shader_multisample_interpolation
+this is also broken
+#endif
+void main() { fragColor = vec4(float(gl_NumSamples)); }
+)";
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+    // Both halves of the AEP path: the built-in shim AND the restored member macros.
+    EXPECT_TRUE(HasNumSamplesShim(source)) << source;
+    const String defines = CollectEsPreambleMacroDefines(source);
+    for (const char* member : {"GL_ANDROID_extension_pack_es31a", "GL_OES_sample_variables",
+                               "GL_OES_shader_image_atomic", "GL_OES_shader_multisample_interpolation",
+                               "GL_OES_texture_storage_multisample_2d_array", "GL_EXT_geometry_shader",
+                               "GL_EXT_gpu_shader5", "GL_EXT_primitive_bounding_box",
+                               "GL_EXT_shader_io_blocks", "GL_EXT_tessellation_shader",
+                               "GL_EXT_texture_buffer", "GL_EXT_texture_cube_map_array"}) {
+        EXPECT_NE(defines.find(String("#define ") + member + " 1\n"), String::npos)
+            << member << " missing from:\n" << defines;
+    }
+    // GL_KHR_blend_equation_advanced is an AEP member glslang propagates to, but its macro is in
+    // the DESKTOP preamble too - so the rewrite never took it away and it must not be restored.
+    EXPECT_EQ(defines.find("GL_KHR_blend_equation_advanced"), String::npos) << defines;
+
+    ExpectShaderCompiles(GL_FRAGMENT_SHADER, source);
+}
+
+TEST_F(ProgramUtilTest, ExtensionImplicationIsTransitiveAndStaysNamed) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    {
+        SCOPED_TRACE("geometry/tessellation imply the matching io_blocks");
+        // glslang re-enters updateExtensionBehavior for each implication, so the graph is walked
+        // to a fixed point rather than one level deep.
+        String source = R"(#version 310 es
+#extension GL_OES_geometry_shader : require
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        const String defines = CollectEsPreambleMacroDefines(source);
+        EXPECT_NE(defines.find("#define GL_OES_geometry_shader 1\n"), String::npos) << defines;
+        EXPECT_NE(defines.find("#define GL_OES_shader_io_blocks 1\n"), String::npos) << defines;
+        // The EXT spelling is a different extension and must not come along.
+        EXPECT_EQ(defines.find("GL_EXT_shader_io_blocks"), String::npos) << defines;
+    }
+
+    {
+        SCOPED_TRACE("a source that names nothing implied still gets nothing");
+        String source = R"(#version 310 es
+#extension GL_OES_sample_variables : enable
+out vec4 fragColor;
+void main() { fragColor = vec4(1.0); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        const String defines = CollectEsPreambleMacroDefines(source);
+        EXPECT_EQ(defines, String("#define GL_OES_sample_variables 1\n")) << defines;
+    }
+
+    {
+        SCOPED_TRACE("`all` opens the built-in gate but does not define every ES macro");
+        // The two questions differ: `all : warn` really does turn every extension on in glslang,
+        // but the preamble macros are defined before any #extension line runs, so `all` says
+        // nothing about which ones the ES -> desktop rewrite took away.
+        String source = R"(#version 310 es
+#extension all : warn
+out vec4 fragColor;
+void main() { fragColor = vec4(float(gl_NumSamples)); }
+)";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_TRUE(HasNumSamplesShim(source)) << source;
+        EXPECT_EQ(source.find("mobilegl-es-preamble"), String::npos) << source;
+        EXPECT_TRUE(CollectEsPreambleMacroDefines(source).empty());
+    }
+}
+
+// The mid-line #version probe must search THE LINE, not the rest of the file: an unbounded
+// std::string::find makes InspectShaderLanguage quadratic on the ordinary resolved-shader-pack
+// shape (one leading #version, no further '#' anywhere). This pins both halves - the detection
+// still fires, and it fires on a source whose only other content is a long directive-free body.
+TEST_F(ProgramUtilTest, MidLineVersionDetectionSurvivesALongDirectiveFreeBody) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    String body;
+    body.reserve(64 * 1024);
+    for (int line = 0; line < 2000; ++line) {
+        body += "    float v" + std::to_string(line) + " = 0.0;\n";
+    }
+
+    // The CTS concatenation shape, followed by a body with no '#' in it at all.
+    String source = "#version 310 es\nprecision highp float;#version 310 es\nout vec4 fragColor;\nvoid main() {\n" +
+                    body + "    fragColor = vec4(1.0);\n}\n";
+    const SizeT lineCountBefore = static_cast<SizeT>(std::count(source.begin(), source.end(), '\n'));
+
+    PreprocessShaderSource(ShaderStage::Fragment, source);
+
+    EXPECT_EQ(source.find("#version", source.find("#version") + 1), String::npos) << source.substr(0, 200);
+    EXPECT_EQ(static_cast<SizeT>(std::count(source.begin(), source.end(), '\n')), lineCountBefore);
+    ExpectShaderCompiles(GL_FRAGMENT_SHADER, source);
 }

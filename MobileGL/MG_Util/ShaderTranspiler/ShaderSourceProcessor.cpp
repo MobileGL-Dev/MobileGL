@@ -13,6 +13,7 @@
 #include <cerrno>
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <utility>
 #include <Config.h>
@@ -255,6 +256,50 @@ namespace {
         bool isValid = false;
     };
 
+    // glslang's #extension implication graph, transcribed from
+    // TParseVersions::updateExtensionBehavior (Versions.cpp:1039-1064). Naming one of these
+    // extensions applies the SAME behavior to every name it implies, so a source that says
+    // `#extension GL_ANDROID_extension_pack_es31a : require` has really required all twelve AEP
+    // members - and glslang's ES gl_NumSamples gate reads GL_OES_sample_variables, one of them.
+    //
+    // Transcribed rather than approximated: the AEP membership list is glslang's, and a guess that
+    // drifts from it would make MobileGL accept or reject a shader glslang does not.
+    // GL_KHR_blend_equation_advanced is in the list for completeness even though it has no ES
+    // preamble macro - IsEsOnlyPreambleExtensionMacro filters it out on its own.
+    const Vector<std::pair<const char*, Vector<const char*>>>& GetExtensionImplications() {
+        static const Vector<std::pair<const char*, Vector<const char*>>> kImplications = {
+            {"GL_ANDROID_extension_pack_es31a",
+             {"GL_KHR_blend_equation_advanced", "GL_OES_sample_variables", "GL_OES_shader_image_atomic",
+              "GL_OES_shader_multisample_interpolation", "GL_OES_texture_storage_multisample_2d_array",
+              "GL_EXT_geometry_shader", "GL_EXT_gpu_shader5", "GL_EXT_primitive_bounding_box",
+              "GL_EXT_shader_io_blocks", "GL_EXT_tessellation_shader", "GL_EXT_texture_buffer",
+              "GL_EXT_texture_cube_map_array"}},
+            // geometry / tessellation to io_blocks
+            {"GL_EXT_geometry_shader", {"GL_EXT_shader_io_blocks"}},
+            {"GL_OES_geometry_shader", {"GL_OES_shader_io_blocks"}},
+            {"GL_EXT_tessellation_shader", {"GL_EXT_shader_io_blocks"}},
+            {"GL_OES_tessellation_shader", {"GL_OES_shader_io_blocks"}},
+        };
+        return kImplications;
+    }
+
+    // Closes `extensions` under the graph above. glslang propagates by RE-ENTERING
+    // updateExtensionBehavior, so the propagation is transitive (AEP -> GL_EXT_geometry_shader ->
+    // GL_EXT_shader_io_blocks); the fixed-point loop below is that re-entry.
+    void AddImpliedExtensions(std::set<MobileGL::String>& extensions) {
+        if (extensions.empty()) return;
+        bool grew = true;
+        while (grew) {
+            grew = false;
+            for (const auto& [source, implied] : GetExtensionImplications()) {
+                if (extensions.count(source) == 0) continue;
+                for (const char* name : implied) {
+                    grew |= extensions.insert(name).second;
+                }
+            }
+        }
+    }
+
     // Reads "<digits> [profile]" out of a "#version" directive whose keyword ends at `probe`, and
     // decides whether it is one MobileGL is willing to rewrite. `code` must be the masked source,
     // so a trailing comment has already become blanks.
@@ -337,12 +382,21 @@ namespace {
                 // BlankRedundantVersionDirectives for why that one is tolerated and nothing else.
                 //
                 // Gated on a directive having been accepted already, so an ordinary shader - which
-                // has none of these - pays one memchr per line past its #version line and nothing
-                // before it.
-                if (info.hasValidVersionDirective) {
-                    const SizeT hashPos = code.find('#', probe);
-                    if (hashPos != MobileGL::String::npos && hashPos < lineEnd) {
-                        recordIfRedundant(hashPos, lineEnd);
+                // has none of these - pays nothing at all before its #version line.
+                //
+                // BOUNDED TO THE LINE, and that is not a detail. std::string::find(char, pos) has
+                // no end bound, so a `code.find('#', probe)` filtered afterwards by
+                // `hashPos < lineEnd` scans from this line to the END OF THE SOURCE whenever no
+                // '#' follows - which is the ordinary shape of a resolved shader-pack source (one
+                // leading #version, nothing after it), and it makes this whole sweep quadratic in
+                // shader size. A 131 KB glsl-transformer output in .trace-work has exactly one '#'
+                // in the file. Searching the line span is behaviour-identical: every hashPos the
+                // unbounded form could accept already had to satisfy hashPos < lineEnd.
+                if (info.hasValidVersionDirective && probe < lineEnd) {
+                    const void* hash = std::memchr(code.data() + probe, '#', lineEnd - probe);
+                    if (hash != nullptr) {
+                        recordIfRedundant(static_cast<SizeT>(static_cast<const char*>(hash) - code.data()),
+                                          lineEnd);
                     }
                 }
             } else {
@@ -389,6 +443,19 @@ namespace {
 
             lineStart = lineEnd + (hasLineBreak ? 1 : 0);
         }
+
+        // Both extension sets are closed under glslang's implication graph BEFORE anyone reads
+        // them, so every consumer sees the same expansion and none of them can forget it. Applied
+        // here rather than at the directive because an implication may be named before its source
+        // (`#extension GL_EXT_shader_io_blocks : disable` then `... AEP : require`), and the
+        // fixed point of the whole set is what glslang's re-entrant propagation ends up at.
+        //
+        // enablesGpuShader5 is deliberately NOT recomputed from the expanded set: it gates the
+        // 460 version escalation on the DESKTOP ARB/NV spellings, and AEP implies the ESSL
+        // GL_EXT_gpu_shader5, a different extension. An ES source is rewritten to 460 core
+        // anyway, so there is nothing for the escalation to do there.
+        AddImpliedExtensions(info.namedExtensions);
+        AddImpliedExtensions(info.enabledExtensions);
 
         return info;
     }
@@ -1653,21 +1720,47 @@ namespace {
         if (!info.hasValidVersionDirective) return;
         if (info.namedExtensions.empty()) return;
 
-        MobileGL::String macros;
-        for (const MobileGL::String& extension : info.namedExtensions) {
-            if (!IsEsOnlyPreambleExtensionMacro(extension, info.version)) continue;
-            macros += extension;
-        }
+        // namedExtensions is already closed under glslang's implication graph, so a source that
+        // names only GL_ANDROID_extension_pack_es31a marks its twelve members too - glslang's ES
+        // preamble defines all of them, and the CTS-shaped "#if !GL_OES_sample_variables" guard
+        // reads one of them.
+        //
+        // `#extension all : warn` is deliberately NOT honoured here, unlike in the built-in gate.
+        // The two answer different questions: the gate asks "would glslang have this extension
+        // turned on", where `all` genuinely says yes, while this asks "which preamble macros did
+        // the ES -> desktop rewrite take away". glslang's preamble runs BEFORE any #extension line
+        // and defines the ES macros regardless of behavior, so `all` adds no information - and
+        // emitting all thirty-five for a source that named nothing is exactly the broad rewrite
+        // the named-extensions-only policy exists to avoid.
+        const bool hasMacroToRestore =
+            std::any_of(info.namedExtensions.begin(), info.namedExtensions.end(),
+                        [&info](const MobileGL::String& extension) {
+                            return IsEsOnlyPreambleExtensionMacro(extension, info.version);
+                        });
         // Nothing the desktop preamble is missing: leave the source byte-identical.
-        if (macros.empty()) return;
+        if (!hasMacroToRestore) return;
 
         source.insert(afterVersion.Get(source),
                       MobileGL::String(kEsPreambleMarkerPrefix) + std::to_string(info.version) + "*/\n");
     }
 
+    // "Would glslang have this extension turned on?", mirroring TParseVersions::extensionTurnedOn.
+    //
+    // Two spellings besides the name itself reach it. The implication graph is already folded into
+    // enabledExtensions (AddImpliedExtensions), so only `#extension all : <behavior>` is left:
+    // glslang applies that behavior to EVERY registered extension at once, and rejects `all` with
+    // require/enable outright (Versions.cpp:1136-1141) - so the only spellings that survive are
+    // `all : warn`, which turns everything ON (behavior != EBhDisable), and `all : disable`.
+    // InspectShaderLanguage only records a name in enabledExtensions for enable/require/warn, so
+    // the literal "all" appearing here means `all : warn` and nothing else.
+    bool ExtensionTurnedOn(const ShaderLanguageInfo& info, const char* extension) {
+        return info.enabledExtensions.count(extension) != 0 || info.enabledExtensions.count("all") != 0;
+    }
+
     // gl_NumSamples is legal in this source only where glslang would have declared it with a
     // non-SPIR-V target (Initialize.cpp): desktop from 4.00 core, or from 1.30 with
-    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables.
+    // ARB_sample_shading; ESSL from 3.20, or from 3.10 with OES_sample_variables - the last of
+    // which GL_ANDROID_extension_pack_es31a also turns on, via the implication graph.
     //
     // The gate matters because the shim ends in "#define gl_NumSamples mg_NumSamples", and a
     // #define is not scoped by anything: defining it for a source where the built-in does not
@@ -1676,10 +1769,10 @@ namespace {
         if (!info.HasVersionDirective() || !info.hasValidVersionDirective) return false;
         if (info.profile == MobileGL::ShaderProfile::ES) {
             if (info.version >= 320) return true;
-            return info.version >= 310 && info.enabledExtensions.count("GL_OES_sample_variables") != 0;
+            return info.version >= 310 && ExtensionTurnedOn(info, "GL_OES_sample_variables");
         }
         if (info.version >= 400) return true;
-        return info.version >= 130 && info.enabledExtensions.count("GL_ARB_sample_shading") != 0;
+        return info.version >= 130 && ExtensionTurnedOn(info, "GL_ARB_sample_shading");
     }
 
     // gl_NumSamples has no SPIR-V built-in to lower to, so glslang declares it only when it is NOT
