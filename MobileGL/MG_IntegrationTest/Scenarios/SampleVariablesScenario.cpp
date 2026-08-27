@@ -183,4 +183,92 @@ void main() { o_color = vec4(float(gl_NumSamples) * (16.0 / 255.0), 0.0, 0.0, 1.
         gl.EndFrame();
     }
 
+    // ARB_sample_shading is advertised, and until now glMinSampleShading was a logging no-op while
+    // glEnable(GL_SAMPLE_SHADING) fell out of RenderState::SetCapability's default arm - so an
+    // application could ask for a shading rate and get silence from both halves.
+    //
+    // What this can and cannot assert. The RATE itself is not observable from a portable shader:
+    // GL 4.6 core 14.3.1 makes any use of gl_SampleID or gl_SamplePosition force per-sample
+    // evaluation on its own, so the very built-ins that would report the rate defeat the
+    // measurement. What IS worth pinning is that the state now reaches both backends without
+    // damage: DirectGLES forwards glEnable(GL_SAMPLE_SHADING) + glMinSampleShading to the ES
+    // driver (and must not, on a driver that has neither, push an INVALID_ENUM into the
+    // application's error queue), and DirectVulkan bakes sampleShadingEnable/minSampleShading into
+    // a NEW pipeline - which it may only do with the device's sampleRateShading feature enabled.
+    TEST_F(SampleVariablesScenario, SampleShadingStateReachesTheBackendWithoutDisturbingTheDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width();
+        const int height = gl.Height();
+
+        std::string error;
+        const unsigned int program = CompileProgram(kVS, kFS, &error);
+        ASSERT_NE(program, 0u) << error;
+
+        GLint maxSamples = 0;
+        glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+        const GLint requestedSamples = std::min<GLint>(maxSamples, 4);
+        if (requestedSamples < 2) {
+            glDeleteProgram(program);
+            GTEST_SKIP() << "GL_MAX_SAMPLES is " << maxSamples << "; sample shading needs a multisample target";
+        }
+
+        GLuint msFbo = 0, msRbo = 0;
+        glGenFramebuffers(1, &msFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
+        glGenRenderbuffers(1, &msRbo);
+        glBindRenderbuffer(GL_RENDERBUFFER, msRbo);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, requestedSamples, GL_RGBA8, width, height);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msRbo);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glDeleteRenderbuffers(1, &msRbo);
+            glDeleteFramebuffers(1, &msFbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteProgram(program);
+            GTEST_SKIP() << "no complete " << requestedSamples << "x multisample RGBA8 renderbuffer on this driver";
+        }
+
+        GLint realizedSamples = 0;
+        glGetIntegerv(GL_SAMPLES, &realizedSamples);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_DEPTH_TEST);
+        glViewport(0, 0, width, height);
+
+        glEnable(GL_SAMPLE_SHADING);
+        glMinSampleShading(1.0f);
+        EXPECT_EQ(glIsEnabled(GL_SAMPLE_SHADING), static_cast<GLboolean>(GL_TRUE));
+        GLfloat rate = -1.0f;
+        glGetFloatv(GL_MIN_SAMPLE_SHADING_VALUE, &rate);
+        EXPECT_FLOAT_EQ(rate, 1.0f);
+        EXPECT_EQ(FirstGLError(), 0u) << "enabling sample shading raised a GL error";
+
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        DrawFullViewportQuad(program);
+        EXPECT_EQ(FirstGLError(), 0u) << "the sample-shading draw raised a GL error";
+
+        BindDefaultFramebuffer();
+        glViewport(0, 0, width, height);
+        ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        const Image resolved = ReadPixels(width, height);
+        const Rgba8 centre = resolved.At(width / 2, height / 2);
+        // The rate changes how OFTEN the shader runs, never what it computes - so the same
+        // gl_NumSamples reading has to come back.
+        EXPECT_NEAR(centre.r, 16 * realizedSamples, 2)
+            << "the draw changed its result once sample shading was enabled";
+
+        glMinSampleShading(0.0f);
+        glDisable(GL_SAMPLE_SHADING);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        glDeleteRenderbuffers(1, &msRbo);
+        glDeleteFramebuffers(1, &msFbo);
+        glDeleteProgram(program);
+        gl.EndFrame();
+    }
+
 } // namespace MGITest
