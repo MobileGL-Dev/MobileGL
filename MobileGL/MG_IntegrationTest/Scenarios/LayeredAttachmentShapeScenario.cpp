@@ -881,15 +881,26 @@ void main()
             DrawSampling(program, scratchFbo, GL_TEXTURE_CUBE_MAP, cube);
             EXPECT_EQ(FirstGLError(), 0u) << "the sampling draw errored";
 
-            // Every face, read back one at a time - the per-face spelling is what names the
-            // offender when only +X was cleared.
+            // Every face, read back through an FBO that names THAT face.
+            //
+            // Not glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face): measured against a tree
+            // where only +X had been cleared, that spelling returned the cleared colour for all
+            // six faces, so it cannot see per-face state on DirectVulkan and the case built on it
+            // was unfalsifiable. glFramebufferTexture2D + glReadPixels names one face and nothing
+            // else, and the pending clear is long gone by now (materialised and popped above), so
+            // this readback cannot alter what it is measuring.
             static const char* const kFaceNames[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
-            glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
             for (int face = 0; face < 6; ++face) {
+                const GLuint faceFbo = TrackFramebuffer();
+                glBindFramebuffer(GL_FRAMEBUFFER, faceFbo);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                       static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), cube, 0);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                ASSERT_TRUE(FramebufferIsComplete()) << "cube face " << kFaceNames[face] << " is not attachable";
                 std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
-                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA,
-                              GL_UNSIGNED_BYTE, texels.data());
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(0, 0, kExtent, kExtent, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 EXPECT_EQ(FirstGLError(), 0u) << "reading cube face " << kFaceNames[face] << " back errored";
                 ExpectAllCleared(texels, kExtent * kExtent,
                                  (std::string("layered GL_TEXTURE_CUBE_MAP glClear materialised by sampling, "
@@ -897,7 +908,6 @@ void main()
                                   kFaceNames[face])
                                      .c_str());
             }
-            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 
             Gl().EndFrame();
         }
