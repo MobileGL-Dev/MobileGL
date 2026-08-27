@@ -81,24 +81,93 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        // Float and half-float colour formats hold values outside [0,1] perfectly well, so their
-        // border colour must NOT be clamped - the RGBA32F conformance rows use a border of 1.0 and
-        // would be unaffected either way, but an HDR border of 4.0 must survive.
-        Bool IsUnclampedColorFormat(TextureInternalFormat format) {
+        // GL 4.6 core 8.14.2: "The border values are clamped before they are used, according to the
+        // format in which texture components are stored. For signed and unsigned normalized
+        // fixed-point formats, border values are clamped to [-1,1] and [0,1] respectively. For
+        // floating-point and integer formats, border values are clamped to the representable range of
+        // the format." Every clause of that sentence is a real case here - the clamp is not just the
+        // normalized one.
+        //
+        // Only the 32-bit float formats are genuinely unclamped: every finite float is representable
+        // in them. Half-float has a finite maximum, and the two packed "float" formats are UNSIGNED,
+        // so a negative border on them must come back as 0 rather than as a negative number the
+        // driver delivers verbatim through VK_BORDER_COLOR_FLOAT_CUSTOM_EXT.
+        struct FloatBorderRange {
+            Bool clamped = true;
+            Float minValue = 0.0f;
+            Float maxValue = 1.0f;
+        };
+
+        FloatBorderRange ResolveFloatBorderRange(TextureInternalFormat format, Bool isSignedNormalized) {
             switch (format) {
-            case TextureInternalFormat::R16F:
-            case TextureInternalFormat::RG16F:
-            case TextureInternalFormat::RGB16F:
-            case TextureInternalFormat::RGBA16F:
             case TextureInternalFormat::R32F:
             case TextureInternalFormat::RG32F:
             case TextureInternalFormat::RGB32F:
             case TextureInternalFormat::RGBA32F:
+                return {false, 0.0f, 0.0f};
+            case TextureInternalFormat::R16F:
+            case TextureInternalFormat::RG16F:
+            case TextureInternalFormat::RGB16F:
+            case TextureInternalFormat::RGBA16F:
+                return {true, -65504.0f, 65504.0f};
+            // Unsigned packed floats: no sign bit at all. 65024 is the largest 11-bit float; the
+            // 10-bit blue channel tops out lower (64512) and RGB9E5 higher (65408), but the bound
+            // that matters for correctness is the lower one, and a single conservative upper bound
+            // costs nothing a real border colour will ever notice.
             case TextureInternalFormat::R11FG11FB10F:
+                return {true, 0.0f, 64512.0f};
             case TextureInternalFormat::RGB9E5:
-                return true;
+                return {true, 0.0f, 65408.0f};
             default:
-                return false;
+                return {true, isSignedNormalized ? -1.0f : 0.0f, 1.0f};
+            }
+        }
+
+        // Per-component representable range of an integer texture format, as Int64 so that the whole
+        // signed and unsigned 32-bit ranges are expressible in one type and the clamp can be written
+        // once for both domains. Alpha is carried separately because RGB10_A2UI is the one format
+        // whose alpha is narrower than its colour channels.
+        struct IntegerBorderRange {
+            Int64 rgbMin = 0;
+            Int64 rgbMax = 0;
+            Int64 alphaMin = 0;
+            Int64 alphaMax = 0;
+        };
+
+        IntegerBorderRange ResolveIntegerBorderRange(TextureInternalFormat format) {
+            const auto uniform = [](Int64 low, Int64 high) { return IntegerBorderRange{low, high, low, high}; };
+            switch (format) {
+            case TextureInternalFormat::R8I:
+            case TextureInternalFormat::RG8I:
+            case TextureInternalFormat::RGB8I:
+            case TextureInternalFormat::RGBA8I:
+                return uniform(-128, 127);
+            case TextureInternalFormat::R16I:
+            case TextureInternalFormat::RG16I:
+            case TextureInternalFormat::RGB16I:
+            case TextureInternalFormat::RGBA16I:
+                return uniform(-32768, 32767);
+            case TextureInternalFormat::R8UI:
+            case TextureInternalFormat::RG8UI:
+            case TextureInternalFormat::RGB8UI:
+            case TextureInternalFormat::RGBA8UI:
+                return uniform(0, 255);
+            case TextureInternalFormat::R16UI:
+            case TextureInternalFormat::RG16UI:
+            case TextureInternalFormat::RGB16UI:
+            case TextureInternalFormat::RGBA16UI:
+                return uniform(0, 65535);
+            case TextureInternalFormat::R32UI:
+            case TextureInternalFormat::RG32UI:
+            case TextureInternalFormat::RGB32UI:
+            case TextureInternalFormat::RGBA32UI:
+                return uniform(0, 4294967295LL);
+            case TextureInternalFormat::RGB10A2UI:
+                return {0, 1023, 0, 3};
+            default:
+                // The signed 32-bit formats, and anything unexpected: the full int32 range, i.e. a
+                // clamp that cannot alter a value the GL entry points could have carried.
+                return uniform(-2147483648LL, 2147483647LL);
             }
         }
 
@@ -413,59 +482,83 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // (0,0,0,1). The value itself is whichever integer form the application wrote; a float
             // border on an integer texture is nonsense GL leaves undefined, so the derived integer
             // representation (a plain cast) is as good an answer as any.
+            //
+            // Clamped to the format's representable range FIRST, per GL 4.6 core 8.14.2, and read
+            // through Int64 so the whole signed and unsigned 32-bit ranges are expressible at once.
+            //
+            // Which representation to start from is the TEXTURE's domain, not the entry-point form
+            // the application used. GL 4.6 core 8.10 stores an "I"-form border colour unmodified with
+            // an integer internal data type and does not define a sign conversion between the two
+            // integer forms, so the stored bits are reinterpreted in the sampled format's own
+            // signedness. Measured, not assumed: a border of -1 written with glTexParameterIiv
+            // against a GL_R8UI texture samples as 255 on the ES driver, i.e. as 0xFFFFFFFF clamped
+            // to the format's maximum - see the IntegerBorderColorScenario case that pins it. Picking
+            // the representation by the FORM instead would answer 0 here, which is a defensible
+            // reading of the same spec text but puts DirectVulkan at odds with DirectGLES - and
+            // DirectGLES cannot deviate, it forwards the value to the driver verbatim. Cross-backend
+            // agreement decides it.
+            const auto range = ResolveIntegerBorderRange(format);
             const auto& borderColorI = sampler.GetBorderColorI();
-            const Bool allZeroRgb = borderColorI.x() == 0 && borderColorI.y() == 0 && borderColorI.z() == 0;
-            if (allZeroRgb && borderColorI.w() == 0) {
+            const auto& borderColorUI = sampler.GetBorderColorUI();
+            const Bool startFromUnsigned = domain == BorderColorDomain::UnsignedInteger;
+            Int64 clamped[4];
+            for (SizeT channel = 0; channel < 4; ++channel) {
+                const Int64 raw = startFromUnsigned ? static_cast<Int64>(borderColorUI[channel])
+                                                    : static_cast<Int64>(borderColorI[channel]);
+                const Int64 low = channel == 3 ? range.alphaMin : range.rgbMin;
+                const Int64 high = channel == 3 ? range.alphaMax : range.rgbMax;
+                clamped[channel] = std::clamp(raw, low, high);
+            }
+
+            // Matched against the CLAMPED value, so a border the format cannot hold still lands on
+            // the palette entry it clamps to rather than missing every one of them.
+            const Bool allZeroRgb = clamped[0] == 0 && clamped[1] == 0 && clamped[2] == 0;
+            if (allZeroRgb && clamped[3] == 0) {
                 resolved.color = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
                 return resolved;
             }
-            if (allZeroRgb && borderColorI.w() == 1) {
+            if (allZeroRgb && clamped[3] == 1) {
                 resolved.color = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
                 return resolved;
             }
-            if (borderColorI.x() == 1 && borderColorI.y() == 1 && borderColorI.z() == 1 && borderColorI.w() == 1) {
+            if (clamped[0] == 1 && clamped[1] == 1 && clamped[2] == 1 && clamped[3] == 1) {
                 resolved.color = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
                 return resolved;
             }
             if (canUseCustom) {
                 resolved.color = VK_BORDER_COLOR_INT_CUSTOM_EXT;
                 resolved.isCustom = true;
-                if (domain == BorderColorDomain::UnsignedInteger) {
-                    const auto& borderColorUI = sampler.GetBorderColorUI();
-                    resolved.customValue.uint32[0] = borderColorUI.x();
-                    resolved.customValue.uint32[1] = borderColorUI.y();
-                    resolved.customValue.uint32[2] = borderColorUI.z();
-                    resolved.customValue.uint32[3] = borderColorUI.w();
-                } else {
-                    resolved.customValue.int32[0] = borderColorI.x();
-                    resolved.customValue.int32[1] = borderColorI.y();
-                    resolved.customValue.int32[2] = borderColorI.z();
-                    resolved.customValue.int32[3] = borderColorI.w();
+                for (SizeT channel = 0; channel < 4; ++channel) {
+                    if (domain == BorderColorDomain::UnsignedInteger) {
+                        resolved.customValue.uint32[channel] = static_cast<Uint32>(clamped[channel]);
+                    } else {
+                        resolved.customValue.int32[channel] = static_cast<Int32>(clamped[channel]);
+                    }
                 }
                 return resolved;
             }
             // No custom colour available: pick the nearest of the three integer palette entries
             // rather than always answering transparent black, which is what turned an integer border
             // of (-1,-1,-1,-1) into 0 and broke the CTS's clamped-texel detection outright.
-            const Bool opaque = borderColorI.w() != 0;
-            const Bool bright = borderColorI.x() != 0 || borderColorI.y() != 0 || borderColorI.z() != 0;
+            const Bool opaque = clamped[3] != 0;
+            const Bool bright = clamped[0] != 0 || clamped[1] != 0 || clamped[2] != 0;
             resolved.color = !opaque ? VK_BORDER_COLOR_INT_TRANSPARENT_BLACK
                                      : (bright ? VK_BORDER_COLOR_INT_OPAQUE_WHITE : VK_BORDER_COLOR_INT_OPAQUE_BLACK);
             return resolved;
         }
 
         // Float domain. GL 4.6 core 8.14.2/8.23: the border colour is interpreted in the texture's
-        // format, so a fixed-point or depth texture clamps it to that format's representable range
-        // first. Without the clamp the CTS's border of (255,255,255,255) on a GL_RGBA8 texture
-        // matched none of the palette entries and fell through to transparent black - every border
-        // texel sampled 0 where the test wanted 255.
+        // format, so it is clamped to that format's representable range first. Without the clamp the
+        // CTS's border of (255,255,255,255) on a GL_RGBA8 texture matched none of the palette entries
+        // and fell through to transparent black - every border texel sampled 0 where the test wanted
+        // 255. The range is per format class, not just the normalized [0,1] / [-1,1] pair: only the
+        // 32-bit float formats are unclamped.
         FloatVec4 borderColor = sampler.GetBorderColor();
-        if (!IsUnclampedColorFormat(format)) {
-            const Float lowerBound = IsSignedNormalizedFormat(format) ? -1.0f : 0.0f;
-            borderColor = FloatVec4(std::clamp(borderColor.x(), lowerBound, 1.0f),
-                                    std::clamp(borderColor.y(), lowerBound, 1.0f),
-                                    std::clamp(borderColor.z(), lowerBound, 1.0f),
-                                    std::clamp(borderColor.w(), lowerBound, 1.0f));
+        if (const auto range = ResolveFloatBorderRange(format, IsSignedNormalizedFormat(format)); range.clamped) {
+            borderColor = FloatVec4(std::clamp(borderColor.x(), range.minValue, range.maxValue),
+                                    std::clamp(borderColor.y(), range.minValue, range.maxValue),
+                                    std::clamp(borderColor.z(), range.minValue, range.maxValue),
+                                    std::clamp(borderColor.w(), range.minValue, range.maxValue));
         }
 
         // A depth texture samples one component, so only x decides - and its alpha reads as 1.
