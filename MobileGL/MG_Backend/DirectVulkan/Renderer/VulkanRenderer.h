@@ -584,6 +584,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.
         Bool m_dualSrcBlendFeatureEnabled = false;
         Bool m_primitiveTopologyListRestartFeatureEnabled = false;
+        // shaderTessellationAndGeometryPointSize gates the PointSize built-in in a tessellation
+        // or geometry stage, which desktop GL treats as an ordinary per-vertex output (writable,
+        // and capturable by name through transform feedback). Cached at device creation so the
+        // program build can say so when a program asks for something the device will not run.
+        Bool m_tessellationAndGeometryPointSizeFeatureEnabled = false;
         // VK_EXT_custom_border_color. Vulkan's four predefined VkBorderColor values cover only
         // transparent/opaque black and opaque white; GL_TEXTURE_BORDER_COLOR is an arbitrary vec4 (or
         // an arbitrary ivec4/uvec4 through the "I" entry points). Without this extension a border

@@ -77,6 +77,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         };
 
+        // Where a gl_PerVertex built-in output lives, resolved from the module's annotations.
+        // Named for gl_Position because the clip-space fixup is what it was written for, and it
+        // is still the only shape that pass accepts - but the transform-feedback capture pass
+        // resolves gl_PointSize through the same struct, in which case `vectorTypeId` /
+        // `vectorPtrTypeId` hold the SCALAR float type and its Output pointer rather than a vec4.
         struct PositionTargetInfo {
             Uint32 variableId = 0;
             Uint32 vectorTypeId = 0;
@@ -101,6 +106,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (outFloatTypeId) *outFloatTypeId = floatTypeId;
             return true;
         }
+
+        // gl_PointSize's counterpart to IsVec4Float32. The two are the only shapes any
+        // gl_PerVertex member this file resolves can have, and each resolver takes whichever
+        // one its built-in is declared with, so a mismatched type declines rather than
+        // producing a mirror the driver would reject.
+        Bool IsFloat32Scalar(spvtools::opt::IRContext* context, Uint32 typeId, Uint32* outFloatTypeId) {
+            auto* floatInst = context->get_def_use_mgr()->GetDef(typeId);
+            if (!floatInst || floatInst->opcode() != spv::Op::OpTypeFloat) return false;
+            if (floatInst->GetSingleWordInOperand(0) != 32) return false;
+
+            if (outFloatTypeId) *outFloatTypeId = typeId;
+            return true;
+        }
+
+        // Which of the two shapes above a resolver should accept. A plain function pointer
+        // rather than a std::function: every call site is one of the two free functions.
+        using BuiltInTypeCheckFn = Bool (*)(spvtools::opt::IRContext*, Uint32, Uint32*);
 
         spvc_basetype MapReflectInterfaceToSpvcBasetype(const SpvReflectInterfaceVariable& variable) {
             if (variable.type_description == nullptr) {
@@ -774,8 +796,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
-        Bool ResolveDirectPositionTarget(spvtools::opt::IRContext* context, Uint32 variableId,
-                                         PositionTargetInfo* outTarget) {
+        Bool ResolveDirectBuiltInTarget(spvtools::opt::IRContext* context, Uint32 variableId,
+                                        BuiltInTypeCheckFn typeCheck, PositionTargetInfo* outTarget) {
             auto* varInst = context->get_def_use_mgr()->GetDef(variableId);
             if (!varInst || varInst->opcode() != spv::Op::OpVariable) return false;
             if (varInst->GetSingleWordInOperand(0) != static_cast<Uint32>(spv::StorageClass::Output)) return false;
@@ -787,7 +809,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             PositionTargetInfo target{};
             target.variableId = variableId;
             target.vectorTypeId = ptrTypeInst->GetSingleWordInOperand(1);
-            if (!IsVec4Float32(context, target.vectorTypeId, &target.floatTypeId)) return false;
+            if (!typeCheck(context, target.vectorTypeId, &target.floatTypeId)) return false;
             target.vectorPtrTypeId = varInst->type_id();
             target.isMember = false;
 
@@ -802,15 +824,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return context->get_type_mgr()->GetTypeInstruction(&ptrType);
         }
 
-        Bool ResolveMemberPositionTarget(spvtools::opt::IRContext* context, Uint32 structTypeId, Uint32 memberIndex,
-                                         PositionTargetInfo* outTarget) {
+        Bool ResolveMemberBuiltInTarget(spvtools::opt::IRContext* context, Uint32 structTypeId, Uint32 memberIndex,
+                                        BuiltInTypeCheckFn typeCheck, PositionTargetInfo* outTarget) {
             auto* structInst = context->get_def_use_mgr()->GetDef(structTypeId);
             if (!structInst || structInst->opcode() != spv::Op::OpTypeStruct) return false;
             if (memberIndex >= structInst->NumInOperands()) return false;
 
             const Uint32 vectorTypeId = structInst->GetSingleWordInOperand(memberIndex);
             Uint32 floatTypeId = 0;
-            if (!IsVec4Float32(context, vectorTypeId, &floatTypeId)) return false;
+            if (!typeCheck(context, vectorTypeId, &floatTypeId)) return false;
 
             const Uint32 vectorPtrTypeId = FindOutputVectorPointerTypeId(context, vectorTypeId);
             if (vectorPtrTypeId == 0) return false;
@@ -838,29 +860,40 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        Bool FindPositionTarget(spvtools::opt::IRContext* context, PositionTargetInfo* outTarget) {
+        // The OUTPUT variable (or gl_PerVertex member) carrying `builtIn`, if the module
+        // declares one of the expected type. Annotations are the search space deliberately:
+        // they survive the link-time sanitize chain's interface delisting, which is the whole
+        // reason EnsureEntryPointInterface exists.
+        Bool FindBuiltInTarget(spvtools::opt::IRContext* context, spv::BuiltIn builtIn,
+                               BuiltInTypeCheckFn typeCheck, PositionTargetInfo* outTarget) {
             Vector<Pair<Uint32, Uint32>> memberCandidates;
             constexpr auto kDecorationBuiltIn = static_cast<Uint32>(spv::Decoration::BuiltIn);
-            constexpr auto kBuiltInPosition = static_cast<Uint32>(spv::BuiltIn::Position);
+            const auto wantedBuiltIn = static_cast<Uint32>(builtIn);
 
             for (auto& inst : context->module()->annotations()) {
                 if (inst.opcode() == spv::Op::OpDecorate) {
                     if (inst.NumInOperands() < 3) continue;
                     if (inst.GetSingleWordInOperand(1) != kDecorationBuiltIn) continue;
-                    if (inst.GetSingleWordInOperand(2) != kBuiltInPosition) continue;
-                    if (ResolveDirectPositionTarget(context, inst.GetSingleWordInOperand(0), outTarget)) return true;
+                    if (inst.GetSingleWordInOperand(2) != wantedBuiltIn) continue;
+                    if (ResolveDirectBuiltInTarget(context, inst.GetSingleWordInOperand(0), typeCheck, outTarget)) {
+                        return true;
+                    }
                 } else if (inst.opcode() == spv::Op::OpMemberDecorate) {
                     if (inst.NumInOperands() < 4) continue;
                     if (inst.GetSingleWordInOperand(2) != kDecorationBuiltIn) continue;
-                    if (inst.GetSingleWordInOperand(3) != kBuiltInPosition) continue;
+                    if (inst.GetSingleWordInOperand(3) != wantedBuiltIn) continue;
                     memberCandidates.emplace_back(inst.GetSingleWordInOperand(0), inst.GetSingleWordInOperand(1));
                 }
             }
 
             for (const auto& [structTypeId, memberIndex] : memberCandidates) {
-                if (ResolveMemberPositionTarget(context, structTypeId, memberIndex, outTarget)) return true;
+                if (ResolveMemberBuiltInTarget(context, structTypeId, memberIndex, typeCheck, outTarget)) return true;
             }
             return false;
+        }
+
+        Bool FindPositionTarget(spvtools::opt::IRContext* context, PositionTargetInfo* outTarget) {
+            return FindBuiltInTarget(context, spv::BuiltIn::Position, IsVec4Float32, outTarget);
         }
 
         // Put `variableId` back on `entryPoint`'s interface list if it is not already there.
@@ -1379,11 +1412,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Bool needsPositionMirror = false;
                 Uint32 positionBufferIndex = 0;
                 Uint32 positionOffset = 0;
+                // gl_PointSize is a gl_PerVertex MEMBER, never a variable of its own, so the
+                // debug-name lookup below can never resolve it - it used to fall through to
+                // "no SPIR-V variable named 'gl_PointSize'" and leave the frontend's reserved
+                // slot unwritten, or, when it was the only capture, leave the module with no
+                // Xfb execution mode at all and the whole span declined.
+                Bool needsPointSizeMirror = false;
+                Uint32 pointSizeBufferIndex = 0;
+                Uint32 pointSizeOffset = 0;
                 for (const auto& varying : m_varyings) {
                     if (varying.name == "gl_Position") {
                         needsPositionMirror = true;
                         positionBufferIndex = varying.bufferIndex;
                         positionOffset = varying.offsetBytes;
+                        continue;
+                    }
+                    if (varying.name == "gl_PointSize") {
+                        needsPointSizeMirror = true;
+                        pointSizeBufferIndex = varying.bufferIndex;
+                        pointSizeOffset = varying.offsetBytes;
                         continue;
                     }
                     if (varying.blockMemberIndex >= 0) {
@@ -1450,8 +1497,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 if (needsPositionMirror) {
-                    modified |= MirrorPositionForCapture(entryFunctionId, *entryPoint, positionBufferIndex,
-                                                         positionOffset, decorateForXfb);
+                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint,
+                                                                 spv::BuiltIn::Position, IsVec4Float32,
+                                                                 "gl_Position", positionBufferIndex, positionOffset,
+                                                                 decorateForXfb);
+                }
+                if (needsPointSizeMirror) {
+                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint,
+                                                                 spv::BuiltIn::PointSize, IsFloat32Scalar,
+                                                                 "gl_PointSize", pointSizeBufferIndex,
+                                                                 pointSizeOffset, decorateForXfb);
                 }
 
                 if (!modified) return Status::SuccessWithoutChange;
@@ -1491,18 +1546,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return 0;
             }
 
+            // gl_Position and gl_PointSize are captured the same way and differ only in which
+            // built-in is looked up and what type it has, so one injector serves both. Anything
+            // else in gl_PerVertex would need its own type check before it could be added here.
             template <typename DecorateFn>
-            Bool MirrorPositionForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
-                                          Uint32 bufferIndex, Uint32 offsetBytes, const DecorateFn& decorateForXfb) {
+            Bool MirrorPerVertexBuiltInForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
+                                                  spv::BuiltIn builtIn, BuiltInTypeCheckFn typeCheck,
+                                                  const char* glslName, Uint32 bufferIndex, Uint32 offsetBytes,
+                                                  const DecorateFn& decorateForXfb) {
                 const Uint32 entryPointModel = entryPoint.GetSingleWordInOperand(0);
                 using namespace spvtools::opt;
                 PositionTargetInfo target{};
-                if (!FindPositionTarget(context(), &target)) {
-                    MGLOG_E("XfbCaptureDecoratePass: gl_Position capture requested but no position output found");
+                if (!FindBuiltInTarget(context(), builtIn, typeCheck, &target)) {
+                    MGLOG_E("XfbCaptureDecoratePass: %s capture requested but no such output found", glslName);
                     return false;
                 }
                 if (!target.isMember) {
-                    // Standalone gl_Position variable: decorate it directly. It still has to be
+                    // Standalone built-in variable: decorate it directly. It still has to be
                     // on the interface - a transform-feedback decoration on a variable the entry
                     // point does not list captures nothing, and the sanitize chain delists an
                     // unwritten one (see EnsureEntryPointInterface).
@@ -1563,7 +1623,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 // The mirror was listed on the entry point above, but the loop just added a READ
                 // of the SOURCE block through an access chain, and the interface rule covers
-                // reads exactly as it covers writes. A gl_Position capture on a shader whose
+                // reads exactly as it covers writes. A built-in capture on a shader whose
                 // block the sanitize chain delisted - a TES that redeclares `out gl_PerVertex`
                 // and never writes it, which is what the tessellation_control_to_tessellation_
                 // evaluation.gl_MaxPatchVertices_Position_PointSize bodies do - produced an

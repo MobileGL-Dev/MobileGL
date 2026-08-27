@@ -13193,6 +13193,18 @@ void main() {
                                                 : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.tessellationShader = supportedDeviceFeatures.tessellationShader;
+        // gl_PointSize is an ORDINARY per-vertex output in desktop GL - a tessellation
+        // evaluation or geometry shader may write it, and a program may capture it by name -
+        // but in Vulkan the PointSize built-in is only usable from those two stages when this
+        // feature is on (VUID-RuntimeSpirv-PointSize-06439; SPIR-V spells the requirement as
+        // the TessellationPointSize / GeometryPointSize capabilities, which glslang emits from
+        // any such write). Left off, every one of those programs is invalid usage that a lenient
+        // driver silently gives an undefined point size and a strict one faults on. Nothing here
+        // asks for it speculatively: the feature is taken only where the device advertises it.
+        deviceFeatures.shaderTessellationAndGeometryPointSize =
+            supportedDeviceFeatures.shaderTessellationAndGeometryPointSize;
+        m_tessellationAndGeometryPointSizeFeatureEnabled =
+            deviceFeatures.shaderTessellationAndGeometryPointSize == VK_TRUE;
         // Sampled-read barriers may only name the shader stages whose device feature is
         // actually enabled (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), so the
         // mask is assembled here, next to the feature decision, and handed to consumers.
