@@ -6846,10 +6846,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const String outMembers =
                 ExtractPerVertexBlockMembers(tessEvalStageEssl, /*input=*/true).value_or(String());
 
-            const String source = BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices,
-                                                                  inMembers, outMembers,
-                                                                  m_passthroughTessControlOuterLevel,
-                                                                  m_passthroughTessControlInnerLevel);
+            String source = BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices,
+                                                            inMembers, outMembers,
+                                                            m_passthroughTessControlOuterLevel,
+                                                            m_passthroughTessControlInnerLevel);
+            // The mirrored member lists can carry gl_PointSize - the neighbour stage declared it,
+            // so matching it is the whole point - and a redeclaration is exactly as illegal as a
+            // reference in ESSL without the extension. Same directive, same never-speculative
+            // rule as the per-stage loop; a driver with neither spelling gets nothing added and
+            // fails below with its own message, which is the honest outcome for a shape it
+            // cannot express.
+            const char* passthroughPointSizeExtension =
+                source.find("gl_PointSize") != String::npos
+                    ? PointSizeExtensionName(g_GLESCapabilities.TessellationPointSizeSupport, /*tessellation=*/true)
+                    : nullptr;
+            source = RequestPointSizeExtension(Move(source), passthroughPointSizeExtension);
 
             const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
             if (backendShaderId == 0) {
@@ -7373,6 +7384,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     source.find("gl_ViewportIndex") != String::npos;
                 source = RequestViewportArrayExtension(std::move(source), needsViewportArrayExtension);
 
+                // The fourth header-level rewrite, and the same shape as the third: ESSL has no
+                // gl_PointSize in a tessellation or geometry stage at ANY version - 320 makes the
+                // stages core and still leaves the built-in behind EXT/OES_..._point_size - while
+                // SPIRV-Cross prints it bare. Without the directive the stage fails to compile
+                // with "`gl_PointSize' undeclared", which takes the whole program to program 0:
+                // the draw renders nothing AND glBeginTransformFeedback is rejected, so a capture
+                // of anything at all off that program silently comes back empty. The token probe
+                // keeps the line off every other program and PointSizeExtensionName returns
+                // nullptr - i.e. nothing is emitted - on a driver advertising neither spelling.
+                if (source.find("gl_PointSize") != String::npos) {
+                    const Bool tessellationStage = glShaderType == GL_TESS_CONTROL_SHADER ||
+                                                   glShaderType == GL_TESS_EVALUATION_SHADER;
+                    if (tessellationStage || glShaderType == GL_GEOMETRY_SHADER) {
+                        const auto tier = tessellationStage ? g_GLESCapabilities.TessellationPointSizeSupport
+                                                            : g_GLESCapabilities.GeometryPointSizeSupport;
+                        const char* pointSizeExtension = PointSizeExtensionName(tier, tessellationStage);
+                        if (pointSizeExtension == nullptr) {
+                            // Latched, and an ERROR rather than a warning: what follows is a
+                            // driver compile failure whose text names a built-in the application
+                            // never mis-spelled, and the reason is a missing driver capability
+                            // rather than anything in the shader. Saying so here is the whole
+                            // difference between a legible skip and an unexplained black draw.
+                            MGLOG_E_ONCE("This driver advertises neither the EXT nor the OES %s_point_size "
+                                         "extension, so its ESSL has no gl_PointSize in a %s stage; program %u "
+                                         "will fail to compile. Point size from a non-vertex stage is not "
+                                         "available on this device.",
+                                         tessellationStage ? "tessellation" : "geometry",
+                                         tessellationStage ? "tessellation" : "geometry",
+                                         stateProgramObject->GetExternalIndex());
+                        }
+                        source = RequestPointSizeExtension(std::move(source), pointSizeExtension);
+                    }
+                }
+
                 source = RebindImageUniformsToFrontendUnits(std::move(source), stateProgramObject);
                 // The completion half of the format bake, for the formats SPIRV-Cross throws on
                 // rather than prints (r8ui and the rest of its desktop-only set). Empty for every
@@ -7495,11 +7540,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // were being rejected outright, and the lane could not say why it was
                     // rendering an empty translucent layer. A shader the driver refuses is
                     // never noise, and one line per refused shader is bounded by program count.
+                    //
+                    // The SOURCE goes with it, the way the synthesized pass-through control
+                    // stage's failure already prints its own: the driver log names a line and a
+                    // column in text that exists nowhere but here, and without it the only way
+                    // to read "`gl_PointSize' undeclared" is to rebuild the whole library at
+                    // DEBUG. Still one line per refused shader.
                     MGLOG_E("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
-                            "%u, driver log: %s",
+                            "%u, driver log: %s\nSource:\n%s",
                             stateProgramObject->GetExternalIndex(),
                             MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
-                            log.data());
+                            log.data(), source.c_str());
                     m_backendProgramUsable = false;
                     // Nothing will ever attach this one, so nothing else can free it.
                     g_GLESFuncs.glDeleteShader(backendShaderId);

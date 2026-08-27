@@ -713,6 +713,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
+        const char* PointSizeExtensionName(MG_External::GLESCapabilities::PointSizeTier tier, Bool tessellation) {
+            using Tier = MG_External::GLESCapabilities::PointSizeTier;
+            switch (tier) {
+                case Tier::ExtensionEXT:
+                    return tessellation ? "GL_EXT_tessellation_point_size" : "GL_EXT_geometry_point_size";
+                case Tier::ExtensionOES:
+                    return tessellation ? "GL_OES_tessellation_point_size" : "GL_OES_geometry_point_size";
+                default:
+                    return nullptr;
+            }
+        }
+
+        String RequestPointSizeExtension(String glslCode, const char* extensionName) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            // The gl_ViewportIndex story, one built-in over: ESSL 320 makes the tessellation and
+            // geometry STAGES core but leaves gl_PointSize out of their gl_PerVertex entirely,
+            // and SPIRV-Cross - which only ever sees a SPIR-V BuiltIn PointSize decoration -
+            // prints the identifier with no directive behind it. Same hard rule as the two
+            // neighbours: never emitted speculatively, because `#extension` on a name the driver
+            // does not advertise is a compile error of its own.
+            if (extensionName == nullptr || glslCode.find(extensionName) != String::npos) {
+                return glslCode;
+            }
+            const String directive = String("#extension ") + extensionName + " : require\n";
+            // Right after the #version line, the one position that must stay first;
+            // ForceSupporterOutput's scan for the LAST #extension directive still finds
+            // whichever one that ends up being.
+            const SizeT versionPos = glslCode.find("#version");
+            if (versionPos == String::npos) {
+                return directive + glslCode;
+            }
+            const SizeT lineEnd = glslCode.find('\n', versionPos);
+            if (lineEnd == String::npos) {
+                return glslCode + "\n" + directive;
+            }
+            glslCode.insert(lineEnd + 1, directive);
+            return glslCode;
+        }
+
         String BakeImageFormatQualifiers(String glslCode,
                                          const UnorderedMap<String, String>& esslFormatByUniformName) {
 #ifdef TRACY_ENABLE

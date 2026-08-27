@@ -1118,6 +1118,23 @@ namespace MobileGL {
                 ExtensionOES, // GL_OES_texture_buffer; ESSL below 320 must say GL_OES_texture_buffer
             };
             TextureBufferTier TextureBufferSupport = TextureBufferTier::None;
+            // Which spelling of per-vertex point size a NON-VERTEX stage has, if any. In desktop
+            // GL gl_PointSize is an ordinary gl_PerVertex member that any vertex-processing stage
+            // may write and any program may capture by name; in ESSL it does not EXIST in a
+            // tessellation or geometry stage until GL_EXT/OES_tessellation_point_size (resp.
+            // ..._geometry_point_size) is requested - not even at 320, where the stages
+            // themselves are core. SPIRV-Cross prints the identifier bare and asks for nothing,
+            // exactly as it does for gl_ViewportIndex, so the directive has to be inserted into
+            // the emitted source (RequestPointSizeExtension) and a driver with neither spelling
+            // cannot compile such a stage at all. Extension string only: these add no entry
+            // points, so there is no pointer to require.
+            enum class PointSizeTier : Uint8 {
+                None = 0,     // neither spelling; the stage cannot name gl_PointSize
+                ExtensionEXT, // GL_EXT_tessellation_point_size / GL_EXT_geometry_point_size
+                ExtensionOES, // GL_OES_tessellation_point_size / GL_OES_geometry_point_size
+            };
+            PointSizeTier TessellationPointSizeSupport = PointSizeTier::None;
+            PointSizeTier GeometryPointSizeSupport = PointSizeTier::None;
             // GL_MAX_TEXTURE_BUFFER_SIZE actually came back from the driver. False means the value
             // below is MobileGL's own floor, not a driver answer: the pname is only legal once
             // buffer textures exist, and querying it on a driver without them raises

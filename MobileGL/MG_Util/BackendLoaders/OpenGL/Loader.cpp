@@ -984,6 +984,20 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_OES_viewport_array") == 0) {
                     caps.SupportsViewportArray = true;
                 }
+                // EXT wins where both are advertised: it is the spelling the Android Extension
+                // Pack mandates, so it is the one a driver is most likely to have tested.
+                if (std::strcmp(extension, "GL_EXT_tessellation_point_size") == 0) {
+                    caps.TessellationPointSizeSupport = MG_External::GLESCapabilities::PointSizeTier::ExtensionEXT;
+                } else if (std::strcmp(extension, "GL_OES_tessellation_point_size") == 0 &&
+                           caps.TessellationPointSizeSupport == MG_External::GLESCapabilities::PointSizeTier::None) {
+                    caps.TessellationPointSizeSupport = MG_External::GLESCapabilities::PointSizeTier::ExtensionOES;
+                }
+                if (std::strcmp(extension, "GL_EXT_geometry_point_size") == 0) {
+                    caps.GeometryPointSizeSupport = MG_External::GLESCapabilities::PointSizeTier::ExtensionEXT;
+                } else if (std::strcmp(extension, "GL_OES_geometry_point_size") == 0 &&
+                           caps.GeometryPointSizeSupport == MG_External::GLESCapabilities::PointSizeTier::None) {
+                    caps.GeometryPointSizeSupport = MG_External::GLESCapabilities::PointSizeTier::ExtensionOES;
+                }
             }
         }
         // The pointer check on top of the extension check makes each flag sufficient on its own
@@ -1055,6 +1069,19 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");
         MGLOG_I("    viewport array (OES_viewport_array; gl_ViewportIndex collapses to viewport 0 when absent): %s",
                 caps.SupportsViewportArray ? "yes" : "no");
+        {
+            const auto pointSizeTierName = [](MG_External::GLESCapabilities::PointSizeTier tier) {
+                switch (tier) {
+                    case MG_External::GLESCapabilities::PointSizeTier::ExtensionEXT: return "EXT";
+                    case MG_External::GLESCapabilities::PointSizeTier::ExtensionOES: return "OES";
+                    default: return "no";
+                }
+            };
+            MGLOG_I("    tessellation gl_PointSize (EXT/OES_tessellation_point_size): %s",
+                    pointSizeTierName(caps.TessellationPointSizeSupport));
+            MGLOG_I("    geometry gl_PointSize (EXT/OES_geometry_point_size): %s",
+                    pointSizeTierName(caps.GeometryPointSizeSupport));
+        }
 
         // LOAD-BEARING STRING, not just a banner. android-plugin/trace-replay-ci.sh's
         // is_angle_surface_lost() greps mobilegl.log for exactly "OpenGL ES capabilities:" to

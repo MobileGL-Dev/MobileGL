@@ -273,6 +273,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // error, so this is never emitted speculatively. A no-op when not needed or already
         // present.
         String RequestViewportArrayExtension(String glslCode, Bool needed);
+        // Adds `#extension <extensionName> : require` when a TESSELLATION or GEOMETRY stage's
+        // emitted ESSL names gl_PointSize. Desktop GL has that built-in in gl_PerVertex for every
+        // vertex-processing stage; ESSL does NOT have it in those two at any version - not even
+        // 320, where the stages themselves are core - until EXT/OES_tessellation_point_size resp.
+        // EXT/OES_geometry_point_size is requested. SPIRV-Cross prints the identifier bare and
+        // asks for nothing, exactly as it does for gl_ViewportIndex, so without this the stage
+        // fails to compile with "`gl_PointSize' undeclared" and the WHOLE program is replaced by
+        // program 0 - the draw renders nothing and any transform-feedback capture it was carrying
+        // is rejected outright. `extensionName` is the caller's answer, nullptr when the driver
+        // advertises neither spelling, because requesting an unadvertised extension is itself a
+        // compile error. A no-op when nullptr or already present.
+        String RequestPointSizeExtension(String glslCode, const char* extensionName);
+        // The extension name RequestPointSizeExtension should be given for `tier`, or nullptr for
+        // PointSizeTier::None. `tessellation` picks the tessellation spellings over the geometry
+        // ones; the two extensions are separate and neither implies the other.
+        const char* PointSizeExtensionName(MG_External::GLESCapabilities::PointSizeTier tier, Bool tessellation);
         // Writes a format layout qualifier into the image declarations named in
         // `esslFormatByUniformName` that still have none. The completion half of the image-format
         // bake, and ONLY that: the SPIR-V pass (BakeImageFormatsPass) is what normally puts the
