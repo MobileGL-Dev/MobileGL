@@ -103,6 +103,28 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         return true;
     }
 
+    Bool ValidateCubeMapArrayShape(TextureUploadTarget target, GLsizei width, GLsizei height, GLsizei depth,
+                                   const char* caller) {
+        if (target != TextureUploadTarget::CubeMapArray && target != TextureUploadTarget::ProxyCubeMapArray) {
+            return true;
+        }
+        if (width != height) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Cube map array levels must be square (width == height)"));
+            return false;
+        }
+        if (depth % 6 != 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Cube map array depth must be a multiple of six"));
+            return false;
+        }
+        return true;
+    }
+
     Bool ValidateTextureSizeWithTextureUploadTarget(TextureUploadTarget target, GLsizei width, GLsizei height) {
         if (target == TextureUploadTarget::CubeMapPositiveX || target == TextureUploadTarget::CubeMapNegativeX ||
             target == TextureUploadTarget::CubeMapPositiveY || target == TextureUploadTarget::CubeMapNegativeY ||

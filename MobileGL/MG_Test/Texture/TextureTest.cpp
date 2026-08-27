@@ -5545,3 +5545,155 @@ TEST_F(TextureTest, ImageWidenedUploadSplitsAPacked2101010RevShadowIntoFourChann
         EXPECT_TRUE(empty.empty());
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// GL_TEXTURE_CUBE_MAP_ARRAY: the shape rules, the shared-exponent level query, and the
+// three-dimensional bound-texture copy. All three were front-end gaps rather than backend ones -
+// the DirectVulkan baseline failed the identical conformance bodies.
+// ---------------------------------------------------------------------------------------------
+
+// glTexStorage3D carried the two cube-array shape rules inline and glTexImage3D carried neither,
+// which is exactly why esextcTextureCubeMapArrayTex3DValidation failed on its two glTexImage3D
+// assertions and passed both glTexStorage3D ones. The predicate now lives in one validator that
+// every level-defining entry point calls.
+TEST_F(TextureTest, TexImage3DAppliesTheCubeMapArrayShapeRules) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, texture);
+    DrainPendingGlErrors();
+
+    // Non-square faces are GL_INVALID_VALUE.
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_RGBA8, 4, 8, 6, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // A depth that is not a whole number of cubes is GL_INVALID_VALUE.
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_RGBA8, 4, 4, 5, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // The legal shape still goes through untouched.
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_RGBA8, 4, 4, 12, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // And the rules are not applied to targets they do not belong to: a 2D array may be any
+    // rectangle with any layer count.
+    GLuint arrayTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &arrayTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, arrayTexture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, 4, 8, 5, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
+}
+
+TEST_F(TextureTest, TexStorage3DKeepsTheCubeMapArrayShapeRulesAfterTheyMovedIntoTheSharedValidator) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP_ARRAY, 1, &texture);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::TextureStorage3D(texture, 1, GL_RGBA8, 4, 8, 6);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    GLuint second = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP_ARRAY, 1, &second);
+    MG_Impl::GLImpl::TextureStorage3D(second, 1, GL_RGBA8, 4, 4, 5);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    GLuint third = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_CUBE_MAP_ARRAY, 1, &third);
+    MG_Impl::GLImpl::TextureStorage3D(third, 1, GL_RGBA8, 4, 4, 6);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// GL_TEXTURE_SHARED_SIZE (0x8C3F) had no case in either glGetTexLevelParameter switch, so it fell
+// into the terminal default arm and raised GL_INVALID_ENUM. esextcTextureCubeMapArrayGetterCalls
+// walks a fixed pname list and TCU_FAILs on the first error, so the whole body died there even
+// though every other pname it asks for was already implemented.
+TEST_F(TextureTest, GetTexLevelParameterAnswersSharedSize) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    GLint sharedSize = -1;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_SHARED_SIZE, &sharedSize);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(sharedSize, 0) << "only a shared-exponent format has a shared exponent";
+
+    GLfloat sharedSizeF = -1.0f;
+    MG_Impl::GLImpl::GetTexLevelParameterfv(GL_TEXTURE_2D, 0, GL_TEXTURE_SHARED_SIZE, &sharedSizeF);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_FLOAT_EQ(sharedSizeF, 0.0f) << "the fv switch is a copy of the iv one and must not drift";
+
+    // RGB9_E5 is the one format that HAS one, and it is five bits wide.
+    GLuint sharedTexture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &sharedTexture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, sharedTexture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGB9_E5, 4, 4, 0, GL_RGB, GL_FLOAT, nullptr);
+    DrainPendingGlErrors();
+
+    sharedSize = -1;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_SHARED_SIZE, &sharedSize);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(sharedSize, 5);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+// glCopyTexSubImage3D was `{ // TODO: implement }` - no validation, no error, no copy - while its
+// DSA sibling was fully implemented right next door. The two now share one body, so the target
+// rules are the only thing that separates them.
+TEST_F(TextureTest, CopyTexSubImage3DRejectsTargetsTheThreeDimensionalFormDoesNotTake) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    // GL 4.6 core 8.6: the 3D form takes only TEXTURE_3D / TEXTURE_2D_ARRAY /
+    // TEXTURE_CUBE_MAP_ARRAY. A cube map's faces are two-dimensional targets and go through
+    // glCopyTexSubImage2D. This used to be accepted silently, which is how the defect hid.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_CUBE_MAP, 0, 0, 0, 0, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}
+
+TEST_F(TextureTest, CopyTexSubImage3DValidatesTheDestinationRegionOnACubeMapArray) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, texture);
+    MG_Impl::GLImpl::TexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_RGBA8, 4, 4, 6, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                nullptr);
+    DrainPendingGlErrors();
+
+    // A negative level is GL_INVALID_VALUE, and reaching it at all proves the entry point now
+    // validates instead of returning silently.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, -1, 0, 0, 0, 0, 0, 2, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // So is a negative extent.
+    MG_Impl::GLImpl::CopyTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, 0, 0, -2, 2);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
+}
+
+TEST_F(TextureTest, CopyTexSubImage1DRejectsAnythingButTexture1D) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    DrainPendingGlErrors();
+
+    MG_Impl::GLImpl::CopyTexSubImage1D(GL_TEXTURE_2D, 0, 0, 0, 0, 2);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+}

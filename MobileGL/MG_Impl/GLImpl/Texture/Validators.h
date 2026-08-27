@@ -20,6 +20,13 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
     Bool ValidateTexturePixelDataType(TexturePixelDataType texturePixelDataType);
     Bool ValidateTextureLevelNumber(Int level);
     Bool ValidateTextureSizeWithTextureUploadTarget(TextureUploadTarget target, GLsizei width, GLsizei height);
+    // The two shape rules a cube-map-array level owes (GL 4.6 core 8.5): its faces are square, and
+    // its depth counts whole cubes. Both are GL_INVALID_VALUE. This used to be spelled inline in
+    // glTexStorage3D only, which is why glTexImage3D let both violations through - every entry
+    // point that DEFINES a cube-array level calls this now, so the two cannot drift again. A
+    // non-cube-array upload target answers true untouched.
+    Bool ValidateCubeMapArrayShape(TextureUploadTarget target, GLsizei width, GLsizei height, GLsizei depth,
+                                   const char* caller);
     Bool ValidateTextureSizeRange(Int width, Int height, Int depth);
     Bool ValidateTextureInternalFormat(TextureInternalFormat format);
     Bool ValidateTextureBorderNumber(Int border);

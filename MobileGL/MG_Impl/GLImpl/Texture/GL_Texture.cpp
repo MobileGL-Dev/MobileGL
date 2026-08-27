@@ -339,6 +339,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return GetTextureComponentType(textureInternalFormat, componentSizes.Alpha, false, false);
             case GL_TEXTURE_DEPTH_TYPE:
                 return GetTextureComponentType(textureInternalFormat, componentSizes.Depth, true, false);
+            case GL_TEXTURE_SHARED_SIZE:
+                // GL 4.6 core table 8.24: the size in bits of the SHARED EXPONENT, which only the
+                // one shared-exponent format has. Everything else answers zero, and the
+                // conformance suite compares "at least", not "equal".
+                return textureInternalFormat == TextureInternalFormat::RGB9E5 ? 5 : 0;
             default:
                 MOBILEGL_ASSERT(false, "Invalid texture level component pname: %d", pname);
                 return 0;
@@ -2214,6 +2219,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
         if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
         if (!TextureImpl::ValidateTextureSizeWithTextureUploadTarget(textureUploadTarget, width, height)) return;
+        if (!TextureImpl::ValidateCubeMapArrayShape(textureUploadTarget, width, height, depth, __func__)) return;
         if (!TextureImpl::ValidateTextureSizeRange(width, height, depth)) return;
         if (!TextureImpl::ValidateTextureInternalFormat(textureInternalFormat)) return;
         if (!TextureImpl::ValidateTextureBorderNumber(border)) return;
@@ -3307,6 +3313,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_ALPHA_SIZE:
         case GL_TEXTURE_DEPTH_SIZE:
         case GL_TEXTURE_STENCIL_SIZE:
+        case GL_TEXTURE_SHARED_SIZE:
             if (params) {
                 *params = GetTextureLevelComponentParameter(textureObject->GetFormat(), pname);
             }
@@ -3479,6 +3486,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_TEXTURE_ALPHA_SIZE:
         case GL_TEXTURE_DEPTH_SIZE:
         case GL_TEXTURE_STENCIL_SIZE:
+        case GL_TEXTURE_SHARED_SIZE:
             if (params) {
                 *params = static_cast<GLfloat>(GetTextureLevelComponentParameter(textureObject->GetFormat(), pname));
             }
@@ -3644,9 +3652,54 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    Bool ValidateCopyTextureSubImage(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLint level,
+                                     GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height,
+                                     GLsizei depth, const char* caller);
+
+    // The shared body of glCopyTexSubImage3D and glCopyTextureSubImage3D once the caller has
+    // resolved the destination texture. `allowCubeFaceFromZOffset` is the ONE difference between
+    // the two forms: the DSA form takes a cube map and selects the face with zoffset (GL 4.6 core
+    // 8.6), while the target-taking form cannot even name a cube map here - GL_TEXTURE_CUBE_MAP is
+    // not in glCopyTexSubImage3D's accepted-target list, its faces go through
+    // glCopyTexSubImage2D - so for it zoffset is always a layer index.
+    static void CopyTextureSubImage3DResolved(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                              GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
+                                              GLint y, GLsizei width, GLsizei height, Bool allowCubeFaceFromZOffset,
+                                              const char* caller) {
+        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, zoffset, width, height, 1, caller)) {
+            return;
+        }
+        TextureUploadTarget uploadTarget = GetPrimaryUploadTarget(textureObject);
+        GLint sliceOffset = zoffset;
+        if (allowCubeFaceFromZOffset && textureObject->GetTarget() == TextureTarget::TextureCubeMap) {
+            uploadTarget = static_cast<TextureUploadTarget>(
+                static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) + static_cast<SizeT>(zoffset));
+            sliceOffset = 0;
+        }
+        CopyReadFramebufferIntoMipmapRegion(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset, x, y,
+                                            width, height, caller);
+    }
+
     void CopyTexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x,
                                  GLint y, GLsizei width, GLsizei height) {
-        // TODO: implement
+        // GL 4.6 core 8.6 table: the three-dimensional form of the bound-texture copy accepts
+        // exactly TEXTURE_3D, TEXTURE_2D_ARRAY and TEXTURE_CUBE_MAP_ARRAY. A cube map's faces are
+        // two-dimensional targets of their own and go through glCopyTexSubImage2D.
+        const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        if (textureTarget != TextureTarget::Texture3D && textureTarget != TextureTarget::Texture2DArray &&
+            textureTarget != TextureTarget::TextureCubeMapArray) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glCopyTexSubImage3D requires GL_TEXTURE_3D, GL_TEXTURE_2D_ARRAY or "
+                                             "GL_TEXTURE_CUBE_MAP_ARRAY."));
+            return;
+        }
+        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        if (!textureObject) return;
+        CopyTextureSubImage3DResolved(textureObject, level, xoffset, yoffset, zoffset, x, y, width, height,
+                                      /*allowCubeFaceFromZOffset=*/false, __func__);
     }
 
     // What the three CopyTextureSubImage forms check in common (GL 4.6 core 8.6), once the caller
@@ -4012,7 +4065,22 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void CopyTexSubImage1D_State(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
-        // TODO: implement
+        // The bound-texture form of glCopyTextureSubImage1D. GL 4.6 core 8.6 accepts only
+        // GL_TEXTURE_1D here.
+        const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
+        if (textureTarget != TextureTarget::Texture1D) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glCopyTexSubImage1D requires GL_TEXTURE_1D."));
+            return;
+        }
+        const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
+        auto& textureObject = GetTextureObjectByTarget(textureUploadTarget, textureTarget);
+        if (!textureObject) return;
+        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, 0, 0, width, 1, 1, __func__)) return;
+        CopyReadFramebufferIntoMipmapRegion(textureObject, GetPrimaryUploadTarget(textureObject), level, xoffset,
+                                            /*yoffset=*/0, /*zoffset=*/0, x, y, width, /*height=*/1, __func__);
     }
 
     Bool CopyTexImage2D_State(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
@@ -4468,6 +4536,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
         if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
         if (!TextureImpl::ValidateTextureSizeWithTextureUploadTarget(textureUploadTarget, width, height)) return;
+        if (!TextureImpl::ValidateCubeMapArrayShape(textureUploadTarget, width, height, depth, __func__)) return;
         if (!TextureImpl::ValidateTextureSizeRange(width, height, depth)) return;
         if (!TextureImpl::ValidateTextureBorderNumber(border)) return;
         if (!TextureImpl::ValidateTextureLevelWithUploadTarget(textureUploadTarget, level)) return;
@@ -5206,17 +5275,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (!ValidateTextureMutable(textureObject, __func__)) return;
-        if (textureObject->GetTarget() == TextureTarget::TextureCubeMapArray &&
-            (width != height || depth % 6 != 0)) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    "Cube map array immutable storage must be square with depth multiple of 6."));
-            return;
-        }
-
         const auto textureUploadTarget = GetPrimaryUploadTarget(textureObject);
+        // The cube-array shape rules, shared with glTexImage3D / glCompressedTexImage3D so the
+        // three cannot drift (they had: this check used to exist here and nowhere else).
+        if (!TextureImpl::ValidateCubeMapArrayShape(textureUploadTarget, width, height, depth, __func__)) return;
+
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
         auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
 
@@ -6649,20 +6712,10 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "cube map array texture."));
             return;
         }
-        if (!ValidateCopyTextureSubImage(textureObject, level, xoffset, yoffset, zoffset, width, height, 1, __func__)) {
-            return;
-        }
         // A cube map addresses its faces as separate upload targets, so zoffset selects the target
         // rather than a slice within one; every other layered target keeps zoffset as the slice.
-        TextureUploadTarget uploadTarget = GetPrimaryUploadTarget(textureObject);
-        GLint sliceOffset = zoffset;
-        if (target == TextureTarget::TextureCubeMap) {
-            uploadTarget = static_cast<TextureUploadTarget>(
-                static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) + static_cast<SizeT>(zoffset));
-            sliceOffset = 0;
-        }
-        CopyReadFramebufferIntoMipmapRegion(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset, x, y,
-                                            width, height, __func__);
+        CopyTextureSubImage3DResolved(textureObject, level, xoffset, yoffset, zoffset, x, y, width, height,
+                                      /*allowCubeFaceFromZOffset=*/true, __func__);
     }
 
     void CopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x, GLint y, GLsizei width) {
