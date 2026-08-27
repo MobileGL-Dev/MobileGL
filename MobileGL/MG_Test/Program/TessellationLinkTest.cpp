@@ -27,7 +27,9 @@
 
 #include <gtest/gtest.h>
 
+#include <ios>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Includes.h"
