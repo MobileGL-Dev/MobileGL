@@ -6488,35 +6488,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // The second half of the inter-stage interface-block repair, and the one that
-            // actually closes the 420pack group: this driver drops the payload of a block that
-            // carries an explicit layout(location=) whenever a tessellation or geometry stage
-            // is in the pipeline, so the qualifier comes off and ES matches the block by name
-            // and member sequence instead. The names those two sides agree on are the ones the
-            // rename above just fixed, which is why this runs AFTER it and not before.
-            //
-            // The caller arms the two directions; both are false unless the driver POST
-            // measured the defect AND this program has a stage that can hit it. Adopted only
-            // when this stage really had a located block, for the reason the array-input split
-            // documents: the optimizer hands back a re-serialised copy either way.
-            Vector<unsigned int> strippedIoBlockLocationSpirv;
-            if (stripInputBlockLocations || stripOutputBlockLocations) {
-                Bool strippedAny = false;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::StripIoBlockLocationsForEssl(
-                        *effectiveSpirv, stripInputBlockLocations, stripOutputBlockLocations,
-                        strippedAny, strippedIoBlockLocationSpirv, enableSpirvValidation) &&
-                    !strippedIoBlockLocationSpirv.empty() && strippedAny) {
-                    effectiveSpirv = &strippedIoBlockLocationSpirv;
-                    MGLOG_D("Program %u stage %s: interface-block location qualifiers dropped "
-                            "(%s), because this driver loses a located block's payload across a "
-                            "tessellation or geometry boundary.",
-                            m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
-                            stripInputBlockLocations
-                                ? (stripOutputBlockLocations ? "consumed and produced" : "consumed")
-                                : "produced");
-                }
-            }
-
             // ESSL stage-matches uniform blocks by member precision, but SPIRV-Cross prints
             // a RelaxedPrecision member as explicit "mediump" in the vertex stage and as
             // UNQUALIFIED (mediump-by-default) in the fragment stage; after
@@ -6720,6 +6691,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     *effectiveSpirv, atomicCounterSpirv, enableSpirvValidation) &&
                 !atomicCounterSpirv.empty()) {
                 effectiveSpirv = &atomicCounterSpirv;
+            }
+
+            // The second half of the inter-stage interface-block repair, and the one that
+            // actually closes the 420pack group: this driver drops the payload of a block that
+            // carries an explicit layout(location=) whenever a tessellation or geometry stage
+            // is in the pipeline, so the qualifier comes off and ES matches the block by name
+            // and member sequence instead. The names those two sides agree on are the ones the
+            // rename above just fixed, which is why this runs AFTER it and not before.
+            //
+            // The caller arms the two directions; both are false unless the driver POST
+            // measured the defect AND this program has a stage that can hit it. Adopted only
+            // when this stage really had a located block, for the reason the array-input split
+            // documents: the optimizer hands back a re-serialised copy either way.
+            //
+            // LAST IN THE CHAIN, and that position is load-bearing. Vulkan SPIR-V REQUIRES a
+            // Location on every user-defined Input/Output variable
+            // ([VUID-StandaloneSpirv-Location-04915]), so the module this produces is
+            // deliberately no longer valid Vulkan SPIR-V - it is an ESSL-emission intermediate
+            // that goes straight into SPIRV-Cross and reaches no driver as SPIR-V. Running it
+            // here means no later pass validates what it produced; the pass itself skips
+            // validation for the same reason (see StripIoBlockLocationsForEssl). Anywhere
+            // earlier and every remaining pass would latch a validation failure on a module
+            // that is doing exactly what it was asked to.
+            Vector<unsigned int> strippedIoBlockLocationSpirv;
+            if (stripInputBlockLocations || stripOutputBlockLocations) {
+                Bool strippedAny = false;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::StripIoBlockLocationsForEssl(
+                        *effectiveSpirv, stripInputBlockLocations, stripOutputBlockLocations,
+                        strippedAny, strippedIoBlockLocationSpirv, enableSpirvValidation) &&
+                    !strippedIoBlockLocationSpirv.empty() && strippedAny) {
+                    effectiveSpirv = &strippedIoBlockLocationSpirv;
+                    MGLOG_D("Program %u stage %s: interface-block location qualifiers dropped "
+                            "(%s), because this driver loses a located block's payload across a "
+                            "tessellation or geometry boundary.",
+                            m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            stripInputBlockLocations
+                                ? (stripOutputBlockLocations ? "consumed and produced" : "consumed")
+                                : "produced");
+                }
             }
 
             MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,

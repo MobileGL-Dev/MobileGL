@@ -17,8 +17,6 @@
 #include <MG_Util/ShaderTranspiler/SpvcSession.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
-#include <spirv-tools/libspirv.hpp>
-
 using namespace MobileGL;
 using MobileGL::MG_Util::ShaderTranspiler::SessionUsageBit;
 using MobileGL::MG_Util::ShaderTranspiler::ShaderCompiler;
@@ -100,19 +98,17 @@ void main()
 )";
 } // namespace
 
+// NOTE ON spirv-val, because its absence here is deliberate and every sibling pass test
+// asserts the opposite. Vulkan SPIR-V REQUIRES a Location decoration on every user-defined
+// Input/Output variable ([VUID-StandaloneSpirv-Location-04915]), so a module whose interface
+// blocks have had theirs removed is INVALID Vulkan SPIR-V by construction - that is what the
+// pass was asked to produce. It never reaches a driver as SPIR-V: DirectGLES runs this last
+// in its chain and hands the result straight to SPIRV-Cross, which needs no location to print
+// a block. What the cases below assert instead is the thing that actually matters - that
+// SPIRV-Cross still emits a complete, matchable interface from it.
 class StripIoBlockLocationsTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        MobileGL::Initialize();
-        m_validationFailuresAtStart = ShaderCompiler::SpirvValidationFailureCount();
-    }
-
-    void TearDown() override {
-        EXPECT_EQ(ShaderCompiler::SpirvValidationFailureCount(), m_validationFailuresAtStart)
-            << "the stripped module did not survive spirv-val";
-    }
-
-    Uint64 m_validationFailuresAtStart = 0;
+    void SetUp() override { MobileGL::Initialize(); }
 };
 
 TEST_F(StripIoBlockLocationsTest, DropsTheQualifierFromBothBlocksAndLeavesVaryingsAlone) {
@@ -130,9 +126,6 @@ TEST_F(StripIoBlockLocationsTest, DropsTheQualifierFromBothBlocksAndLeavesVaryin
     ASSERT_TRUE(ShaderCompiler::StripIoBlockLocationsForEssl(input, true, true, strippedAny, output, true));
     ASSERT_FALSE(output.empty());
     EXPECT_TRUE(strippedAny);
-
-    spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
-    ASSERT_TRUE(tools.Validate(output));
 
     const String after = Transpile(output);
     // The blocks come out bare...

@@ -1241,8 +1241,16 @@ namespace MobileGL {
                 optimizer.RegisterPass(StripIoBlockLocationsPass::CreateStripIoBlockLocationsPass(
                     stripInputBlocks, stripOutputBlocks, &strippedAny));
 
+                // NOT VALIDATED, and that is the point of the pass rather than an oversight.
+                // Vulkan SPIR-V requires a Location on every user-defined Input/Output variable
+                // ([VUID-StandaloneSpirv-Location-04915]), so a module whose interface blocks
+                // have deliberately lost theirs fails spirv-val by construction. It never
+                // reaches a driver as SPIR-V: the caller runs this last in the DirectGLES chain
+                // and hands the result straight to SPIRV-Cross, which needs no location to
+                // print a block. Validating here would latch a failure on every affected
+                // program and teach the counter to cry wolf.
                 return RunOptimizerChecked("StripIoBlockLocationsForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                                           outputBinary, false, enableSpirvValidation);
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
