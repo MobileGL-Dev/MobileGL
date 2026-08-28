@@ -3389,8 +3389,8 @@ TEST_F(TextureTest, NormalizePixelFormatKeepsPackedTransferTypesForPackedSizedFo
 }
 
 // The packed16 field-order quirk (PixelFormatNormalizeOptionBit::WidenPacked16Norm): where the
-// driver's 16-bit packed storage mirrors its field order at a non-zero array mip level (the
-// Mali defect behind the KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* failures), the
+// driver stores some packed16 allocations with a mirrored field order (the Mali defect
+// behind the KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* failures), the
 // three ES narrow formats move to 8-bit-per-channel storage. The transfer pair must NOT move
 // with the bit - it is already the UNorm8 component layout the canonical shadow holds - and
 // no other format may move with it either.

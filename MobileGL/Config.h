@@ -264,10 +264,11 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_WIDEN_PACKED16_STORAGE: DirectGLES stores GL_RGB565/GL_RGB5(A1)/GL_RGBA4
         // images as 8-bit-per-channel ES storage (GL_RGB8/GL_RGBA8) instead of the driver's
         // native 16-bit packed formats. Auto defers to a POST driver-bug probe
-        // (SelfTest::CopyImageMirrorsPacked16FieldOrder): some Mali drivers keep a MIRRORED
-        // field order for the 16-bit packed texels of a non-zero mip level of a
-        // GL_TEXTURE_2D_ARRAY, so glCopyImageSubData - a raw texel-block move - lands
-        // R/G/B/A reversed whenever exactly one endpoint is such a level
+        // (SelfTest::CopyImageMirrorsPacked16FieldOrder): some Mali drivers store SOME
+        // packed16 allocations with a MIRRORED field order (allocation-scoped and
+        // shape/context dependent - the failing 30x30x12 GL_TEXTURE_2D_ARRAYs are mirrored
+        // at every level), so glCopyImageSubData - a raw texel-block move - lands R/G/B/A
+        // reversed whenever exactly one endpoint sits in a mirrored allocation
         // (KHR-GL4x.copy_image.functional rgb5/rgb5_a1/rgba4 x every *2d_array* pair).
         // With no 16-bit packed ES image left there is no field order to disagree about; the
         // client word still round-trips exactly, because the canonical shadow is already

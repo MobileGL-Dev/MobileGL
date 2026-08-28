@@ -344,11 +344,12 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // GL_RGB565 are ES formats an application can legitimately ask for - the same
             // normalization picks the storage for glRenderbufferStorage - so widening them
             // used to be declined as "a memory decision, not a correctness one". The 18
-            // KHR-GL4x.copy_image.functional bodies on Mali falsified that: the driver's own
-            // 16-bit packed storage keeps a MIRRORED field order at a non-zero mip level of a
-            // 2D array, so a raw glCopyImageSubData between such a level and any other image
-            // delivers the channels reversed (0x0007 -> 0x3800 for a 5551 word: the 1_5_5_5_REV
-            // re-encoding of the same fields). Where that is measured -
+            // KHR-GL4x.copy_image.functional bodies on Mali falsified that: the driver
+            // stores SOME packed16 allocations with a MIRRORED field order (allocation-scoped,
+            // shape- and context-dependent; the failing 30x30x12 arrays are mirrored at every
+            // level), so a raw glCopyImageSubData between a mirrored allocation and a plain
+            // one delivers the channels reversed (0x0007 -> 0x3800 for a 5551 word: the
+            // 1_5_5_5_REV re-encoding of the same fields). Where that is measured -
             // WidenPacked16Norm, set from the POST probe or its ForceOn override - the three
             // formats take the same 8-bit widening; everywhere else they stay narrow and the
             // memory argument stands. Nothing about the REPORTED precision moves either way:

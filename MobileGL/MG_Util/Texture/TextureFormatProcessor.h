@@ -47,9 +47,11 @@ namespace MobileGL {
         // Store the three 16-bit packed normalized formats (GL_RGB565, GL_RGB5_A1, GL_RGBA4)
         // as 8-bit-per-channel ES storage (GL_RGB8 / GL_RGBA8), the way the desktop-only
         // narrow formats already are. Set by DirectGLES when the driver's 16-bit packed
-        // storage cannot be trusted as a raw-copy endpoint: some Mali drivers keep a
-        // MIRRORED field order for these texels at a non-zero mip level of a 2D array, so
-        // glCopyImageSubData (a raw texel-block move) delivers the channels reversed. The
+        // storage cannot be trusted as a raw-copy endpoint: some Mali drivers store SOME
+        // packed16 allocations with a MIRRORED field order (which ones depends on shape and
+        // context history - measured on a three-level 30x30x12 2D array, every level of it),
+        // so glCopyImageSubData (a raw texel-block move) between a mirrored allocation and a
+        // plain one delivers the channels reversed. The
         // (format, type) transfer pair does not move with the bit - it is already the
         // UNorm8 component layout the canonical shadow holds for all three formats.
         // Reported precision does not move either: GL_TEXTURE_*_SIZE and
