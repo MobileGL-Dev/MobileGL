@@ -2087,6 +2087,46 @@ TEST_F(TextureTest, GetTextureSubImageSelectsTheCubeFaceZOffsetNames) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
 
+// glGetTexImage of ONE cube face packs one face, so a PIXEL_PACK_BUFFER holding one face is
+// exactly the right size for it. The validator used to measure the bound PBO against all SIX
+// faces' worth and refuse - INVALID_OPERATION for a buffer the copy that follows would have filled
+// precisely. glGetTexImage passes no bufSize, which skips the destination-size branch but NOT the
+// PBO one, so this is the only spelling where the six-face sizing was reachable at all.
+TEST_F(TextureTest, GetTexImageOfOneCubeFacePacksIntoAOneFacePixelPackBuffer) {
+    constexpr GLsizei kEdge = 2;
+    constexpr SizeT kFaceBytes = static_cast<SizeT>(kEdge) * kEdge * 4;
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, texture);
+    MG_Impl::GLImpl::TexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kEdge, kEdge);
+    for (int face = 0; face < 6; ++face) {
+        Uint8 seed[kFaceBytes];
+        for (SizeT i = 0; i < kFaceBytes; ++i) seed[i] = static_cast<Uint8>(10 + face);
+        MG_Impl::GLImpl::TexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, kEdge, kEdge, GL_RGBA,
+                                       GL_UNSIGNED_BYTE, seed);
+    }
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "seeding the six faces failed";
+
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::GenBuffers(1, &buffer);
+    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, buffer);
+    MG_Impl::GLImpl::BufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(kFaceBytes), nullptr, GL_STREAM_READ);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "creating the one-face pixel pack buffer failed";
+
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR)
+        << "a pixel pack buffer sized for the one face this call packs was refused";
+
+    Uint8 packed[kFaceBytes] = {};
+    MG_Impl::GLImpl::GetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(kFaceBytes), packed);
+    EXPECT_EQ(static_cast<int>(packed[0]), 15) << "the PBO holds face " << (static_cast<int>(packed[0]) - 10)
+                                               << ", not -Z";
+
+    MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, TextureParameteriAndBindTextureUnitAreDirectStateAccess) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);

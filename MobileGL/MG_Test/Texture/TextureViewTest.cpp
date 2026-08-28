@@ -505,4 +505,47 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
         EXPECT_FALSE(MG_State::pGLContext->ValidateTextureObject(view));
     }
+
+    // ======================= which of the owner's layers a face names =======================
+
+    // A GL_TEXTURE_CUBE_MAP view over a LAYERED owner - a 2D array here, a cube-map ARRAY behaves
+    // identically - is the one shape where the face a target names cannot be carried by the choice
+    // of blob: the owner keeps every layer in ONE blob, so there is nothing for
+    // ToOwnerUploadTarget to choose between and the face has to land in the byte offset instead.
+    // It did not. The offset shifted by the view's layer origin alone, so all six face tokens read
+    // the view's FIRST layer-face - silently, with real texels from a real layer, on every path
+    // that answers out of the CPU shadow.
+    //
+    // The shadow is exactly what this exercises: the fixture's backend is not DirectVulkan, so the
+    // by-name readback takes the shadow arm rather than asking a backend. (DirectVulkan's own path
+    // resolves the face into a Vulkan baseArrayLayer and was always right, which is what made this
+    // a disagreement between the two backends rather than a uniform wrong answer.)
+    TEST_F(TextureViewTest, CubeMapViewOfAnArrayReadsTheFaceEachTokenNames) {
+        constexpr GLint kLayers = 8;
+        constexpr GLint kViewMinLayer = 2;
+
+        const GLuint storage = MakeImmutable2DArray(1, 1, kLayers);
+        // Every layer carries its own index, so a read that lands on the wrong one says which one
+        // answered instead of merely failing.
+        for (GLint layer = 0; layer < kLayers; ++layer) {
+            const Uint8 texel[] = {static_cast<Uint8>(10 + layer), 20, 30, 40};
+            MG_Impl::GLImpl::TexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                           texel);
+        }
+        DrainPendingGlErrors();
+
+        const GLuint view = GenTexture();
+        MG_Impl::GLImpl::TextureView(view, GL_TEXTURE_CUBE_MAP, storage, GL_RGBA8, 0, 1, kViewMinLayer, 6);
+        ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "the cube-map view over the array was refused";
+
+        for (GLint face = 0; face < 6; ++face) {
+            Uint8 output[4] = {};
+            MG_Impl::GLImpl::GetTextureSubImage(view, 0, 0, 0, face, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                                sizeof(output), output);
+            EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "reading face " << face << " errored";
+            EXPECT_EQ(static_cast<GLint>(output[0]), 10 + kViewMinLayer + face)
+                << "face " << face << " of a view based at layer " << kViewMinLayer << " answered with layer "
+                << (static_cast<GLint>(output[0]) - 10);
+        }
+    }
 } // namespace
