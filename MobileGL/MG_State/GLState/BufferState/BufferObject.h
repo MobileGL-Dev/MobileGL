@@ -211,6 +211,10 @@ namespace MobileGL {
             // Sizes the store for a (re)definition, renewing an adopted GPU-resident
             // mapping across it. See the definition for why the renewal is not optional.
             void RedefineStorage(SizeT size);
+            // Backend-initiated coherent adoption for mesh-arena-sized stores; see the
+            // definition for the driver behavior that makes every other write route to
+            // a busy large mutable store a frame-scale stall.
+            void TryAdoptLargeStorage();
             void NotifyRespecify();
             void NotifySubData(SizeT offset, SizeT size);
             void NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess);

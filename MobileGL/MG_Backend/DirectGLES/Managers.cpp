@@ -828,6 +828,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return RingAvailable(g_uploadRing);
             }
 
+            // A partial range below this goes through the staging ring instead of a
+            // range-invalidating map: the map's page-substitution fast path needs a
+            // sizeable (page-coverable) range to engage, and below it the driver
+            // falls back to waiting out the WAR hazard on the CPU.
+            constexpr SizeT kInvalidateRangeMinBytes = 128u * 1024u;
+
             // Push every queued range of `resource` from the shadow into the backend
             // store, without ever letting a driver resolve the WAR hazard against
             // in-flight frames at the WHOLE BUFFER's expense. Three tiers:
@@ -879,11 +885,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const SizeT start = std::min(range.start, end);
                     const SizeT size = end - start;
                     if (size == 0) continue;
-                    if (mapUsable) {
+                    // The invalidating map's fast path is SHAPE-dependent on this Mali
+                    // driver: a whole-buffer invalidation renames the store outright,
+                    // and a large range gets fresh pages - but a small unaligned range
+                    // of a busy store makes the map WAIT (osup_sync_object_wait, ~9%
+                    // of a Minecraft 26.3 replay). So: whole buffer -> orphan-map;
+                    // large range -> range-invalidating map; small range -> the staged
+                    // ring copy, whose worst case (a whole-destination ghost) is only
+                    // ever the small destination itself.
+                    //
+                    // The map covers EXACTLY the queued range: only those bytes are the
+                    // shadow's to rewrite. Widening to page bounds looked free and was
+                    // not - the widened bytes clobbered GPU-written data (an SSBO
+                    // counter beside the app's SubData) with the stale shadow.
+                    const Bool wholeBuffer = start == 0 && end == limit && limit == resource.storageSize;
+                    if (mapUsable && (wholeBuffer || size >= kInvalidateRangeMinBytes)) {
                         BindBufferId(TempBufferTarget, resource.id);
+                        const GLbitfield access =
+                            GL_MAP_WRITE_BIT |
+                            (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
                         void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
-                                                                 (GLsizeiptr)size,
-                                                                 GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+                                                                 (GLsizeiptr)size, access);
                         if (dst) {
                             Memcpy(dst, bufferObject.MappedData() + start, size);
                             g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
@@ -1055,17 +1077,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->pendingRanges.Add({offset, offset + size});
                     return;
                 }
+                // An adopted zero-copy persistent store already HAS the bytes (the
+                // frontend wrote them through the coherent mapping); a driver upload
+                // here would be a self-copy that re-synchronizes what coherent mapping
+                // made free.
+                if (resource->persistentMapped && resource->persistentPtr) {
+                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+                    return;
+                }
                 // An immediate glBufferSubData resolves the WAR hazard against frames
                 // still referencing this store on the CPU on some drivers - Mali parks
                 // the thread in osup_sync_object_wait until every referencing job
                 // retires, which serialized Minecraft 26.3's per-frame UBO/chunk-mesh
                 // update streams into ~1 fps. Queue the range instead (the shadow
                 // already holds the bytes) and let draw-time sync push the merged
-                // ranges through the staging ring. The zero-copy persistent store
-                // keeps the legacy immediate upload: draw-time sync never flushes
-                // ranges for it, and its mapping publishes writes by itself.
-                if ((resource->persistentMapped && resource->persistentPtr) ||
-                    MG_Config::Features.EsprytDisableUploadRing) {
+                // ranges through the staging ring.
+                if (MG_Config::Features.EsprytDisableUploadRing) {
                     UploadRangeNow(*resource, bufferObject, offset, offset + size);
                     resource->syncedChangeSerial = bufferObject.GetChangeSerial();
                     return;
@@ -1087,13 +1114,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
 
-                // Same WAR-hazard rule as Ops_SubData: an immediate upload (mapped or
-                // glBufferSubData) can park the thread on Mali until the frames still
-                // referencing this store retire. Queue the range for the staged-copy
-                // flush at draw-time sync; only the zero-copy persistent store and the
-                // negative-control kill switch keep the immediate paths below.
-                if (!(resource->persistentMapped && resource->persistentPtr) &&
-                    !MG_Config::Features.EsprytDisableUploadRing) {
+                // An adopted zero-copy persistent store already HAS the bytes: the
+                // frontend shadow IS the coherent mapping the app (or UploadSubData)
+                // wrote into, so publishing is free. The self-copy that used to run
+                // here mapped a buffer this backend keeps persistently mapped (an
+                // INVALID_OPERATION whose fallback was a WAR-stalling
+                // glBufferSubData).
+                if (resource->persistentMapped && resource->persistentPtr) {
+                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+                    return;
+                }
+
+                // Same WAR-hazard rule as Ops_SubData: an immediate synchronized upload
+                // (mapped or glBufferSubData) can park the thread on Mali until the
+                // frames still referencing this store retire. Queue the range for the
+                // staged flush at draw-time sync; the negative-control kill switch
+                // keeps the immediate paths below.
+                if (!MG_Config::Features.EsprytDisableUploadRing) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add(range);
                     return;
@@ -2628,7 +2665,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
-            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteTextures) {
+            // TEMP-EXP (leak texture deletes): /sdcard/MG/exp_leak_texture_deletes.
+            // Discriminator for the mali-mem-purge hiccup theory: never hand the
+            // driver a texture free, so the purge daemon has nothing to reclaim.
+            static const Bool s_expLeakTextureDeletes = [] {
+                FILE* f = std::fopen("/sdcard/MG/exp_leak_texture_deletes", "rb");
+                if (!f) return false;
+                std::fclose(f);
+                return true;
+            }();
+            if (m_contextGeneration == g_backendContextGeneration && g_GLESFuncs.glDeleteTextures &&
+                !s_expLeakTextureDeletes) {
                 g_GLESFuncs.glDeleteTextures(1, &m_backendTextureId);
                 if (m_bufferImageSplitViewId != 0) {
                     g_GLESFuncs.glDeleteTextures(1, &m_bufferImageSplitViewId);

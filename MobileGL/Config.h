@@ -184,6 +184,15 @@ namespace MobileGL::MG_Config {
         // on Mali both the immediate glBufferSubData and a staged copy into a busy
         // mutable store ghost the whole destination on the CPU.
         Bool EsprytDisableInvalidateFlush = false;
+        // MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION: keep mesh-arena-sized buffer stores
+        // (>= 16MiB) on the CPU-shadow model instead of backing them with the backend's
+        // persistently+coherently mapped storage at definition time (negative control /
+        // escape hatch). Frontend-scoped: it engages only where the active backend
+        // provides AcquirePersistentMap. With adoption on, an app SubData into a busy
+        // 128MB arena is a plain memcpy into GPU-visible memory; every driver-mediated
+        // route for the same write stalls the thread or ghost-copies the whole arena on
+        // this class of Mali driver, and the arena stops costing its size again in RAM.
+        Bool DisableLargeBufferAdoption = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,

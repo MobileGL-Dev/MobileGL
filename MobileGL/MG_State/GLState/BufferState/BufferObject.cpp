@@ -8,6 +8,8 @@
 
 #include "BufferObject.h"
 
+#include <Config.h>
+
 #include <atomic>
 
 namespace MobileGL::MG_State::GLState {
@@ -126,6 +128,7 @@ namespace MobileGL::MG_State::GLState {
         // distinguishes the two cases, and it is cleared just above.
         m_storageFlags = GL_DYNAMIC_STORAGE_BIT | GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
         NotifyRespecify();
+        TryAdoptLargeStorage();
     }
 
     void BufferObject::Resize(SizeT size) {
@@ -144,6 +147,33 @@ namespace MobileGL::MG_State::GLState {
         m_isImmutableStorage = true;
         m_storageFlags = storageFlags;
         NotifyRespecify();
+        TryAdoptLargeStorage();
+    }
+
+    // Back a LARGE store with the backend's persistently+coherently mapped GPU
+    // storage the moment it is (re)defined, without waiting for the app to map it.
+    // Minecraft 26.3 streams chunk meshes into 128MB vertex arenas with plain
+    // glNamedBufferSubData - the one write API that carries no synchronization
+    // hint - and on Mali every route that hands the driver a write into a busy
+    // MUTABLE store either parks the calling thread (glBufferSubData, and
+    // glMapBufferRange even with GL_MAP_UNSYNCHRONIZED_BIT) or ghost-copies the
+    // whole destination on a driver worker (staged glCopyBufferSubData, and a
+    // range-invalidating map: ~167ms per touched arena, the recurring in-world
+    // hiccup). An adopted coherent map is the one shape with NO per-write driver
+    // call at all: every SubData lands as a plain memcpy into GPU-visible memory,
+    // and the shadow copy is dropped (a 128MB arena stops costing 128MB of RAM).
+    // Only attempted for stores the size of mesh arenas: small buffers keep the
+    // shadow model whose draw-time flush already prices them correctly.
+    void BufferObject::TryAdoptLargeStorage() {
+        constexpr SizeT kLargeBufferAdoptBytes = 16u * 1024u * 1024u;
+        if (MG_Config::Features.DisableLargeBufferAdoption) return;
+        if (m_size < kLargeBufferAdoptBytes) return;
+        if (m_resource.IsGpuResident()) return;
+        if (m_isMapped) return;
+        if (g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) return;
+        if (void* base = g_bufferBackendOps->AcquirePersistentMap(*this)) {
+            m_resource.AdoptPersistentMap(base);
+        }
     }
 
     void BufferObject::UploadData(DataPtr data, SizeT atOffset) {
