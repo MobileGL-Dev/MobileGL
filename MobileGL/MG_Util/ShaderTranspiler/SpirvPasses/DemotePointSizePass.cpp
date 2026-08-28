@@ -160,22 +160,44 @@ namespace MobileGL {
                 // Standalone form: a variable decorated BuiltIn PointSize directly.
                 std::vector<Instruction*> standaloneVars;
                 std::vector<Instruction*> standaloneBuiltInDecorations;
+                // Where clip and cull distance live, by (struct, member). DECLARATION is not
+                // the question - glslang emits the whole four-member gl_PerVertex block into
+                // every stage, touched or not - so these sites are only the starting point
+                // for the ACCESS scan the control-stage decline below performs, which is the
+                // same thing SPIRV-Cross's own clip_distance_count counts.
+                std::vector<MemberSite> clipCullSites;
+                std::vector<Instruction*> standaloneClipCullVars;
+                const auto isClipOrCull = [](const uint32_t builtIn) {
+                    return static_cast<spv::BuiltIn>(builtIn) == spv::BuiltIn::ClipDistance ||
+                           static_cast<spv::BuiltIn>(builtIn) == spv::BuiltIn::CullDistance;
+                };
                 for (Instruction& ann : ctx->annotations()) {
                     if (ann.opcode() == spv::Op::OpMemberDecorate && ann.NumInOperands() >= 4 &&
                         static_cast<spv::Decoration>(ann.GetSingleWordInOperand(2)) ==
-                            spv::Decoration::BuiltIn &&
-                        static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) ==
+                            spv::Decoration::BuiltIn) {
+                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(3)) ==
                             spv::BuiltIn::PointSize) {
-                        memberSites.push_back({ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
+                            memberSites.push_back(
+                                {ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
+                        } else if (isClipOrCull(ann.GetSingleWordInOperand(3))) {
+                            clipCullSites.push_back(
+                                {ann.GetSingleWordInOperand(0), ann.GetSingleWordInOperand(1)});
+                        }
                     } else if (ann.opcode() == spv::Op::OpDecorate && ann.NumInOperands() >= 3 &&
                                static_cast<spv::Decoration>(ann.GetSingleWordInOperand(1)) ==
-                                   spv::Decoration::BuiltIn &&
-                               static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(2)) ==
-                                   spv::BuiltIn::PointSize) {
-                        Instruction* var = defUse->GetDef(ann.GetSingleWordInOperand(0));
-                        if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
-                            standaloneVars.push_back(var);
-                            standaloneBuiltInDecorations.push_back(&ann);
+                                   spv::Decoration::BuiltIn) {
+                        if (static_cast<spv::BuiltIn>(ann.GetSingleWordInOperand(2)) ==
+                            spv::BuiltIn::PointSize) {
+                            Instruction* var = defUse->GetDef(ann.GetSingleWordInOperand(0));
+                            if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
+                                standaloneVars.push_back(var);
+                                standaloneBuiltInDecorations.push_back(&ann);
+                            }
+                        } else if (isClipOrCull(ann.GetSingleWordInOperand(2))) {
+                            Instruction* var = defUse->GetDef(ann.GetSingleWordInOperand(0));
+                            if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
+                                standaloneClipCullVars.push_back(var);
+                            }
                         }
                     }
                 }
@@ -502,6 +524,32 @@ namespace MobileGL {
                     return decline("a PointSize write with no output carrier name to bind it to");
                 }
 
+                // A FORCED carrier with nothing redirected onto it is a carrier no instruction
+                // ever writes - and a declared-but-unwritten output does not survive the ES
+                // hop: the driver's GLSL front end drops it, and a transform-feedback request
+                // naming it then fails the link with "varying undeclared", taking every other
+                // capture in the set down with it. The pass therefore SEEDS such a carrier
+                // (below) with GL's default point size, which is also what an unhosted
+                // built-in rasterizes at. GL leaves the value of an unwritten output
+                // undefined, so a defined 1.0 is a legal choice and a far better one than a
+                // varying the driver deletes.
+                const bool outputCarrierHasWriter = [&] {
+                    if (!scalarOutputChains.empty()) return true;
+                    for (const ArrayedRedirect& redirect : arrayedRedirects) {
+                        if (!redirect.input) return true;
+                    }
+                    return false;
+                }();
+                // The seed the control stage would need is per-INVOCATION - gl_out[
+                // gl_InvocationID] - and synthesizing that means inventing the InvocationId
+                // built-in for a stage that may not declare it. A control stage asked to
+                // produce a value it never computes is also a program reading undefined data
+                // either way, so this declines rather than growing the pass for it.
+                if (needsOutputCarrier && !standaloneOutputSwapped && !outputCarrierHasWriter &&
+                    isTessControl) {
+                    return decline("a control stage asked to produce a point-size carrier it never writes");
+                }
+
                 // The TCS output carrier is arrayed per vertex; its length comes from gl_out,
                 // or - for a forced carrier in a control stage that never declared gl_out -
                 // from the OutputVertices execution mode.
@@ -545,6 +593,109 @@ namespace MobileGL {
                 }
                 if (!anyWork && capabilitiesToStrip.empty()) return Status::SuccessWithoutChange;
 
+                // THE ONE SHAPE WHERE "declared but unaccessed" IS NOT ENOUGH. SPIRV-Cross
+                // force-emits the whole redeclared gl_PerVertex OUTPUT block for a control
+                // stage whose clip or cull distances are LIVE (should_force_emit_builtin_block,
+                // spirv_glsl.cpp), and that emission is driven by the struct's member
+                // DECORATIONS, never by access - so it prints "float gl_PointSize;" into a
+                // block no instruction touches any more. On the extension-less ES drivers this
+                // pass exists for, that redeclaration is exactly as illegal as the access was,
+                // so the demoted program would still be lost - only now with the capability
+                // stripped, the program-wide verdict flipped and a diagnostic naming a
+                // built-in the module no longer mentions. Declining keeps the honest refusal,
+                // and keeps the header's claim true for every shape that IS demoted.
+                //
+                // LIVE, not declared: glslang emits the whole four-member gl_PerVertex block
+                // into every stage whether or not it is touched, and SPIRV-Cross counts clip
+                // and cull distance from ACCESSES (Compiler::ActiveBuiltinHandler). Keying
+                // this on the decorations alone would decline every control stage there is.
+                // Only a block-MEMBER PointSize can be left behind to be printed; a standalone
+                // variable leaves with the demotion.
+                if (isTessControl && !blockVars.empty()) {
+                    bool clipOrCullIsLive = false;
+                    const auto memberIsClipOrCull = [&](const uint32_t structId,
+                                                        const uint32_t member) {
+                        for (const MemberSite& site : clipCullSites) {
+                            if (site.structId == structId && site.memberIndex == member) return true;
+                        }
+                        return false;
+                    };
+                    for (Instruction& inst : ctx->module()->types_values()) {
+                        if (clipOrCullIsLive) break;
+                        if (inst.opcode() != spv::Op::OpVariable) continue;
+                        const auto storage =
+                            static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0));
+                        if (storage != spv::StorageClass::Input &&
+                            storage != spv::StorageClass::Output) {
+                            continue;
+                        }
+                        // A standalone clip/cull variable counts the moment anything but its
+                        // own declaration touches it.
+                        bool standaloneClipCull = false;
+                        for (Instruction* candidate : standaloneClipCullVars) {
+                            if (candidate == &inst) standaloneClipCull = true;
+                        }
+                        Instruction* pointee = defUse->GetDef(VariablePointeeType(ctx, &inst));
+                        bool arrayed = false;
+                        if (pointee != nullptr && pointee->opcode() == spv::Op::OpTypeArray) {
+                            arrayed = true;
+                            pointee = defUse->GetDef(pointee->GetSingleWordInOperand(0));
+                        }
+                        const bool blockCarriesClipCull =
+                            pointee != nullptr && pointee->opcode() == spv::Op::OpTypeStruct &&
+                            [&] {
+                                for (const MemberSite& site : clipCullSites) {
+                                    if (site.structId == pointee->result_id()) return true;
+                                }
+                                return false;
+                            }();
+                        if (!standaloneClipCull && !blockCarriesClipCull) continue;
+                        const uint32_t structId = blockCarriesClipCull ? pointee->result_id() : 0;
+                        const uint32_t memberOperand = arrayed ? 2u : 1u;
+                        defUse->ForEachUser(&inst, [&](Instruction* user) {
+                            if (clipOrCullIsLive) return;
+                            switch (user->opcode()) {
+                            case spv::Op::OpEntryPoint:
+                            case spv::Op::OpName:
+                            case spv::Op::OpMemberName:
+                            case spv::Op::OpDecorate:
+                            case spv::Op::OpMemberDecorate:
+                                return;
+                            default:
+                                break;
+                            }
+                            if (standaloneClipCull) {
+                                clipOrCullIsLive = true;
+                                return;
+                            }
+                            if (user->opcode() != spv::Op::OpAccessChain &&
+                                user->opcode() != spv::Op::OpInBoundsAccessChain) {
+                                // A whole-block load, copy or anything else that cannot be
+                                // narrowed reaches every member, clip distance included.
+                                clipOrCullIsLive = true;
+                                return;
+                            }
+                            uint32_t member = 0;
+                            if (user->NumInOperands() <= memberOperand ||
+                                !PlainConstantValue(ctx, user->GetSingleWordInOperand(memberOperand),
+                                                    member)) {
+                                clipOrCullIsLive = true; // cannot prove it misses clip/cull
+                                return;
+                            }
+                            if (memberIsClipOrCull(structId, member)) clipOrCullIsLive = true;
+                        });
+                    }
+                    if (clipOrCullIsLive) {
+                        for (const BlockVar& blockVar : blockVars) {
+                            if (blockVar.storage == spv::StorageClass::Output) {
+                                return decline(
+                                    "a control stage with live clip/cull distance, whose "
+                                    "redeclared output block would still print gl_PointSize");
+                            }
+                        }
+                    }
+                }
+
                 // Phase 2: MUTATION. Nothing below may decline.
                 const uint32_t floatTypeId = Float32Type(ctx);
                 uint32_t inputCarrierId = 0;
@@ -565,6 +716,44 @@ namespace MobileGL {
                     outputCarrierId =
                         CreateCarrierVariable(ctx, entryPoint, pointeeTypeId, spv::StorageClass::Output,
                                               m_options.outputCarrierName, m_options.location);
+                }
+
+                // Seed a forced carrier nothing writes, so the ES hop keeps it (see the
+                // reasoning at outputCarrierHasWriter). In a GEOMETRY stage the store has to
+                // go before every EmitVertex, because that is when the outputs of one vertex
+                // are latched; anywhere else the ends of the entry function will do.
+                if (outputCarrierId != 0 && !outputCarrierHasWriter) {
+                    const uint32_t defaultPointSizeId = ctx->get_constant_mgr()->GetFloatConstId(1.0f);
+                    const uint32_t entryFunctionId = entryPoint->GetSingleWordInOperand(1);
+                    std::vector<Instruction*> seedSites;
+                    for (auto funcIt = ctx->module()->begin(); funcIt != ctx->module()->end();
+                         ++funcIt) {
+                        if (funcIt->result_id() != entryFunctionId) continue;
+                        funcIt->ForEachInst([&](Instruction* inst) {
+                            const bool emit = inst->opcode() == spv::Op::OpEmitVertex ||
+                                              inst->opcode() == spv::Op::OpEmitStreamVertex;
+                            const bool ret = inst->opcode() == spv::Op::OpReturn ||
+                                             inst->opcode() == spv::Op::OpReturnValue;
+                            if (isGeometry ? emit : ret) seedSites.push_back(inst);
+                        });
+                        // A geometry stage with no EmitVertex emits nothing at all; seeding the
+                        // ends of the function still keeps the varying alive for the capture.
+                        if (isGeometry && seedSites.empty()) {
+                            funcIt->ForEachInst([&](Instruction* inst) {
+                                if (inst->opcode() == spv::Op::OpReturn ||
+                                    inst->opcode() == spv::Op::OpReturnValue) {
+                                    seedSites.push_back(inst);
+                                }
+                            });
+                        }
+                    }
+                    for (Instruction* site : seedSites) {
+                        site->InsertBefore(spvtools::MakeUnique<Instruction>(
+                            ctx, spv::Op::OpStore, 0, 0,
+                            std::initializer_list<Operand>{
+                                {SPV_OPERAND_TYPE_ID, {outputCarrierId}},
+                                {SPV_OPERAND_TYPE_ID, {defaultPointSizeId}}}));
+                    }
                 }
 
                 // Scalar output chains first, while the def-use index still knows their uses.

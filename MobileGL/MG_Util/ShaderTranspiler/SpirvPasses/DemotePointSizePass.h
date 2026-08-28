@@ -32,10 +32,20 @@ namespace MobileGL {
             // capability is stripped. The gl_PerVertex STRUCT keeps its PointSize member,
             // declared and decorated but no longer accessed: that is exactly the shape glslang
             // produces for a program that never touches point size (it defers the capability to
-            // first use), which is the one shape proven to build on every extension-less driver
-            // this repairs. A standalone PointSize VARIABLE (never glslang's shape, but legal
+            // first use). A standalone PointSize VARIABLE (never glslang's shape, but legal
             // SPIR-V) is demoted in place: BuiltIn swapped for the Location, and the variable
             // renamed to the carrier's name.
+            //
+            // "Declared but unaccessed" is only safe while the ES hop PRINTS by access, and
+            // there is one shape where it does not. SPIRV-Cross redeclares the whole
+            // gl_PerVertex output block for a CONTROL stage whose clip or cull distances are
+            // live (should_force_emit_builtin_block), and that redeclaration walks the
+            // struct's member DECORATIONS - so it would print "float gl_PointSize;" into a
+            // block nothing touches any more, which an extension-less ES driver rejects
+            // exactly as it rejected the access. That combination therefore DECLINES, below,
+            // rather than shipping a module that is mutated and still lost. Every other
+            // demoted shape leaves the member genuinely invisible to the ES hop, which is
+            // what the pinned transpile assertions hold.
             //
             // A VERTEX module is never capability-limited (gl_PointSize is core there on both
             // targets), so it keeps its built-in untouched and, when the next stage consumes the
@@ -70,8 +80,13 @@ namespace MobileGL {
                 // Create the Output carrier even when this module never writes PointSize: the
                 // next stage reads it (Vulkan requires every consumed input to be produced,
                 // VUID-RuntimeSpirv-OpEntryPoint-08743), or a transform-feedback capture of
-                // gl_PointSize binds to it. The value is then whatever GL says an unwritten
-                // varying holds: undefined, exactly as the built-in would have been.
+                // gl_PointSize binds to it. Such a carrier is SEEDED with 1.0 - GL's default
+                // point size, and what an unhosted built-in rasterizes at - rather than left
+                // unwritten: GL calls the value of an unwritten output undefined, but an ES
+                // driver's front end DELETES a never-written output, and a capture naming a
+                // deleted varying fails the link and takes the whole capture set with it. A
+                // control stage cannot be seeded this way (the write is per-invocation) and
+                // declines instead.
                 Bool forceOutputCarrier = false;
             };
 
