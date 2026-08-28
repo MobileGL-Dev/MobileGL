@@ -113,6 +113,18 @@ void main() {
 }
 )";
 
+        // The same tessellation pipeline with something to capture, so that
+        // glBeginTransformFeedback accepts it: the paused-span PATCHES case needs an
+        // open (but paused) capture span AND a tessellator in one program.
+        const char* const kTessEvalCaptureSource = R"(#version 430 core
+layout(triangles, equal_spacing, cw) in;
+out vec4 te_out_value;
+void main() {
+  te_out_value = vec4(1.0);
+  gl_Position = vec4(gl_TessCoord.xy * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
         class PrimitivesGeneratedNoXfbScenario : public ScenarioTest {
         protected:
             void SetUp() override {
@@ -145,8 +157,10 @@ void main() {
                 ScenarioTest::TearDown();
             }
 
+            // captureVarying: the name to record with glTransformFeedbackVaryings, or
+            // nullptr for a program that can never open a capture span.
             GLuint BuildProgram(std::initializer_list<std::pair<GLenum, const char*>> stages,
-                                bool withCaptureVarying) {
+                                const char* captureVarying) {
                 std::vector<GLuint> shaders;
                 for (const auto& [type, source] : stages) {
                     const GLuint shader = CompileShaderStage(type, source, &m_buildLog);
@@ -158,9 +172,8 @@ void main() {
                 }
                 const GLuint program = glCreateProgram();
                 for (const GLuint shader : shaders) glAttachShader(program, shader);
-                if (withCaptureVarying) {
-                    const char* varying = "vs_out_value";
-                    glTransformFeedbackVaryings(program, 1, &varying, GL_INTERLEAVED_ATTRIBS);
+                if (captureVarying != nullptr) {
+                    glTransformFeedbackVaryings(program, 1, &captureVarying, GL_INTERLEAVED_ATTRIBS);
                 }
                 glLinkProgram(program);
                 for (const GLuint shader : shaders) glDeleteShader(shader);
@@ -180,19 +193,41 @@ void main() {
             }
 
             GLuint BuildCaptureProgram() {
-                return BuildProgram({{GL_VERTEX_SHADER, kVertexSource}}, true);
+                return BuildProgram({{GL_VERTEX_SHADER, kVertexSource}}, "vs_out_value");
             }
 
-            GLuint BuildTessellationProgram() {
+            GLuint BuildTessellationProgram(bool withCaptureVarying = false) {
                 GLint maxTessGenLevel = 0;
                 glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
                 while (glGetError() != GL_NO_ERROR) {
                 }
                 if (maxTessGenLevel < 1) return 0;
-                return BuildProgram({{GL_VERTEX_SHADER, kTessVertexSource},
-                                     {GL_TESS_CONTROL_SHADER, kTessControlSource},
-                                     {GL_TESS_EVALUATION_SHADER, kTessEvalSource}},
-                                    false);
+                return BuildProgram(
+                    {{GL_VERTEX_SHADER, kTessVertexSource},
+                     {GL_TESS_CONTROL_SHADER, kTessControlSource},
+                     {GL_TESS_EVALUATION_SHADER,
+                      withCaptureVarying ? kTessEvalCaptureSource : kTessEvalSource}},
+                    withCaptureVarying ? "te_out_value" : nullptr);
+            }
+
+            // A capture span that is open but PAUSED. The pause closes the capture, so
+            // every draw inside it is XFB-inactive at the backend - the stream query's
+            // silent case - while the GL span stays active. `program` must be the one
+            // that is bound: GL requires the same program at resume.
+            void BeginPausedSpan() {
+                glGenBuffers(1, &m_captureBuffer);
+                glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, m_captureBuffer);
+                glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, 64 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+                glBeginTransformFeedback(GL_TRIANGLES);
+                glPauseTransformFeedback();
+            }
+
+            void EndPausedSpan() {
+                glResumeTransformFeedback();
+                glEndTransformFeedback();
+                glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+                if (m_captureBuffer != 0) glDeleteBuffers(1, &m_captureBuffer);
+                m_captureBuffer = 0;
             }
 
             // GENERATED query around `record()`, answered with GL_QUERY_RESULT.
@@ -240,6 +275,7 @@ void main() {
 
             GLuint m_vao = 0;
             GLuint m_queries[2] = {0, 0}; // [0]=written, [1]=generated
+            GLuint m_captureBuffer = 0;
             std::vector<GLuint> m_programs;
             std::string m_buildLog;
         };
@@ -358,6 +394,113 @@ void main() {
             EXPECT_EQ(DrainGLErrors(), 0u);
             EXPECT_EQ(generated, 3u) << "one triangle before the span, one inside it, one after";
             EXPECT_EQ(written, 1u) << "only the draw inside the span writes anything";
+        }
+
+        // ===================== DRAWS INSIDE A PAUSED SPAN =====================
+        //
+        // glPauseTransformFeedback closes the capture without closing the span, so a
+        // draw made while paused is XFB-INACTIVE at the backend - the stream query is
+        // exactly as silent for it as for a draw with no span at all - while
+        // GL_PRIMITIVES_GENERATED must still count what the last vertex processing
+        // stage emitted (GL 4.6 core 13.4; the WRITTEN query is the one the pause
+        // silences). The frontend does keep a CPU counter for paused draws, but it can
+        // price only 3 of the ~15 draw entry points and answers 0 for GL_PATCHES, so
+        // these draws are the reroute's business like any other - and the trap on the
+        // other side is counting them TWICE, once in each accounting.
+        //
+        // Each case measures the SAME draw twice: once with no span open at all (the
+        // capability control - what this stack can count) and once inside the paused
+        // span, and requires the two to agree. That differential is what makes these
+        // cases falsifying rather than vacuous: a stack where no counter reaches a
+        // capture-less draw fails the control and skips, while a stack that counts the
+        // unpaused draw and answers 0 for the paused one - which is what excluding
+        // paused draws from the reroute produced - fails, instead of skipping into
+        // green.
+
+        // The draw the CPU counter CAN price: if the span both reroutes it and adds the
+        // CPU delta, this reads 2.
+        TEST_F(PrimitivesGeneratedNoXfbScenario, APausedSpanCountsACpuPricedDrawExactlyOnce) {
+            if (!Ready()) return;
+            if (AmbientQuirkFromEnvironment("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE") == AmbientQuirk::Off) {
+                GTEST_SKIP() << "the negative control replays the pre-probe accounting, whose paused "
+                                "draws are CPU-counted on top of whatever the stream query says";
+            }
+            const GLuint program = BuildCaptureProgram();
+            ASSERT_NE(program, 0u) << BuildLog();
+            glUseProgram(program);
+
+            const GLuint unpaused = QueryGenerated([]() { glDrawArrays(GL_TRIANGLES, 0, 3); });
+            BeginPausedSpan();
+            const GLuint paused = QueryGenerated([]() { glDrawArrays(GL_TRIANGLES, 0, 3); });
+            EndPausedSpan();
+            EXPECT_EQ(DrainGLErrors(), 0u);
+            if (unpaused == 0u) {
+                GTEST_SKIP() << "no counter this backend can reach answers a capture-less draw on this "
+                                "stack, so the paused half of the comparison proves nothing; the "
+                                "bring-up probe measures the same hole and the POST row reports it";
+            }
+            EXPECT_EQ(unpaused, 1u) << "the control itself: one triangle is one primitive";
+            EXPECT_EQ(paused, unpaused)
+                << "one triangle drawn while the capture span is paused is still one primitive "
+                   "generated - counted once, by whichever accounting owns it, never by two of them "
+                   "(a reroute slot AND the frontend's CPU paused counter reads 2)";
+        }
+
+        // The draw the CPU counter CANNOT price: GL_PATCHES, whose amplification is not
+        // knowable on the CPU (CountPrimitivesForDraw answers 0 for it by design) - and
+        // the CTS's tessellator-measuring shape. Excluding paused draws from the
+        // reroute left this counted by nothing at all on the affected device.
+        TEST_F(PrimitivesGeneratedNoXfbScenario, APausedSpanCountsATessellatedPatchExactlyOnce) {
+            if (!Ready()) return;
+            const GLuint program = BuildTessellationProgram(/*withCaptureVarying=*/true);
+            if (program == 0) {
+                GTEST_SKIP() << "no tessellation stages on this stack: " << BuildLog();
+            }
+            glUseProgram(program);
+            glPatchParameteri(GL_PATCH_VERTICES, 1);
+
+            const GLuint unpaused = QueryGenerated([]() { glDrawArrays(GL_PATCHES, 0, 1); });
+            BeginPausedSpan();
+            const GLuint paused = QueryGenerated([]() { glDrawArrays(GL_PATCHES, 0, 1); });
+            EndPausedSpan();
+            EXPECT_EQ(DrainGLErrors(), 0u);
+            if (unpaused == 0u) {
+                GTEST_SKIP() << "no counter this backend can reach answers a capture-less patch draw "
+                                "on this stack, so the paused half proves nothing; the bring-up probe "
+                                "measures the same hole and the POST row reports it";
+            }
+            EXPECT_EQ(unpaused, 1u)
+                << "the control itself: a triangles-domain patch with every level 1 tessellates to "
+                   "exactly one triangle";
+            EXPECT_EQ(paused, unpaused)
+                << "pausing the capture does not stop the tessellator from generating that triangle, "
+                   "and the frontend's CPU paused counter answers 0 for GL_PATCHES - so a paused "
+                   "patch draw left out of the reroute is counted by nothing at all";
+        }
+
+        // The other half of the same hole: the instanced entry points never reach the
+        // frontend's paused accounting either, so a paused instanced draw excluded from
+        // the reroute is likewise counted by nothing.
+        TEST_F(PrimitivesGeneratedNoXfbScenario, APausedSpanCountsAnInstancedDrawExactlyOnce) {
+            if (!Ready()) return;
+            const GLuint program = BuildCaptureProgram();
+            ASSERT_NE(program, 0u) << BuildLog();
+            glUseProgram(program);
+
+            const GLuint unpaused =
+                QueryGenerated([]() { glDrawArraysInstanced(GL_TRIANGLES, 0, 3, 4); });
+            BeginPausedSpan();
+            const GLuint paused = QueryGenerated([]() { glDrawArraysInstanced(GL_TRIANGLES, 0, 3, 4); });
+            EndPausedSpan();
+            EXPECT_EQ(DrainGLErrors(), 0u);
+            if (unpaused == 0u) {
+                GTEST_SKIP() << "no counter this backend can reach answers a capture-less draw on this "
+                                "stack, so the paused half proves nothing";
+            }
+            EXPECT_EQ(unpaused, 4u) << "the control itself: four instances of one triangle";
+            EXPECT_EQ(paused, unpaused)
+                << "four instances generate four primitives whether or not the capture span is "
+                   "paused, and no instanced entry point reaches the frontend's paused accounting";
         }
 
         // THE ONE CASE THAT CAN FAIL WHEN THE REROUTE SILENTLY STOPS BEING ARMED -
