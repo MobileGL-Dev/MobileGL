@@ -1001,6 +1001,20 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.outputBlockRenames = &otherIoBlockRenames;
         variants.emplace_back("outputBlockRenames(other target)", BuildEsslTranslationKey(v));
     }
+    {   // the two arguments to StripIoBlockLocationsForEssl, and separate cases for the same
+        // reason the rename maps are: a stage strips the blocks it CONSUMES only when the
+        // producer is in this program and the ones it PRODUCES only when the consumer is, so
+        // the two directions are independently armed and a key that folded them together
+        // would serve a fragment stage's ESSL to a vertex stage that needs the opposite.
+        EsslTranslationKeyInputs v = base;
+        v.stripInputBlockLocations = true;
+        variants.emplace_back("stripInputBlockLocations", BuildEsslTranslationKey(v));
+    }
+    {
+        EsslTranslationKeyInputs v = base;
+        v.stripOutputBlockLocations = true;
+        variants.emplace_back("stripOutputBlockLocations", BuildEsslTranslationKey(v));
+    }
     {
         EsslTranslationKeyInputs v = base;
         v.enableSpirvValidation = true;
