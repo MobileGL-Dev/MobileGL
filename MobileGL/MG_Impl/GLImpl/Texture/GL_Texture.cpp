@@ -5078,6 +5078,13 @@ namespace MobileGL::MG_Impl::GLImpl {
     // The half of the GetTexImage/GetTextureImage error set (GL 4.6 core 8.11) that depends on the
     // resolved texture object rather than on how it was named. Shared because the by-name entry
     // point does not route through GetTexImage_State and so used to enforce none of it.
+    // A cube map's six faces are six independent images, and both readback spellings name one of
+    // them: glGetTexImage through the TARGET token, glGetTextureSubImage through zoffset. Both then
+    // have to tell the size checks below that ONE image is coming back, not six.
+    static Bool IsCubeMapFaceUploadTarget(TextureUploadTarget target) {
+        return target >= TextureUploadTarget::CubeMapPositiveX && target <= TextureUploadTarget::CubeMapNegativeZ;
+    }
+
     // `imagesQueried` is how many of the texture's upload-target images the query hands back, and
     // exists for the destination-size check at the bottom. Zero means "all of them", which is what
     // the whole-level forms return - every face of a cube map. glGetTextureSubImage naming ONE cube
@@ -5282,9 +5289,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
                     : bindingSlot.GetBoundObject();
 
-        // glGetTexImage has no bufSize argument: -1 stands for "no client-side limit".
+        // glGetTexImage has no bufSize argument: -1 stands for "no client-side limit". That skips
+        // the destination-size branch but NOT the pixel-pack-buffer one, which measures the same
+        // `required` against the bound PBO's real size - so a cube FACE query has to say it returns
+        // one image here too, or a PBO sized for the one face this call packs is refused as too
+        // small while the copy that follows writes exactly that much into it.
         return ValidateTextureImageQuery(textureObject, level, textureInputFormat, texturePixelDataType, -1, pixels,
-                                         "GetTexImage_State");
+                                         "GetTexImage_State",
+                                         IsCubeMapFaceUploadTarget(textureUploadTarget) ? 1u : 0u);
     }
 
     // What this helper can and cannot answer.

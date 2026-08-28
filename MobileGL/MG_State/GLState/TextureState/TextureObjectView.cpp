@@ -97,27 +97,31 @@ namespace MobileGL::MG_State::GLState {
         return m_storageOwner->HasFixedSampleLocations();
     }
 
+    Uint TextureObjectView::ViewLayerIndex(TextureUploadTarget viewTarget) const {
+        if (GetTarget() != TextureTarget::TextureCubeMap) {
+            // One target, one layer: the view's origin is the whole answer.
+            return m_viewMinLayer;
+        }
+        for (Uint i = 0; i < static_cast<Uint>(m_uploadTargets.size()); ++i) {
+            if (m_uploadTargets[i] == viewTarget) return m_viewMinLayer + i;
+        }
+        return m_viewMinLayer;
+    }
+
     TextureUploadTarget TextureObjectView::ToOwnerUploadTarget(TextureUploadTarget viewTarget) const {
         const auto& ownerTargets = m_storageOwner->GetUploadTargets();
         MOBILEGL_ASSERT(!ownerTargets.empty(), "TextureObjectView: storage owner has no upload target");
         if (ownerTargets.size() == 1) {
-            // The owner keeps every layer in one blob, so there is nothing to choose.
+            // The owner keeps every layer in one blob, so there is nothing to choose HERE - which
+            // is exactly why a cube-map view over such an owner has to have its face carried by
+            // LayerByteOffset instead. See ViewLayerIndex.
             return ownerTargets[0];
         }
-        // The owner is a cube map: six independent blobs, one per face, and the view's layer
-        // index selects among them. A cube-map view of a cube map maps face to face; any other
-        // view target addresses layers, which for a cube-map owner ARE its faces.
+        // The owner is a cube map: six independent blobs, one per face, and the layer this view
+        // target names selects among them. A cube-map view of a cube map maps face to face; any
+        // other view target addresses layers, which for a cube-map owner ARE its faces.
         const Uint faceCount = static_cast<Uint>(ownerTargets.size());
-        Uint face = m_viewMinLayer;
-        if (GetTarget() == TextureTarget::TextureCubeMap) {
-            for (Uint i = 0; i < m_uploadTargets.size(); ++i) {
-                if (m_uploadTargets[i] == viewTarget) {
-                    face = m_viewMinLayer + i;
-                    break;
-                }
-            }
-        }
-        return ownerTargets[std::min(face, faceCount - 1)];
+        return ownerTargets[std::min(ViewLayerIndex(viewTarget), faceCount - 1)];
     }
 
     IntVec3 TextureObjectView::ToViewLevelSize(const IntVec3& ownerLevelSize) const {
@@ -151,7 +155,13 @@ namespace MobileGL::MG_State::GLState {
     }
 
     SizeT TextureObjectView::LayerByteOffset(TextureUploadTarget viewTarget, Uint mipmapLevel) const {
-        if (m_viewMinLayer == 0 || m_ownerMipmap == nullptr) return 0;
+        if (m_ownerMipmap == nullptr) return 0;
+        // The FACE is part of this, not just the view's origin: a cube-map view over a layered
+        // owner (a 2D array or a cube-map ARRAY) has only one blob to address, so the face its
+        // target token names lives here or nowhere. It used to live nowhere, and all six face
+        // tokens read the view's first layer-face - silently, with texels from a real layer.
+        const Uint layerIndex = ViewLayerIndex(viewTarget);
+        if (layerIndex == 0) return 0;
         const LayerAxis ownerAxis = LayerAxisOf(m_storageOwner->GetTarget());
         if (ownerAxis == LayerAxis::None) {
             // A cube-map owner keeps each face in its OWN blob, and ToOwnerUploadTarget already
@@ -173,23 +183,26 @@ namespace MobileGL::MG_State::GLState {
                                       ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
                                       : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
                                             static_cast<SizeT>(std::max(ownerSize.y(), 0));
-        const SizeT offset = static_cast<SizeT>(m_viewMinLayer) * layerTexels * bytesPerTexel;
+        const SizeT offset = static_cast<SizeT>(layerIndex) * layerTexels * bytesPerTexel;
         return offset < ownerBytes ? offset : 0;
     }
 
-    IntVec3 TextureObjectView::ToOwnerRegionOffset(const IntVec3& viewOffset) const {
-        if (m_viewMinLayer == 0) return viewOffset;
+    IntVec3 TextureObjectView::ToOwnerRegionOffset(TextureUploadTarget viewTarget, const IntVec3& viewOffset) const {
+        const Uint layerIndex = ViewLayerIndex(viewTarget);
+        if (layerIndex == 0) return viewOffset;
         IntVec3 offset = viewOffset;
         // The dirty region is recorded in the OWNER's blob coordinates - that is the space its
-        // upload path walks - so the view's layer origin has to be added here even though
+        // upload path walks - so the layer this view target names has to be added here even though
         // MapMipmapData hands back an already-shifted POINTER. The two are not double-counting:
-        // one moves the bytes, the other tells the owner which of its layers moved.
+        // one moves the bytes, the other tells the owner which of its layers moved. They must agree
+        // on the layer, which is why both ask ViewLayerIndex rather than reading m_viewMinLayer -
+        // on a cube-map view the face is half the answer.
         switch (LayerAxisOf(m_storageOwner->GetTarget())) {
         case LayerAxis::Y:
-            offset.y() += static_cast<Int>(m_viewMinLayer);
+            offset.y() += static_cast<Int>(layerIndex);
             break;
         case LayerAxis::Z:
-            offset.z() += static_cast<Int>(m_viewMinLayer);
+            offset.z() += static_cast<Int>(layerIndex);
             break;
         case LayerAxis::None:
             break;
@@ -300,7 +313,7 @@ namespace MobileGL::MG_State::GLState {
                                                    IntVec3 size) {
         if (m_ownerMipmap == nullptr) return;
         m_ownerMipmap->MarkStorageDirtyRegion(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel),
-                                              ToOwnerRegionOffset(offset), size);
+                                              ToOwnerRegionOffset(uploadTarget, offset), size);
     }
 
     MipmapDirtyRegion TextureObjectView::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,

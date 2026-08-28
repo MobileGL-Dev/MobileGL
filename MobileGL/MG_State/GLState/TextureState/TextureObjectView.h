@@ -103,6 +103,18 @@ namespace MobileGL::MG_State::GLState {
         // target - arrays and cube-map arrays included - keeps all its layers in one blob, so
         // the mapping is "the owner's only target" unless one of the two sides is a cube map.
         TextureUploadTarget ToOwnerUploadTarget(TextureUploadTarget viewTarget) const;
+        // WHICH of the owner's layers a given view-side upload target names, in the owner's layer
+        // numbering. For every view target but a cube map that is just this view's layer origin -
+        // one target, one layer. A GL_TEXTURE_CUBE_MAP view addresses SIX of the owner's layers at
+        // once (GL 4.6 core 8.18), so the face its target token names is an index on top of that
+        // origin, and this is the only place that can express it when the owner keeps every layer
+        // in one blob: ToOwnerUploadTarget has a single blob to choose from there, so the face
+        // would otherwise vanish and all six tokens would read the view's first layer.
+        //
+        // Every place that turns this view into owner-side bytes goes through here - the blob
+        // choice, the byte offset, and the dirty region - so the three cannot disagree about which
+        // layer a face is.
+        Uint ViewLayerIndex(TextureUploadTarget viewTarget) const;
         Uint ToOwnerLevel(Uint viewLevel) const { return m_viewMinLevel + viewLevel; }
         // The owner's level extent rewritten into this view's shape: the owner's layer axis is
         // collapsed to one slice and the view's own layer count is imposed on the view's layer
@@ -114,8 +126,10 @@ namespace MobileGL::MG_State::GLState {
         // and a single row for a 1D array; a cube-map owner returns 0 because its faces are
         // separate blobs that ToOwnerUploadTarget already selects between.
         SizeT LayerByteOffset(TextureUploadTarget viewTarget, Uint mipmapLevel) const;
-        // A dirty-region origin moved from the view's layer space into the owner's.
-        IntVec3 ToOwnerRegionOffset(const IntVec3& viewOffset) const;
+        // A dirty-region origin moved from the view's layer space into the owner's. Takes the view
+        // target for the same reason LayerByteOffset does: on a cube-map view the target names the
+        // face, and the region has to name the same owner layer the bytes were written to.
+        IntVec3 ToOwnerRegionOffset(TextureUploadTarget viewTarget, const IntVec3& viewOffset) const;
 
         SharedPtr<ITextureObject> m_storageOwner;
         // Non-owning; m_storageOwner keeps it alive and is never a view, so this is set once in
