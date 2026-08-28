@@ -461,6 +461,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the owning thread replaying them: guard both fields with pendingMutex.
             Bool pendingRespecify = false;
             VecRange1D pendingRanges;
+            // App bytes for an ADOPTED store, awaiting their GPU-ordered landing (ring
+            // stage + glCopyBufferSubData at the next sync; see
+            // BufferBackendOps::ResidentSubData). The frontend keeps such writes out of
+            // the coherent mapping - an in-place host write tears the in-flight frames
+            // still reading the old bytes. Guarded by pendingMutex like pendingRanges.
+            struct PendingResidentWrite {
+                SizeT offset = 0;
+                Vector<Uint8> bytes;
+            };
+            Vector<PendingResidentWrite> pendingResidentWrites;
             std::mutex pendingMutex;
             // Buffer-mutation epoch (see CurrentBufferMutationEpoch) at which this
             // resource last probed IsBufferDrawClean == true, 0 = never (epochs start

@@ -283,6 +283,22 @@ namespace MobileGL::MG_State::GLState {
                         "UploadSubData out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
 
+        // An adopted store's Bytes() IS the memory in-flight frames are reading, and
+        // GL orders a glBufferSubData after those already-submitted reads. A backend
+        // that can land the bytes on the GPU timeline takes them here, untouched by
+        // the mapping - the in-place host write below tore the frames still reading
+        // the old bytes. The bytes are not current in the mapping until the backend's
+        // ordered copy executes, so reads reconcile through the same gate GPU-written
+        // buffers use.
+        if (m_resource.IsGpuResident() && data.size > 0 && g_bufferBackendOps &&
+            g_bufferBackendOps->ResidentSubData) {
+            g_bufferBackendOps->ResidentSubData(*this, atOffset, data);
+            m_hasDefinedContent = true;
+            ++m_changeSerial;
+            m_gpuWritePending = true;
+            return;
+        }
+
         // An adopted store's Bytes() IS the memory the GPU reads, and a backend that
         // defers work (DirectVulkan's frame command buffer) may still be holding a
         // recorded-but-unsubmitted dispatch that GL orders this write AFTER. Writing
@@ -310,6 +326,24 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(!m_isMapped || (m_mappingAccess & BufferMappingAccessBit::Persistent),
                         "Cannot fill data while buffer is non-persistently mapped.");
         if (size == 0) return;
+
+        // An adopted store takes the same GPU-timeline landing as UploadSubData: the
+        // in-place write below would tear in-flight readers of the mapping.
+        if (m_resource.IsGpuResident() && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
+            Vector<Uint8> expanded(size);
+            if (pattern.size == 1) {
+                Memset(expanded.data(), *static_cast<const Uint8*>(pattern.data), size);
+            } else {
+                for (SizeT at = 0; at < size; at += pattern.size) {
+                    Memcpy(expanded.data() + at, pattern.data, pattern.size);
+                }
+            }
+            g_bufferBackendOps->ResidentSubData(*this, atOffset, {expanded.data(), size});
+            m_hasDefinedContent = true;
+            ++m_changeSerial;
+            m_gpuWritePending = true;
+            return;
+        }
 
         // A clear is ordered after all earlier GPU writes. Partial clears additionally need the
         // retained shadow bytes; whole-store clears need the same synchronization before writing
@@ -347,6 +381,17 @@ namespace MobileGL::MG_State::GLState {
                         size, m_size);
 
         src->SyncGpuWrites();
+        // An adopted DESTINATION takes the same GPU-timeline landing as UploadSubData;
+        // the in-place write below would tear in-flight readers of the mapping.
+        if (m_resource.IsGpuResident() && size > 0 && g_bufferBackendOps &&
+            g_bufferBackendOps->ResidentSubData) {
+            g_bufferBackendOps->ResidentSubData(*this, dstOffset,
+                                                {src->m_resource.Bytes() + srcOffset, size});
+            m_hasDefinedContent = true;
+            ++m_changeSerial;
+            m_gpuWritePending = true;
+            return;
+        }
         // The DESTINATION needs the same ordering as UploadSubData: an adopted store is
         // written in place, so pending recorded GPU writes to it must retire before the
         // copy lands or they would execute on top of it.
