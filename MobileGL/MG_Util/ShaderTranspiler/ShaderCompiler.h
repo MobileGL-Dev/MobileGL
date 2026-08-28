@@ -603,6 +603,14 @@ namespace MobileGL {
                 // the optimizer itself failed (modules untouched); a shape decline is
                 // reported through `outcome` and also leaves the modules untouched. See
                 // DemotePointSizePass for the per-module rewrite and its honest residue.
+                //
+                // Two declines are PROGRAM-shaped and therefore live here rather than in the
+                // pass: a carrier that would land past the minimum-spec varying budget, and
+                // an evaluation stage reading gl_in point size with NO control stage - the
+                // synthesized pass-through control stage both backends stand in that gap
+                // forwards gl_Position alone, so the input carrier would strand the value and
+                // trip the backends' own "reads a located input" refusal against a name the
+                // application never wrote.
                 static Bool DemoteTessellationGeometryPointSizeForProgram(
                     Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes,
                     Bool demoteTessellation, Bool demoteGeometry, Bool captureRequestsPointSize,

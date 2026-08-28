@@ -832,8 +832,17 @@ namespace MobileGL {
                         return 1u;
                     }
                     if (const auto* vector = type->AsVector()) {
-                        const auto* elementFloat = vector->element_type()->AsFloat();
-                        const Bool is64Bit = elementFloat != nullptr && elementFloat->width() == 64;
+                        // 64-bit INTEGER elements count exactly like 64-bit floats:
+                        // ARB_gpu_shader_int64 extends 11.1.2.1's double-precision rule
+                        // verbatim to i64/u64, and DirectVulkan advertises that extension
+                        // unconditionally - so answering "one location" for an i64vec4 would
+                        // place the carrier on the SECOND location that varying already owns,
+                        // which is the underestimate this function's header forbids.
+                        const auto* element = vector->element_type();
+                        const auto* elementFloat = element->AsFloat();
+                        const auto* elementInteger = element->AsInteger();
+                        const Bool is64Bit = (elementFloat != nullptr && elementFloat->width() == 64) ||
+                                             (elementInteger != nullptr && elementInteger->width() == 64);
                         return (is64Bit && vector->element_count() > 2) ? 2u : 1u;
                     }
                     if (const auto* matrix = type->AsMatrix()) {
@@ -1095,6 +1104,23 @@ namespace MobileGL {
                     if (report.declined) {
                         outcome.declineDetail = Move(report.declineReason);
                         return true; // byte-identical decline; the existing refusals stay armed
+                    }
+                    // AN EVALUATION STAGE WITH NO CONTROL STAGE THAT NOW READS A LOCATED
+                    // INPUT. GL lets the evaluation stage sit straight on the vertex stage,
+                    // and both backends stand a SYNTHESIZED pass-through control stage in
+                    // between - one that forwards gl_Position and nothing else. Their guard
+                    // for that is literally "does this module read a located input"
+                    // (ModuleReadsLocatedInput / ReflectPassthroughTessControlNeed), so the
+                    // carrier this pass just created would turn the very program the demotion
+                    // exists to rescue into a declined one, reported against a varying name
+                    // the application never wrote. Declining here keeps the modules
+                    // byte-identical and leaves the honest built-in refusal in charge; only
+                    // teaching the synthesized stage to forward the carrier could do better.
+                    if (stage == 2 && stageIndex[1] < 0 && report.createdInputCarrier) {
+                        outcome.declineDetail =
+                            "an evaluation stage reads gl_in point size with no control stage to "
+                            "carry it; the synthesized pass-through cannot forward the carrier";
+                        return true;
                     }
                     rewrote[stage] = true;
                     if (report.createdInputCarrier && producer >= 0) {
