@@ -102,6 +102,14 @@ namespace MobileGL::MG_Util::SelfTest {
         // The probe submitted and read back at least the two triangle shapes.
         // False when any setup step failed; failureReason then names the step.
         Bool ran = false;
+        // The probe's bounded fence wait expired with the submission possibly
+        // still executing. The probe then deliberately LEAKED every child object
+        // it created (no vkDeviceWaitIdle, no destroys - a hung GPU must not hang
+        // the caller), so a caller that owns the device MUST NOT destroy or
+        // idle-wait it either: vkDestroyDevice with live children and in-flight
+        // work is the exact hang the bound exists to prevent. The POST leaks its
+        // throwaway device on this flag, mirroring its sibling probes.
+        Bool fenceWaitTimedOut = false;
         String failureReason;
         PrimitivesGeneratedNoXfbShapeMeasurement trianglesPlain;
         PrimitivesGeneratedNoXfbShapeMeasurement trianglesDiscard;
@@ -200,15 +208,22 @@ namespace MobileGL::MG_Util::SelfTest {
         // proven whole through clipping statistics.
         StatisticsSubstitute,
         // The defect is present and the statistics control is exact on the PLAIN
-        // shape but silent or wrong under rasterizer discard (llvmpipe's discard
-        // short-circuit does this to its statistics - its dedicated query is what
-        // rescues it to the verdict above). Rerouting still repairs every
-        // undiscarded query and is never worse per draw - a rerouted draw would
-        // have answered 0 through the silent stream query - but the CTS shape
-        // stays broken and the report must say so.
+        // shape but not on every drawn shape (llvmpipe's discard short-circuit
+        // does this to its statistics - its dedicated query is what rescues it to
+        // the verdict above). This verdict additionally GUARANTEES domination:
+        // every shape the statistics missed measured exactly 0 through the stream
+        // query too, so rerouting is never worse per draw - it repairs every
+        // shape the statistics answer exactly and leaves the rest at the 0 they
+        // already read. A measurement where the stream was EXACT on a shape the
+        // statistics missed does not qualify (rerouting would downgrade that
+        // shape) and falls to Unfixable instead. The shapes the substitute
+        // misses - the CTS's discarded shapes among them wherever they are the
+        // missed ones - stay broken, and the report must say which.
         StatisticsSubstitutePlainOnly,
-        // The defect is present and no substitute qualifies even for the plain
-        // shape: the honest verdict is the current behaviour.
+        // The defect is present and no substitute qualifies: none is exact
+        // everywhere, and the plain-only fallback either misses the plain shape
+        // or fails the domination rule above. The honest verdict is the current
+        // behaviour.
         Unfixable,
     };
 

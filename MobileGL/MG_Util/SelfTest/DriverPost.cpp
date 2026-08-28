@@ -1681,7 +1681,21 @@ namespace MobileGL::MG_Util::SelfTest {
                 fail(format("vkCreateDevice failed (VkResult = {})", static_cast<Int>(createResult)));
                 return;
             }
-            const ScopeGuard destroyDevice([&]() { vkDestroyDeviceFn(device, nullptr); });
+            // The probe's own teardown destroys (and idle-waits) everything it created -
+            // EXCEPT when its bounded fence wait expires, where it deliberately leaks
+            // every child object rather than touch a possibly hung GPU. This device must
+            // then leak with them: vkDestroyDevice requires its children destroyed and its
+            // queues idle, and on the driver that just missed a 5 s deadline the realistic
+            // outcome is a block inside vkDestroyDevice - the POST hang the bound exists to
+            // prevent. Same shape as the timestamp probe's guard above and the iterationRP
+            // witness's below.
+            Bool probeFenceWaitTimedOut = false;
+            const ScopeGuard destroyDevice([&]() {
+                if (probeFenceWaitTimedOut) {
+                    return;
+                }
+                vkDestroyDeviceFn(device, nullptr);
+            });
 
             VkQueue queue = VK_NULL_HANDLE;
             vkGetDeviceQueueFn(device, graphicsQueueFamilyIndex, 0, &queue);
@@ -1750,6 +1764,8 @@ namespace MobileGL::MG_Util::SelfTest {
 
             const PrimitivesGeneratedNoXfbMeasurement measurement =
                 RunPrimitivesGeneratedNoXfbProbe(probeContext);
+            // Before any return below: the guard above owns the device and must know.
+            probeFenceWaitTimedOut = measurement.fenceWaitTimedOut;
             if (!measurement.ran) {
                 fail(format("the probe could not run ({}); the renderer's bring-up probe decides the "
                             "reroute independently",
@@ -1779,6 +1795,52 @@ namespace MobileGL::MG_Util::SelfTest {
             const String facts = shapeFacts("triangles", measurement.trianglesPlain) + "; " +
                                  shapeFacts("triangles under discard", measurement.trianglesDiscard) +
                                  "; " + shapeFacts("patches under discard", measurement.patchesDiscard);
+
+            const auto statisticsExactOn = [](const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+                return shape.statisticsMeasured && shape.statisticsClippingInput == shape.expectedPrimitives;
+            };
+            // What the PLAIN-ONLY verdict actually measured, named from the numbers rather
+            // than assumed: the shape the substitute misses may be the tessellated one
+            // alone, and a missed shape may read a wrong NONZERO count rather than 0. A
+            // row that always blamed rasterizer discard would put a false statement about
+            // the driver into the campaign's evidence artifact, contradicted by the facts
+            // string printed right after it.
+            const auto describeMissedStatisticsShapes = [&]() {
+                String missed;
+                const auto note = [&](const char* name,
+                                      const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+                    if (!shape.drawn || statisticsExactOn(shape)) {
+                        return;
+                    }
+                    if (!missed.empty()) {
+                        missed += " and ";
+                    }
+                    missed += name;
+                    missed += shape.statisticsMeasured
+                                  ? format(" (read {} of {} expected)", shape.statisticsClippingInput,
+                                           shape.expectedPrimitives)
+                                  : String(" (its statistics slot did not read back)");
+                };
+                note("the plain draw", measurement.trianglesPlain);
+                note("triangles under rasterizer discard", measurement.trianglesDiscard);
+                note("patches under rasterizer discard", measurement.patchesDiscard);
+                return missed;
+            };
+            // The CTS's tessellator-measuring shape is a PATCHES draw under discard; say
+            // whether THIS driver's substitute covers it instead of assuming it does not.
+            const auto describeCtsShape = [&]() -> String {
+                if (!measurement.patchesDiscard.drawn) {
+                    return "the CTS's tessellator-measuring shape (a PATCHES draw under discard) could "
+                           "not be measured here - this device has no tessellationShader - so whether "
+                           "the substitute covers it is unknown";
+                }
+                return statisticsExactOn(measurement.patchesDiscard)
+                           ? "the CTS's tessellator-measuring shape (a PATCHES draw under discard) is "
+                             "NOT among them: the substitute answers it exactly, so those tests are "
+                             "repaired"
+                           : "the CTS's tessellator-measuring shape (a PATCHES draw under discard) is "
+                             "among them, so those tests stay broken on this driver";
+            };
 
             switch (EvaluatePrimitivesGeneratedNoXfbVerdict(measurement)) {
             case PrimitivesGeneratedNoXfbVerdict::StreamCounts:
@@ -1812,18 +1874,51 @@ namespace MobileGL::MG_Util::SelfTest {
             case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly:
                 fail("the stream query answers 0 for a draw made with no capture span open, and the "
                      "clipping-invocations statistics substitute counts the plain draw exactly but "
-                     "reads 0 under rasterizer discard - so the renderer reroutes XFB-inactive draws "
-                     "(repairing undiscarded queries at no cost to the rest) and the CTS's "
-                     "tessellator-measuring shape, which needs the discarded count, remains broken "
-                     "on this driver (" +
-                     facts + ")");
+                     "misses " +
+                     describeMissedStatisticsShapes() +
+                     " - each of them a shape the stream query answered 0 for as well, so the renderer "
+                     "reroutes XFB-inactive draws (repairing every shape the substitute answers, at no "
+                     "cost to the rest, which is what the verdict requires); " +
+                     describeCtsShape() + " (" + facts + ")");
                 return;
-            case PrimitivesGeneratedNoXfbVerdict::Unfixable:
+            case PrimitivesGeneratedNoXfbVerdict::Unfixable: {
+                // Two ways to land here, and the report must not conflate them: no
+                // substitute answers even the plain draw, or one does but it is WRONG on a
+                // shape the stream query answers EXACTLY - arming it would trade a correct
+                // answer for a wrong one, so MobileGL refuses (see the verdict's
+                // domination rule).
+                String downgradeShapes;
+                const auto noteDowngrade = [&](const char* name,
+                                               const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+                    if (!shape.drawn || statisticsExactOn(shape) ||
+                        shape.streamGenerated != shape.expectedPrimitives) {
+                        return;
+                    }
+                    if (!downgradeShapes.empty()) {
+                        downgradeShapes += " and ";
+                    }
+                    downgradeShapes += name;
+                };
+                noteDowngrade("the plain draw", measurement.trianglesPlain);
+                noteDowngrade("triangles under rasterizer discard", measurement.trianglesDiscard);
+                noteDowngrade("patches under rasterizer discard", measurement.patchesDiscard);
+                if (statisticsExactOn(measurement.trianglesPlain) && !downgradeShapes.empty()) {
+                    fail("the stream query answers 0 for a draw made with no capture span open, and the "
+                         "clipping-invocations statistics substitute repairs the plain draw but is wrong "
+                         "on " +
+                         downgradeShapes +
+                         ", which the stream query answers exactly - rerouting every XFB-inactive draw "
+                         "would trade a correct count for a wrong one, so MobileGL arms nothing and the "
+                         "capture-less query keeps the driver's answers (" +
+                         facts + ")");
+                    return;
+                }
                 fail("the stream query answers 0 for a draw made with no capture span open and the "
                      "device offers no working statistics substitute; an application sizing a capture "
                      "buffer from GL_PRIMITIVES_GENERATED gets 0 (" +
                      facts + ")");
                 return;
+            }
             case PrimitivesGeneratedNoXfbVerdict::Inconclusive:
                 break;
             }

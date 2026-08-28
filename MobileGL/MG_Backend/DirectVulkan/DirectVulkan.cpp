@@ -1221,11 +1221,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // stale queries are always safe to delete.
             Uint64 rendererGeneration = 0;
             // Kind::XfbGenerated - the frontend's paused-draw primitive counter when the
-            // query began. VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT counts only what the
-            // capture saw, so a draw made while the span was paused is invisible to it -
-            // but GL_PRIMITIVES_GENERATED counts what the last vertex processing stage
-            // emitted regardless. The delta closes that gap at result time.
+            // query began. On the affected drivers VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT
+            // counts only what the capture saw, so a draw made while the span was paused is
+            // invisible to it - but GL_PRIMITIVES_GENERATED counts what the last vertex
+            // processing stage emitted regardless. The delta closes that gap at result time.
             Uint64 pausedPrimitiveSnapshot = 0;
+            // ...unless the GPU already counted those paused draws when the span opened -
+            // through the reroute pool (VulkanRenderer::BeginXfbQueryForDraw reroutes every
+            // draw with no open capture, paused ones included) or, where the probe measured
+            // the stream query as counting capture-less draws, through the stream slot the
+            // paused draw still takes. Adding the CPU delta on top would count them twice,
+            // and the CPU counter is the weaker source anyway: only 3 of the ~15 draw entry
+            // points write it and it answers 0 for GL_PATCHES.
+            Bool pausedPrimitivesCountedByGpu = false;
         };
     } // namespace
 
@@ -1324,7 +1332,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                         primitives)) {
                 return false;
             }
-            if (query->kind == VulkanTimerQuery::Kind::XfbGenerated && MG_State::pGLContext != nullptr) {
+            if (query->kind == VulkanTimerQuery::Kind::XfbGenerated &&
+                !query->pausedPrimitivesCountedByGpu && MG_State::pGLContext != nullptr) {
                 primitives += MG_State::pGLContext->GetTransformFeedbackPausedPrimitiveCounter() -
                               query->pausedPrimitiveSnapshot;
             }
@@ -1373,6 +1382,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         query->rendererGeneration = GetRendererGeneration();
         query->pausedPrimitiveSnapshot =
             MG_State::pGLContext ? MG_State::pGLContext->GetTransformFeedbackPausedPrimitiveCounter() : 0;
+        // Read AFTER StartXfbQueryCapture, which is where a failed reroute-pool creation
+        // disarms: the answer is then what this span will actually do for every draw.
+        query->pausedPrimitivesCountedByGpu = generated && pVulkanRenderer->ArePausedDrawsGpuCounted();
         return query;
     }
 

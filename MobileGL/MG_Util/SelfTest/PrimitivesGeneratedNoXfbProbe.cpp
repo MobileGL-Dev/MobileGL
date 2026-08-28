@@ -96,14 +96,17 @@ namespace MobileGL::MG_Util::SelfTest {
         VkPipeline triangleDiscardPipeline = VK_NULL_HANDLE;
         VkPipeline patchDiscardPipeline = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
-        Bool fenceWaitTimedOut = false;
 
         // Teardown on every path. When the fence wait timed out the submission may
         // still be executing on a hung GPU: vkDeviceWaitIdle could block forever
         // and destroying in-flight objects is undefined, so everything is
-        // deliberately leaked - a hung GPU must not hang the caller.
+        // deliberately leaked - a hung GPU must not hang the caller. The same flag
+        // is returned in the measurement, because a caller that OWNS the device must
+        // make the same choice for it (see the header): destroying a device whose
+        // children are alive and whose queue may still be executing is the very hang
+        // this bound exists to prevent.
         const ProbeScopeGuard teardown([&]() {
-            if (fenceWaitTimedOut) {
+            if (measurement.fenceWaitTimedOut) {
                 return;
             }
             fns.vkDeviceWaitIdle(device);
@@ -393,7 +396,9 @@ namespace MobileGL::MG_Util::SelfTest {
         }
         constexpr Uint64 kFenceTimeoutNs = 5'000'000'000ull; // a probe must never hang its caller
         if (fns.vkWaitForFences(device, 1, &fence, VK_TRUE, kFenceTimeoutNs) != VK_SUCCESS) {
-            fenceWaitTimedOut = true; // see the scope guard
+            // Set BEFORE failing: the scope guard reads it to skip every destroy, and
+            // the caller reads it out of the measurement to skip destroying the device.
+            measurement.fenceWaitTimedOut = true;
             return fail("the probe submission did not complete within 5 s");
         }
 
@@ -453,6 +458,15 @@ namespace MobileGL::MG_Util::SelfTest {
         Bool allStreamExact = true;
         Bool allPrimitivesGeneratedExtExact = true;
         Bool allStatisticsExact = true;
+        // Whether the statistics substitute DOMINATES the stream query shape by shape:
+        // every shape the statistics do not answer exactly must be one the stream query
+        // answered 0 for anyway. Without this, a plain-shape-only substitute could be
+        // armed on a device whose stream query was RIGHT on a shape the statistics get
+        // wrong - and the renderer reroutes every XFB-inactive draw, so that shape would
+        // be downgraded from correct to wrong. "Never worse per draw" is what makes
+        // arming on an uncharacterised driver defensible; it has to be measured, not
+        // assumed.
+        Bool statisticsDominateStream = true;
         for (const auto* shape : shapes) {
             if (!shape->drawn) {
                 continue;
@@ -476,6 +490,11 @@ namespace MobileGL::MG_Util::SelfTest {
             if (!shape->statisticsMeasured ||
                 shape->statisticsClippingInput != shape->expectedPrimitives) {
                 allStatisticsExact = false;
+                // Only a shape the stream query was silent on may be left behind by
+                // the substitute; a shape it answered exactly must not be traded away.
+                if (shape->streamGenerated == shape->expectedPrimitives) {
+                    statisticsDominateStream = false;
+                }
             }
         }
         if (allStreamExact) {
@@ -492,8 +511,11 @@ namespace MobileGL::MG_Util::SelfTest {
         const auto& plain = measurement.trianglesPlain;
         const Bool plainStatisticsExact =
             plain.statisticsMeasured && plain.statisticsClippingInput == plain.expectedPrimitives;
-        return plainStatisticsExact ? PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly
-                                    : PrimitivesGeneratedNoXfbVerdict::Unfixable;
+        // Both halves are required: the substitute must repair the plain shape, AND it
+        // must not cost any shape an answer the stream query already had right.
+        return (plainStatisticsExact && statisticsDominateStream)
+                   ? PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly
+                   : PrimitivesGeneratedNoXfbVerdict::Unfixable;
     }
 
     PrimGenRerouteKind ChoosePrimitivesGeneratedReroute(MG_Config::QuirkOverride overrideSetting,

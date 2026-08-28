@@ -3285,9 +3285,10 @@ void main() {
         m_primGenRerouteActiveSlots.clear();
         m_primGenRerouteSlotCursor = 0;
         m_primGenRerouteSlotOpen = false;
-        // Not sticky across renderers: the next bring-up re-decides it (from the
+        // Not sticky across renderers: the next bring-up re-decides both (from the
         // per-process probe memo, so it re-decides without re-probing).
         m_primGenRerouteKind = MG_Util::SelfTest::PrimGenRerouteKind::None;
+        m_primGenStreamCountsXfbInactiveDraws = false;
         m_bufferManager.Shutdown();
 
         // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
@@ -11436,6 +11437,17 @@ void main() {
         return true;
     }
 
+    Bool VulkanRenderer::ArePausedDrawsGpuCounted() const {
+        // Exactly the gate BeginXfbQueryForDraw applies per draw, so a span told "armed"
+        // really does get a reroute slot for every draw with no open capture - a paused
+        // span's draws included.
+        const Bool rerouteArmed = m_primGenRerouteKind != MG_Util::SelfTest::PrimGenRerouteKind::None &&
+                                  m_primGenReroutePool != VK_NULL_HANDLE;
+        // Otherwise the paused draw takes a stream slot, which is an exact count of it
+        // on a driver the probe measured as counting capture-less draws.
+        return rerouteArmed || m_primGenStreamCountsXfbInactiveDraws;
+    }
+
     void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots,
                                              Vector<Uint32>& outRerouteSlots) {
         if (kind > 1) {
@@ -11503,17 +11515,21 @@ void main() {
         if ((!m_xfbQueryCaptureActive[0] && !m_xfbQueryCaptureActive[1]) || m_xfbQueryPool == VK_NULL_HANDLE) {
             return;
         }
-        // A draw made while the GL span is merely PAUSED is CPU-accounted by the
-        // frontend's paused-primitive counter, whose delta the GENERATED resolve adds
-        // (DirectVulkan.cpp); a reroute slot for it would count it twice. Only a
-        // draw with no capture AND no paused span is the stream query's silent case.
-        const Bool glSpanPausedDraw = MG_State::pGLContext != nullptr &&
-                                      MG_State::pGLContext->IsTransformFeedbackActive() &&
-                                      MG_State::pGLContext->IsTransformFeedbackPaused();
+        // Every draw with no OPEN capture is the stream query's silent case, and that
+        // includes a draw made while the GL span is merely PAUSED (the pause closes the
+        // capture, so BeginXfbCaptureForDraw already answered false for it). Paused
+        // draws are rerouted like any other: the frontend's CPU paused-primitive
+        // counter cannot stand in for them - it is written by only 3 of the ~15 draw
+        // entry points (never the instanced, indirect or multi-draw ones) and answers 0
+        // for GL_PATCHES by design, since the tessellator's amplification is not
+        // knowable on the CPU - which is exactly the CTS's shape. Double counting is
+        // prevented on the other side instead: a GENERATED span opened while this
+        // reroute is armed ignores that CPU counter entirely (see
+        // ArePausedDrawsGpuCounted and DirectVulkan.cpp's XfbGenerated resolve), so
+        // every XFB-inactive draw in the span is priced exactly once, by this pool.
         const Bool rerouteGenerated = m_xfbQueryCaptureActive[1] &&
                                       m_primGenRerouteKind != MG_Util::SelfTest::PrimGenRerouteKind::None &&
-                                      m_primGenReroutePool != VK_NULL_HANDLE && !xfbActive &&
-                                      !glSpanPausedDraw;
+                                      m_primGenReroutePool != VK_NULL_HANDLE && !xfbActive;
         // The stream slot stays for WRITTEN whatever the reroute does (with capture
         // inactive its primitivesWritten is 0, which is the correct WRITTEN answer),
         // and for GENERATED wherever this draw is not rerouted - so one GL query span
@@ -14234,7 +14250,18 @@ void main() {
                 return RunPrimitivesGeneratedNoXfbProbe(probeContext);
             }();
             verdict = EvaluatePrimitivesGeneratedNoXfbVerdict(s_measurement);
-            if (!s_measurement.ran) {
+            if (s_measurement.fenceWaitTimedOut) {
+                // The probe's submission never signaled within its bound, so it left its
+                // command pool, query pools, render pass, framebuffer, shader modules,
+                // pipeline layout, pipelines and fence alive on purpose. This device is the
+                // renderer's own and outlives them, so nothing here may destroy them or
+                // wait the device idle - the queue may still be executing that submission,
+                // and an idle wait is the hang the bound exists to prevent. They leak for
+                // the process's life; a device this sick has bigger problems.
+                MGLOG_W("PRIMITIVES_GENERATED probe timed out waiting on its own submission (%s); its "
+                        "Vulkan objects are deliberately leaked and XFB-inactive draws keep the stream "
+                        "query", s_measurement.failureReason.c_str());
+            } else if (!s_measurement.ran) {
                 MGLOG_W("PRIMITIVES_GENERATED probe did not run (%s); XFB-inactive draws keep the "
                         "stream query", s_measurement.failureReason.c_str());
             } else {
@@ -14256,6 +14283,13 @@ void main() {
                 logShape("patches+discard", s_measurement.patchesDiscard);
             }
         }
+        // A driver whose stream query counts capture-less draws counts a PAUSED span's
+        // draws through the stream slot they take, so that span's result must not have
+        // the frontend's CPU paused counter added on top of it either (the pre-reroute
+        // accounting did exactly that, double counting every paused draw the CPU could
+        // price). Measured, not assumed: the forced arms never ask the probe and leave
+        // this false.
+        m_primGenStreamCountsXfbInactiveDraws = verdict == PrimitivesGeneratedNoXfbVerdict::StreamCounts;
         m_primGenRerouteKind = ChoosePrimitivesGeneratedReroute(
             overrideSetting, verdict, primitivesGeneratedQueryUsable, m_pipelineStatisticsQueryFeatureEnabled);
         if (m_primGenRerouteKind != PrimGenRerouteKind::None) {

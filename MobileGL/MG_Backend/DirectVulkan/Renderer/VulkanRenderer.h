@@ -732,9 +732,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // per primitive reaching primitive clipping - after every vertex processing
         // stage, before rasterizer discard - which is the same set).
         // XFB-ACTIVE draws keep the stream slot (exact today, and WRITTEN needs it);
-        // paused-span draws keep the frontend's CPU accounting (see the paused counter
-        // in DirectVulkan.cpp) and never open a reroute slot, or they would count
-        // twice. One GL query span may therefore hold slots of both pools.
+        // every draw with no open capture - a PAUSED span's draws included - takes a
+        // reroute slot, and the span then ignores the frontend's CPU paused-primitive
+        // counter rather than adding it on top (see IsPrimGenRerouteArmed): that
+        // counter is written by only 3 of the ~15 draw entry points and answers 0 for
+        // GL_PATCHES, so it cannot price the draws this reroute exists to repair. One
+        // GL query span may therefore hold slots of both pools.
         Bool m_pipelineStatisticsQueryFeatureEnabled = false;
         // VK_EXT_primitives_generated_query: base feature, and the
         // ...WithRasterizerDiscard feature without which a discarding draw inside the
@@ -747,6 +750,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_tessellationShaderFeatureEnabled = false;
         MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind =
             MG_Util::SelfTest::PrimGenRerouteKind::None;
+        // The bring-up probe measured this device's stream query as counting draws made
+        // with no capture span open (the StreamCounts verdict) - so it counts the
+        // PAUSED-span ones too, through the stream slot they take when nothing is
+        // rerouted. Only the probe can know this, so it stays false wherever the probe
+        // is not consulted (the forced arms), which keeps those lanes' accounting as it
+        // was.
+        Bool m_primGenStreamCountsXfbInactiveDraws = false;
         VkQueryPool m_primGenReroutePool = VK_NULL_HANDLE;
         Uint32 m_primGenRerouteSlotCursor = 0;
         Vector<Uint32> m_primGenRerouteActiveSlots;
@@ -758,6 +768,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ArmPrimGenReroute();
 
     public:
+        // Whether a GENERATED span opened now will have the draws made while the GL
+        // span is PAUSED counted on the GPU - through the reroute pool, which takes
+        // every draw with no open capture, or (where the reroute is not armed because
+        // the stream query was measured to count capture-less draws) through the stream
+        // slot such a draw still takes. The frontend's CPU paused-primitive counter
+        // must not be added on top of either: it would double count, and it cannot
+        // price the draws that matter anyway - only 3 of the ~15 draw entry points
+        // write it and it answers 0 for GL_PATCHES. Read once per span, after
+        // StartXfbQueryCapture (whose pool creation may disarm the reroute).
+        Bool ArePausedDrawsGpuCounted() const;
         // kind: 0 = PRIMITIVES_WRITTEN, 1 = PRIMITIVES_GENERATED.
         Bool StartXfbQueryCapture(Uint32 kind);
         void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots, Vector<Uint32>& outRerouteSlots);
