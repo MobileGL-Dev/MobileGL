@@ -101,6 +101,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexAttribBindingScenario.cpp
     Scenarios/XfbCaptureBufferReuseScenario.cpp
     Scenarios/XfbPrimitiveQueryScenario.cpp
+    Scenarios/PrimitivesGeneratedNoXfbScenario.cpp
     Scenarios/XfbRepeatedCaptureScenario.cpp
     Scenarios/TessellationXfbCaptureScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
@@ -366,6 +367,12 @@ mgl_itest_join_environment(MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT
     ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1" ${MGL_ITEST_COMMON_ENV})
+# Same shape as the UnlocatedIoBlocks entry: the log path is where the reroute's latched
+# MGLOG_I lands, and the arming case only trusts the bytes written after it started.
+mgl_itest_join_environment(MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/primgen-query-reroute.log"
+    ${MGL_ITEST_VULKAN_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -544,6 +551,25 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT}"
+)
+
+# PrimitivesGeneratedNoXfbScenario again, with the GL_PRIMITIVES_GENERATED statistics
+# reroute PINNED ON. The ambient DirectVulkan registration runs the same cases under the
+# bring-up probe's Auto verdict, so between the two entries both accounting paths answer
+# the same GL questions and must produce the same numbers - the "two pools must agree"
+# gate this machine can hold that the affected device cannot. The pinned entry is also
+# the only one whose arming case runs: it asserts the renderer's latched MGLOG_I, so a
+# silently-disarmed reroute (an inverted override mapping, a lost gate) fails here
+# instead of leaving every equality case vacuously green. DirectVulkan only - the flag
+# steers nothing on DirectGLES.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.PrimGenReroute."
+    TEST_FILTER "PrimitivesGeneratedNoXfbScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT}"
 )
 
 # The packed16 copy scenarios again, with the 8-bit storage widening PINNED ON. The ambient

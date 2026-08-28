@@ -57,8 +57,12 @@ namespace MobileGL::MG_Util::SelfTest {
     //     (when the device has pipelineStatisticsQuery): one invocation of the
     //     primitive clipping stage per primitive reaching it - GL's
     //     CLIPPING_INPUT_PRIMITIVES - which sits AFTER every vertex processing
-    //     stage and, per spec, BEFORE rasterizer discard, so for an XFB-inactive
-    //     draw it is definitionally the number PRIMITIVES_GENERATED must answer.
+    //     stage (post-tess, post-GS) and, per spec, BEFORE rasterizer discard, so
+    //     for an XFB-inactive draw it is definitionally the number
+    //     PRIMITIVES_GENERATED must answer. (A geometry stage's non-zero vertex
+    //     streams never reach clipping, but non-indexed GL_PRIMITIVES_GENERATED
+    //     counts stream 0 alone, so the sets still agree. The stage's OUTPUT
+    //     count - CLIPPING_PRIMITIVES - would not: clipping drops and splits.)
     //
     // THE CONTROL DISCIPLINE (DriverBugProbes.h): the substitute slots are the
     // probe's controls, and the DISCARD dimension is measured separately because
