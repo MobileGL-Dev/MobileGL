@@ -829,10 +829,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // Push every queued range of `resource` from the shadow into the backend
-            // store. Ranges go through the staging ring + glCopyBufferSubData when the
-            // ring is usable - the copy resolves the WAR hazard against in-flight
-            // frames on the GPU timeline, where it is mere job ordering - and fall
-            // back to the direct (potentially stalling) glBufferSubData otherwise.
+            // store, without ever letting a driver resolve the WAR hazard against
+            // in-flight frames at the WHOLE BUFFER's expense. Three tiers:
+            //
+            //   1. glMapBufferRange(WRITE | INVALIDATE_RANGE) + memcpy. The entire
+            //      mapped range is rewritten from the authoritative shadow, so
+            //      declaring its old bytes dead is exact - and it lets the driver
+            //      swap fresh pages in for JUST that range. This is the only tier
+            //      whose cost scales with the RANGE on this Mali driver: both the
+            //      immediate glBufferSubData (pre-queueing) and a staged
+            //      glCopyBufferSubData into a busy MUTABLE store ghost the whole
+            //      destination with a worker-thread memcpy - Minecraft 26.3 streams
+            //      ~1MB section meshes into 128MB arenas about nine times a frame
+            //      during a camera pan, and 9 x 128MB of ghosting per frame is
+            //      ~380ms, the measured 2-4 fps. (Backing the arenas with immutable
+            //      stores also kills the ghost, but eagerly commits every arena's
+            //      full extent - +hundreds of MB - which LMK'd the whole device.)
+            //   2. The staging ring + glCopyBufferSubData: the copy is ordered on
+            //      the GPU timeline, no CPU wait (MOBILEGL_DISABLE_INVALIDATE_FLUSH
+            //      forces this tier as the map path's negative control).
+            //   3. Direct glBufferSubData (potentially stalling) when neither the
+            //      map entry points nor the ring exist.
+            //
+            // The ranges are flushed AS QUEUED (VecRange1D::Add already merges
+            // near-adjacent ones): bytes, not flush calls, are the cost axis here,
+            // and collapsing a scattered flush into its union re-copied nearly whole
+            // chunk-mesh arenas every frame.
             // The caller owns syncedChangeSerial; this only drains the queue.
             void FlushPendingRangesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
 #ifdef TRACY_ENABLE
@@ -848,19 +870,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Clamp against BOTH extents: the readback flush may run while the
                 // frontend size and the backend store disagree (a pending respecify
                 // resolves that later; bytes past either end have nowhere to land).
-                //
-                // The ranges are copied AS QUEUED (VecRange1D::Add already merges
-                // near-adjacent ones): this driver runs buffer copies as worker-thread
-                // memcpys, so BYTES are the cost axis - collapsing a scattered flush
-                // into its union re-copied nearly whole chunk-mesh arenas every frame
-                // and saturated the copy worker during camera pans.
                 const SizeT limit = std::min(bufferObject.GetSize(), resource.storageSize);
+                const Bool mapUsable = !MG_Config::Features.DisableInvalidateFlush &&
+                                       g_GLESFuncs.glMapBufferRange && g_GLESFuncs.glUnmapBuffer;
                 const Bool ringUsable = UploadRingUsableNow();
                 for (const auto& range : ranges) {
                     const SizeT end = std::min(range.end, limit);
                     const SizeT start = std::min(range.start, end);
                     const SizeT size = end - start;
                     if (size == 0) continue;
+                    if (mapUsable) {
+                        BindBufferId(TempBufferTarget, resource.id);
+                        void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
+                                                                 (GLsizeiptr)size,
+                                                                 GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+                        if (dst) {
+                            Memcpy(dst, bufferObject.MappedData() + start, size);
+                            g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                            continue;
+                        }
+                    }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
                         RingAllocate(g_uploadRing, size, ringOffset)) {

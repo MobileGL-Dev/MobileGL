@@ -176,6 +176,14 @@ namespace MobileGL::MG_Config {
         // upload ring (negative control / driver-bug escape hatch; the immediate
         // upload stalls on drivers that resolve the WAR hazard on the CPU, e.g. Mali).
         Bool DisableUploadRing = false;
+        // MOBILEGL_DISABLE_INVALIDATE_FLUSH: skip the glMapBufferRange(WRITE |
+        // INVALIDATE_RANGE) tier of the DirectGLES pending-range flush and go straight
+        // to the upload ring's staged glCopyBufferSubData (negative control / escape
+        // hatch for a driver whose range-invalidating map misbehaves). The map tier is
+        // what keeps a partial write into a large in-flight buffer priced by the RANGE:
+        // on Mali both the immediate glBufferSubData and a staged copy into a busy
+        // mutable store ghost the whole destination on the CPU.
+        Bool DisableInvalidateFlush = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
