@@ -6722,6 +6722,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         strippedAny, strippedIoBlockLocationSpirv, enableSpirvValidation) &&
                     !strippedIoBlockLocationSpirv.empty() && strippedAny) {
                     effectiveSpirv = &strippedIoBlockLocationSpirv;
+                    // THE ARMING SIGNAL, and it is INFO on purpose: the per-stage line below is
+                    // MGLOG_D, which is compiled out of every build CI and the device runs, so
+                    // nothing outside a debug build could tell an armed repair from a silently
+                    // un-armed one. Latched, so it costs one line per process rather than one
+                    // per stage of every program. The integration lane that pins the emulation
+                    // on asserts on exactly this line - see UnlocatedIoBlockScenario.
+                    MGLOG_I_ONCE("DirectGLES is emitting inter-stage interface blocks WITHOUT their "
+                                 "layout(location) qualifier, because this driver loses a located "
+                                 "block's payload across a tessellation or geometry boundary.");
                     MGLOG_D("Program %u stage %s: interface-block location qualifiers dropped "
                             "(%s), because this driver loses a located block's payload across a "
                             "tessellation or geometry boundary.",

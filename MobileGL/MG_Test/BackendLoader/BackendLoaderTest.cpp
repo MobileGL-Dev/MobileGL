@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -14,9 +15,11 @@
 
 #include <algorithm>
 
+#include <Init.h>
 #include <MG_Backend/DirectGLES/BackendObject_DirectGLES.h>
 #include <MG_Backend/DirectVulkan/BackendObject_DirectVulkan.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Util/SelfTest/DriverBugProbes.h>
 
 // ProbeIndirectInstanceIdIncludesBaseInstance is driven against a fake GLES driver:
 // a GLESFunctionsTable populated with captureless lambdas backed by the file-scope
@@ -25,6 +28,13 @@
 // ANGLE-style baseInstance-leaking driver, or a failing one.
 namespace {
     struct FakeDriverState {
+        // What each of the located-interface-block probe's draws reads back, in the order the
+        // probe makes them: unlocated control, located subject, located vertex-to-fragment
+        // control. Empty means "conforming driver" - every read returns the payload - which is
+        // what keeps this probe invisible to every other test in this file.
+        std::vector<bool> ioBlockPayloadArrives;
+        std::size_t ioBlockReads = 0;
+        std::size_t ioBlockDraws = 0;
         // Behavior knobs, configured per test before running the probe.
         GLint maxVertexSsboBlocks = 4;
         GLint glesMajorVersion = 3;
@@ -433,6 +443,52 @@ namespace {
         };
         funcs.glBindFramebuffer = [](GLenum, GLuint) {};
         funcs.glBindRenderbuffer = [](GLenum, GLuint) {};
+        // ---- what the located-interface-block probe draws with -------------------------
+        // Enough of a rasterizer for ProbeLocatedIoBlocksLosePayload to reach a verdict: it
+        // builds three programs, draws each to a 1x1 target and reads the pixel back, and the
+        // fake decides what each read returns. Default behaviour is a CONFORMING driver, so
+        // every test that predates this one sees the probe reach "not affected" and no
+        // capability it asserts on moves.
+        funcs.glCheckFramebufferStatus = [](GLenum) -> GLenum { return GL_FRAMEBUFFER_COMPLETE; };
+        funcs.glViewport = [](GLint, GLint, GLsizei, GLsizei) {};
+        funcs.glClearColor = [](GLfloat, GLfloat, GLfloat, GLfloat) {};
+        funcs.glClear = [](GLbitfield) {};
+        funcs.glPixelStorei = [](GLenum, GLint) {};
+        funcs.glColorMask = [](GLboolean, GLboolean, GLboolean, GLboolean) {};
+        funcs.glIsEnabled = [](GLenum) -> GLboolean { return GL_FALSE; };
+        funcs.glGetBooleanv = [](GLenum, GLboolean* data) {
+            if (data == nullptr) return;
+            for (int i = 0; i < 4; ++i) data[i] = GL_TRUE;
+        };
+        funcs.glGetIntegeri_v = [](GLenum, GLuint, GLint* data) {
+            if (data != nullptr) *data = 0;
+        };
+        funcs.glGetProgramInfoLog = [](GLuint, GLsizei bufSize, GLsizei* length, GLchar* infoLog) {
+            if (infoLog != nullptr && bufSize > 0) infoLog[0] = '\0';
+            if (length != nullptr) *length = 0;
+        };
+        funcs.glGetShaderInfoLog = [](GLuint, GLsizei bufSize, GLsizei* length, GLchar* infoLog) {
+            if (infoLog != nullptr && bufSize > 0) infoLog[0] = '\0';
+            if (length != nullptr) *length = 0;
+        };
+        funcs.glDrawArrays = [](GLenum, GLint, GLsizei) { ++g_fake.ioBlockDraws; };
+        // One entry of ioBlockPayloadArrives is consumed per draw, in the order the probe makes
+        // them: the unlocated CONTROL, then the located SUBJECT, then the located
+        // vertex-to-fragment second control. Past the end of the list the driver is conforming.
+        funcs.glReadPixels = [](GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void* pixels) {
+            auto* out = static_cast<unsigned char*>(pixels);
+            if (out == nullptr) return;
+            const std::size_t index = g_fake.ioBlockReads++;
+            const bool arrives = index < g_fake.ioBlockPayloadArrives.size()
+                                     ? g_fake.ioBlockPayloadArrives[index]
+                                     : true;
+            // 0.25 and 0.5 as the probe's vertex stage wrote them; zeroes are what a stage that
+            // received nothing reads.
+            out[0] = arrives ? 0x40 : 0x00;
+            out[1] = arrives ? 0x80 : 0x00;
+            out[2] = 0x00;
+            out[3] = 0xff;
+        };
         funcs.glRenderbufferStorage = [](GLenum, GLenum, GLsizei, GLsizei) {};
         funcs.glFramebufferRenderbuffer = [](GLenum, GLenum, GLenum, GLuint) {};
         funcs.glDeleteFramebuffers = [](GLsizei n, const GLuint* framebuffers) {
@@ -1346,4 +1402,152 @@ TEST(BaseInstanceCapabilities, RequiresTheExtensionAndAllThreeEntryPoints) {
     ASSERT_TRUE(
         MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(missingEntryPointCaps, funcs));
     EXPECT_FALSE(missingEntryPointCaps.SupportsBaseInstance);
+}
+
+// ===================== LOCATED INTER-STAGE INTERFACE BLOCKS =====================
+//
+// The capability that decides whether DirectGLES strips the layout(location) qualifier off a
+// tessellation/geometry program's interface blocks, and the environment override that forces
+// it either way.
+//
+// THE MAPPING IS INVERTED ON PURPOSE and that is exactly why it is pinned here: the variable
+// is named for the EMULATION ("emit them unlocated"), the capability is named for the DRIVER
+// ("located blocks work"), so forcing the emulation ON must set the capability to FALSE. A
+// one-line swap of those two arms would leave every other test in the tree green - the unit
+// tests drive the pass directly, and the integration lane runs on llvmpipe, which carries a
+// located block correctly either way - while silently disabling the repair on the only device
+// that needs it.
+
+namespace {
+    void SetEnvVarForTest(const char* name, const char* value) {
+#if defined(_WIN32)
+        _putenv_s(name, value);
+#else
+        setenv(name, value, 1);
+#endif
+    }
+
+    void UnsetEnvVarForTest(const char* name) {
+#if defined(_WIN32)
+        _putenv_s(name, "");
+#else
+        unsetenv(name);
+#endif
+    }
+
+    // Sets MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS (or clears it), re-reads the configuration the
+    // way process start would, and runs the capability fill against the fake driver.
+    MobileGL::MG_External::GLESCapabilities CapabilitiesWithOverride(
+        const MobileGL::MG_External::GLESFunctionsTable& funcs, const char* value) {
+        if (value == nullptr) {
+            UnsetEnvVarForTest("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
+        } else {
+            SetEnvVarForTest("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS", value);
+        }
+        MobileGL::MG_ConfigLoader::Init();
+        MobileGL::MG_External::GLESCapabilities caps;
+        EXPECT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+        return caps;
+    }
+} // namespace
+
+TEST(LocatedIoBlockCapability, TheOverrideMapsOntoTheCapabilityInverted) {
+    const auto funcs = MakeFakeGLESFunctions();
+
+    // ONE TEST, THREE ARMS, IN THIS ORDER, because the Auto arm consults a probe that is
+    // memoized for the lifetime of the process - splitting them into three test cases would
+    // make the answer depend on which one gtest happened to run first.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+
+    // ForceOn - "emit the blocks unlocated". The driver is NOT probed, and the capability must
+    // come out FALSE. This is the assertion the inversion swap breaks.
+    {
+        const auto caps = CapabilitiesWithOverride(funcs, "1");
+        EXPECT_FALSE(caps.SupportsLocatedInterStageIoBlocks)
+            << "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1 forces the emulation ON, which means "
+               "declaring that this driver's located interface blocks do NOT work. A true here "
+               "means the strip is disabled in the one configuration that exists to enable it.";
+    }
+
+    // ForceOff - the negative control. Also unprobed, and the capability must come out TRUE so
+    // the strip stays off.
+    {
+        const auto caps = CapabilitiesWithOverride(funcs, "0");
+        EXPECT_TRUE(caps.SupportsLocatedInterStageIoBlocks)
+            << "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=0 forces located blocks ON, i.e. the "
+               "emulation off; a false here would strip on every driver regardless of the probe.";
+    }
+
+    // Auto - the setting every real run uses. The capability is the probe's verdict, negated:
+    // "the blocks lose their payload" is the same statement as "located blocks are not
+    // supported". On this fake the probe finds a conforming driver, so the capability is true.
+    {
+        const auto caps = CapabilitiesWithOverride(funcs, nullptr);
+        EXPECT_EQ(caps.SupportsLocatedInterStageIoBlocks,
+                  !MobileGL::MG_Util::SelfTest::LocatedIoBlocksLosePayload(funcs).detected)
+            << "with the variable unset the capability must follow the driver probe and nothing "
+               "else";
+        EXPECT_TRUE(caps.SupportsLocatedInterStageIoBlocks)
+            << "the fake driver carries the probe's payload, so Auto must leave the strip off";
+    }
+
+    UnsetEnvVarForTest("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
+    MobileGL::MG_ConfigLoader::Init();
+}
+
+// The probe's own verdict logic, driven directly rather than through the memoized accessor so
+// each shape gets its own answer. Its two controls are the whole design: without them a driver
+// that cannot run the shape at all, or one whose interface blocks are broken generally, would
+// be reported as having this very specific defect - and would have its locations stripped for
+// nothing.
+TEST(LocatedIoBlockProbe, ReportsTheDefectOnlyWhenTheUnlocatedControlCarriesThePayload) {
+    const auto funcs = MakeFakeGLESFunctions();
+    using MobileGL::MG_Util::SelfTest::ProbeLocatedIoBlocksLosePayload;
+
+    // A CONFORMING driver: every draw delivers. No finding.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    g_fake.ioBlockPayloadArrives = {true, true, true};
+    EXPECT_FALSE(ProbeLocatedIoBlocksLosePayload(funcs).detected);
+
+    // THE AFFECTED DRIVER: the unlocated control delivers, the located subject does not, and
+    // the located vertex-to-fragment control does. That last one is what scopes the repair to
+    // tessellation/geometry programs.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    g_fake.ioBlockPayloadArrives = {true, false, true};
+    {
+        const auto measurement = ProbeLocatedIoBlocksLosePayload(funcs);
+        EXPECT_TRUE(measurement.detected);
+        EXPECT_FALSE(measurement.alsoAffectsVertexToFragment);
+    }
+
+    // ...and a driver that loses the payload even without a geometry stage says so, because the
+    // repair does not reach that shape and the report must not imply it does.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    g_fake.ioBlockPayloadArrives = {true, false, false};
+    {
+        const auto measurement = ProbeLocatedIoBlocksLosePayload(funcs);
+        EXPECT_TRUE(measurement.detected);
+        EXPECT_TRUE(measurement.alsoAffectsVertexToFragment);
+    }
+
+    // THE CONTROL FAILING IS NOT A FINDING. A driver that cannot carry an UNLOCATED block
+    // either has something else wrong with it, and stripping locations would repair nothing
+    // while changing every tessellation and geometry program on it.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    g_fake.ioBlockPayloadArrives = {false, false, false};
+    EXPECT_FALSE(ProbeLocatedIoBlocksLosePayload(funcs).detected);
+
+    // Neither is a driver the probe cannot even draw on: an inconclusive probe must leave the
+    // capability exactly as it was before the probe existed.
+    ResetFakeDriver();
+    g_fake.glesMinorVersion = 2;
+    auto crippled = MakeFakeGLESFunctions();
+    crippled.glReadPixels = nullptr;
+    EXPECT_FALSE(ProbeLocatedIoBlocksLosePayload(crippled).detected);
+    EXPECT_EQ(g_fake.ioBlockDraws, 0u) << "an entry-point-gated probe must not draw at all";
 }

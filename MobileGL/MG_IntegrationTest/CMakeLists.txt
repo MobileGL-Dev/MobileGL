@@ -353,8 +353,15 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT
     "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1" ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0" ${MGL_ITEST_COMMON_ENV})
+# MOBILEGL_LOG_FILE_PATH alongside the pin, because the arming assertion needs somewhere to
+# read the library's own report from. The strip's arming signal is a latched MGLOG_I and there
+# is no other way for a test process to learn that it fired - MG_Config is not reachable from
+# this module on Android, where it links the shipping library. The path is per-lane so nothing
+# else appends to it, and the case only trusts the bytes written after it started.
 mgl_itest_join_environment(MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1" ${MGL_ITEST_COMMON_ENV})
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/unlocated-io-blocks.log"
+    ${MGL_ITEST_COMMON_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)

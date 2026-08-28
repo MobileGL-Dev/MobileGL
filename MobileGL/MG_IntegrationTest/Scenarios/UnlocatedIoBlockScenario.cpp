@@ -41,6 +41,11 @@
 //   black  - the pipeline ran, the plain varying arrived, and the BLOCK payload came back
 //            zeroed. That is what an interface whose two ends stopped matching looks like.
 
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -345,6 +350,37 @@ void main()
 
             const std::string& BuildLog() const { return m_buildLog; }
 
+            // The library log this process is writing, or an empty path when none was
+            // configured. MOBILEGL_LOG_FILE_PATH is read at log-init, before anything this
+            // fixture can reach, so the ctest entry sets it and this only reads it back.
+            static std::filesystem::path LibraryLogPath() {
+                const char* path = std::getenv("MOBILEGL_LOG_FILE_PATH");
+                return (path != nullptr && *path != '\0') ? std::filesystem::path(path)
+                                                          : std::filesystem::path();
+            }
+
+            // How many bytes the library log already holds. Everything this fixture asserts on
+            // is searched from here forward, because the file is APPENDED to by every process
+            // in the lane and a line left behind by an earlier one would otherwise satisfy the
+            // assertion without this process having done anything at all.
+            static std::uintmax_t LibraryLogSize() {
+                std::error_code ec;
+                const std::filesystem::path path = LibraryLogPath();
+                if (path.empty()) return 0;
+                const std::uintmax_t size = std::filesystem::file_size(path, ec);
+                return ec ? 0 : size;
+            }
+
+            static std::string LibraryLogSince(std::uintmax_t offset) {
+                const std::filesystem::path path = LibraryLogPath();
+                if (path.empty()) return {};
+                std::ifstream file(path, std::ios::binary);
+                if (!file.good()) return {};
+                file.seekg(static_cast<std::streamoff>(offset));
+                return std::string((std::istreambuf_iterator<char>(file)),
+                                   std::istreambuf_iterator<char>());
+            }
+
             static GLenum FirstGLError() {
                 const GLenum first = glGetError();
                 while (glGetError() != GL_NO_ERROR) {
@@ -415,6 +451,75 @@ void main()
             EXPECT_EQ(FirstGLError(), 0u);
             EXPECT_TRUE(IsGreen(centre))
                 << "the renamed-and-unlocated interface chain lost its payload: " << centre;
+        }
+
+        // THE ONE CASE THAT CAN FAIL WHEN THE REPAIR SILENTLY STOPS BEING ARMED.
+        //
+        // Everything above renders green on llvmpipe whether the blocks were stripped or not -
+        // this machine carries a located block correctly - so those cases pin that the strip
+        // does no HARM and can say nothing about whether it happened. That leaves the arming
+        // itself untested, and the arming is where the cheap mistake lives: Loader.cpp maps
+        // MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS onto the capability INVERTED (forcing the
+        // emulation on means declaring located blocks UNSUPPORTED), and a one-line swap of
+        // those two arms would disable the device repair with every test here still green.
+        //
+        // So this case asserts a LIBRARY OBSERVABLE against the environment, the shape
+        // AsyncCompileScenario::ExtensionStringMatchesTheConfiguration uses: the environment
+        // says the emulation is pinned on, therefore the library must SAY it stripped
+        // something. The observable is the latched MGLOG_I DirectGLES emits the first time the
+        // pass fires (Managers.cpp); it is INFO rather than DEBUG precisely so that this
+        // assertion is possible in the builds CI runs.
+        //
+        // Two things it deliberately does NOT do: it does not read MG_Config (on Android this
+        // module links the shipping library, which exports nothing internal - the reason
+        // ViewportArrayScenario's control moved to the environment), and it does not trust the
+        // whole log file, only the bytes appended after this test started.
+        TEST_F(UnlocatedIoBlockScenario, TheEmulationIsActuallyArmedWhenTheEnvironmentPinsItOn) {
+            if (!Ready()) return;
+
+            if (AmbientQuirkFromEnvironment("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS") != AmbientQuirk::On) {
+                GTEST_SKIP() << "this case needs the emulation pinned ON for the whole process, which "
+                                "is what the UnlocatedIoBlocks. ctest entry does with "
+                                "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1; with the variable unset the "
+                                "driver POST decides, and on this machine it decides the blocks are "
+                                "fine - so there would be nothing to observe";
+            }
+            if (LibraryLogPath().empty()) {
+                GTEST_SKIP() << "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS is pinned on but "
+                                "MOBILEGL_LOG_FILE_PATH is not set, so the library has nowhere to "
+                                "record that it stripped anything; the UnlocatedIoBlocks. ctest entry "
+                                "sets both";
+            }
+            if (Gl().BackendName() != std::string("DirectGLES")) {
+                GTEST_SKIP() << "the strip is DirectGLES's; " << Gl().BackendName()
+                             << " hands the module to the driver as SPIR-V, where Location is how "
+                                "interfaces are matched";
+            }
+
+            // Taken BEFORE the program is built, so the line this looks for can only be one
+            // this process wrote. The latch means it is emitted at the FIRST stage of the
+            // FIRST affected program, which is inside the build below.
+            const std::uintmax_t before = LibraryLogSize();
+
+            const GLuint program = BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource);
+            if (program == 0) {
+                GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
+                             << Gl().BackendName() << ", so nothing would arm the strip: " << BuildLog();
+            }
+            // Drawn as well as built, so a stack that defers its backend program to first use
+            // still reaches the transpile this is asserting about.
+            const Rgba8 centre = DrawAndReadCentre(program);
+            EXPECT_EQ(FirstGLError(), 0u);
+            EXPECT_TRUE(IsGreen(centre)) << "the pinned-on lane did not even render correctly: " << centre;
+
+            const std::string appended = LibraryLogSince(before);
+            EXPECT_NE(appended.find("WITHOUT their layout(location) qualifier"), std::string::npos)
+                << "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS is pinned ON, a five-stage program with four "
+                   "interface-block boundaries was built and drawn, and DirectGLES never reported "
+                   "stripping a single location. The emulation is not armed - check the override "
+                   "mapping in Loader.cpp (it is inverted on purpose) and the arming gate in "
+                   "Managers.cpp. Log appended by this test:\n"
+                << appended;
         }
 
     } // namespace
