@@ -8,6 +8,7 @@
 
 #include "DriverBugProbes.h"
 
+#include <Config.h>
 #include <MG_Util/Debug/Log.h>
 
 #include <cstring>
@@ -1828,11 +1829,19 @@ namespace MobileGL::MG_Util::SelfTest {
 
         SavedState saved;
         Save(gl, saved);
+        // The colour mask is not in SavedState - no other probe touches it - so this one saves
+        // and puts back its own. It has to be forced open: a masked channel would read back as
+        // zero and turn a healthy driver into a "payload lost" verdict.
+        GLboolean savedColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+        const Bool canMaskColor = gl.glColorMask != nullptr && gl.glGetBooleanv != nullptr;
+        if (canMaskColor) {
+            gl.glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
+            gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        }
         GLuint vao = 0;
         gl.glGenVertexArrays(1, &vao);
         gl.glBindVertexArray(vao);
         PrepareForProbeDraw(gl);
-        if (gl.glColorMask != nullptr) gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
         // THE CONTROL, and it runs first: the identical three-stage program with no location on
         // the blocks. If THAT cannot carry the payload, this driver's problem is not the
@@ -1862,6 +1871,9 @@ namespace MobileGL::MG_Util::SelfTest {
         if (vao != 0) {
             gl.glBindVertexArray(0);
             gl.glDeleteVertexArrays(1, &vao);
+        }
+        if (canMaskColor) {
+            gl.glColorMask(savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3]);
         }
         Restore(gl, saved);
         Drain(gl);
@@ -2015,13 +2027,27 @@ namespace MobileGL::MG_Util::SelfTest {
                             "vertex+fragment program is still emitted as the application wrote it"
                           : ". A located block between a VERTEX and a FRAGMENT stage is delivered "
                             "correctly on the same driver, which is what scopes the repair";
-            detail +=
-                ". MobileGL emits a tessellation/geometry program's interface blocks with no "
-                "location qualifier at all (StripIoBlockLocationsPass) and lets ES match them by "
-                "block name and member sequence, which it does; the locations were invented by "
-                "the cross-stage IO resolver rather than written by the application";
+            // The repair can be switched off from the environment, and a report that said
+            // "Fixed" while the strip was disabled would be describing a build nobody is
+            // running. The verdict follows what this process will actually do, not what the
+            // code is capable of.
+            const Bool repairDisabled =
+                MG_Config::Features.EsprytUnlocatedIoBlocks == MG_Config::QuirkOverride::ForceOff;
+            if (repairDisabled) {
+                detail +=
+                    ". THE REPAIR IS DISABLED in this process: MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS "
+                    "is set to force located blocks ON, so DirectGLES emits the location "
+                    "qualifier the driver cannot honour and the payload is lost. Unset the "
+                    "variable to get the repair back";
+            } else {
+                detail +=
+                    ". MobileGL emits a tessellation/geometry program's interface blocks with no "
+                    "location qualifier at all (StripIoBlockLocationsPass) and lets ES match them "
+                    "by block name and member sequence, which it does; the locations were invented "
+                    "by the cross-stage IO resolver rather than written by the application";
+            }
             return DriverBugFinding{"Located inter-stage interface blocks carry no payload",
-                                    measurement.alsoAffectsVertexToFragment
+                                    (repairDisabled || measurement.alsoAffectsVertexToFragment)
                                         ? DriverBugVerdict::Unfixable
                                         : DriverBugVerdict::Fixed,
                                     Move(detail)};

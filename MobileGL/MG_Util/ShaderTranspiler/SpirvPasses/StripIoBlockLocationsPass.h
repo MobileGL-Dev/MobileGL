@@ -46,6 +46,16 @@ namespace MobileGL {
             // and so do vertex attributes and fragment outputs, which are never blocks.
             // Builtin blocks (gl_PerVertex) are skipped; they carry no Location anyway.
             //
+            // BOTH DECORATION LEVELS, because a block carries its location at exactly one of
+            // them: on the VARIABLE when the cross-stage IO resolver assigned it (or the
+            // application wrote `layout(location=) out Blk {...}`), and on the MEMBERS when the
+            // application located those instead - in which case glslang puts nothing on the
+            // variable at all and SPIRV-Cross suppresses the block-level qualifier in favour of
+            // the member ones. A variable-only strip would silently pass that second shape by.
+            // A struct reached by an interface variable whose direction is NOT armed keeps its
+            // member decorations: they belong to the type, and taking them off would strip the
+            // unarmed side too.
+            //
             // The two directions are armed SEPARATELY by the caller, because an interface
             // whose other end lives in a DIFFERENT program (a separable program pipeline)
             // must keep its location: that is the only thing matching it there, and the other

@@ -54,27 +54,24 @@ namespace MobileGL {
                     return blockStructIds;
                 }
 
-                // True when `variable` is an Input/Output interface block of the direction the
-                // caller armed. Tessellation and geometry interfaces are arrays of the block
-                // struct, so array levels are unwrapped before the struct is recognised.
-                Bool IsArmedInterfaceBlock(IRContext* irContext, Instruction& variable,
-                                           const std::unordered_set<uint32_t>& blockStructIds,
-                                           Bool stripInputBlocks, Bool stripOutputBlocks) {
-                    if (variable.opcode() != spv::Op::OpVariable) return false;
+                // The interface-block struct an Input/Output variable declares, or 0 when the
+                // variable is not one. Tessellation and geometry interfaces are arrays of the
+                // block struct, so array levels are unwrapped before the struct is recognised.
+                uint32_t GetInterfaceBlockStructId(IRContext* irContext, Instruction& variable,
+                                                   const std::unordered_set<uint32_t>& blockStructIds,
+                                                   spv::StorageClass& outStorageClass) {
+                    if (variable.opcode() != spv::Op::OpVariable) return 0;
                     const auto storageClass =
                         static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
-                    if (storageClass == spv::StorageClass::Input) {
-                        if (!stripInputBlocks) return false;
-                    } else if (storageClass == spv::StorageClass::Output) {
-                        if (!stripOutputBlocks) return false;
-                    } else {
-                        return false;
+                    if (storageClass != spv::StorageClass::Input &&
+                        storageClass != spv::StorageClass::Output) {
+                        return 0;
                     }
 
                     auto* defUseMgr = irContext->get_def_use_mgr();
                     Instruction* pointerType = defUseMgr->GetDef(variable.type_id());
                     if (pointerType == nullptr || pointerType->opcode() != spv::Op::OpTypePointer) {
-                        return false;
+                        return 0;
                     }
                     uint32_t pointeeId = pointerType->GetSingleWordInOperand(1);
                     Instruction* pointee = defUseMgr->GetDef(pointeeId);
@@ -83,8 +80,16 @@ namespace MobileGL {
                         pointeeId = pointee->GetSingleWordInOperand(0);
                         pointee = defUseMgr->GetDef(pointeeId);
                     }
-                    if (pointee == nullptr || pointee->opcode() != spv::Op::OpTypeStruct) return false;
-                    return blockStructIds.find(pointeeId) != blockStructIds.end();
+                    if (pointee == nullptr || pointee->opcode() != spv::Op::OpTypeStruct) return 0;
+                    if (blockStructIds.find(pointeeId) == blockStructIds.end()) return 0;
+
+                    outStorageClass = storageClass;
+                    return pointeeId;
+                }
+
+                Bool DirectionIsArmed(spv::StorageClass storageClass, Bool stripInputBlocks,
+                                      Bool stripOutputBlocks) {
+                    return storageClass == spv::StorageClass::Input ? stripInputBlocks : stripOutputBlocks;
                 }
             } // namespace
 
@@ -96,36 +101,74 @@ namespace MobileGL {
                 const std::unordered_set<uint32_t> blockStructIds = CollectUserBlockStructIds(irContext);
                 if (blockStructIds.empty()) return Status::SuccessWithoutChange;
 
-                // The variable ids to strip, resolved BEFORE anything is killed: the walk below
-                // deletes annotations, and deciding what to delete while deleting reads a list
-                // that is being mutated underneath it.
+                // What to strip, resolved BEFORE anything is killed: the walk below deletes
+                // annotations, and deciding what to delete while deleting reads a list that is
+                // being mutated underneath it.
+                //
+                // BOTH LEVELS, because a block carries its location at exactly one of them and
+                // which one is not the caller's choice. When the location came from the
+                // cross-stage IO resolver (or from `layout(location=) out Blk {...}`) glslang
+                // puts it on the VARIABLE; when the application located the members instead
+                // (`out Blk { layout(location = 4) vec4 v; }`) it puts one OpMemberDecorate per
+                // member and NOTHING on the variable - and SPIRV-Cross then suppresses the
+                // block-level qualifier and prints the member ones instead
+                // (spirv_glsl.cpp:1444 and :2037-2045). Stripping only the variable level would
+                // leave that second shape emitting exactly the located block this driver drops
+                // the payload for, and - because there was no variable decoration to remove -
+                // would report nothing stripped, so the caller would decline the module and
+                // nothing would say the repair had passed the shader by.
                 std::unordered_set<uint32_t> armedVariableIds;
+                std::unordered_set<uint32_t> armedStructIds;
+                // Block structs reached by an interface variable whose direction is NOT armed.
+                // A struct in here is left alone even if some armed variable also reaches it:
+                // member decorations belong to the TYPE, so stripping them would take the
+                // qualifier off the unarmed side too - the one whose other end is in a
+                // different program and is matched by exactly that number.
+                std::unordered_set<uint32_t> unarmedStructIds;
                 for (Instruction& variable : irContext->module()->types_values()) {
-                    if (IsArmedInterfaceBlock(irContext, variable, blockStructIds, m_stripInputBlocks,
-                                              m_stripOutputBlocks)) {
+                    spv::StorageClass storageClass = spv::StorageClass::Input;
+                    const uint32_t structId =
+                        GetInterfaceBlockStructId(irContext, variable, blockStructIds, storageClass);
+                    if (structId == 0) continue;
+                    if (DirectionIsArmed(storageClass, m_stripInputBlocks, m_stripOutputBlocks)) {
                         armedVariableIds.insert(variable.result_id());
+                        armedStructIds.insert(structId);
+                    } else {
+                        unarmedStructIds.insert(structId);
                     }
+                }
+                for (const uint32_t unarmedStructId : unarmedStructIds) {
+                    armedStructIds.erase(unarmedStructId);
                 }
                 if (armedVariableIds.empty()) return Status::SuccessWithoutChange;
 
+                // Component travels with Location and is meaningless without it. Leaving one
+                // behind is not merely untidy: for an ES target SPIRV-Cross THROWS on a block
+                // member's Component (spirv_glsl.cpp:1447-1460) rather than printing it, which
+                // costs the whole stage.
+                const auto isLocationOrComponent = [](uint32_t decoration) {
+                    return static_cast<spv::Decoration>(decoration) == spv::Decoration::Location ||
+                           static_cast<spv::Decoration>(decoration) == spv::Decoration::Component;
+                };
+
                 std::vector<Instruction*> toKill;
                 for (Instruction& annotation : irContext->module()->annotations()) {
-                    if (annotation.opcode() != spv::Op::OpDecorate) continue;
-                    const auto decoration =
-                        static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1));
-                    // Component travels with Location and is meaningless without it; a block
-                    // whose Location is gone and whose Component survives would be a shader
-                    // SPIRV-Cross prints `layout(component = N)` for on its own, which ESSL has
-                    // no spelling for at all.
-                    if (decoration != spv::Decoration::Location &&
-                        decoration != spv::Decoration::Component) {
-                        continue;
+                    if (annotation.opcode() == spv::Op::OpDecorate) {
+                        if (!isLocationOrComponent(annotation.GetSingleWordInOperand(1))) continue;
+                        if (armedVariableIds.find(annotation.GetSingleWordInOperand(0)) ==
+                            armedVariableIds.end()) {
+                            continue;
+                        }
+                        toKill.push_back(&annotation);
+                    } else if (annotation.opcode() == spv::Op::OpMemberDecorate) {
+                        // OpMemberDecorate <struct> <member> <decoration> ...
+                        if (!isLocationOrComponent(annotation.GetSingleWordInOperand(2))) continue;
+                        if (armedStructIds.find(annotation.GetSingleWordInOperand(0)) ==
+                            armedStructIds.end()) {
+                            continue;
+                        }
+                        toKill.push_back(&annotation);
                     }
-                    if (armedVariableIds.find(annotation.GetSingleWordInOperand(0)) ==
-                        armedVariableIds.end()) {
-                        continue;
-                    }
-                    toKill.push_back(&annotation);
                 }
 
                 for (Instruction* inst : toKill) {

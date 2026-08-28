@@ -83,6 +83,31 @@ void main()
 }
 )";
 
+    // The OTHER place a block's location can live. When the application locates the MEMBERS
+    // rather than the block, glslang emits one OpMemberDecorate Location per member and
+    // NOTHING on the variable - and SPIRV-Cross then suppresses the block-level qualifier and
+    // prints the member ones instead. A strip that only looked at the variable would find
+    // nothing to remove here, report "unchanged", and leave the emitted ESSL carrying exactly
+    // the located block the driver drops the payload for.
+    const char* kMemberLocatedTessEvalSource = R"(#version 450 core
+layout(isolines, point_mode) in;
+
+in TCSOutputBlock {
+    layout(location = 4) vec4 tcs_tes_variable;
+    layout(location = 5) vec4 tcs_tes_second;
+} input_block[];
+out TESOutputBlock {
+    layout(location = 6) vec4 tes_gs_variable;
+    layout(location = 7) vec4 tes_gs_second;
+} output_block;
+
+void main()
+{
+    output_block.tes_gs_variable = input_block[0].tcs_tes_variable;
+    output_block.tes_gs_second = input_block[0].tcs_tes_second;
+}
+)";
+
     // A stage with no interface block at all: the pass must leave its located varyings alone
     // and report that it changed nothing, so the caller declines the re-serialised module.
     const char* kNoBlockTessEvalSource = R"(#version 420 core
@@ -181,6 +206,58 @@ TEST_F(StripIoBlockLocationsTest, StripsOnlyTheDirectionTheCallerArmed) {
     const String afterOutputOnly = Transpile(outputOnly);
     EXPECT_NE(afterOutputOnly.find(") in TCSOutputBlock"), String::npos) << afterOutputOnly;
     EXPECT_EQ(afterOutputOnly.find(") out TESOutputBlock"), String::npos) << afterOutputOnly;
+}
+
+// The regression guard for the shape a variable-only strip walks straight past.
+TEST_F(StripIoBlockLocationsTest, DropsLocationsTheApplicationPutOnTheBlockMembers) {
+    const Vector<Uint32> input = CompileToSpirv(GL_TESS_EVALUATION_SHADER, kMemberLocatedTessEvalSource);
+    ASSERT_FALSE(input.empty());
+
+    // The defect, pinned first: SPIRV-Cross prints the member locations, and there is no
+    // block-level qualifier for a variable-level strip to find.
+    const String before = Transpile(input);
+    EXPECT_NE(before.find("layout(location = 4)"), String::npos) << before;
+    EXPECT_NE(before.find("layout(location = 6)"), String::npos) << before;
+
+    bool strippedAny = false;
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::StripIoBlockLocationsForEssl(input, true, true, strippedAny, output, true));
+    ASSERT_FALSE(output.empty());
+    EXPECT_TRUE(strippedAny) << "the member-located block was passed by, and reporting no change "
+                                "makes the caller decline the module and say nothing about it";
+
+    const String after = Transpile(output);
+    EXPECT_EQ(CountOf(after, "layout(location"), 0u)
+        << "a member location survived, so the emitted block is still the shape the driver "
+           "drops the payload for:\n"
+        << after;
+    // The interface still has to be matchable: same blocks, same members, same order.
+    EXPECT_NE(after.find("TCSOutputBlock"), String::npos) << after;
+    EXPECT_NE(after.find("TESOutputBlock"), String::npos) << after;
+    EXPECT_LT(after.find("tcs_tes_variable"), after.find("tcs_tes_second")) << after;
+    EXPECT_LT(after.find("tes_gs_variable"), after.find("tes_gs_second")) << after;
+}
+
+// ...and the same shape with only ONE direction armed. The member decorations belong to the
+// TYPE, so the unarmed block's must survive - it is matched, in another program, by exactly
+// those numbers.
+TEST_F(StripIoBlockLocationsTest, KeepsMemberLocationsOnTheDirectionTheCallerDidNotArm) {
+    const Vector<Uint32> input = CompileToSpirv(GL_TESS_EVALUATION_SHADER, kMemberLocatedTessEvalSource);
+    ASSERT_FALSE(input.empty());
+
+    bool strippedAny = false;
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::StripIoBlockLocationsForEssl(input, true, false, strippedAny, output, true));
+    ASSERT_FALSE(output.empty());
+    EXPECT_TRUE(strippedAny);
+
+    const String after = Transpile(output);
+    EXPECT_EQ(after.find("layout(location = 4)"), String::npos) << after;
+    EXPECT_EQ(after.find("layout(location = 5)"), String::npos) << after;
+    EXPECT_NE(after.find("layout(location = 6)"), String::npos)
+        << "the produced block lost its member locations even though its consumer is elsewhere:\n"
+        << after;
+    EXPECT_NE(after.find("layout(location = 7)"), String::npos) << after;
 }
 
 TEST_F(StripIoBlockLocationsTest, ReportsNoChangeForAStageWithoutInterfaceBlocks) {

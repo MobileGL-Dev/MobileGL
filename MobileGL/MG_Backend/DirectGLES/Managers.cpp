@@ -7341,11 +7341,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //   * this program has a stage that can hit it - a located block between a
                 //     vertex and a fragment stage works on the affected driver, so a program
                 //     with neither tessellation nor geometry keeps its ESSL byte for byte;
-                //   * for THIS stage and THIS direction, the other end of the interface is in
-                //     this same program. In a separate-shader-objects pipeline it is not, and
-                //     the location is the only thing matching the two programs across - the
-                //     identical reason the rename plan above tests producer/consumer presence.
-                // The direction tests reuse that plan's answers rather than recomputing them.
+                //   * for THIS stage and THIS direction, this program HAS a stage on that side
+                //     of it. That is the same test the rename plan above makes, and the same
+                //     approximation: it asks "is some stage of this program earlier/later than
+                //     me", not "is the exact partner of every one of my blocks here". The two
+                //     coincide for every program MobileGL builds, because a separable pipeline
+                //     is flattened into one composite carrying every stage that has a shader
+                //     (GLContext::GetProgramForDraw) and a program bound with glUseProgram has
+                //     no partner program at all - so a stage set with a gap in it does not
+                //     arise. Should one ever arise, this must become the nearest-stage
+                //     resolution the rename plan computes, or the two ends of the gap would
+                //     disagree about the qualifier.
+                // The direction tests deliberately mirror that plan rather than inventing a
+                // second rule for the same question.
                 Bool stripInputBlockLocations = false;
                 Bool stripOutputBlockLocations = false;
                 if (ioBlockLocationStripArmed && stagePipelineIndices[index] >= 0) {
