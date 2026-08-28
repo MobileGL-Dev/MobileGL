@@ -152,6 +152,19 @@ namespace MobileGL::MG_Config {
         // lavapipe carry a located block correctly and would otherwise never run this code -
         // and ForceOff is the negative control. See StripIoBlockLocationsPass.
         QuirkOverride EsprytUnlocatedIoBlocks = QuirkOverride::Auto;
+        // MOBILEGL_POINT_SIZE_DEMOTION: demote gl_PointSize out of tessellation/geometry
+        // stages into an ordinary varying (ShaderCompiler::
+        // DemoteTessellationGeometryPointSizeForProgram) instead of declining such programs
+        // on a device that advertises neither EXT/OES_tessellation_point_size /
+        // geometry_point_size (DirectGLES) nor shaderTessellationAndGeometryPointSize
+        // (DirectVulkan). Auto arms it exactly where the detection says the capability is
+        // absent, which is the right setting everywhere. ForceOn exists so the demotion can
+        // be exercised on a healthy driver - llvmpipe and lavapipe host the built-in
+        // natively and would otherwise never run this code, which is what the pinned
+        // integration lane uses - and ForceOff restores the plain declines (escape hatch /
+        // negative control). Cross-backend by design: the demotion runs in the shared
+        // phase-B chain, so one switch covers both. See DemotePointSizePass.
+        QuirkOverride PointSizeDemotion = QuirkOverride::Auto;
         // MOBILEGL_COHERENT_AS_FLUSH: app-compat for engines (e.g. Flywheel) that write
         // GPU-read data through persistent GL_MAP_FLUSH_EXPLICIT_BIT maps they never
         // flush. Persistent FLUSH_EXPLICIT map requests are rewritten to coherent

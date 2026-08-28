@@ -52,6 +52,7 @@
 #include "SpirvPasses/LegalizeFragmentOutputIndexPass.h"
 #include "SpirvPasses/LegalizeResourceArrayIndexPass.h"
 #include "SpirvPasses/FlattenAtomicCounterBlockPass.h"
+#include "SpirvPasses/DemotePointSizePass.h"
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/optimizer.hpp"
 #include "source/opt/build_module.h"
@@ -814,6 +815,300 @@ namespace MobileGL {
                     }
                 }
                 return false;
+            }
+
+            namespace {
+                namespace opt_analysis = spvtools::opt::analysis;
+
+                // Locations one value of `type` consumes (GL 4.6 core 11.1.2.1). Unknown
+                // shapes OVERESTIMATE (4) rather than fail: this feeds the free-location
+                // choice for the demoted point-size carrier, where an overestimate wastes a
+                // couple of slots and an underestimate aliases a live varying.
+                Uint32 ConservativeLocationSpan(const opt_analysis::Type* type) {
+                    constexpr Uint32 kUnknownSpan = 4;
+                    if (type == nullptr) return kUnknownSpan;
+                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr ||
+                        type->AsBool() != nullptr) {
+                        return 1u;
+                    }
+                    if (const auto* vector = type->AsVector()) {
+                        const auto* elementFloat = vector->element_type()->AsFloat();
+                        const Bool is64Bit = elementFloat != nullptr && elementFloat->width() == 64;
+                        return (is64Bit && vector->element_count() > 2) ? 2u : 1u;
+                    }
+                    if (const auto* matrix = type->AsMatrix()) {
+                        return ConservativeLocationSpan(matrix->element_type()) * matrix->element_count();
+                    }
+                    if (const auto* array = type->AsArray()) {
+                        const auto& lengthWords = array->length_info().words;
+                        if (lengthWords.size() != 2 ||
+                            lengthWords[0] !=
+                                static_cast<Uint32>(opt_analysis::Array::LengthInfo::kConstant)) {
+                            return kUnknownSpan;
+                        }
+                        return ConservativeLocationSpan(array->element_type()) * std::max(lengthWords[1], 1u);
+                    }
+                    if (const auto* strct = type->AsStruct()) {
+                        Uint32 sum = 0;
+                        for (const auto* member : strct->element_types()) {
+                            sum += ConservativeLocationSpan(member);
+                        }
+                        return std::max(sum, 1u);
+                    }
+                    return kUnknownSpan;
+                }
+
+                // One BuildModule per module answers all three questions the program-scoped
+                // demotion driver asks: which point-size capability the module declares, and
+                // one past the highest Input/Output location slot it consumes (so the carrier
+                // can be placed beyond every varying of every stage).
+                struct PointSizeModuleProbe {
+                    Bool parsed = false;
+                    Bool declaresTessellationPointSize = false;
+                    Bool declaresGeometryPointSize = false;
+                    Uint32 locationSlotEnd = 0;
+                };
+
+                PointSizeModuleProbe ProbePointSizeModule(const Vector<Uint32>& spirv) {
+                    PointSizeModuleProbe probe;
+                    if (spirv.empty()) {
+                        probe.parsed = true; // an absent stage constrains nothing
+                        return probe;
+                    }
+                    std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
+                        SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbePointSizeModule"), spirv.data(),
+                        spirv.size());
+                    if (!context) return probe;
+                    probe.parsed = true;
+
+                    for (const spvtools::opt::Instruction& capability : context->capabilities()) {
+                        if (capability.NumInOperands() < 1) continue;
+                        const auto declared =
+                            static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                        if (declared == spv::Capability::TessellationPointSize) {
+                            probe.declaresTessellationPointSize = true;
+                        } else if (declared == spv::Capability::GeometryPointSize) {
+                            probe.declaresGeometryPointSize = true;
+                        }
+                    }
+
+                    spv::ExecutionModel model = spv::ExecutionModel::Max;
+                    for (spvtools::opt::Instruction& entryPoint : context->module()->entry_points()) {
+                        model = static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0));
+                        break;
+                    }
+                    // Per-vertex interfaces are arrayed one level deeper than the locations
+                    // they consume; peel that level, but never off a per-patch output.
+                    const Bool peelInputs = model == spv::ExecutionModel::TessellationControl ||
+                                            model == spv::ExecutionModel::TessellationEvaluation ||
+                                            model == spv::ExecutionModel::Geometry;
+                    const Bool peelOutputs = model == spv::ExecutionModel::TessellationControl;
+
+                    std::unordered_set<Uint32> patchDecorated;
+                    for (spvtools::opt::Instruction& annotation : context->annotations()) {
+                        if (annotation.opcode() == spv::Op::OpDecorate && annotation.NumInOperands() >= 2 &&
+                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) ==
+                                spv::Decoration::Patch) {
+                            patchDecorated.insert(annotation.GetSingleWordInOperand(0));
+                        }
+                    }
+
+                    auto* defUse = context->get_def_use_mgr();
+                    auto* typeMgr = context->get_type_mgr();
+                    for (spvtools::opt::Instruction& annotation : context->annotations()) {
+                        if (annotation.opcode() == spv::Op::OpDecorate && annotation.NumInOperands() >= 3 &&
+                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) ==
+                                spv::Decoration::Location) {
+                            const Uint32 location = annotation.GetSingleWordInOperand(2);
+                            Uint32 span = 1;
+                            spvtools::opt::Instruction* var =
+                                defUse->GetDef(annotation.GetSingleWordInOperand(0));
+                            if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
+                                const auto storage =
+                                    static_cast<spv::StorageClass>(var->GetSingleWordInOperand(0));
+                                // Two location namespaces are NOT varying slots and must not
+                                // shrink the carrier budget: vertex-stage inputs (attribute
+                                // locations) and fragment-stage outputs (draw buffers).
+                                if ((model == spv::ExecutionModel::Vertex &&
+                                     storage == spv::StorageClass::Input) ||
+                                    (model == spv::ExecutionModel::Fragment &&
+                                     storage == spv::StorageClass::Output)) {
+                                    continue;
+                                }
+                                spvtools::opt::Instruction* pointerType = defUse->GetDef(var->type_id());
+                                if (pointerType != nullptr &&
+                                    pointerType->opcode() == spv::Op::OpTypePointer) {
+                                    const opt_analysis::Type* pointee =
+                                        typeMgr->GetType(pointerType->GetSingleWordInOperand(1));
+                                    const Bool peel =
+                                        ((storage == spv::StorageClass::Input && peelInputs) ||
+                                         (storage == spv::StorageClass::Output && peelOutputs)) &&
+                                        patchDecorated.count(var->result_id()) == 0;
+                                    if (peel && pointee != nullptr && pointee->AsArray() != nullptr) {
+                                        pointee = pointee->AsArray()->element_type();
+                                    }
+                                    span = ConservativeLocationSpan(pointee);
+                                }
+                            }
+                            probe.locationSlotEnd = std::max(probe.locationSlotEnd, location + span);
+                        } else if (annotation.opcode() == spv::Op::OpMemberDecorate &&
+                                   annotation.NumInOperands() >= 4 &&
+                                   static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(2)) ==
+                                       spv::Decoration::Location) {
+                            const Uint32 member = annotation.GetSingleWordInOperand(1);
+                            const Uint32 location = annotation.GetSingleWordInOperand(3);
+                            Uint32 span = 1;
+                            spvtools::opt::Instruction* structType =
+                                defUse->GetDef(annotation.GetSingleWordInOperand(0));
+                            if (structType != nullptr && structType->opcode() == spv::Op::OpTypeStruct &&
+                                member < structType->NumInOperands()) {
+                                span = ConservativeLocationSpan(
+                                    typeMgr->GetType(structType->GetSingleWordInOperand(member)));
+                            }
+                            probe.locationSlotEnd = std::max(probe.locationSlotEnd, location + span);
+                        }
+                    }
+                    return probe;
+                }
+
+                // Interior boundary carrier names, spelled by the PRODUCING stage so both
+                // sides of one boundary agree textually as well as by location. The capture
+                // stage's output uses POINT_SIZE_CAPTURE_CARRIER_NAME instead. None of these
+                // may embed the token "gl_PointSize" - see the constant's comment.
+                const char* PointSizeBoundaryCarrierName(const GLenum producerStage) {
+                    switch (producerStage) {
+                    case GL_VERTEX_SHADER:
+                        return "mg_PointSizeIo0";
+                    case GL_TESS_CONTROL_SHADER:
+                        return "mg_PointSizeIo1";
+                    case GL_TESS_EVALUATION_SHADER:
+                        return "mg_PointSizeIo2";
+                    default:
+                        return "mg_PointSizeIo0";
+                    }
+                }
+
+                // Past this the carrier would sit above what a minimum-spec varying budget can
+                // address; such a program keeps its honest decline instead.
+                constexpr Uint32 kMaxDemotedPointSizeCarrierLocation = 30;
+            } // namespace
+
+            Bool ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+                Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes,
+                const Bool demoteTessellation, const Bool demoteGeometry,
+                const Bool captureRequestsPointSize, PointSizeDemotionOutcome& outcome,
+                const bool validateOutput, const bool enableSpirvValidation) {
+                outcome = {};
+                if (!demoteTessellation && !demoteGeometry) return true;
+
+                // The pre-rasterization chain, in pipeline order, as indices into `modules`.
+                Int stageIndex[4] = {-1, -1, -1, -1}; // VS, TCS, TES, GS
+                for (SizeT i = 0; i < shaderTypes.size() && i < modules.size(); ++i) {
+                    switch (shaderTypes[i]) {
+                    case GL_VERTEX_SHADER: stageIndex[0] = static_cast<Int>(i); break;
+                    case GL_TESS_CONTROL_SHADER: stageIndex[1] = static_cast<Int>(i); break;
+                    case GL_TESS_EVALUATION_SHADER: stageIndex[2] = static_cast<Int>(i); break;
+                    case GL_GEOMETRY_SHADER: stageIndex[3] = static_cast<Int>(i); break;
+                    default: break;
+                    }
+                }
+                if (stageIndex[1] < 0 && stageIndex[2] < 0 && stageIndex[3] < 0) return true;
+
+                // One probe per module: the capability facts arm the verdict, the location
+                // scan places the carrier past every varying of every stage (the location is
+                // shared program-wide, so it has to clear all of them at once).
+                Bool anyTessellationUse = false;
+                Bool anyGeometryUse = false;
+                Uint32 carrierLocation = 0;
+                for (const auto& module : modules) {
+                    const PointSizeModuleProbe probe = ProbePointSizeModule(module);
+                    if (!probe.parsed) {
+                        // Unparseable is not a verdict; the module is already broken for
+                        // other reasons and owns its own failure.
+                        return true;
+                    }
+                    anyTessellationUse |= probe.declaresTessellationPointSize;
+                    anyGeometryUse |= probe.declaresGeometryPointSize;
+                    carrierLocation = std::max(carrierLocation, probe.locationSlotEnd);
+                }
+                if (!((anyTessellationUse && demoteTessellation) ||
+                      (anyGeometryUse && demoteGeometry))) {
+                    return true;
+                }
+                if (carrierLocation > kMaxDemotedPointSizeCarrierLocation) {
+                    outcome.declineDetail = std::format(
+                        "the program's varyings already reach location {}, past the carrier budget",
+                        carrierLocation);
+                    return true;
+                }
+
+                // GL 4.6 core 13.3: capture reads the last capture-capable stage - geometry,
+                // else evaluation, else the vertex stage (whose built-in needs no demotion).
+                const Int captureStage = stageIndex[3] >= 0 ? 3 : (stageIndex[2] >= 0 ? 2 : -1);
+                constexpr GLenum kStageEnum[4] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER,
+                                                  GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER};
+
+                // Back to front, so each stage's "I now read the carrier" report can force the
+                // producing stage's output carrier into existence - Vulkan requires every
+                // consumed input to be produced (VUID-RuntimeSpirv-OpEntryPoint-08743), and an
+                // ES link may reject a statically read input with no producing output.
+                Vector<Vector<Uint32>> rewritten(modules.size());
+                Bool rewrote[4] = {false, false, false, false};
+                Bool forceOutput[4] = {false, false, false, false};
+                if (captureStage >= 0 && captureRequestsPointSize) {
+                    forceOutput[captureStage] = true;
+                }
+                for (Int stage = 3; stage >= 0; --stage) {
+                    const Int moduleIndex = stageIndex[stage];
+                    if (moduleIndex < 0) continue;
+                    Int producer = stage - 1;
+                    while (producer >= 0 && stageIndex[producer] < 0) --producer;
+
+                    DemotePointSizeOptions options;
+                    options.location = carrierLocation;
+                    options.inputCarrierName = PointSizeBoundaryCarrierName(
+                        producer >= 0 ? kStageEnum[producer]
+                                      // A separable program whose first present stage already
+                                      // consumes the carrier: the producer lives in another
+                                      // program. Name by the conventional producer of this
+                                      // stage's boundary; matching across programs is by
+                                      // location and is documented residue either way.
+                                      : kStageEnum[stage > 0 ? stage - 1 : 0]);
+                    options.outputCarrierName = stage == captureStage
+                                                    ? String(POINT_SIZE_CAPTURE_CARRIER_NAME)
+                                                    : String(PointSizeBoundaryCarrierName(kStageEnum[stage]));
+                    options.forceOutputCarrier = forceOutput[stage];
+
+                    // A vertex stage with nothing downstream consuming the carrier needs no
+                    // mirror and stays byte-identical without an optimizer round trip.
+                    if (stage == 0 && !options.forceOutputCarrier) continue;
+
+                    DemotePointSizeReport report;
+                    spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                    optimizer.RegisterPass(
+                        DemotePointSizePass::CreateDemotePointSizePass(options, &report));
+                    if (!RunOptimizerChecked("DemoteTessellationGeometryPointSizeForProgram", optimizer,
+                                             modules[moduleIndex], rewritten[moduleIndex],
+                                             validateOutput, enableSpirvValidation)) {
+                        return false; // modules untouched: nothing was committed
+                    }
+                    if (report.declined) {
+                        outcome.declineDetail = Move(report.declineReason);
+                        return true; // byte-identical decline; the existing refusals stay armed
+                    }
+                    rewrote[stage] = true;
+                    if (report.createdInputCarrier && producer >= 0) {
+                        forceOutput[producer] = true;
+                    }
+                }
+
+                // Atomic commit: every stage rewritten together or none at all.
+                for (Int stage = 0; stage < 4; ++stage) {
+                    if (!rewrote[stage]) continue;
+                    modules[stageIndex[stage]] = Move(rewritten[stageIndex[stage]]);
+                }
+                outcome.demoted = true;
+                return true;
             }
 
             Bool ShaderCompiler::ModuleDeclaresFloat64(const Vector<Uint32>& spirv) {

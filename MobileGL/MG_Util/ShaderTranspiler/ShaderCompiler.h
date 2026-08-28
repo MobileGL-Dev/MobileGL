@@ -562,6 +562,53 @@ namespace MobileGL {
                 // the module parse costs nothing on a device that has it.
                 static Bool ModuleDeclaresTessellationOrGeometryPointSize(const Vector<Uint32>& spirv);
 
+                // ---- gl_PointSize demotion for devices without the capability above ----
+                // The name of the demoted program's LAST capture-capable stage's point-size
+                // carrier. It is the contract three parties meet at: the demotion pass names
+                // the variable, DirectVulkan's XfbCaptureDecoratePass binds a "gl_PointSize"
+                // capture to it instead of mirroring the (no longer accessed) built-in, and
+                // DirectGLES respells the driver-side glTransformFeedbackVaryings request
+                // with it. Deliberately NOT containing the substring "gl_PointSize":
+                // DirectGLES's extension-request gate is a text search for that token over
+                // the emitted ESSL, and a carrier name embedding it would re-arm the decline
+                // this demotion exists to retire.
+                static constexpr const char* POINT_SIZE_CAPTURE_CARRIER_NAME = "mg_PointSizeCapture";
+
+                // What the program-scoped demotion left behind. `demoted` false with an empty
+                // detail means the program never needed it (no tessellation/geometry stage
+                // accesses the built-in, or the device hosts it); false WITH a detail means a
+                // module shape the pass cannot express - the modules are byte-identical and
+                // the existing decline paths (Espryt's missing-extension compile failure,
+                // Magma's pointSizeCapabilityUnsupported refusal) stay in charge of it.
+                struct PointSizeDemotionOutcome {
+                    Bool demoted = false;
+                    String declineDetail;
+                };
+
+                // Demotes gl_PointSize across a WHOLE program's pre-rasterization chain into
+                // ordinary float varyings at one shared free location, so a device that
+                // advertises neither ES tessellation/geometry_point_size extension nor
+                // Vulkan's shaderTessellationAndGeometryPointSize can still run programs
+                // whose tessellation/geometry stages merely CARRY the value (transform
+                // feedback and gl_in[].gl_PointSize reads). Runs after
+                // SanitizeAndOptimizeBinary, on the final shared modules both backends
+                // consume, and is atomic per program: every stage is rewritten or none is,
+                // because a consumer whose producer kept the built-in would read garbage.
+                // `demoteTessellation` / `demoteGeometry` are the env verdicts (the device
+                // LACKS that capability); the per-program half of the decision - whether any
+                // module actually declares TessellationPointSize / GeometryPointSize - is
+                // probed here. `captureRequestsPointSize` forces the capture-capable last
+                // stage to declare its carrier even when it never writes the built-in, so a
+                // by-name capture always has something to bind to. Returns false only when
+                // the optimizer itself failed (modules untouched); a shape decline is
+                // reported through `outcome` and also leaves the modules untouched. See
+                // DemotePointSizePass for the per-module rewrite and its honest residue.
+                static Bool DemoteTessellationGeometryPointSizeForProgram(
+                    Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes,
+                    Bool demoteTessellation, Bool demoteGeometry, Bool captureRequestsPointSize,
+                    PointSizeDemotionOutcome& outcome, bool validateOutput = true,
+                    bool enableSpirvValidation = false);
+
                 // True when the module still declares a 64-bit float type. After
                 // SanitizeAndOptimizeBinary that can only mean DemoteFloat64Pass declined the
                 // module (see its header for the two operations that make it decline), which is

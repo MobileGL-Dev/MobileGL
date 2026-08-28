@@ -411,9 +411,17 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         const UnorderedMap<String, Uint>* explicitFragmentOutIndices = nullptr;
         Uint32 shaderCompileFlags = 0;
         Bool enableSpirvValidation = false;
-        // CompileEnv::ConsumesFloat64Natively() - the fp64 tail of the sanitize chain. The
-        // one backend capability bit in this key; see the note above for why it has to be.
+        // CompileEnv::ConsumesFloat64Natively() - the fp64 tail of the sanitize chain. See
+        // the note above for why it has to be here.
         Bool nativeFloat64 = false;
+        // CompileEnv::DemotesTessellationPointSize() / DemotesGeometryPointSize() - the
+        // second and third capability bits under the same rule as nativeFloat64: each ARMS
+        // a phase-B rewrite of the cached modules themselves
+        // (ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram), so the same GLSL
+        // produces materially different module sets under the two answers - built-in
+        // point size kept, or carried as an ordinary varying with the capability stripped.
+        Bool demoteTessellationPointSize = false;
+        Bool demoteGeometryPointSize = false;
         // ---- inputs that only matter because the PAYLOAD now carries the reflection ----
         // When the payload was SPIR-V alone these were provably irrelevant: transform
         // feedback is resolved by READING the linked intermediates and never writes an XFB

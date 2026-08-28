@@ -87,6 +87,13 @@ namespace MobileGL {
             // needs it, which includes every 64-bit vertex attribute: the attribute itself arrives
             // as 32-bit words, but the bitcast result and everything computed from it is Float64.
             Bool SupportsShaderFloat64 = false;
+            // VkPhysicalDeviceFeatures::shaderTessellationAndGeometryPointSize. Any
+            // tessellation/geometry module declaring OpCapability TessellationPointSize /
+            // GeometryPointSize needs it (VUID-VkShaderModuleCreateInfo-pCode-08740's
+            // capability table); without it the shared phase-B chain demotes the built-in
+            // to an ordinary varying. One feature for both stage families, unlike the ES
+            // loader's two extension tiers.
+            Bool SupportsTessellationAndGeometryPointSize = false;
             // VkPhysicalDeviceFeatures::imageCubeArray. Required before a
             // VK_IMAGE_VIEW_TYPE_CUBE_ARRAY view may be created at all
             // (VUID-VkImageViewCreateInfo-viewType-01004), which is every cube map array texture -

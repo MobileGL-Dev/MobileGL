@@ -222,6 +222,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         vkGetPhysicalDeviceFeatures(physicalDevice, &supportedFeatures);
         caps.SupportsWideLines = supportedFeatures.wideLines == VK_TRUE;
         caps.SupportsShaderFloat64 = supportedFeatures.shaderFloat64 == VK_TRUE;
+        // One feature covers both stage families here, unlike the ES loader's two extension
+        // tiers; the renderer enables it on the device whenever advertised
+        // (VulkanRenderer::CreateLogicalDeviceAndQueues), so this probe and that enable can
+        // never disagree about the physical device.
+        caps.SupportsTessellationAndGeometryPointSize =
+            supportedFeatures.shaderTessellationAndGeometryPointSize == VK_TRUE;
         caps.SupportsImageCubeArray = supportedFeatures.imageCubeArray == VK_TRUE;
         {
             // Probe the formats a colour render target actually uses. A driver that refuses the flag
@@ -350,6 +356,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         FillFragmentInterpolationLimits(caps, properties.limits);
         caps.SupportsWideLines = false;
         caps.SupportsShaderFloat64 = false;
+        caps.SupportsTessellationAndGeometryPointSize = false;
         caps.SupportsImageCubeArray = false;
         caps.Supports2DArrayCompatible3DImages = false;
         // This helper only receives properties, not VkPhysicalDeviceFeatures. Leave optional

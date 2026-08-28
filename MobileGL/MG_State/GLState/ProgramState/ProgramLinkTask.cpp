@@ -896,6 +896,11 @@ namespace MobileGL::MG_State::GLState {
         // env snapshot ProgramSpirvTask hands the chain, so the key and the bytes can never
         // disagree.
         keyInputs.nativeFloat64 = env.ConsumesFloat64Natively();
+        // The second and third capability bits, under exactly the same rule: each arms a
+        // phase-B rewrite of the cached modules (the point-size demotion), read from the
+        // same env snapshot that phase B will consult, so key and bytes cannot disagree.
+        keyInputs.demoteTessellationPointSize = env.DemotesTessellationPointSize();
+        keyInputs.demoteGeometryPointSize = env.DemotesGeometryPointSize();
         keyInputs.stages.reserve(in.shaders.size());
         for (const LinkShaderInput& shader : in.shaders) {
             const ShaderCompileArtifacts& compiled = CompiledArtifacts(shader.compiled);

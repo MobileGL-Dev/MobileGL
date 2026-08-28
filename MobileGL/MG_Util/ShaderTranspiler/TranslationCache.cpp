@@ -34,7 +34,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //    gated, so one L1 key shape can describe two materially different module sets (real
         //    doubles vs demoted-and-flattened) and a blob written under 4 says nothing about
         //    which one it holds.
-        constexpr Uint32 kKeyLayoutVersion = 5u;
+        // 6: L1 gained the two point-size demotion bits (demoteTessellationPointSize /
+        //    demoteGeometryPointSize). Phase B now rewrites the cached modules on a device
+        //    that cannot host gl_PointSize in tessellation/geometry stages, so a blob
+        //    written under 5 says nothing about whether its modules were demoted.
+        constexpr Uint32 kKeyLayoutVersion = 6u;
 
         // The repo's existing cache epoch (MG_Config::CacheVersion, the seed
         // ProgramFactory::ComputeHash uses). Strictly redundant for an in-memory
@@ -128,6 +132,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         builder.Value(inputs.shaderCompileFlags);
         builder.Value(static_cast<Uint8>(inputs.enableSpirvValidation));
         builder.Value(static_cast<Uint8>(inputs.nativeFloat64));
+        builder.Value(static_cast<Uint8>(inputs.demoteTessellationPointSize));
+        builder.Value(static_cast<Uint8>(inputs.demoteGeometryPointSize));
         builder.Value(static_cast<Uint64>(inputs.stages.size()));
         for (const auto& stage : inputs.stages) {
             builder.Value(static_cast<Uint32>(stage.type));

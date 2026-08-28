@@ -1479,6 +1479,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Follows the line above, and must: OpenGL ES has no double-precision vertex format and no
         // fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to land here.
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;
+        // Whether a tessellation / geometry stage's ESSL may name gl_PointSize at all: the two
+        // extension pairs the loader probed, independently, because they really do come
+        // separately. False arms the shared phase-B demotion
+        // (ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram), whose ESSL then
+        // never names the built-in in those stages and needs no extension.
+        // MOBILEGL_POINT_SIZE_DEMOTION=1 pretends both are absent so the demotion can be
+        // exercised on a healthy driver (the pinned integration lane); =0 restores the
+        // detected answer's declines.
+        m_dynamicParameters.SupportsTessellationPointSize =
+            m_GLESCapabilities.TessellationPointSizeSupport !=
+            MG_External::GLESCapabilities::PointSizeTier::None;
+        m_dynamicParameters.SupportsGeometryPointSize =
+            m_GLESCapabilities.GeometryPointSizeSupport !=
+            MG_External::GLESCapabilities::PointSizeTier::None;
+        switch (MG_Config::Features.PointSizeDemotion) {
+        case MG_Config::QuirkOverride::ForceOn:
+            MGLOG_I("DirectGLES: MOBILEGL_POINT_SIZE_DEMOTION=1 - treating tessellation/geometry "
+                    "gl_PointSize as unhosted so the demotion runs on this driver");
+            m_dynamicParameters.SupportsTessellationPointSize = false;
+            m_dynamicParameters.SupportsGeometryPointSize = false;
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            MGLOG_I("DirectGLES: MOBILEGL_POINT_SIZE_DEMOTION=0 - keeping the built-in and the "
+                    "plain declines regardless of the driver's extensions");
+            m_dynamicParameters.SupportsTessellationPointSize = true;
+            m_dynamicParameters.SupportsGeometryPointSize = true;
+            break;
+        case MG_Config::QuirkOverride::Auto:
+            break;
+        }
         m_dynamicParameters.MaxDrawBuffers = m_GLESCapabilities.MaxDrawBuffers;
         m_dynamicParameters.MaxColorAttachments = m_GLESCapabilities.MaxColorAttachments;
         m_dynamicParameters.MaxClipDistances = m_GLESCapabilities.MaxClipDistances;

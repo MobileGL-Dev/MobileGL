@@ -1081,6 +1081,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // report VK_FALSE, so on every real mobile device this is false and the demotion runs
         // exactly as it always has.
         m_dynamicParameters.SupportsShaderFloat64 = m_vulkanCaps.SupportsShaderFloat64;
+        // shaderTessellationAndGeometryPointSize, both stage families from the one feature.
+        // False arms the shared phase-B point-size demotion, whose modules then carry no
+        // TessellationPointSize/GeometryPointSize capability and build without the feature.
+        // MOBILEGL_POINT_SIZE_DEMOTION=1 pretends it is absent so the demotion can be
+        // exercised on a healthy driver (lavapipe advertises the feature); =0 restores the
+        // detected answer's declines.
+        {
+            Bool supportsStagePointSize = m_vulkanCaps.SupportsTessellationAndGeometryPointSize;
+            switch (MG_Config::Features.PointSizeDemotion) {
+            case MG_Config::QuirkOverride::ForceOn:
+                MGLOG_I("DirectVulkan: MOBILEGL_POINT_SIZE_DEMOTION=1 - treating tessellation/geometry "
+                        "gl_PointSize as unhosted so the demotion runs on this driver");
+                supportsStagePointSize = false;
+                break;
+            case MG_Config::QuirkOverride::ForceOff:
+                MGLOG_I("DirectVulkan: MOBILEGL_POINT_SIZE_DEMOTION=0 - keeping the built-in and the "
+                        "plain declines regardless of the device feature");
+                supportsStagePointSize = true;
+                break;
+            case MG_Config::QuirkOverride::Auto:
+                break;
+            }
+            m_dynamicParameters.SupportsTessellationPointSize = supportsStagePointSize;
+            m_dynamicParameters.SupportsGeometryPointSize = supportsStagePointSize;
+        }
         // Never, on any device, and DELIBERATELY NOT COUPLED to the line above even though it
         // once tracked the same feature. It used to, because a `dvec` input needed Float64 to
         // exist in the module at all; a 64-bit vertex FETCH was already impossible

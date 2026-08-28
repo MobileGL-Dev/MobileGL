@@ -1428,6 +1428,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         continue;
                     }
                     if (varying.name == "gl_PointSize") {
+                        // A demoted module (ShaderCompiler::
+                        // DemoteTessellationGeometryPointSizeForProgram) no longer ACCESSES the
+                        // built-in member - the value lives in the carrier variable the demotion
+                        // named - so the capture binds to the carrier directly. The mirror below
+                        // must not run for it: reading the now-unwritten member would capture
+                        // garbage, and the read itself is the capability access the demotion
+                        // exists to remove. Detected off the module's own debug names, so a
+                        // composite built from another program's stage answers for the module it
+                        // actually contains.
+                        const auto carrierIt = idsByName.find(
+                            MG_Util::ShaderTranspiler::ShaderCompiler::POINT_SIZE_CAPTURE_CARRIER_NAME);
+                        if (carrierIt != idsByName.end()) {
+                            decorateForXfb(carrierIt->second, varying.bufferIndex, varying.offsetBytes);
+                            modified = true;
+                            continue;
+                        }
                         needsPointSizeMirror = true;
                         pointSizeBufferIndex = varying.bufferIndex;
                         pointSizeOffset = varying.offsetBytes;
@@ -3454,6 +3470,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // `spirv` and `moduleSpirvs` for any program attached to after it linked.
         const Vector<ShaderStage> stages = program.GetLinkedShaderStages();
         auto& spirv = program.GetGeneratedSpirv();
+        if (program.PointSizeDemoted()) {
+            // THE ARMING SIGNAL, INFO on purpose and latched: the integration lane that pins
+            // MOBILEGL_POINT_SIZE_DEMOTION=1 asserts on exactly this line, because every
+            // rendering assertion above it stays green on a healthy driver whether the
+            // demotion ran or was silently disarmed. See PointSizeDemotionScenario.
+            MGLOG_I_ONCE("DirectVulkan is building programs whose tessellation/geometry gl_PointSize was "
+                         "demoted to an ordinary varying, because this device cannot host the built-in "
+                         "in those stages.");
+        }
         Vector<Vector<Uint>> moduleSpirvs(spirv.size());
         const Bool enableSpirvValidation = program.GetSpirvValidationEnabled();
         // Unconditional now: the two ValidateTransformedSpirv calls below run in every build,

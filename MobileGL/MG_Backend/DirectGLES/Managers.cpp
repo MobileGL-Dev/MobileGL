@@ -7342,6 +7342,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_backendProgramUsable = false;
                 return;
             }
+            if (stateProgramObject->PointSizeDemoted()) {
+                // THE ARMING SIGNAL, INFO on purpose and latched: the integration lane that
+                // pins MOBILEGL_POINT_SIZE_DEMOTION=1 asserts on exactly this line, because
+                // every rendering assertion stays green on a healthy driver whether the
+                // demotion ran or was silently disarmed. See PointSizeDemotionScenario.
+                MGLOG_I_ONCE("DirectGLES is building programs whose tessellation/geometry gl_PointSize was "
+                             "demoted to an ordinary varying, because this driver cannot host the built-in "
+                             "in those stages.");
+            }
             MGLOG_D("Attaching %zu shaders to program %u", linkedStages.size(), m_backendProgramId);
             for (const auto& ref : stateProgramObject->GetLinkedShaderSnapshot()) {
                 if (!ref.shader) continue;
@@ -8012,6 +8021,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // for; it has the variable that replaced it. Everything else - including a
                 // member of a block that was left alone - keeps the application's spelling.
                 // Storage first, pointers after: xfbNames holds pointers into these strings.
+                //
+                // Same rule for a demoted gl_PointSize: the capture stage's ESSL no longer
+                // spells the built-in at all - the value lives in the carrier the demotion
+                // named - so the driver-side request has to follow it there. Only when the
+                // capture stage IS a demoted one (geometry, else evaluation): a program whose
+                // capture stage is the vertex shader keeps the built-in and its spelling,
+                // whatever happened to a control stage behind it.
+                Bool captureStageDemoted = false;
+                if (stateProgramObject->PointSizeDemoted()) {
+                    for (const ShaderStage linkedStage : linkedStages) {
+                        if (linkedStage == ShaderStage::TessEval || linkedStage == ShaderStage::Geometry) {
+                            captureStageDemoted = true;
+                            break;
+                        }
+                    }
+                }
                 Vector<String> rewrittenXfbNames(xfbVaryings.size());
                 for (SizeT nameIndex = 0; nameIndex < xfbVaryings.size(); ++nameIndex) {
                     String flatName;
@@ -8019,6 +8044,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         MG_Util::ShaderTranspiler::ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(
                             xfbVaryings[nameIndex].name, flattenedXfbBlockNames, flatName)) {
                         rewrittenXfbNames[nameIndex] = std::move(flatName);
+                    } else if (captureStageDemoted && xfbVaryings[nameIndex].name == "gl_PointSize") {
+                        rewrittenXfbNames[nameIndex] =
+                            MG_Util::ShaderTranspiler::ShaderCompiler::POINT_SIZE_CAPTURE_CARRIER_NAME;
                     } else {
                         rewrittenXfbNames[nameIndex] = xfbVaryings[nameIndex].name;
                     }

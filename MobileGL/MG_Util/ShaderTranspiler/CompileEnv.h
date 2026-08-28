@@ -154,6 +154,20 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // demoted module is the one that works everywhere, so it is what a standalone compile
         // (an internal shader object, a unit test) gets.
         Bool ConsumesFloat64Natively() const { return HasBackend() && params.SupportsShaderFloat64; }
+        // Whether the tessellation / geometry gl_PointSize demotion is ARMED for this env -
+        // i.e. the backend declared it cannot host the capability. Deliberately requiring a
+        // backend, opposite in shape to ConsumesFloat64Natively's fallback but for the same
+        // conservatism: the fp64 demotion is the module that works everywhere, while this
+        // one rewrites interfaces and capture names, so the no-backend answer (standalone
+        // compiles, unit tests) is the untouched module. Like nativeFloat64, each bit is L1
+        // key material of its own (SpirvTranslationKeyInputs), never part of the frontend
+        // fingerprint: glslang produces the same thing either way.
+        Bool DemotesTessellationPointSize() const {
+            return HasBackend() && !params.SupportsTessellationPointSize;
+        }
+        Bool DemotesGeometryPointSize() const {
+            return HasBackend() && !params.SupportsGeometryPointSize;
+        }
         // Matches the historical rule exactly: with no active backend every extension counts
         // as advertised, because the frontend then has nothing to gate against.
         Bool IsExtensionAdvertised(GLExtension extension) const {

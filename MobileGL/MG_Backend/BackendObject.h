@@ -495,6 +495,24 @@ namespace MobileGL {
             // halves (PackDoubleVertexInputsPass and VertexInputStateFactory::ToVkVertexFormat)
             // still see one consistent world.
             Bool SupportsFloat64VertexAttributes = false;
+            // Whether a TESSELLATION stage of this backend may access gl_PointSize - i.e.
+            // whether a module declaring OpCapability TessellationPointSize can reach the
+            // driver at all. DirectVulkan sets both this and the geometry twin from the one
+            // shaderTessellationAndGeometryPointSize feature; DirectGLES sets them
+            // independently from the EXT/OES_tessellation_point_size /
+            // geometry_point_size extension pairs (PointSizeTier), which really do come
+            // separately. When absent, ProgramSpirvTask demotes the built-in to an ordinary
+            // varying program-wide (ShaderCompiler::
+            // DemoteTessellationGeometryPointSizeForProgram); MOBILEGL_POINT_SIZE_DEMOTION
+            // overrides the detection in either direction at backend init.
+            //
+            // Defaults TRUE, deliberately against the house "assume absent" rule: false
+            // ARMS a rewrite, so the conservative no-backend answer (standalone compiles,
+            // unit tests) is the one that leaves modules untouched. A backend that never
+            // sets it gets standard modules and, at worst, the old honest declines.
+            Bool SupportsTessellationPointSize = true;
+            // The geometry-stage twin (OpCapability GeometryPointSize).
+            Bool SupportsGeometryPointSize = true;
             SizeT MaxShaderStorageBlockSize = 128 * 1024 * 1024;
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;

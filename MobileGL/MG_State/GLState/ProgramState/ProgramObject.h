@@ -603,6 +603,11 @@ namespace MobileGL::MG_State::GLState {
         // other question about the global UBO's layout - and it is one: it decides how wide a
         // `double` uniform's slot is.
         Bool UsesNativeFloat64() const { return Spirv().nativeFloat64; }
+        // Whether gl_PointSize was demoted out of this program's tessellation/geometry
+        // modules into the ordinary carrier varying. Joins phase B: it is a fact about the
+        // generated modules, and its readers (the backends' capture-name respelling) already
+        // hold the phase-B join.
+        Bool PointSizeDemoted() const { return Spirv().pointSizeDemoted; }
         SizeT GetUniformStorageSpanInBytes(Uint location) const {
             return UniformStorageSpanInBytes(GetUniformTypeFacts(location), GetUniformSizesInBytes(location),
                                              UsesNativeFloat64());
@@ -1429,6 +1434,18 @@ namespace MobileGL::MG_State::GLState {
             // table's offsets mean, and glUniform*d / glGetUniform*v have to write and read the
             // width the shader actually declares.
             Bool nativeFloat64 = false;
+            // Whether gl_PointSize was demoted out of THESE modules' tessellation/geometry
+            // stages into an ordinary varying (ShaderCompiler::
+            // DemoteTessellationGeometryPointSizeForProgram) because the backend cannot host
+            // the built-in there. Per PROGRAM by construction - a consumer whose producer
+            // kept the built-in would read garbage - and recorded here rather than
+            // re-derived because it cannot be: the rewrite's whole point is that the final
+            // bytes no longer declare the capability that armed it. The backends read it to
+            // respell a "gl_PointSize" transform-feedback capture as the carrier
+            // (ShaderCompiler::POINT_SIZE_CAPTURE_CARRIER_NAME). The GL reflection surface
+            // deliberately keeps answering "gl_PointSize": demotion happens after phase A,
+            // so every query keeps the truthful GL spelling.
+            Bool pointSizeDemoted = false;
         };
 
         // ---- artifacts-only helpers, shared with ProgramLinkTask ----
