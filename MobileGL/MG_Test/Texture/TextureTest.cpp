@@ -2052,6 +2052,41 @@ TEST_F(TextureTest, GetTextureSubImageRejectsPartialReadbackForNow) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
 }
 
+// A cube map keeps each face as its own stored image, so a level's texel size reads z = 1 whichever
+// face is asked - but GL 4.6 core 8.11.4 addresses the six faces through zoffset, which is the
+// by-name spelling of the face token glGetTexImage takes. Both halves of that were missing: the z
+// range was measured against the level's 1, so every face but +X came back INVALID_OPERATION as a
+// partial read, and the destination-size check summed all six faces, so even face +X could not be
+// read into the one face's worth of buffer a single-face read has any reason to pass.
+TEST_F(TextureTest, GetTextureSubImageSelectsTheCubeFaceZOffsetNames) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_CUBE_MAP, texture);
+    // Every face carries its own index in the red channel, so a read that answers the wrong face
+    // says which one it answered with.
+    for (int face = 0; face < 6; ++face) {
+        const Uint8 pixel[] = {static_cast<Uint8>(10 + face), 20, 30, 40};
+        MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA8, 1, 1, 0, GL_RGBA,
+                                    GL_UNSIGNED_BYTE, pixel);
+    }
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "seeding the six faces failed";
+
+    for (int face = 0; face < 6; ++face) {
+        Uint8 output[4] = {};
+        MG_Impl::GLImpl::GetTextureSubImage(texture, 0, 0, 0, face, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                            sizeof(output), output);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "reading face " << face << " errored";
+        EXPECT_EQ(static_cast<int>(output[0]), 10 + face)
+            << "zoffset " << face << " answered with face " << (static_cast<int>(output[0]) - 10);
+    }
+
+    // Past the last face. Still a partial read of a level with no sixth-and-beyond image.
+    Uint8 output[4] = {};
+    MG_Impl::GLImpl::GetTextureSubImage(texture, 0, 0, 0, 6, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, sizeof(output),
+                                        output);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+}
+
 TEST_F(TextureTest, TextureParameteriAndBindTextureUnitAreDirectStateAccess) {
     GLuint texture = 0;
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);

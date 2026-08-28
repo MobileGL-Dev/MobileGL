@@ -32,13 +32,19 @@
 // too, so the per-slice branch that exists for exactly this case was unreachable and every
 // slice above z = 0 came back VK_NULL_HANDLE.
 //
-// The seven cases below are those shapes - layered 3D, one 3D slice, layered cube-map array with
-// its depth and packed depth-stencil attachments, and (cases 6 and 7) a layered cube MAP and 1D
-// ARRAY whose queued glClear is consumed outside a render pass. Each one asserts LAYER ROUTING,
+// The first seven cases below are those shapes - layered 3D, one 3D slice, layered cube-map array
+// with its depth and packed depth-stencil attachments, and (cases 6 and 7) a layered cube MAP and
+// 1D ARRAY whose queued glClear is consumed outside a render pass. Each one asserts LAYER ROUTING,
 // not merely survival: what a layer receives is a function of its own index, so an attachment that
 // collapsed onto layer 0, or attached one face of a cube, fails on the layers it did not reach
 // rather than passing quietly. Every texture is seeded with a poison value first, so "the draw
 // never landed here" reads differently from "the wrong layer landed here".
+//
+// Case (8) is the same collapse one step downstream, and case (6) is what found it: the READBACK
+// of a cube map ignored the face it was asked for and answered +X for all six. Every case here
+// that reads a layered target back depends on the readback addressing the layer it names, so it
+// belongs beside them - and case (6) had to be written around it, which is the strongest argument
+// there is that it was never pinned.
 //
 // One of them turned out not to be a DirectVulkan bug at all. glFramebufferTexture on
 // GL_DEPTH_STENCIL_ATTACHMENT is a shorthand the front end splits into a depth and a stencil
@@ -95,6 +101,10 @@ namespace MGITest {
         // to glClearColor as n/255, so the round trip through a UNORM8 target is lossless and a
         // mismatch means a real miss rather than rounding.
         constexpr Rgba8 kClearColor{17, 68, 187, 255};
+
+        // The six cube faces in the order GL numbers them, which is also the order Vulkan keeps
+        // them in as array layers (GL 4.6 core 8.5.3 / VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT).
+        const char* const kFaceNames[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
 
         // What pass `pass` paints on layer `layer`. r and g name the LAYER (so a mis-routed write
         // says which layer it came from) and b names the PASS (so "the second draw was not
@@ -357,6 +367,27 @@ void main()
                 return texture;
             }
 
+            // A cube map whose six faces are UPLOADED with their own colours - the same
+            // ExpectedColor(face, 0) the painted cube of case (8) ends up holding, so both can be
+            // checked with one expectation. Uploaded rather than rendered means the CPU shadow and
+            // the image agree, which is the premise the BY-NAME readback needs; see case (8).
+            GLuint MakeFaceColoredCubeMap() {
+                const GLuint texture = TrackTexture();
+                glBindTexture(GL_TEXTURE_CUBE_MAP, texture);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kExtent, kExtent);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+                for (int face = 0; face < 6; ++face) {
+                    const std::vector<Rgba8> seed(static_cast<std::size_t>(kExtent) * kExtent,
+                                                  ExpectedColor(face, 0));
+                    glTexSubImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, 0, 0, kExtent,
+                                    kExtent, GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
+                }
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+                return texture;
+            }
+
             // An RGBA8 1D array, every layer poisoned. glTexImage2D's HEIGHT is the layer count -
             // that is what GL_TEXTURE_1D_ARRAY means, and it is why reading the level size's z
             // gives 1 however many layers there are.
@@ -484,6 +515,34 @@ void main()
                             break;
                         }
                     }
+                }
+            }
+
+            // Every texel of one cube FACE is that face's own colour. When it is not, the message
+            // says whose colour answered instead - which is the whole point here: a readback that
+            // ignores the face token does not return garbage, it returns another face's perfectly
+            // plausible texels, and "+X's colour came back for -Y" is the sentence that names the
+            // defect. `what` is the spelling under test, since three of them read the same faces.
+            void ExpectFaceColor(const std::vector<Rgba8>& texels, int face, const char* what) {
+                const Rgba8 expected = ExpectedColor(face, 0);
+                for (std::size_t i = 0; i < texels.size(); ++i) {
+                    const Rgba8 actual = texels[i];
+                    if (actual == expected) continue;
+                    std::string blame;
+                    if (actual.r == kPoison && actual.g == kPoison) {
+                        blame = " - the poison, so nothing was ever written to this face";
+                    } else {
+                        for (int other = 0; other < 6; ++other) {
+                            if (other != face && actual == ExpectedColor(other, 0)) {
+                                blame = std::string(" - which is face ") + kFaceNames[other] + "'s colour";
+                                break;
+                            }
+                        }
+                    }
+                    ADD_FAILURE() << what << ": face " << kFaceNames[face] << " texel " << i << " is "
+                                  << Describe(actual) << ", expected " << Describe(expected) << blame;
+                    // One message per face is enough to say what happened.
+                    break;
                 }
             }
 
@@ -883,13 +942,16 @@ void main()
 
             // Every face, read back through an FBO that names THAT face.
             //
-            // Not glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face): measured against a tree
-            // where only +X had been cleared, that spelling returned the cleared colour for all
-            // six faces, so it cannot see per-face state on DirectVulkan and the case built on it
-            // was unfalsifiable. glFramebufferTexture2D + glReadPixels names one face and nothing
-            // else, and the pending clear is long gone by now (materialised and popped above), so
-            // this readback cannot alter what it is measuring.
-            static const char* const kFaceNames[6] = {"+X", "-X", "+Y", "-Y", "+Z", "-Z"};
+            // Not glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face): when this case was written
+            // that spelling could not see per-face state on DirectVulkan at all - measured against
+            // a tree where only +X had been cleared it returned the cleared colour for all six
+            // faces - so a case built on it would have been unfalsifiable. That is a readback
+            // defect rather than an attachment one, and case (8) below is where it is pinned and
+            // fixed; this case keeps the independent spelling deliberately, because it must go on
+            // measuring the CLEAR whatever the readback does. glFramebufferTexture2D +
+            // glReadPixels names one face and nothing else, and the pending clear is long gone by
+            // now (materialised and popped above), so this readback cannot alter what it is
+            // measuring.
             for (int face = 0; face < 6; ++face) {
                 const GLuint faceFbo = TrackFramebuffer();
                 glBindFramebuffer(GL_FRAMEBUFFER, faceFbo);
@@ -954,6 +1016,115 @@ void main()
             EXPECT_EQ(FirstGLError(), 0u) << "reading the 1D-array level back errored";
             ExpectAllCleared(texels, kExtent,
                              "layered GL_TEXTURE_1D_ARRAY glClear materialised by sampling (unit = layer)");
+
+            Gl().EndFrame();
+        }
+
+        // (8) THE CUBE FACE TOKEN A READBACK IS GIVEN, AND WHETHER IT HONOURS IT.
+        //
+        // Case (6) above had to route around glGetTexImage(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face)
+        // entirely: measured against a tree where only the +X face had been cleared, that spelling
+        // returned +X's colour for all six face tokens. This case is that observation turned into
+        // an assertion, and it is about the READBACK, not the attachment.
+        //
+        // THE DEFECT. DirectVulkan's GetTextureImage derived its copy geometry from the IMAGE's
+        // target alone. A plain GL_TEXTURE_CUBE_MAP is not one of the array targets, so the layer
+        // count collapsed to one - correct, one face IS one layer - but nothing ever turned the
+        // face the TARGET TOKEN named into the copy's baseArrayLayer, which stayed 0. All six face
+        // tokens therefore read array layer 0 and answered +X: five of a cube map's six faces were
+        // unreadable through the entry point GL provides for reading them. Nothing announces it -
+        // the call succeeds, raises no error, and hands back entirely plausible texels from the
+        // wrong face. The conversion it was missing already existed twice over, as the clear and
+        // render-pass managers' ResolveAttachmentBaseArrayLayer.
+        //
+        // glGetTextureSubImage is the same question asked by name: GL 4.6 core 8.11.4 addresses a
+        // cube map's faces through zoffset. That spelling was not merely reading the wrong face,
+        // it could not read ANY face - measured pre-fix, all six returned INVALID_OPERATION on
+        // both backends. Two independent reasons, and it took both to make even zoffset 0 fail:
+        // the z range was measured against the level's z, which is one face's 1, so five of the
+        // six looked like a partial read; and the destination-size check summed all six faces, so
+        // the one face's worth of buffer a single-face read has any reason to pass was rejected as
+        // too small.
+        //
+        // Each face is painted its OWN colour, so a collapse onto layer 0 does not merely read
+        // "wrong": the failure names the face that answered. The cube is poisoned first and then
+        // painted through the GPU, so an answer served from the stale CPU shadow is also called out
+        // by name rather than passing. And the per-face FBO + glReadPixels read is the control: it
+        // names one face and nothing else, so if IT disagrees the defect is in how the faces were
+        // written and this case is measuring the wrong thing.
+        //
+        // DirectGLES attaches the named face to a scratch FBO and reads that, so it answers the
+        // face token correctly throughout - a red there means this case is wrong. Its by-name
+        // readback is a different matter and gets a texture of its own; see the third block.
+        TEST_F(LayeredAttachmentShapeScenario, CubeMapFaceReadbackAnswersTheFaceItWasAskedFor) {
+            if (!Ready()) return;
+
+            const GLuint cube = MakePoisonedCubeMap();
+            ASSERT_EQ(FirstGLError(), 0u) << "creating the RGBA8 cube map failed";
+
+            // Paint every face its own colour through an FBO that names that one face. A clear
+            // rather than a draw, so nothing here depends on a shader stage being present.
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_DEPTH_TEST);
+            glViewport(0, 0, kExtent, kExtent);
+            GLuint faceFbos[6] = {};
+            for (int face = 0; face < 6; ++face) {
+                faceFbos[face] = TrackFramebuffer();
+                glBindFramebuffer(GL_FRAMEBUFFER, faceFbos[face]);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                       static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), cube, 0);
+                glDrawBuffer(GL_COLOR_ATTACHMENT0);
+                glReadBuffer(GL_COLOR_ATTACHMENT0);
+                ASSERT_TRUE(FramebufferIsComplete()) << "cube face " << kFaceNames[face] << " is not attachable";
+                const Rgba8 want = ExpectedColor(face, 0);
+                glClearColor(want.r / 255.0f, want.g / 255.0f, want.b / 255.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            ASSERT_EQ(FirstGLError(), 0u) << "painting the six faces errored";
+
+            // The control. If this is red, the faces do not hold six different values and the two
+            // readbacks below are being measured against a premise that is not true.
+            for (int face = 0; face < 6; ++face) {
+                glBindFramebuffer(GL_FRAMEBUFFER, faceFbos[face]);
+                std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
+                glPixelStorei(GL_PACK_ALIGNMENT, 1);
+                glReadPixels(0, 0, kExtent, kExtent, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                EXPECT_EQ(FirstGLError(), 0u) << "the control read of face " << kFaceNames[face] << " errored";
+                ExpectFaceColor(texels, face, "control: per-face FBO + glReadPixels");
+            }
+
+            // The subject: the face TOKEN.
+            glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            for (int face = 0; face < 6; ++face) {
+                std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
+                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA,
+                              GL_UNSIGNED_BYTE, texels.data());
+                EXPECT_EQ(FirstGLError(), 0u) << "glGetTexImage of face " << kFaceNames[face] << " errored";
+                ExpectFaceColor(texels, face, "glGetTexImage(GL_TEXTURE_CUBE_MAP_<face>)");
+            }
+            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+            // The same question by name, where zoffset is the face.
+            //
+            // On a cube map UPLOADED face by face rather than the painted one above, because the
+            // by-name readback has no backend entry outside DirectVulkan and answers from the CPU
+            // shadow there - a separate, pre-existing gap that has nothing to do with which face
+            // gets read. Asking it about GPU-painted content would make this red on DirectGLES for
+            // a reason the case is not about; asking it about uploaded content leaves exactly one
+            // thing either backend can get wrong, which is the face. DirectVulkan still answers
+            // this one out of the image, so the layer collapse is just as visible here.
+            const GLuint uploaded = MakeFaceColoredCubeMap();
+            ASSERT_EQ(FirstGLError(), 0u) << "uploading the six faces failed";
+            for (int face = 0; face < 6; ++face) {
+                std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
+                glGetTextureSubImage(uploaded, 0, 0, 0, face, kExtent, kExtent, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                     static_cast<GLsizei>(texels.size() * sizeof(Rgba8)), texels.data());
+                EXPECT_EQ(FirstGLError(), 0u) << "glGetTextureSubImage of face " << kFaceNames[face] << " errored";
+                ExpectFaceColor(texels, face, "glGetTextureSubImage(zoffset = face)");
+            }
 
             Gl().EndFrame();
         }
