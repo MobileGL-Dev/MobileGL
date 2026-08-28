@@ -225,4 +225,36 @@ void main() {
         EXPECT_EQ(values[1], reseed[1] + 2 * kInvocations) << "the re-seeded value at offset 4 did not reach the shader";
     }
 
+    // A CPU glBufferSubData issued AFTER a dispatch, read back with NO further GPU work in
+    // between. The DirectGLES backend queues app SubData ranges for the draw-time staged-copy
+    // flush (the upload ring) instead of uploading in place, and readback of a GPU-written
+    // buffer overwrites the frontend shadow with the driver copy - so if the readback path
+    // forgets to flush the queued range first, the newer CPU write is REVERTED by the readback
+    // and offset 0 reads the dispatch's value instead of the reseed. Offset 4 pins the other
+    // direction: the flush must not clobber GPU results outside the written range.
+    TEST_F(AtomicCounterScenario, SubDataAfterDispatchSurvivesAnImmediateReadback) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLuint zero = MakeCounterBuffer(0, {0u, 0u});
+        MakeCounterBuffer(1, {0u});
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        Dispatch();
+
+        const unsigned int reseed = 4242u;
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, zero);
+        glBufferSubData(GL_ATOMIC_COUNTER_BUFFER, 0, sizeof(reseed), &reseed);
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+        ASSERT_EQ(FirstGLError(), 0u) << "re-seeding the counter buffer raised a GL error";
+
+        const std::vector<unsigned int> values = ReadCounters(zero, 2);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_EQ(values[0], reseed)
+            << "offset 0 read back " << values[0] << "; the dispatch's value (" << kInvocations
+            << ") means the readback ran before the queued SubData range was flushed and reverted it";
+        EXPECT_EQ(values[1], 2 * kInvocations)
+            << "offset 4 read back " << values[1] << "; the SubData flush must leave bytes outside its "
+            << "range untouched";
+    }
+
 } // namespace MGITest
