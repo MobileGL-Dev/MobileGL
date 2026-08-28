@@ -128,6 +128,32 @@ void main()
 }
 )";
 
+        // A capture stage that only READS the incoming point size and never writes its own.
+        // Legal GL, and the shape that separates "the demotion arms" from "the demotion knows
+        // a capture is coming": with the built-in gone, only the capture request can put a
+        // carrier back for a by-name capture to bind to.
+        const char* const kReadOnlyGeometrySource = R"(#version 460 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+out float g_echo;
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+    g_echo      = gl_in[0].gl_PointSize;
+    EmitVertex();
+    EndPrimitive();
+}
+)";
+
+        const char* const kEchoFragmentSource = R"(#version 460 core
+in float g_echo;
+layout(location = 0) out vec4 fragColor;
+void main()
+{
+    fragColor = vec4(g_echo, 0.0, 0.0, 1.0);
+}
+)";
+
         class PointSizeDemotionScenario : public ScenarioTest {
         protected:
             void SetUp() override {
@@ -384,6 +410,53 @@ void main()
 
             const std::vector<float> captured = RunCaptureSpan(program, GL_POINTS, 1, 1);
             EXPECT_TRUE(ComponentIs(captured, 0, 8.0f));
+            EXPECT_EQ(glGetError(), GL_NO_ERROR);
+        }
+
+        // THE CAPTURE-REQUEST PATH, END TO END - the half no unit test can reach, because the
+        // request travels from glTransformFeedbackVaryings through phase A's resolved capture
+        // set and the phase-B handoff before it reaches the demotion.
+        //
+        // The geometry stage READS gl_in[0].gl_PointSize and never writes gl_PointSize, which
+        // is enough to arm the demotion (glslang declares GeometryPointSize on a read) but not
+        // enough to create an output carrier on its own. Only the capture request can, and if
+        // that request never arrives the program does not merely lose the point-size column:
+        // DirectGLES respells the driver-side capture to a name no stage declares and the
+        // WHOLE capture set fails to link, while DirectVulkan mirrors a built-in the demotion
+        // just removed and can unwind far enough to drop the Xfb execution mode. Either way
+        // g_echo - an ordinary varying with nothing to do with point size - comes back poison,
+        // which is what this asserts. gl_PointSize itself is captured but never asserted: no
+        // stage writes it, so GL leaves its value undefined.
+        TEST_F(PointSizeDemotionScenario, ACaptureSurvivesAStageThatOnlyReadsThePointSize) {
+            if (!Ready()) return;
+            // The NATIVE Espryt path cannot do this at all, and never could: with the built-in
+            // hosted, the geometry stage's ESSL simply does not declare gl_PointSize unless it
+            // writes it, so the driver rejects the capture request with "varying undeclared"
+            // and the program becomes unusable. That is a pre-existing ES limitation the
+            // demotion happens to REPAIR - the carrier is a real, seeded, declared varying -
+            // so this case has something to assert only where the demotion is armed. Magma
+            // consumes SPIR-V and answers on both paths, which keeps the negative control.
+            if (Gl().BackendName() == "DirectGLES" &&
+                AmbientQuirkFromEnvironment("MOBILEGL_POINT_SIZE_DEMOTION") != AmbientQuirk::On) {
+                GTEST_SKIP() << "Espryt cannot capture a gl_PointSize its capture stage never "
+                                "writes without the demotion; the PointSizeDemotion. ctest entry "
+                                "runs this same case with MOBILEGL_POINT_SIZE_DEMOTION=1";
+            }
+
+            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kPointVertexSource},
+                                                        {GL_GEOMETRY_SHADER, kReadOnlyGeometrySource},
+                                                        {GL_FRAGMENT_SHADER, kEchoFragmentSource}},
+                                                       {"g_echo", "gl_PointSize"});
+            ASSERT_NE(program, 0u)
+                << "the capture set failed to link. On a demoting configuration this is the "
+                   "capture request never reaching the demotion, so the point-size capture was "
+                   "respelled to a carrier no stage declares. Build log: "
+                << m_buildLog;
+
+            const std::vector<float> captured = RunCaptureSpan(program, GL_POINTS, 1, 2);
+            EXPECT_TRUE(ComponentIs(captured, 0, 7.0f))
+                << "the unrelated varying captured alongside gl_PointSize did not survive; the "
+                   "point-size capture took the whole set with it";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
         }
 

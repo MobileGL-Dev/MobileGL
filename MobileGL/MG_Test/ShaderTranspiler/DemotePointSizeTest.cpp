@@ -151,6 +151,39 @@ void main() {
 }
 )";
 
+    // A control stage that also carries CLIP DISTANCE. SPIRV-Cross force-redeclares the whole
+    // gl_PerVertex output block for exactly this stage/builtin combination, and prints its
+    // members from the struct's DECORATIONS rather than from what the module accesses - so a
+    // demoted module's untouched PointSize member would still reach the driver's ESSL.
+    const char* kClipDistanceTessControlSource = R"(#version 460 core
+layout(vertices = 3) out;
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    gl_out[gl_InvocationID].gl_PointSize = gl_in[gl_InvocationID].gl_PointSize + 1.0;
+    gl_out[gl_InvocationID].gl_ClipDistance[0] = 0.5;
+    gl_TessLevelOuter[0] = 1.0;
+    gl_TessLevelOuter[1] = 1.0;
+    gl_TessLevelOuter[2] = 1.0;
+    gl_TessLevelInner[0] = 1.0;
+}
+)";
+
+    // The same clip-distance write and NO point-size access anywhere: the shape a
+    // successfully demoted module would have been left in. glslang emits the whole
+    // four-member gl_PerVertex block regardless, which is what makes it the exact
+    // "declared but unaccessed" state the pass header's premise is about.
+    const char* kClipDistanceUnusedPointSizeTessControlSource = R"(#version 460 core
+layout(vertices = 3) out;
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    gl_out[gl_InvocationID].gl_ClipDistance[0] = 0.5;
+    gl_TessLevelOuter[0] = 1.0;
+    gl_TessLevelOuter[1] = 1.0;
+    gl_TessLevelOuter[2] = 1.0;
+    gl_TessLevelInner[0] = 1.0;
+}
+)";
+
     // A tessellation evaluation module reaching PointSize through a WHOLE-STRUCT load - the
     // one shape the pass must refuse rather than half-rewrite. glslang never emits it, so it
     // is assembled by hand.
@@ -270,7 +303,13 @@ TEST_F(DemotePointSizeTest, DemotesAFiveStageProgramWholesale) {
     EXPECT_NE(tes.find("BuiltIn PointSize"), String::npos) << tes;
 
     // What SPIRV-Cross then prints: no gl_PointSize anywhere in a demoted stage's ESSL (the
-    // token DirectGLES's extension gate greps for), the carriers in its place.
+    // token DirectGLES's extension gate greps for), the carriers in its place. The CONTROL
+    // stage is transpiled too, and deliberately: it is the one stage SPIRV-Cross can be made
+    // to redeclare the whole output block for, which is why the clip-distance combination
+    // declines instead of demoting.
+    const String tcsEssl = Transpile(modules[1]);
+    EXPECT_EQ(tcsEssl.find("gl_PointSize"), String::npos) << tcsEssl;
+    EXPECT_NE(tcsEssl.find("mg_PointSizeIo1"), String::npos) << tcsEssl;
     const String tesEssl = Transpile(modules[2]);
     EXPECT_EQ(tesEssl.find("gl_PointSize"), String::npos) << tesEssl;
     EXPECT_NE(tesEssl.find("mg_PointSizeIo1"), String::npos) << tesEssl;
@@ -443,6 +482,222 @@ TEST_F(DemotePointSizeTest, ACaptureRequestForcesTheCarrierOnANonWritingCaptureS
     const String tes = Disassemble(modules[2]);
     EXPECT_NE(tes.find("OpName %mg_PointSizeCapture"), String::npos) << tes;
     EXPECT_TRUE(Validates(modules[2]));
+
+    // And the driver-side half of the same contract: the ESSL DirectGLES hands its driver
+    // has to DECLARE the carrier, because DirectGLES respells the glTransformFeedbackVaryings
+    // request to that name. A carrier the transpile dropped would take the whole capture set
+    // down with an ES link error naming a variable the application never wrote.
+    const String tesEssl = Transpile(modules[2]);
+    EXPECT_NE(tesEssl.find("mg_PointSizeCapture"), String::npos) << tesEssl;
+}
+
+// THE PRODUCTION SHAPE THE FORCED CARRIER EXISTS FOR, and the one the flag's own unit test
+// could not reach: the capture stage never WRITES gl_PointSize, it only reads the incoming
+// one. The demotion still arms - glslang declares GeometryPointSize on a READ - so the
+// built-in leaves the module, and only the capture request can put a carrier back. In
+// production that request arrives as ProgramLinkTask::SpirvHandoff::captureRequestsPointSize;
+// this is the same value one layer down.
+TEST_F(DemotePointSizeTest, AReadOnlyCaptureStageStillDeclaresTheCaptureCarrier) {
+    const char* readOnlyGeometry = R"(#version 460 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+out float g_echo;
+void main() {
+    gl_Position = gl_in[0].gl_Position;
+    g_echo = gl_in[0].gl_PointSize;
+    EmitVertex();
+    EndPrimitive();
+}
+)";
+    const char* echoFragment = R"(#version 460 core
+in float g_echo;
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(g_echo); }
+)";
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                                                            {GL_GEOMETRY_SHADER, readOnlyGeometry},
+                                                            {GL_FRAGMENT_SHADER, echoFragment}});
+    ASSERT_EQ(modules.size(), 3u);
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+
+    // The premise: a stage that only READS the built-in still declares the capability, so the
+    // device still refuses it and the demotion still arms.
+    ASSERT_TRUE(ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(modules[1]))
+        << "a geometry stage that only reads gl_in[].gl_PointSize must still declare "
+           "GeometryPointSize, or this whole class of program was never affected";
+
+    ShaderCompiler::PointSizeDemotionOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+        modules, types, false, true, /*captureRequestsPointSize=*/true, outcome, true, true));
+    EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
+
+    const String gs = Disassemble(modules[1]);
+    EXPECT_NE(gs.find("OpName %mg_PointSizeIo0"), String::npos)
+        << "the read still has to reach the vertex stage's mirrored value:\n"
+        << gs;
+    EXPECT_NE(gs.find("OpName %mg_PointSizeCapture"), String::npos)
+        << "the capture request must force the carrier even though this stage never writes "
+           "the built-in; without it DirectGLES respells the capture to a name no stage "
+           "declares and the whole capture set fails to link:\n"
+        << gs;
+    const String gsEssl = Transpile(modules[1]);
+    EXPECT_NE(gsEssl.find("mg_PointSizeCapture"), String::npos) << gsEssl;
+    EXPECT_EQ(gsEssl.find("gl_PointSize"), String::npos) << gsEssl;
+
+    // Without the request there is nothing to bind a by-name capture to - which is exactly
+    // what production did on every link while the request never reached this call.
+    Vector<Vector<Uint32>> unrequested = CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                                                                {GL_GEOMETRY_SHADER, readOnlyGeometry},
+                                                                {GL_FRAGMENT_SHADER, echoFragment}});
+    ASSERT_EQ(unrequested.size(), 3u);
+    ShaderCompiler::PointSizeDemotionOutcome unrequestedOutcome;
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+        unrequested, types, false, true, /*captureRequestsPointSize=*/false, unrequestedOutcome, true,
+        true));
+    EXPECT_TRUE(unrequestedOutcome.demoted) << unrequestedOutcome.declineDetail;
+    EXPECT_EQ(Disassemble(unrequested[1]).find("OpName %mg_PointSizeCapture"), String::npos)
+        << "with no capture asking for it, the carrier must not be declared";
+}
+
+// THE PREMISE THE PASS HEADER USED TO STATE UNIVERSALLY: "declared but no longer accessed"
+// is invisible to the ES hop. It is not, for one stage/builtin combination - and this case
+// pins the mechanism with no demotion involved at all, so a future SPIRV-Cross that emitted
+// by ACCESS would fail here first and the decline below could be relaxed.
+TEST_F(DemotePointSizeTest, ARedeclaredControlBlockPrintsAnUnaccessedPointSizeMember) {
+    Vector<Vector<Uint32>> modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kPlainVertexSource},
+                               {GL_TESS_CONTROL_SHADER, kClipDistanceUnusedPointSizeTessControlSource},
+                               {GL_TESS_EVALUATION_SHADER, kPlainTessEvalSource},
+                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    ASSERT_EQ(modules.size(), 4u);
+
+    // Nothing in this control stage touches point size, so nothing declares the capability -
+    // it is byte-for-byte the state a demoted module would be left in.
+    ASSERT_FALSE(ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(modules[1]));
+    const String tcs = Disassemble(modules[1]);
+    EXPECT_NE(tcs.find("BuiltIn PointSize"), String::npos)
+        << "the member has to still be declared for this case to say anything:\n"
+        << tcs;
+
+    const String tcsEssl = Transpile(modules[1]);
+    EXPECT_NE(tcsEssl.find("gl_PointSize"), String::npos)
+        << "SPIRV-Cross force-redeclares a control stage's gl_PerVertex output block when its "
+           "clip/cull distances are live, and prints the block's members from their "
+           "decorations rather than from what is accessed. DirectGLES's extension gate is a "
+           "text search for this token over exactly this string:\n"
+        << tcsEssl;
+}
+
+// ... and therefore this program declines rather than demoting: a mutated module that the
+// driver still rejects is strictly worse than the honest refusal, because it also flips the
+// program-wide verdict and the L1 key.
+TEST_F(DemotePointSizeTest, AControlStageCarryingClipDistanceDeclinesTheProgram) {
+    Vector<Vector<Uint32>> modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                               {GL_TESS_CONTROL_SHADER, kClipDistanceTessControlSource},
+                               {GL_TESS_EVALUATION_SHADER, kTessEvalSource},
+                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    ASSERT_EQ(modules.size(), 4u);
+    const Vector<Vector<Uint32>> before = modules;
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
+                               GL_FRAGMENT_SHADER};
+    ShaderCompiler::PointSizeDemotionOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+        modules, types, true, true, true, outcome, true, true));
+    EXPECT_FALSE(outcome.demoted);
+    EXPECT_NE(outcome.declineDetail.find("clip/cull"), String::npos) << outcome.declineDetail;
+    EXPECT_EQ(modules, before) << "a decline must leave every module byte-identical";
+    EXPECT_TRUE(ShaderCompiler::ModuleDeclaresTessellationOrGeometryPointSize(modules[1]))
+        << "the declined program must still arm the existing honest refusals";
+}
+
+// A legal desktop-GL shape the passthrough machinery explicitly serves: an evaluation stage
+// sitting straight on the vertex stage. Both backends synthesize the missing control stage,
+// and that synthesized stage forwards gl_Position and nothing else - so the input carrier the
+// demotion would create has no producer, and each backend's "reads a located input" guard
+// would decline the program against a varying name the application never wrote. Declining the
+// demotion instead keeps the modules, and the diagnostics, honest.
+TEST_F(DemotePointSizeTest, AnEvaluationStageWithNoControlStageDeclines) {
+    const char* readingTessEval = R"(#version 460 core
+layout(triangles, point_mode) in;
+void main() {
+    gl_Position = gl_in[0].gl_Position;
+    gl_PointSize = gl_in[0].gl_PointSize + 1.0;
+}
+)";
+    Vector<Vector<Uint32>> modules =
+        CompileProgramToSpirv({{GL_VERTEX_SHADER, kVertexSource},
+                               {GL_TESS_EVALUATION_SHADER, readingTessEval},
+                               {GL_FRAGMENT_SHADER, kFragmentSource}});
+    ASSERT_EQ(modules.size(), 3u);
+    const Vector<Vector<Uint32>> before = modules;
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_TESS_EVALUATION_SHADER, GL_FRAGMENT_SHADER};
+    ShaderCompiler::PointSizeDemotionOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+        modules, types, true, true, true, outcome, true, true));
+    EXPECT_FALSE(outcome.demoted);
+    EXPECT_NE(outcome.declineDetail.find("control stage"), String::npos) << outcome.declineDetail;
+    EXPECT_EQ(modules, before) << "a decline must leave every module byte-identical";
+    EXPECT_FALSE(ShaderCompiler::ModuleReadsLocatedInput(modules[1]))
+        << "the declined evaluation stage must not have acquired the located input carrier "
+           "that both backends' pass-through guard refuses";
+}
+
+// The carrier is placed one past the highest location any stage CONSUMES, and a 64-bit
+// vector consumes two of them. GL 4.6 core 11.1.2.1 says so for doubles, and
+// ARB_gpu_shader_int64 - which DirectVulkan advertises unconditionally - extends the rule
+// verbatim to i64/u64. An i64vec4 counted as one location would put the carrier on the
+// SECOND location that varying already owns: two Output variables at one location, an
+// invalid Vulkan interface and an ES link error naming a variable the application never
+// wrote. This is the one direction the placement is not allowed to be wrong in.
+TEST_F(DemotePointSizeTest, TheCarrierClearsA64BitIntegerVectorVarying) {
+    const char* wideVertex = R"(#version 460 core
+#extension GL_ARB_gpu_shader_int64 : require
+layout(location = 0) flat out i64vec4 v_wide;
+void main() {
+    gl_Position = vec4(1.0);
+    gl_PointSize = 3.0;
+    v_wide = i64vec4(1, 2, 3, 4);
+}
+)";
+    const char* wideGeometry = R"(#version 460 core
+#extension GL_ARB_gpu_shader_int64 : require
+layout(points) in;
+layout(points, max_vertices = 1) out;
+layout(location = 0) flat in i64vec4 v_wide[];
+layout(location = 0) flat out i64vec4 g_wide;
+void main() {
+    gl_Position = gl_in[0].gl_Position;
+    gl_PointSize = gl_in[0].gl_PointSize;
+    g_wide = v_wide[0];
+    EmitVertex();
+    EndPrimitive();
+}
+)";
+    const char* wideFragment = R"(#version 460 core
+#extension GL_ARB_gpu_shader_int64 : require
+layout(location = 0) flat in i64vec4 g_wide;
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(float(g_wide.x)); }
+)";
+    Vector<Vector<Uint32>> modules = CompileProgramToSpirv({{GL_VERTEX_SHADER, wideVertex},
+                                                            {GL_GEOMETRY_SHADER, wideGeometry},
+                                                            {GL_FRAGMENT_SHADER, wideFragment}});
+    ASSERT_EQ(modules.size(), 3u);
+    const Vector<GLenum> types{GL_VERTEX_SHADER, GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+    ShaderCompiler::PointSizeDemotionOutcome outcome;
+    ASSERT_TRUE(ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
+        modules, types, false, true, true, outcome, true, true));
+    EXPECT_TRUE(outcome.demoted) << outcome.declineDetail;
+
+    // v_wide / g_wide sit at location 0 and occupy 0 AND 1, so every carrier must clear 2.
+    const String vs = Disassemble(modules[0]);
+    EXPECT_NE(vs.find("OpDecorate %mg_PointSizeIo0 Location 2"), String::npos)
+        << "the carrier landed on a location the i64vec4 varying already owns:\n"
+        << vs;
+    const String gs = Disassemble(modules[1]);
+    EXPECT_NE(gs.find("OpDecorate %mg_PointSizeIo0 Location 2"), String::npos) << gs;
+    EXPECT_NE(gs.find("OpDecorate %mg_PointSizeCapture Location 2"), String::npos) << gs;
 }
 
 TEST_F(DemotePointSizeTest, AWholeStructCopyDeclinesTheProgramByteIdentically) {
