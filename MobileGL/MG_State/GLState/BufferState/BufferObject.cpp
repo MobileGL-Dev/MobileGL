@@ -253,6 +253,18 @@ namespace MobileGL::MG_State::GLState {
                         "UploadSubData out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
 
+        // An adopted store's Bytes() IS the memory the GPU reads, and a backend that
+        // defers work (DirectVulkan's frame command buffer) may still be holding a
+        // recorded-but-unsubmitted dispatch that GL orders this write AFTER. Writing
+        // the mapping now would land the bytes underneath that dispatch - its
+        // increments then execute on top of the newer data and invert the call order.
+        // Retire the pending GPU writes first, as FillSubData already does. Shadow-
+        // backed stores need none of this: the Memcpy below touches only the shadow,
+        // and the backend's SubData op does its own ordering against in-flight work.
+        if (m_resource.IsGpuResident()) {
+            SyncGpuWrites();
+        }
+
         Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         NotifyContentWrite(atOffset, data.size);
     }
@@ -305,6 +317,12 @@ namespace MobileGL::MG_State::GLState {
                         size, m_size);
 
         src->SyncGpuWrites();
+        // The DESTINATION needs the same ordering as UploadSubData: an adopted store is
+        // written in place, so pending recorded GPU writes to it must retire before the
+        // copy lands or they would execute on top of it.
+        if (m_resource.IsGpuResident()) {
+            SyncGpuWrites();
+        }
         Memcpy(m_resource.Bytes() + dstOffset, src->m_resource.Bytes() + srcOffset, size);
         NotifyContentWrite(dstOffset, size);
     }

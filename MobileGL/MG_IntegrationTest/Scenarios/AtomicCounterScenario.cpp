@@ -226,25 +226,21 @@ void main() {
     }
 
     // A CPU glBufferSubData issued AFTER a dispatch, read back with NO further GPU work in
-    // between. The DirectGLES backend queues app SubData ranges for the draw-time staged-copy
-    // flush (the upload ring) instead of uploading in place, and readback of a GPU-written
-    // buffer overwrites the frontend shadow with the driver copy - so if the readback path
-    // forgets to flush the queued range first, the newer CPU write is REVERTED by the readback
-    // and offset 0 reads the dispatch's value instead of the reseed. Offset 4 pins the other
-    // direction: the flush must not clobber GPU results outside the written range.
+    // between. Each backend has its own way to invert this pair, and both are pinned here.
+    // DirectGLES queues app SubData ranges for the draw-time staged-copy flush (the upload
+    // ring) instead of uploading in place, and readback of a GPU-written buffer overwrites
+    // the frontend shadow with the driver copy - so if the readback path forgets to flush the
+    // queued range first, the newer CPU write is REVERTED by the readback and offset 0 reads
+    // the dispatch's value instead of the reseed. DirectVulkan adopts the buffer into
+    // coherent GPU memory the moment the dispatch resolves its descriptor, so the SubData
+    // write lands in the very bytes the GPU reads - while the dispatch still sits recorded in
+    // the deferred frame command buffer. Unless the frontend retires that pending work before
+    // writing the adopted store (BufferObject::UploadSubData), the dispatch executes ON TOP
+    // of the reseed and offset 0 reads reseed + increments instead of the reseed. Offset 4
+    // pins the other direction for both: the upload must leave bytes outside its range - the
+    // dispatch's results - untouched.
     TEST_F(AtomicCounterScenario, SubDataAfterDispatchSurvivesAnImmediateReadback) {
         if (!Ready() || IsSkipped()) return;
-        // DirectGLES-only for now. DirectVulkan fails this case with or without the upload
-        // ring, on revisions that predate it: its buffer uploads submit immediately while the
-        // dispatch sits in the deferred frame command buffer, so the GPU increments the
-        // RESEEDED value (reads 4242 + increments instead of 4242) - a pre-existing
-        // upload-vs-recorded-work ordering gap in that backend, kept visible here rather than
-        // silently absorbed. Un-skip once DirectVulkan orders app uploads against already
-        // recorded GPU work.
-        if (Gl().BackendName() != std::string("DirectGLES")) {
-            GTEST_SKIP() << "SubData-after-dispatch ordering is a known DirectVulkan gap; this case pins the "
-                            "DirectGLES readback pre-flush only";
-        }
 
         const GLuint zero = MakeCounterBuffer(0, {0u, 0u});
         MakeCounterBuffer(1, {0u});
