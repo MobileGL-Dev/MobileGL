@@ -185,6 +185,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
         features.DisableUboRing = QueryEnvFlag("MOBILEGL_DISABLE_UBO_RING");
         features.DisableUnpackRing = QueryEnvFlag("MOBILEGL_DISABLE_UNPACK_RING");
+        features.DisableUploadRing = QueryEnvFlag("MOBILEGL_DISABLE_UPLOAD_RING");
         features.EsprytForceDepthStencilReadbackEmulation =
             QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");

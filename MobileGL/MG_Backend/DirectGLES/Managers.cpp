@@ -648,6 +648,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT. 64 covers every type with room to
             // spare and keeps consecutive staged blocks off each other's cache lines.
             constexpr SizeT kUnpackRingAlignment = 64;
+            // glCopyBufferSubData carries no offset-alignment requirement at all; 64
+            // keeps staged blocks cache-line separated, same as the unpack ring.
+            constexpr SizeT kUploadRingInitialBytes = 4u * 1024u * 1024u;
+            constexpr SizeT kUploadRingMaxBytes = 64u * 1024u * 1024u;
+            constexpr SizeT kUploadRingAlignment = 64;
 
             struct PersistentRingStore {
                 Uint id = 0;
@@ -705,6 +710,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         kUnpackRingMaxBytes,
                                         kUnpackRingAlignment,
                                         "Texture unpack ring"};
+            // Staging ring for app buffer updates whose destination store may still be
+            // referenced by in-flight GPU work. Mali's glBufferSubData resolves that WAR
+            // hazard by BLOCKING in the call (osup_sync_object_wait) until every
+            // referencing job retires - under Minecraft 26.3's per-frame UBO and
+            // chunk-mesh SubData streams that serialized whole frames (~1 fps while
+            // chunks stream in). Staging the bytes here and issuing a
+            // glCopyBufferSubData instead keeps the hazard on the GPU timeline where it
+            // is just job ordering, and the CPU never waits.
+            PersistentRing g_uploadRing{{},
+                                        {},
+                                        {},
+                                        kUploadRingInitialBytes,
+                                        kUploadRingMaxBytes,
+                                        kUploadRingAlignment,
+                                        "Buffer upload ring"};
 
             // The ES context the ring's id/map belonged to is gone (or was never
             // seen): drop every handle without GL calls and re-arm creation. The
@@ -792,6 +812,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 BindBufferId(TempBufferTarget, resource.id);
                 g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
                                             bufferObject.MappedData() + start);
+            }
+
+            // Ring machinery shared with the UBO/unpack rings; defined further down in
+            // this same unnamed namespace.
+            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
+            Bool RingAvailable(PersistentRing& ring);
+
+            // True when a pending-range flush can go through the staging ring right
+            // now: kill switch off, the ES copy entry point resolved, and the ring's
+            // own availability gate (EXT_buffer_storage + fences + live context) up.
+            Bool UploadRingUsableNow() {
+                if (MG_Config::Features.DisableUploadRing) return false;
+                if (!g_GLESFuncs.glCopyBufferSubData) return false;
+                return RingAvailable(g_uploadRing);
+            }
+
+            // Push every queued range of `resource` from the shadow into the backend
+            // store. Ranges go through the staging ring + glCopyBufferSubData when the
+            // ring is usable - the copy resolves the WAR hazard against in-flight
+            // frames on the GPU timeline, where it is mere job ordering - and fall
+            // back to the direct (potentially stalling) glBufferSubData otherwise.
+            // The caller owns syncedChangeSerial; this only drains the queue.
+            void FlushPendingRangesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
+#ifdef TRACY_ENABLE
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                VecRange1D ranges;
+                {
+                    const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                    if (resource.pendingRanges.empty()) return;
+                    ranges = std::move(resource.pendingRanges);
+                    resource.pendingRanges.clear();
+                }
+                // Clamp against BOTH extents: the readback flush may run while the
+                // frontend size and the backend store disagree (a pending respecify
+                // resolves that later; bytes past either end have nowhere to land).
+                //
+                // The ranges are copied AS QUEUED (VecRange1D::Add already merges
+                // near-adjacent ones): this driver runs buffer copies as worker-thread
+                // memcpys, so BYTES are the cost axis - collapsing a scattered flush
+                // into its union re-copied nearly whole chunk-mesh arenas every frame
+                // and saturated the copy worker during camera pans.
+                const SizeT limit = std::min(bufferObject.GetSize(), resource.storageSize);
+                const Bool ringUsable = UploadRingUsableNow();
+                for (const auto& range : ranges) {
+                    const SizeT end = std::min(range.end, limit);
+                    const SizeT start = std::min(range.start, end);
+                    const SizeT size = end - start;
+                    if (size == 0) continue;
+                    SizeT ringOffset = 0;
+                    if (ringUsable && size <= kUploadRingMaxBytes &&
+                        RingAllocate(g_uploadRing, size, ringOffset)) {
+                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, bufferObject.MappedData() + start, size);
+                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
+                        g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
+                                                        (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
+                    } else {
+                        UploadRangeNow(resource, bufferObject, start, end);
+                    }
+                }
             }
 
             // EXT_buffer_storage bit values (same numeric values as the desktop ARB
@@ -941,11 +1022,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration ||
                     !StorageMatches(*resource, bufferObject)) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add({offset, offset + size});
                     return;
                 }
-                UploadRangeNow(*resource, bufferObject, offset, offset + size);
-                resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+                // An immediate glBufferSubData resolves the WAR hazard against frames
+                // still referencing this store on the CPU on some drivers - Mali parks
+                // the thread in osup_sync_object_wait until every referencing job
+                // retires, which serialized Minecraft 26.3's per-frame UBO/chunk-mesh
+                // update streams into ~1 fps. Queue the range instead (the shadow
+                // already holds the bytes) and let draw-time sync push the merged
+                // ranges through the staging ring. The zero-copy persistent store
+                // keeps the legacy immediate upload: draw-time sync never flushes
+                // ranges for it, and its mapping publishes writes by itself.
+                if ((resource->persistentMapped && resource->persistentPtr) ||
+                    MG_Config::Features.DisableUploadRing) {
+                    UploadRangeNow(*resource, bufferObject, offset, offset + size);
+                    resource->syncedChangeSerial = bufferObject.GetChangeSerial();
+                    return;
+                }
+                const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                resource->pendingRanges.Add({offset, offset + size});
             }
 
             void Ops_FlushMappedRange(BufferObject& bufferObject, Range1D range,
@@ -956,6 +1053,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration ||
                     !StorageMatches(*resource, bufferObject)) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.Add(range);
+                    return;
+                }
+
+                // Same WAR-hazard rule as Ops_SubData: an immediate upload (mapped or
+                // glBufferSubData) can park the thread on Mali until the frames still
+                // referencing this store retire. Queue the range for the staged-copy
+                // flush at draw-time sync; only the zero-copy persistent store and the
+                // negative-control kill switch keep the immediate paths below.
+                if (!(resource->persistentMapped && resource->persistentPtr) &&
+                    !MG_Config::Features.DisableUploadRing) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add(range);
                     return;
                 }
@@ -1006,6 +1116,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
                 const SizeT size = std::min<SizeT>(bufferObject.GetSize(), resource->storageSize);
                 if (size == 0) return;
+
+                // Queued app writes must land in the backend store before it is read
+                // back, or the writeback below would revert them in the shadow.
+                FlushPendingRangesNow(*resource, bufferObject);
 
                 BindBufferId(TempBufferTarget, resource->id);
                 void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
@@ -1295,11 +1409,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 resource->storageSize != bufferObject->GetSize()) {
                 RespecifyStorageNow(*resource, *bufferObject);
             } else if (!resource->pendingRanges.empty()) {
-                for (const auto& range : resource->pendingRanges) {
-                    const SizeT end = std::min(range.end, bufferObject->GetSize());
-                    UploadRangeNow(*resource, *bufferObject, std::min(range.start, end), end);
-                }
-                resource->pendingRanges.clear();
+                FlushPendingRangesNow(*resource, *bufferObject);
                 resource->syncedChangeSerial = bufferObject->GetChangeSerial();
             } else if (resource->syncedChangeSerial != bufferObject->GetChangeSerial()) {
                 // Ops could not track some writes (e.g. the ops table was
@@ -1621,6 +1731,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                   "ring offset mask below requires power-of-two ring sizes");
                     static_assert((kUnpackRingInitialBytes & (kUnpackRingInitialBytes - 1)) == 0,
                                   "ring offset mask below requires power-of-two ring sizes");
+                    static_assert((kUploadRingInitialBytes & (kUploadRingInitialBytes - 1)) == 0,
+                                  "ring offset mask below requires power-of-two ring sizes");
                     const SizeT offset = static_cast<SizeT>(store.head & (store.size - 1));
                     if (offset + alignedSize <= store.size && store.head + alignedSize - store.tail <= store.size) {
                         store.head += alignedSize;
@@ -1789,6 +1901,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SizeT UnpackRingMaxBytes() { return kUnpackRingMaxBytes; }
 
         void UnpackRingOnPresent() { RingOnPresent(g_unpackRing); }
+
+        void UploadRingOnPresent() { RingOnPresent(g_uploadRing); }
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {

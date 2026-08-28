@@ -170,6 +170,12 @@ namespace MobileGL::MG_Config {
         // persistent-mapped unpack-PBO ring (negative control / driver-bug escape
         // hatch).
         Bool DisableUnpackRing = false;
+        // MOBILEGL_DISABLE_UPLOAD_RING: force DirectGLES app buffer updates
+        // (glBufferSubData / map flushes) back to the immediate driver upload instead
+        // of queueing them for the staged-copy flush through the persistent-mapped
+        // upload ring (negative control / driver-bug escape hatch; the immediate
+        // upload stalls on drivers that resolve the WAR hazard on the CPU, e.g. Mali).
+        Bool DisableUploadRing = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,

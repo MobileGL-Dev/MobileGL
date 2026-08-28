@@ -642,6 +642,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Largest single staging request the ring can ever satisfy.
         SizeT UnpackRingMaxBytes();
         void UnpackRingOnPresent();
+
+        // --- Buffer upload ring ---------------------------------------------------
+        // The same persistent-mapped bump allocator, staging APP BUFFER UPDATES
+        // (glBufferSubData / non-persistent map flushes) whose destination store may
+        // still be referenced by in-flight GPU work. Mali resolves that WAR hazard by
+        // BLOCKING the calling glBufferSubData (osup_sync_object_wait) until every
+        // referencing job retires - Minecraft 26.3 rewrites its chunk-section and
+        // dynamic-transform UBOs and streams chunk meshes with per-frame SubData, and
+        // each such call serialized against the whole GPU queue (~1 fps while chunks
+        // stream in, and again on every camera pan). App SubData ranges are queued on
+        // the resource instead (the frontend shadow already holds the bytes) and
+        // draw-time sync drains them: bytes staged into this ring, then one
+        // glCopyBufferSubData per merged range - the copy is ordered on the GPU
+        // timeline, so the hazard costs no CPU wait. Reclamation contract identical
+        // to the other two rings. MOBILEGL_DISABLE_UPLOAD_RING restores the
+        // historical immediate-upload path (negative control / escape hatch).
+        void UploadRingOnPresent();
     } // namespace BufferImpl
 
     namespace VertexArrayImpl {

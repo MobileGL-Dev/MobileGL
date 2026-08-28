@@ -10636,6 +10636,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // frame's ring high-water marks for slot reclamation.
         BufferImpl::UboRingOnPresent();
         BufferImpl::UnpackRingOnPresent();
+        BufferImpl::UploadRingOnPresent();
         BufferImpl::TrimBufferPool();
     }
 
