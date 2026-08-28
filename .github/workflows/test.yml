@@ -271,10 +271,20 @@ jobs:
         run: |
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          # Second, filtered pass: with the range-invalidating map flush disabled,
+          # the buffer scenarios run on the upload ring's staged-copy tier - which
+          # the default pass never reaches (the map tier absorbs every flush on
+          # Mesa), so without this the Mali fallback tier would have zero CI
+          # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
+          # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L integration-gpu --no-tests=error
+            MOBILEGL_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu \
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error
           else
             ctest --output-on-failure -L integration-gpu --no-tests=error
+            MOBILEGL_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu \
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error
           fi
 
       - name: Upload core dumps
