@@ -78,9 +78,9 @@ namespace MobileGL {
                 }
 
                 // Locations one value of `type` occupies (GL 4.6 core 11.1.2.1 / 15.2): a
-                // matrix takes one per column, a double-precision vector wider than two takes
-                // two, an array takes its element's span once per element. 0 means "this pass
-                // cannot place it", which declines the whole block rather than guessing.
+                // matrix takes one per column, a 64-bit vector wider than two takes two, an
+                // array takes its element's span once per element. 0 means "this pass cannot
+                // place it", which declines the whole block rather than guessing.
                 Uint32 LocationSpan(const analysis::Type* type) {
                     if (type == nullptr) return 0;
                     if (type->AsFloat() != nullptr || type->AsInteger() != nullptr ||
@@ -93,8 +93,14 @@ namespace MobileGL {
                             element->AsBool() == nullptr) {
                             return 0;
                         }
+                        // 64-bit INTEGERS span two locations exactly like doubles do:
+                        // ARB_gpu_shader_int64 extends 11.1.2.1's double-precision rule
+                        // verbatim to i64/u64. Answering 1 for an i64vec4 would pack the
+                        // members after it onto locations that varying already owns.
                         const auto* elementFloat = element->AsFloat();
-                        const Bool is64Bit = elementFloat != nullptr && elementFloat->width() == 64;
+                        const auto* elementInteger = element->AsInteger();
+                        const Bool is64Bit = (elementFloat != nullptr && elementFloat->width() == 64) ||
+                                             (elementInteger != nullptr && elementInteger->width() == 64);
                         return (is64Bit && vector->element_count() > 2) ? 2u : 1u;
                     }
                     if (const auto* matrix = type->AsMatrix()) {
