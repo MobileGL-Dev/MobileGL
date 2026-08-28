@@ -3375,6 +3375,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (format != TextureInternalFormat::RGB5 && format != TextureInternalFormat::RGB5A1) {
                 return data;
             }
+            // With the storage widened to 8-bit-per-channel (the packed16 field-order quirk)
+            // there is no driver requantization left for the repack to pre-empt - the shadow's
+            // UNorm8 bytes ARE the stored bytes - and the packed 16-bit client type this leg
+            // retargets to is not a legal upload for a GL_RGB8/GL_RGBA8 store at all.
+            if (TextureImpl::UsesWidenedPacked16NormStorage(format)) {
+                return data;
+            }
             const Bool hasAlpha = format == TextureInternalFormat::RGB5A1;
             const GLenum packedType = hasAlpha ? GL_UNSIGNED_SHORT_5_5_5_1 : GL_UNSIGNED_SHORT_5_6_5;
             // Idempotent across a region's level loop: glType is shared, so later levels arrive with

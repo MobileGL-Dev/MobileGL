@@ -127,6 +127,21 @@ namespace MobileGL::MG_Util::SelfTest {
             GLfloat clearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             GLint packAlignment = 4;
             GLint packRowLength = 0;
+            // The rest of the pixel-transfer scope. The probes that upload or read back texels
+            // run under whatever scope their caller left - the lazy ones run from live paths,
+            // not just the POST screen - and a caller's skip/row-length/PBO would silently
+            // shear a probe's own data. Saved so a probe can zero them and the caller gets
+            // them back.
+            GLint packSkipPixels = 0;
+            GLint packSkipRows = 0;
+            GLint unpackAlignment = 4;
+            GLint unpackRowLength = 0;
+            GLint unpackImageHeight = 0;
+            GLint unpackSkipPixels = 0;
+            GLint unpackSkipRows = 0;
+            GLint unpackSkipImages = 0;
+            GLint pixelPackBuffer = 0;
+            GLint pixelUnpackBuffer = 0;
             GLint imageName = 0;
             GLint imageLevel = 0;
             GLint imageLayered = 0;
@@ -166,6 +181,16 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &state.texture2DArray);
             gl.glGetIntegerv(GL_PACK_ALIGNMENT, &state.packAlignment);
             gl.glGetIntegerv(GL_PACK_ROW_LENGTH, &state.packRowLength);
+            gl.glGetIntegerv(GL_PACK_SKIP_PIXELS, &state.packSkipPixels);
+            gl.glGetIntegerv(GL_PACK_SKIP_ROWS, &state.packSkipRows);
+            gl.glGetIntegerv(GL_UNPACK_ALIGNMENT, &state.unpackAlignment);
+            gl.glGetIntegerv(GL_UNPACK_ROW_LENGTH, &state.unpackRowLength);
+            gl.glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &state.unpackImageHeight);
+            gl.glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &state.unpackSkipPixels);
+            gl.glGetIntegerv(GL_UNPACK_SKIP_ROWS, &state.unpackSkipRows);
+            gl.glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &state.unpackSkipImages);
+            gl.glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &state.pixelPackBuffer);
+            gl.glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &state.pixelUnpackBuffer);
             if (gl.glGetFloatv != nullptr) {
                 gl.glGetFloatv(GL_COLOR_CLEAR_VALUE, state.clearColor);
             }
@@ -221,6 +246,18 @@ namespace MobileGL::MG_Util::SelfTest {
             if (gl.glPixelStorei != nullptr) {
                 gl.glPixelStorei(GL_PACK_ALIGNMENT, state.packAlignment);
                 gl.glPixelStorei(GL_PACK_ROW_LENGTH, state.packRowLength);
+                gl.glPixelStorei(GL_PACK_SKIP_PIXELS, state.packSkipPixels);
+                gl.glPixelStorei(GL_PACK_SKIP_ROWS, state.packSkipRows);
+                gl.glPixelStorei(GL_UNPACK_ALIGNMENT, state.unpackAlignment);
+                gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, state.unpackRowLength);
+                gl.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, state.unpackImageHeight);
+                gl.glPixelStorei(GL_UNPACK_SKIP_PIXELS, state.unpackSkipPixels);
+                gl.glPixelStorei(GL_UNPACK_SKIP_ROWS, state.unpackSkipRows);
+                gl.glPixelStorei(GL_UNPACK_SKIP_IMAGES, state.unpackSkipImages);
+            }
+            if (gl.glBindBuffer != nullptr) {
+                gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(state.pixelPackBuffer));
+                gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(state.pixelUnpackBuffer));
             }
             if (gl.glClearColor != nullptr) {
                 gl.glClearColor(state.clearColor[0], state.clearColor[1], state.clearColor[2],
@@ -1887,6 +1924,199 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        // ===================== PACKED16 COPY-IMAGE FIELD ORDER =====================
+
+        constexpr const char* kPacked16CopyProbeName = "packed16 copy-image field order";
+
+        // The shape the KHR-GL4x.copy_image failures pin, verbatim: on the affected Mali only a
+        // 2D array whose base level is 30x30x12 showed the divergence at LEVEL 1 (the same
+        // suite's level-0 copies and a 14x14 base's level 1 round-trip clean), so the probe
+        // reproduces those dimensions rather than a minimal shape that might sit on the clean
+        // side of whatever allocation threshold picks the driver's layout.
+        constexpr GLsizei kPacked16BaseSize = 30;
+        constexpr GLsizei kPacked16Layers = 12;
+        constexpr GLsizei kPacked16DstSize = 7;
+
+        // One GL_RGB5_A1 texel, as the client word the probe uploads everywhere:
+        // (R, G, B, A) = (0, 1, 3, 1) under GL_UNSIGNED_SHORT_5_5_5_1. Chosen because 5551 is
+        // the one 16-bit packed layout whose field widths are not a palindrome - its mirror
+        // fixes the DIRECTION of the swap - and because this word's mirror differs in every
+        // channel including alpha, so no expansion rounding can confuse the two predictions.
+        constexpr Uint16 kPacked16Word = 0x0047;
+        // What an FBO readback answers for the word, as UNorm8: (0, 1, 3) / 31 and alpha 1.
+        constexpr GLubyte kPacked16Expected[4] = {0, 8, 25, 255};
+        // The same readback when the stored bits are the mirrored re-encoding: 0x0047 decoded
+        // as 5_5_5_1 and re-encoded as 1_5_5_5_REV is 0x8C20, which the destination's non-REV
+        // layout then decodes as (17, 16, 16) / 31 with alpha 0. This is byte-for-byte the
+        // arithmetic behind every failing CTS body (src 0x0047 -> got 0x8C20).
+        constexpr GLubyte kPacked16Mirrored[4] = {140, 132, 132, 0};
+        // A 5-bit step is 255/31 ~ 8.2 UNorm8 codes; half a step accepts every 5-bit-to-8-bit
+        // expansion a driver uses (floor, round, bit replication) while still telling two
+        // adjacent 5-bit values apart.
+        constexpr Int kPacked16Tolerance = 4;
+
+        // A 2-level GL_RGB5_A1 2D array allocated the way MobileGL's own mutable-texture path
+        // allocates one (glTexImage3D per level), with every texel of both levels holding
+        // kPacked16Word. MAX_LEVEL is clamped so the two-level chain is complete - some
+        // drivers refuse glCopyImageSubData on an incomplete texture.
+        GLuint MakePacked16ArrayTexture(const GLESFunctionsTable& gl) {
+            GLuint texture = 0;
+            gl.glGenTextures(1, &texture);
+            if (texture == 0) return 0;
+            gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 1);
+            for (GLint level = 0; level < 2; ++level) {
+                const GLsizei size = kPacked16BaseSize >> level;
+                const Vector<Uint16> words(
+                    static_cast<SizeT>(size) * static_cast<SizeT>(size) * kPacked16Layers, kPacked16Word);
+                gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, level, GL_RGB5_A1, size, size, kPacked16Layers, 0,
+                                GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, words.data());
+            }
+            gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            return texture;
+        }
+
+        // A one-level GL_RGB5_A1 2D destination filled with 0xFFFF - the CTS's own (1,1,1,1)
+        // destination fill - so a copy that silently did nothing reads as "no verdict" rather
+        // than as either prediction.
+        GLuint MakePacked16DstTexture(const GLESFunctionsTable& gl) {
+            GLuint texture = 0;
+            gl.glGenTextures(1, &texture);
+            if (texture == 0) return 0;
+            gl.glBindTexture(GL_TEXTURE_2D, texture);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+            const Vector<Uint16> fill(static_cast<SizeT>(kPacked16DstSize) * kPacked16DstSize, Uint16{0xFFFF});
+            gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, kPacked16DstSize, kPacked16DstSize, 0, GL_RGBA,
+                            GL_UNSIGNED_SHORT_5_5_5_1, fill.data());
+            gl.glBindTexture(GL_TEXTURE_2D, 0);
+            return texture;
+        }
+
+        // The destination's texel (0, 0), through a framebuffer of its own. False when the
+        // attachment is incomplete or the read errors - both are declines, not verdicts.
+        Bool ReadPacked16DstTexel(const GLESFunctionsTable& gl, GLuint texture, GLubyte out[4]) {
+            GLuint framebuffer = 0;
+            gl.glGenFramebuffers(1, &framebuffer);
+            if (framebuffer == 0) return false;
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+            Bool read = false;
+            if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                gl.glReadBuffer(GL_COLOR_ATTACHMENT0);
+                Drain(gl);
+                gl.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
+                read = gl.glGetError() == GL_NO_ERROR;
+            }
+            gl.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            gl.glDeleteFramebuffers(1, &framebuffer);
+            Drain(gl);
+            return read;
+        }
+
+        // Copies a kPacked16DstSize-square region out of layer 0 of the array's `sourceLevel`
+        // onto a freshly filled 2D destination and hands back the destination's texel (0, 0).
+        // False when the copy raised an error or the readback could not run.
+        Bool Packed16CopyLandsTexel(const GLESFunctionsTable& gl, GLuint array, GLint sourceLevel,
+                                    GLubyte out[4]) {
+            const GLuint destination = MakePacked16DstTexture(gl);
+            if (destination == 0) return false;
+            Drain(gl);
+            gl.glCopyImageSubData(array, GL_TEXTURE_2D_ARRAY, sourceLevel, 0, 0, 0, destination,
+                                  GL_TEXTURE_2D, 0, 0, 0, 0, kPacked16DstSize, kPacked16DstSize, 1);
+            const Bool copied = gl.glGetError() == GL_NO_ERROR;
+            const Bool read = copied && ReadPacked16DstTexel(gl, destination, out);
+            gl.glDeleteTextures(1, &destination);
+            Drain(gl);
+            return read;
+        }
+
+        Bool Packed16TexelNear(const GLubyte got[4], const GLubyte want[4]) {
+            for (Int i = 0; i < 4; ++i) {
+                const Int delta = static_cast<Int>(got[i]) - static_cast<Int>(want[i]);
+                if (delta > kPacked16Tolerance || delta < -kPacked16Tolerance) return false;
+            }
+            return true;
+        }
+    } // namespace
+
+    Bool ProbeCopyImageMirrorsPacked16FieldOrder(const GLESFunctionsTable& gl) {
+        if (!gl.glGenTextures || !gl.glBindTexture || !gl.glTexParameteri || !gl.glTexImage2D ||
+            !gl.glTexImage3D || !gl.glDeleteTextures || !gl.glCopyImageSubData || !gl.glGenFramebuffers ||
+            !gl.glBindFramebuffer || !gl.glFramebufferTexture2D || !gl.glCheckFramebufferStatus ||
+            !gl.glDeleteFramebuffers || !gl.glReadBuffer || !gl.glReadPixels || !gl.glPixelStorei ||
+            !gl.glGetError) {
+            return false;
+        }
+
+        SavedState saved;
+        Save(gl, saved);
+        // The uploads and readbacks below run under the probe's own tight pixel-transfer
+        // scope - a caller's skip/row-length/PBO would shear the probe's data into a false
+        // verdict either way. Restore puts the caller's scope back with the rest.
+        gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        gl.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        gl.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+        gl.glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        gl.glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        gl.glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+        gl.glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        gl.glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+        gl.glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+        gl.glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+        if (gl.glBindBuffer != nullptr) {
+            gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        }
+        Drain(gl);
+
+        Bool detected = false;
+        const GLuint array = MakePacked16ArrayTexture(gl);
+        GLubyte control[4] = {0, 0, 0, 0};
+        GLubyte subject[4] = {0, 0, 0, 0};
+        // THE CONTROL: the identical copy out of the array's LEVEL 0, which is clean on the
+        // affected driver too. It proves glCopyImageSubData works between a 5551 array and a
+        // 5551 2D image at all, that the upload and the FBO readback round-trip the word, and
+        // that only the mip level moves the answer - so a driver with no copy_image, or none
+        // for these formats, reaches no verdict instead of being reported as this.
+        if (array == 0 || !Packed16CopyLandsTexel(gl, array, 0, control)) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the level-0 control copy could not run)",
+                    kPacked16CopyProbeName);
+        } else if (!Packed16TexelNear(control, kPacked16Expected)) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the level-0 control read back "
+                    "(%d, %d, %d, %d) instead of the uploaded word's (%d, %d, %d, %d))",
+                    kPacked16CopyProbeName, control[0], control[1], control[2], control[3],
+                    kPacked16Expected[0], kPacked16Expected[1], kPacked16Expected[2], kPacked16Expected[3]);
+        } else if (!Packed16CopyLandsTexel(gl, array, 1, subject)) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the level-1 subject copy could not run)",
+                    kPacked16CopyProbeName);
+        } else if (Packed16TexelNear(subject, kPacked16Mirrored)) {
+            detected = true;
+            MGLOG_I("[driver-bug] %s probe: a copy out of the array's level 1 delivered "
+                    "(%d, %d, %d, %d), the 1_5_5_5_REV re-encoding of the word - THE FIELD ORDER "
+                    "OF A NON-ZERO ARRAY MIP LEVEL IS MIRRORED",
+                    kPacked16CopyProbeName, subject[0], subject[1], subject[2], subject[3]);
+        } else if (!Packed16TexelNear(subject, kPacked16Expected)) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (the level-1 copy read back "
+                    "(%d, %d, %d, %d), which is neither the word nor its mirror)",
+                    kPacked16CopyProbeName, subject[0], subject[1], subject[2], subject[3]);
+        }
+        if (array != 0) gl.glDeleteTextures(1, &array);
+        Restore(gl, saved);
+        return detected;
+    }
+
+    Bool CopyImageMirrorsPacked16FieldOrder(const GLESFunctionsTable& gl) {
+        // One driver per process, and the answer is structural (the driver's storage layout
+        // for a shape), not sampled.
+        static const Bool mirrored = ProbeCopyImageMirrorsPacked16FieldOrder(gl);
+        return mirrored;
+    }
+
+    namespace {
         Optional<DriverBugFinding> ProbeExplicitVertexInputLocationCeilingBug(const GLESFunctionsTable& gl) {
             const VertexInputLocationCeilingMeasurement& measurement = ExplicitVertexInputLocationCeiling(gl);
             if (!measurement.detected) return std::nullopt;
@@ -2053,6 +2283,25 @@ namespace MobileGL::MG_Util::SelfTest {
                                     Move(detail)};
         }
 
+        Optional<DriverBugFinding> ProbeCopyImagePacked16FieldOrderBug(const GLESFunctionsTable& gl) {
+            if (!CopyImageMirrorsPacked16FieldOrder(gl)) return std::nullopt;
+            return DriverBugFinding{
+                "glCopyImageSubData mirrors 16-bit packed texels at a non-zero array mip level",
+                DriverBugVerdict::Fixed,
+                "the driver's physical field order for a 16-bit packed texel (RGB565 / RGB5_A1 / "
+                "RGBA4) at a non-zero mip level of a GL_TEXTURE_2D_ARRAY is the *_REV mirror of "
+                "the order every other image uses, so a glCopyImageSubData - a raw texel-block "
+                "move - between such a level and any other image lands the R/G/B/A fields "
+                "reversed (a 5551 word 0x0047 arrives as 0x8C20). Uploads and readbacks of the "
+                "same level are clean - the driver decodes its own layout consistently, which is "
+                "this probe's control - so only the raw-copy path ever crosses the two layouts. "
+                "MobileGL stores these three formats as 8-bit-per-channel ES storage on this "
+                "driver instead (GL_RGB8 / GL_RGBA8, the storage their canonical shadow already "
+                "holds and the client word round-trips through exactly), so no 16-bit packed "
+                "image is left for a copy to disagree about, at twice the memory for images of "
+                "those formats"};
+        }
+
         // The table. One row per known driver bug; see the header for how to add a sibling.
         using DriverBugProbeFn = Optional<DriverBugFinding> (*)(const GLESFunctionsTable&);
         constexpr DriverBugProbeFn kGlesDriverBugProbes[] = {
@@ -2064,6 +2313,7 @@ namespace MobileGL::MG_Util::SelfTest {
             &ProbeExplicitVertexInputLocationCeilingBug,
             &ProbeLayeredBlitDestinationBug,
             &ProbeLocatedIoBlockPayloadBug,
+            &ProbeCopyImagePacked16FieldOrderBug,
         };
     } // namespace
 

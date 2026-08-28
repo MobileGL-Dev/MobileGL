@@ -46,6 +46,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Flags<PixelFormatNormalizeOptionBit> GetRenderTargetNormalizeOptions(
             const MG_External::GLESCapabilities& capabilities, SizeT targetIndex);
 
+        // Whether this format's ES storage is widened to 8-bit-per-channel because the
+        // driver's 16-bit packed storage mirrors its field order at a non-zero array mip
+        // level (PixelFormatNormalizeOptionBit::WidenPacked16Norm). True only for
+        // GL_RGB565/GL_RGB5(_A1)/GL_RGBA4, and only where the POST probe measured the
+        // divergence (or MOBILEGL_WIDEN_PACKED16_STORAGE forces it). The transfer paths
+        // consult it too: the packed-norm re-upload leg must stand down when the ES storage
+        // is no longer 16-bit packed.
+        Bool UsesWidenedPacked16NormStorage(TextureInternalFormat internalFormat);
+
         void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,
                                        GLenum* outFormat, GLenum* outType,
                                        TextureTarget target = TextureTarget::Unknown);

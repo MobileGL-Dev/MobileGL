@@ -11,8 +11,10 @@
 #include "Managers.h"
 #include "MG_Backend/BackendObjects.h"
 #include "MG_Util/Converters/GLToMG/FramebufferEnumConverter.h"
+#include "MG_Util/SelfTest/DriverBugProbes.h"
 #include "MG_Util/Texture/TextureFormatProcessor.h"
 #include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
+#include <Config.h>
 
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
@@ -125,6 +127,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     requestedInternalFormat,
                     TextureImpl::GetRenderTargetNormalizeOptions(g_GLESCapabilities, targetIndex));
             }
+            // Outside the caveat branch on purpose: the driver CAN create the native narrow
+            // storage - the capability probes say so - it just cannot be trusted as a raw-copy
+            // endpoint. Texture and renderbuffer targets both come through here, which is what
+            // keeps a renderbuffer -> texture copy of these formats same-ES-format when the
+            // widening engages.
+            if (TextureImpl::UsesWidenedPacked16NormStorage(internalFormat)) {
+                options |= PixelFormatNormalizeOptionBit::WidenPacked16Norm;
+            }
             NormalizePixelFormat(requestedInternalFormat, options, outInternalFormat, outFormat, outType);
         }
     } // namespace
@@ -180,6 +190,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 options |= PixelFormatNormalizeOptionBit::NoSnorm8RenderTarget;
             }
             return options;
+        }
+
+        Bool UsesWidenedPacked16NormStorage(TextureInternalFormat internalFormat) {
+            switch (internalFormat) {
+            // TextureInternalFormat::RGB5 is both GL_RGB5 and GL_RGB565 - the GL-to-MG
+            // converter folds the two spellings onto one logical format.
+            case TextureInternalFormat::RGB5:
+            case TextureInternalFormat::RGB5A1:
+            case TextureInternalFormat::RGBA4:
+                break;
+            default:
+                return false;
+            }
+            switch (MG_Config::Features.EsprytWidenPacked16Storage) {
+            case MG_Config::QuirkOverride::ForceOn:
+                return true;
+            case MG_Config::QuirkOverride::ForceOff:
+                return false;
+            case MG_Config::QuirkOverride::Auto:
+                break;
+            }
+            // Behind the backend gate on purpose: the memoized probe latches its first answer
+            // for the whole process, and before the backend is up the GL function table may
+            // not be resolved yet - a probe run then would latch "cannot tell" as "clean"
+            // forever. Once the backend exists, the first narrow-format image this process
+            // creates runs the probe on a live context.
+            if (pActiveBackendObject == nullptr) {
+                return false;
+            }
+            return MG_Util::SelfTest::CopyImageMirrorsPacked16FieldOrder(g_GLESFuncs);
         }
 
         void GenerateTextureFormatInfo(TextureInternalFormat internalFormat, GLenum* outInternalFormat,

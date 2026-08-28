@@ -253,6 +253,22 @@ namespace MobileGL::MG_Config {
         // LowerViewportIndexPass' demote-to-a-plain-global where it does not - and is
         // the negative control the emulation is measured against.
         QuirkOverride ViewportArrayEmulation = QuirkOverride::Auto;
+        // MOBILEGL_WIDEN_PACKED16_STORAGE: DirectGLES stores GL_RGB565/GL_RGB5(A1)/GL_RGBA4
+        // images as 8-bit-per-channel ES storage (GL_RGB8/GL_RGBA8) instead of the driver's
+        // native 16-bit packed formats. Auto defers to a POST driver-bug probe
+        // (SelfTest::CopyImageMirrorsPacked16FieldOrder): some Mali drivers keep a MIRRORED
+        // field order for the 16-bit packed texels of a non-zero mip level of a
+        // GL_TEXTURE_2D_ARRAY, so glCopyImageSubData - a raw texel-block move - lands
+        // R/G/B/A reversed whenever exactly one endpoint is such a level
+        // (KHR-GL4x.copy_image.functional rgb5/rgb5_a1/rgba4 x every *2d_array* pair).
+        // With no 16-bit packed ES image left there is no field order to disagree about; the
+        // client word still round-trips exactly, because the canonical shadow is already
+        // UNorm8 and an n-bit field encodes to UNorm8 and back losslessly for n <= 8.
+        // ForceOn widens on any driver (the llvmpipe suites use it to exercise the widened
+        // path); ForceOff keeps the native narrow storage even where the probe fires - the
+        // negative control that replays the corruption. Costs 2x the memory of the affected
+        // formats where it engages, which is why Auto is probe-gated rather than always-on.
+        QuirkOverride EsprytWidenPacked16Storage = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

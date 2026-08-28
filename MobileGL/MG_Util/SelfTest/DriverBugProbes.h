@@ -299,6 +299,35 @@ namespace MobileGL::MG_Util::SelfTest {
     const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(
         const MG_External::GLESFunctionsTable& gl);
 
+    // Copies one known GL_UNSIGNED_SHORT_5_5_5_1 word out of a GL_RGB5_A1 2D array's mip
+    // level 1 into a plain 2D image with glCopyImageSubData and reads the landed texel back.
+    // Returns true only when the level-1 copy delivers the word's 5_5_5_1 <-> 1_5_5_5_REV
+    // field-order mirror while the identical level-0 copy delivers the word itself.
+    //
+    // The affected Mali stores 16-bit packed texels (RGB565 / RGB5_A1 / RGBA4) at a non-zero
+    // mip level of a 2D array in the *_REV field order every other image does NOT use.
+    // Uploads and readbacks decode that layout consistently, so nothing but a raw texel-block
+    // move can see it - which is exactly what glCopyImageSubData is defined to be, and why
+    // the whole KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* matrix fails there while
+    // every other suite touching these formats passes. The texture reproduces the failing
+    // shape verbatim (a 30x30x12 two-level array; a 14x14 base's level 1 measured clean on
+    // the same driver, so a minimal shape might not manifest the layout).
+    //
+    // THE CONTROL is the identical copy out of mip level 0, which is clean on the affected
+    // driver too: it proves copy_image works between these images at all and that the
+    // upload/readback round trip is exact, so a driver that cannot host the shape reaches no
+    // verdict instead of being reported as this. The subject must also match the mirror
+    // PREDICTION, not merely differ from the expectation - a copy that delivered anything
+    // else is a different defect and reaches no verdict either. Restores every piece of GL
+    // state it touches.
+    Bool ProbeCopyImageMirrorsPacked16FieldOrder(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeCopyImageMirrorsPacked16FieldOrder(), evaluated at most once per process. The
+    // DirectGLES format normalization consults this to decide whether the three 16-bit packed
+    // normalized formats must be stored as 8-bit-per-channel ES storage (see
+    // PixelFormatNormalizeOptionBit::WidenPacked16Norm).
+    Bool CopyImageMirrorsPacked16FieldOrder(const MG_External::GLESFunctionsTable& gl);
+
     // Every known driver bug this GLES driver actually has. Bugs it does not have are absent,
     // so an unaffected device renders an empty section rather than a wall of "not affected".
     Vector<DriverBugFinding> CollectGlesKnownDriverBugs(const MG_External::GLESFunctionsTable& gl);

@@ -26,6 +26,7 @@ using MobileGL::MG_Util::SelfTest::ProbeGeometryStageSsboWriteAfterEmitDropped;
 using MobileGL::MG_Util::SelfTest::ProbeImageLocationPerNameBudget;
 using MobileGL::MG_Util::SelfTest::ProbeImageWriteReadCoherencyResidual;
 using MobileGL::MG_Util::SelfTest::ProbeBlitIgnoresDestinationArrayLayer;
+using MobileGL::MG_Util::SelfTest::ProbeCopyImageMirrorsPacked16FieldOrder;
 using MobileGL::MG_Util::SelfTest::ProbeExplicitVertexInputLocationCeiling;
 using MobileGL::MG_Util::SelfTest::ProbeR32FMultisampleSwizzleCorruption;
 
@@ -107,6 +108,21 @@ namespace {
         bool blitIgnoresDestinationLayer = false;
         bool blitIgnoresSourceLayer = false;
 
+        // Probe 7: the driver's PHYSICAL field order for a 16-bit packed texel at a non-zero
+        // mip level of a 2D array is the *_REV mirror of the plain-image order. Modelled at
+        // upload, which is where the real defect lives: the words such a level stores are the
+        // mirrored re-encoding, the raw copy moves them verbatim, and the plain 2D readback
+        // decodes them with the non-REV order - exactly the 0x0047 -> 0x8C20 arithmetic the
+        // affected Mali hands back. Uploads and readbacks of the SAME image stay consistent,
+        // which is why only the copy path can observe the knob.
+        bool packed16ArrayMipFieldOrderMirrored = false;
+        // The inconclusive path: EVERY array level stores mirrored words, level 0 included, so
+        // the probe's level-0 control copy is dirty too and no verdict may be reached.
+        bool packed16EveryArrayLevelMirrored = false;
+        // Another inconclusive path: the copy silently lands nothing, so the destination keeps
+        // its 0xFFFF fill - a value that is neither the word nor its mirror.
+        bool packed16CopyDoesNothing = false;
+
         // ---- object bookkeeping ---------------------------------------------
         GLenum pendingError = GL_NO_ERROR;
         GLuint nextShaderId = 1;
@@ -136,7 +152,14 @@ namespace {
         std::map<GLuint, std::array<GLubyte, 2>> arrayLayerFill;
         // framebuffer id -> the (2D array texture, layer) glFramebufferTextureLayer attached.
         std::map<GLuint, std::pair<GLuint, GLint>> framebufferLayerAttachment;
+        // (texture, level) -> the PHYSICAL 16-bit word every texel of that 5551 image holds.
+        // One word per level is all the packed16 probe distinguishes: it uploads a uniform
+        // fill and reads one texel.
+        std::map<std::pair<GLuint, GLint>, GLushort> packedTexelWords;
+        // framebuffer id -> the plain 2D texture glFramebufferTexture2D attached.
+        std::map<GLuint, GLuint> framebuffer2DAttachment;
         GLuint boundArrayTexture = 0;
+        GLuint boundTexture2D = 0;
         GLuint boundDrawFramebuffer = 0;
         GLuint boundReadFramebuffer = 0;
 
@@ -162,6 +185,17 @@ namespace {
 
     bool Contains(const std::string& haystack, const char* needle) {
         return haystack.find(needle) != std::string::npos;
+    }
+
+    // The 5_5_5_1 <-> 1_5_5_5_REV field-order mirror: the same fields, packed from the other
+    // end of the word. 0x0047 (R,G,B,A = 0,1,3,1) becomes 0x8C20 - the exact pair every
+    // failing KHR-GL4x.copy_image body printed on the affected Mali.
+    GLushort MirrorPacked5551(GLushort word) {
+        const GLushort r = (word >> 11) & 0x1F;
+        const GLushort g = (word >> 6) & 0x1F;
+        const GLushort b = (word >> 1) & 0x1F;
+        const GLushort a = word & 0x1;
+        return static_cast<GLushort>((a << 15) | (b << 10) | (g << 5) | r);
     }
 
     // Every `image2D <name>` the program declares, across all its stages.
@@ -401,6 +435,7 @@ namespace {
         funcs.glBindTexture = [](GLenum target, GLuint texture) {
             if (target == GL_TEXTURE_2D_MULTISAMPLE) g_fake.boundMultisampleTexture = texture;
             if (target == GL_TEXTURE_2D_ARRAY) g_fake.boundArrayTexture = texture;
+            if (target == GL_TEXTURE_2D) g_fake.boundTexture2D = texture;
         };
         funcs.glTexStorage3D = [](GLenum target, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) {
             if (target == GL_TEXTURE_2D_ARRAY) g_fake.arrayLayerFill[g_fake.boundArrayTexture] = {0, 0};
@@ -418,6 +453,13 @@ namespace {
         funcs.glDeleteTextures = [](GLsizei n, const GLuint* textures) {
             for (GLsizei i = 0; i < n; ++i) {
                 if (textures[i] != 0) --g_fake.aliveTextures;
+                for (auto it = g_fake.packedTexelWords.begin(); it != g_fake.packedTexelWords.end();) {
+                    if (it->first.first == textures[i]) {
+                        it = g_fake.packedTexelWords.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
             }
         };
         funcs.glTexParameteri = [](GLenum target, GLenum pname, GLint param) {
@@ -426,8 +468,39 @@ namespace {
                     static_cast<GLenum>(param);
             }
         };
-        funcs.glTexImage2D = [](GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum,
-                                const void*) {};
+        // The packed16 probe's endpoints. A plain 2D image stores its 5551 words in the
+        // canonical (non-REV) order on every knob setting - the defect is confined to array
+        // mip levels, and keeping the 2D side clean is what lets the readback below decode
+        // with one order and still reproduce the mirror.
+        funcs.glTexImage2D = [](GLenum target, GLint level, GLint, GLsizei, GLsizei, GLint, GLenum,
+                                GLenum type, const void* pixels) {
+            if (target != GL_TEXTURE_2D || type != GL_UNSIGNED_SHORT_5_5_5_1 || pixels == nullptr) return;
+            GLushort word = 0;
+            std::memcpy(&word, pixels, sizeof(word));
+            g_fake.packedTexelWords[{g_fake.boundTexture2D, level}] = word;
+        };
+        // The defect itself, at the upload where the physical layout is chosen: a mirrored
+        // array level stores the re-encoded word. Its own readback would decode it back
+        // consistently - only the raw copy below ever leaks the layout.
+        funcs.glTexImage3D = [](GLenum target, GLint level, GLint, GLsizei, GLsizei, GLsizei, GLint,
+                                GLenum, GLenum type, const void* pixels) {
+            if (target != GL_TEXTURE_2D_ARRAY || type != GL_UNSIGNED_SHORT_5_5_5_1 || pixels == nullptr) return;
+            GLushort word = 0;
+            std::memcpy(&word, pixels, sizeof(word));
+            const bool mirrored = g_fake.packed16EveryArrayLevelMirrored ||
+                                  (g_fake.packed16ArrayMipFieldOrderMirrored && level >= 1);
+            g_fake.packedTexelWords[{g_fake.boundArrayTexture, level}] =
+                mirrored ? MirrorPacked5551(word) : word;
+        };
+        // A raw texel-block move: the PHYSICAL word travels, whichever layout wrote it.
+        funcs.glCopyImageSubData = [](GLuint srcName, GLenum, GLint srcLevel, GLint, GLint, GLint,
+                                      GLuint dstName, GLenum, GLint dstLevel, GLint, GLint, GLint,
+                                      GLsizei, GLsizei, GLsizei) {
+            if (g_fake.packed16CopyDoesNothing) return;
+            const auto source = g_fake.packedTexelWords.find({srcName, srcLevel});
+            if (source == g_fake.packedTexelWords.end()) return;
+            g_fake.packedTexelWords[{dstName, dstLevel}] = source->second;
+        };
         funcs.glTexSubImage2D = [](GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum,
                                    const void*) {};
         funcs.glTexStorage2D = [](GLenum, GLsizei, GLenum, GLsizei, GLsizei) {};
@@ -446,7 +519,11 @@ namespace {
                 g_fake.boundReadFramebuffer = framebuffer;
             }
         };
-        funcs.glFramebufferTexture2D = [](GLenum, GLenum, GLenum, GLuint, GLint) {};
+        funcs.glFramebufferTexture2D = [](GLenum target, GLenum, GLenum, GLuint texture, GLint) {
+            const GLuint framebuffer = (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer
+                                                                       : g_fake.boundDrawFramebuffer;
+            g_fake.framebuffer2DAttachment[framebuffer] = texture;
+        };
         funcs.glFramebufferTextureLayer = [](GLenum target, GLenum, GLuint texture, GLint, GLint layer) {
             const GLuint framebuffer = (target == GL_READ_FRAMEBUFFER) ? g_fake.boundReadFramebuffer
                                                                        : g_fake.boundDrawFramebuffer;
@@ -482,6 +559,7 @@ namespace {
             for (GLsizei i = 0; i < n; ++i) {
                 if (framebuffers[i] != 0) --g_fake.aliveFramebuffers;
                 g_fake.framebufferLayerAttachment.erase(framebuffers[i]);
+                g_fake.framebuffer2DAttachment.erase(framebuffers[i]);
             }
         };
         funcs.glGenVertexArrays = [](GLsizei n, GLuint* arrays) {
@@ -561,9 +639,31 @@ namespace {
         funcs.glReadPixels = [](GLint, GLint, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                 void* pixels) {
             const std::size_t texels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-            // Answered before anything else: a read framebuffer that names an array LAYER is the
-            // layered-blit probe asking what that layer holds, and its bytes have nothing to do
-            // with the pass/fail texel encoding the image probes below share.
+            // A read framebuffer naming a plain 2D texture that holds a 5551 word is the
+            // packed16 probe reading its copy destination. The driver decodes its OWN storage
+            // with the canonical non-REV order and expands each field by bit replication -
+            // which is exactly how the mirrored word 0x8C20 becomes (140, 132, 132, 0).
+            if (const auto attached = g_fake.framebuffer2DAttachment.find(g_fake.boundReadFramebuffer);
+                attached != g_fake.framebuffer2DAttachment.end() &&
+                g_fake.packedTexelWords.count({attached->second, 0}) != 0) {
+                // Gated on the texture actually holding a 5551 word, so every OTHER probe that
+                // attaches a plain 2D texture keeps the pass/fail readback paths below.
+                const GLushort w = g_fake.packedTexelWords[{attached->second, 0}];
+                const auto expand5 = [](GLushort v) {
+                    return static_cast<GLubyte>((v << 3) | (v >> 2));
+                };
+                GLubyte* out = static_cast<GLubyte*>(pixels);
+                for (std::size_t i = 0; i < texels; ++i) {
+                    out[i * 4 + 0] = expand5((w >> 11) & 0x1F);
+                    out[i * 4 + 1] = expand5((w >> 6) & 0x1F);
+                    out[i * 4 + 2] = expand5((w >> 1) & 0x1F);
+                    out[i * 4 + 3] = (w & 0x1) ? 255 : 0;
+                }
+                return;
+            }
+            // Answered before anything else below: a read framebuffer that names an array LAYER
+            // is the layered-blit probe asking what that layer holds, and its bytes have nothing
+            // to do with the pass/fail texel encoding the image probes below share.
             if (const auto layered = g_fake.framebufferLayerAttachment.find(g_fake.boundReadFramebuffer);
                 layered != g_fake.framebufferLayerAttachment.end()) {
                 const auto& fill = g_fake.arrayLayerFill[layered->second.first];
@@ -626,6 +726,8 @@ TEST(DriverBugProbes, AProbeThatCannotRunReportsNoBug) {
     EXPECT_FALSE(ProbeImageLocationPerNameBudget(gl).detected);
     EXPECT_FALSE(ProbeCrossStageImageQualifierMergeDropsWrites(gl));
     EXPECT_FALSE(ProbeImageWriteReadCoherencyResidual(gl).detected);
+    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl))
+        << "a probe with no entry points has measured nothing";
 }
 
 // The section lists only bugs the device HAS, so a driver nothing could be probed on renders
@@ -944,4 +1046,53 @@ TEST(DriverBugProbes, ImageCoherencyNeedsBothHalvesOfTheSplitPairInOneStage) {
     g_fake.maxFragmentImageUniforms = 1;
     const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
     EXPECT_FALSE(ProbeImageWriteReadCoherencyResidual(gl).detected);
+}
+
+TEST(DriverBugProbes, Packed16FieldOrderIsCleanOnAConformingDriver) {
+    ResetFakeDriver();
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl));
+    ExpectProbeReleasedEverything();
+}
+
+TEST(DriverBugProbes, Packed16FieldOrderIsDetectedWhenTheArrayMipLevelIsMirrored) {
+    ResetFakeDriver();
+    g_fake.packed16ArrayMipFieldOrderMirrored = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_TRUE(ProbeCopyImageMirrorsPacked16FieldOrder(gl));
+    ExpectProbeReleasedEverything();
+}
+
+// THE CONTROL. A driver whose EVERY array level stores mirrored words fails the level-0
+// control copy too - a different (and larger) defect than the one this probe is entitled to
+// report, so it must reach no verdict rather than pin the mip-level shape.
+TEST(DriverBugProbes, Packed16FieldOrderReportsNothingWhenTheControlIsMirroredToo) {
+    ResetFakeDriver();
+    g_fake.packed16ArrayMipFieldOrderMirrored = true;
+    g_fake.packed16EveryArrayLevelMirrored = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl));
+    ExpectProbeReleasedEverything();
+}
+
+// And the shape that is not this bug: a copy that lands nothing leaves the destination's
+// 0xFFFF fill, which matches neither the word nor its mirror - "reached no verdict".
+TEST(DriverBugProbes, Packed16FieldOrderReportsNothingWhenTheCopyLandsNothing) {
+    ResetFakeDriver();
+    g_fake.packed16ArrayMipFieldOrderMirrored = true;
+    g_fake.packed16CopyDoesNothing = true;
+    const MG_External::GLESFunctionsTable gl = MakeFakeGLESFunctions();
+    EXPECT_FALSE(ProbeCopyImageMirrorsPacked16FieldOrder(gl));
+    ExpectProbeReleasedEverything();
+}
+
+// The byte arithmetic the fake's mirror encodes, pinned against the QPA evidence. The fake
+// models the ARRAY-AS-SOURCE direction (decode 5_5_5_1, re-encode 1_5_5_5_REV): 0x0047 must
+// deliver 0x8C20, the exact pair every failing array-as-source copy_image body printed. The
+// QPA's array-as-destination bodies show the INVERSE transform (enc_5551 of dec_REV: 0x0007
+// delivered as 0x3800), and enc_REV(dec_5551(x)) inverts enc_5551(dec_REV(x)), so feeding
+// the delivered word back through the fake's mirror must reproduce the original.
+TEST(DriverBugProbes, Packed16MirrorArithmeticMatchesTheDeviceEvidence) {
+    EXPECT_EQ(MirrorPacked5551(0x0047), 0x8C20);
+    EXPECT_EQ(MirrorPacked5551(0x3800), 0x0007);
 }

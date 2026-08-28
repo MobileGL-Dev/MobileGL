@@ -3388,6 +3388,46 @@ TEST_F(TextureTest, NormalizePixelFormatKeepsPackedTransferTypesForPackedSizedFo
     }
 }
 
+// The packed16 field-order quirk (PixelFormatNormalizeOptionBit::WidenPacked16Norm): where the
+// driver's 16-bit packed storage mirrors its field order at a non-zero array mip level (the
+// Mali defect behind the KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* failures), the
+// three ES narrow formats move to 8-bit-per-channel storage. The transfer pair must NOT move
+// with the bit - it is already the UNorm8 component layout the canonical shadow holds - and
+// no other format may move with it either.
+TEST_F(TextureTest, NormalizePixelFormatWidensThePacked16FormatsUnderTheQuirkBit) {
+    using MG_Util::TextureFormatProcessor::NormalizePixelFormat;
+    struct {
+        GLenum requested;
+        GLenum expectedNarrow;
+        GLenum expectedWidened;
+        GLenum expectedFormat;
+    } cases[] = {
+        {GL_RGB565, GL_RGB565, GL_RGB8, GL_RGB},
+        {GL_RGB5_A1, GL_RGB5_A1, GL_RGBA8, GL_RGBA},
+        {GL_RGBA4, GL_RGBA4, GL_RGBA8, GL_RGBA},
+        // Negative controls: a 32-bit packed format and an already-8-bit one stay put with
+        // the bit set - the quirk is about 16-bit packed normalized storage and nothing else.
+        {GL_RGB10_A2, GL_RGB10_A2, GL_RGB10_A2, GL_RGBA},
+        {GL_RGBA8, GL_RGBA8, GL_RGBA8, GL_RGBA},
+    };
+    for (const auto& c : cases) {
+        GLenum narrowInternal = 0, narrowFormat = 0, narrowType = 0;
+        NormalizePixelFormat(c.requested, PixelFormatNormalizeOptionBit::None, &narrowInternal, &narrowFormat,
+                             &narrowType);
+        EXPECT_EQ(narrowInternal, c.expectedNarrow) << "internalformat 0x" << std::hex << c.requested;
+
+        GLenum widenedInternal = 0, widenedFormat = 0, widenedType = 0;
+        NormalizePixelFormat(c.requested, PixelFormatNormalizeOptionBit::WidenPacked16Norm, &widenedInternal,
+                             &widenedFormat, &widenedType);
+        EXPECT_EQ(widenedInternal, c.expectedWidened) << "internalformat 0x" << std::hex << c.requested;
+        // The transfer pair is identical narrow and widened: the widening changes only the ES
+        // storage, never how client data is described to it.
+        EXPECT_EQ(widenedFormat, narrowFormat) << "internalformat 0x" << std::hex << c.requested;
+        EXPECT_EQ(widenedType, narrowType) << "internalformat 0x" << std::hex << c.requested;
+        EXPECT_EQ(widenedFormat, c.expectedFormat) << "internalformat 0x" << std::hex << c.requested;
+    }
+}
+
 // GL_RGB565 (ARB_ES2_compatibility / GL 4.1, used directly by the GL CTS) must round-trip
 // through the internal-format enums; it had no GLToMG mapping at all, so glTexImage* with
 // GL_RGB565 was rejected as an unknown internal format.

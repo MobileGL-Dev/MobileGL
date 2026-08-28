@@ -201,6 +201,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
         features.ViewportArrayEmulation =
             QueryEnvQuirkOverride("MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION");
+        features.EsprytWidenPacked16Storage =
+            QueryEnvQuirkOverride("MOBILEGL_WIDEN_PACKED16_STORAGE");
     }
 
     inline void InitBackendType() {

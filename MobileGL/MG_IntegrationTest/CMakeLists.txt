@@ -106,6 +106,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
+    Scenarios/CopyImagePacked16Scenario.cpp
     Scenarios/TextureViewScenario.cpp
     Scenarios/PackedWordReadbackScenario.cpp
     Scenarios/LayeredAttachmentBarrierScenario.cpp
@@ -362,6 +363,8 @@ mgl_itest_join_environment(MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/unlocated-io-blocks.log"
     ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_WIDEN_PACKED16_STORAGE=1" ${MGL_ITEST_COMMON_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -540,4 +543,22 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT}"
+)
+
+# The packed16 copy scenarios again, with the 8-bit storage widening PINNED ON. The ambient
+# registrations above cover the narrow storage - on every CI driver the widening's POST
+# probe finds no field-order mirror, so Auto keeps the native 16-bit path - which means the
+# storage every AFFECTED device will actually run would otherwise execute nowhere at all:
+# no CI driver has the Mali bug that arms it. This lane is what proves the widened storage
+# is client-invisible (same packed words in and out on every leg the 18 failing CTS bodies
+# used, the renderbuffer one included). DirectGLES only - the flag steers nothing on
+# DirectVulkan, which has always stored these formats widened.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.WidenedPacked16."
+    TEST_FILTER "CopyImagePacked16Scenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT}"
 )

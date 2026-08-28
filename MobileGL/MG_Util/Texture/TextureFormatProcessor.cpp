@@ -340,16 +340,37 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             // (VkTextureManager::ResolveTextureFormatInfo resolves all six legacy low-bit formats
             // to R8G8B8A8_UNORM), so the two backends now agree here.
             //
-            // Only the DESKTOP-ONLY formats move. GL_RGBA4 and GL_RGB5_A1 are ES formats an
-            // application can legitimately ask for - the same normalization picks the storage for
-            // glRenderbufferStorage - so widening them would be a memory decision, not a
-            // correctness one. Nothing about the REPORTED precision moves either way:
-            // GL_TEXTURE_*_SIZE and glGetInternalformativ answer from TextureMetrics, keyed on the
-            // requested format, not on the ES storage.
+            // Only the DESKTOP-ONLY formats move UNCONDITIONALLY. GL_RGBA4, GL_RGB5_A1 and
+            // GL_RGB565 are ES formats an application can legitimately ask for - the same
+            // normalization picks the storage for glRenderbufferStorage - so widening them
+            // used to be declined as "a memory decision, not a correctness one". The 18
+            // KHR-GL4x.copy_image.functional bodies on Mali falsified that: the driver's own
+            // 16-bit packed storage keeps a MIRRORED field order at a non-zero mip level of a
+            // 2D array, so a raw glCopyImageSubData between such a level and any other image
+            // delivers the channels reversed (0x0007 -> 0x3800 for a 5551 word: the 1_5_5_5_REV
+            // re-encoding of the same fields). Where that is measured -
+            // WidenPacked16Norm, set from the POST probe or its ForceOn override - the three
+            // formats take the same 8-bit widening; everywhere else they stay narrow and the
+            // memory argument stands. Nothing about the REPORTED precision moves either way:
+            // GL_TEXTURE_*_SIZE and glGetInternalformativ answer from TextureMetrics, keyed on
+            // the requested format, not on the ES storage.
             case GL_R3_G3_B2:
             case GL_RGB4:
             case GL_RGB5:
                 *outInternalFormat = GL_RGB8;
+                break;
+            // GL_RGB5 above is nominally the same resolution, but a TEXTURE never arrives here
+            // as GL_RGB5: ConvertGLEnumToTextureInternalFormat folds GL_RGB5 and GL_RGB565 onto
+            // one logical format whose GL spelling is GL_RGB565, so this case is the one the
+            // allocation path actually reaches for both spellings.
+            case GL_RGB565:
+                *outInternalFormat =
+                    (options & PixelFormatNormalizeOptionBit::WidenPacked16Norm) ? GL_RGB8 : internalFormat;
+                break;
+            case GL_RGB5_A1:
+            case GL_RGBA4:
+                *outInternalFormat =
+                    (options & PixelFormatNormalizeOptionBit::WidenPacked16Norm) ? GL_RGBA8 : internalFormat;
                 break;
             case GL_RGB10:
             case GL_RGB12:
