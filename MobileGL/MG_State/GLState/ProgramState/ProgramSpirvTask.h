@@ -72,8 +72,9 @@ namespace MobileGL::MG_State::GLState {
         void BuildGlobalUboRouting(const ProgramLinkTask::SpirvHandoff& handoff, Uint externalIndex);
 
         // Worker-side MGLOG replacement, replayed by the join on the GL thread. Same reason as
-        // ProgramLinkTask::DeferLog.
-        void DeferLog(String line);
+        // ProgramLinkTask::DeferLog, and the same severity rule: DEBUG is compiled out of
+        // every shipped build, so a line that has to survive one names its own level.
+        void DeferLog(String line, Int level = MOBILEGL_LOG_LEVEL_DEBUG);
 
         SharedPtr<ProgramLinkTask> m_phaseA;
     };

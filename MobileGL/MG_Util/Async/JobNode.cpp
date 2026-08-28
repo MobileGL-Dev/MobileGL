@@ -95,11 +95,13 @@ namespace MobileGL::MG_Util::Async {
             // which means std::terminate for the whole process. Every job boundary contains
             // it and reports the job as Cancelled; the joining GL thread then sees a node
             // that produced no result, which is the same shape as an abandoned node.
-            diagnostics.logLines.push_back(std::format("Job body threw: {}", e.what()));
+            diagnostics.logLines.push_back(
+                {MOBILEGL_LOG_LEVEL_DEBUG, std::format("Job body threw: {}", e.what())});
             TryTransition(JobState::Running, JobState::Cancelled);
             return;
         } catch (...) {
-            diagnostics.logLines.emplace_back("Job body threw a non-std exception");
+            diagnostics.logLines.push_back(
+                {MOBILEGL_LOG_LEVEL_DEBUG, String("Job body threw a non-std exception")});
             TryTransition(JobState::Running, JobState::Cancelled);
             return;
         }
@@ -162,10 +164,27 @@ namespace MobileGL::MG_Util::Async {
                         "being written");
 
         if (!node.diagnostics.logLines.empty()) {
-            Vector<String> lines;
+            Vector<DeferredLogLine> lines;
             lines.swap(node.diagnostics.logLines);
-            for (const String& line : lines) {
-                MGLOG_D("%s", line.c_str());
+            for (const DeferredLogLine& line : lines) {
+                // Per-line severity, because a shipped build compiles MGLOG_D away entirely
+                // and a verdict that only this channel records would vanish with it. The
+                // levels are the compile-time constants, so a suppressed one costs nothing
+                // beyond the string the worker already built.
+                switch (line.level) {
+                case MOBILEGL_LOG_LEVEL_INFO:
+                    MGLOG_I("%s", line.text.c_str());
+                    break;
+                case MOBILEGL_LOG_LEVEL_WARN:
+                    MGLOG_W("%s", line.text.c_str());
+                    break;
+                case MOBILEGL_LOG_LEVEL_ERROR:
+                    MGLOG_E("%s", line.text.c_str());
+                    break;
+                default:
+                    MGLOG_D("%s", line.text.c_str());
+                    break;
+                }
             }
         }
 

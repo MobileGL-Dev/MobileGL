@@ -16,10 +16,29 @@
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 
+#include <atomic>
 #include <cstring>
 
 namespace MobileGL::MG_State::GLState {
-    void ProgramSpirvTask::DeferLog(String line) { diagnostics.logLines.push_back(Move(line)); }
+    namespace {
+        // The MGLOG_*_ONCE latch, moved to the SOURCE of a deferred line. It cannot live at
+        // the replay: Async::ApplyDeferredDiagnostics is ONE site shared by every job in the
+        // tree, so a latch there would silence unrelated lines. And it has to exist: a shader
+        // pack hands the same refusal to program after program, and a per-program WARN on a
+        // path like that is exactly the repeated production logging the house rule forbids.
+        // First occurrence at WARN - the one a bug report needs - every later one back at
+        // DEBUG, which shipped builds compile out.
+        Int FirstTimeWarnLevel(std::atomic_flag& latch) {
+            return latch.test_and_set(std::memory_order_relaxed) ? MOBILEGL_LOG_LEVEL_DEBUG
+                                                                 : MOBILEGL_LOG_LEVEL_WARN;
+        }
+        std::atomic_flag g_pointSizeDeclineReported;
+        std::atomic_flag g_pointSizeOptimizerFailureReported;
+    } // namespace
+
+    void ProgramSpirvTask::DeferLog(String line, const Int level) {
+        diagnostics.logLines.push_back({level, Move(line)});
+    }
 
     void ProgramSpirvTask::SubmitAfter(const SharedPtr<ProgramLinkTask>& phaseA) {
         MOBILEGL_ASSERT(phaseA != nullptr, "ProgramSpirvTask::SubmitAfter: the phase-A node is missing");
@@ -285,13 +304,12 @@ namespace MobileGL::MG_State::GLState {
         // size in those stages - pays one module parse per stage and no rewrite.
         artifacts.pointSizeDemoted = false;
         if (allOptimized && (demoteTessellationPointSize || demoteGeometryPointSize)) {
-            Bool captureRequestsPointSize = false;
-            for (const auto& varying : handoff.reflection.xfbVaryings) {
-                if (varying.name == "gl_PointSize") {
-                    captureRequestsPointSize = true;
-                    break;
-                }
-            }
+            // Read off the HANDOFF's own derived bit, not off `handoff.reflection`: that
+            // field is the routing slice phase A fills with eight named members, and
+            // xfbVaryings is not one of them - reading it there answered "no capture ever
+            // asks for gl_PointSize" on every production link, which left a read-only
+            // capture stage without the carrier its capture binds to.
+            const Bool captureRequestsPointSize = handoff.captureRequestsPointSize;
             ShaderCompiler::PointSizeDemotionOutcome outcome;
             if (!ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
                     artifacts.generatedSpirv, handoff.shaderTypes, demoteTessellationPointSize,
@@ -301,7 +319,8 @@ namespace MobileGL::MG_State::GLState {
                 // and the backends' existing refusals stay in charge - honest, just slower.
                 DeferLog(std::format("ProgramObject {}: point-size demotion failed in the optimizer; the "
                                      "program keeps its built-in and the device's declines apply",
-                                     externalIndex));
+                                     externalIndex),
+                         FirstTimeWarnLevel(g_pointSizeOptimizerFailureReported));
             } else if (outcome.demoted) {
                 artifacts.pointSizeDemoted = true;
                 DeferLog(std::format("ProgramObject {}: gl_PointSize demoted to an ordinary varying across "
@@ -309,9 +328,15 @@ namespace MobileGL::MG_State::GLState {
                                      "gl_in reads; rasterized size falls back to 1.0)",
                                      externalIndex));
             } else if (!outcome.declineDetail.empty()) {
+                // THE MOST VALUABLE LINE THIS FEATURE PRODUCES: which module shape the pass
+                // refused, and therefore why an affected device is still about to lose the
+                // program. Nothing else records it - `declineDetail` has no other runtime
+                // surface - so at the deferred channel's DEBUG default it was formatted and
+                // then dropped by every INFO build, i.e. every device and every CI artifact.
                 DeferLog(std::format("ProgramObject {}: point-size demotion declined ({}); the program "
                                      "keeps its built-in and the device's declines apply",
-                                     externalIndex, outcome.declineDetail));
+                                     externalIndex, outcome.declineDetail),
+                         FirstTimeWarnLevel(g_pointSizeDeclineReported));
             }
         }
     }

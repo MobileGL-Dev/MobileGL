@@ -117,6 +117,19 @@ namespace MobileGL::MG_State::GLState {
             // for phase B after the join has moved `artifacts` away.
             ProgramObject::LinkArtifacts reflection;
 
+            // Whether the RESOLVED transform-feedback capture set names gl_PointSize - the
+            // one fact about `artifacts.xfbVaryings` phase B needs, carried as a derived
+            // bool rather than by widening the slice above, which is deliberately the five
+            // (now eight) fields BuildGlobalUboRouting consumes and nothing else.
+            //
+            // It has to be here and cannot be re-derived: the point-size demotion forces the
+            // capture-capable stage to declare its carrier even when that stage never WRITES
+            // the built-in (ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram's
+            // `captureRequestsPointSize`), and by phase B the only record of the request is
+            // this bit. No new L1 key material: the key already covers
+            // `requestedXfbVaryings`, of which this is a function.
+            Bool captureRequestsPointSize = false;
+
             // L1 shader-translation memo key for this program's SPIR-V (see
             // MG_Util/ShaderTranspiler/TranslationCache.h). Built HERE, at the tail of phase
             // A, and not by phase B - two reasons, both structural:
@@ -201,8 +214,10 @@ namespace MobileGL::MG_State::GLState {
         // Worker-side MGLOG replacement: appended to diagnostics.logLines and replayed by the
         // join, on the GL thread, where a serial implementation would have printed it.
         // Logging straight from a worker interleaves mid-line with the GL thread's output and
-        // lands out of order relative to the glLinkProgram that caused it.
-        void DeferLog(String line);
+        // lands out of order relative to the glLinkProgram that caused it. `level` is the
+        // severity the replay uses; DEBUG (the default) is compiled out of every shipped
+        // build, so a line that has to survive one names its own.
+        void DeferLog(String line, Int level = MOBILEGL_LOG_LEVEL_DEBUG);
 
         // Counts down to zero exactly once. Starts at deps + 1: the extra guard is released
         // by SubmitAfter itself, so a dependency that settles while the edges are still being

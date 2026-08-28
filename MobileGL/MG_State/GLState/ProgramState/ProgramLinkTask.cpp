@@ -517,7 +517,9 @@ namespace MobileGL::MG_State::GLState {
         };
     } // namespace
 
-    void ProgramLinkTask::DeferLog(String line) { diagnostics.logLines.push_back(Move(line)); }
+    void ProgramLinkTask::DeferLog(String line, const Int level) {
+        diagnostics.logLines.push_back({level, Move(line)});
+    }
 
     void ProgramLinkTask::SubmitAfter(const Vector<SharedPtr<ShaderCompileTask>>& deps) {
         // +1 for the guard this function releases itself. Without it, a dependency that
@@ -855,6 +857,18 @@ namespace MobileGL::MG_State::GLState {
         spirvHandoff.reflection.uniformReflection = artifacts.uniformReflection;
         spirvHandoff.reflection.blockReflection = artifacts.blockReflection;
         spirvHandoff.reflection.tProgramBlockIndexToGl = artifacts.tProgramBlockIndexToGl;
+        // The capture set is NOT part of that slice (see the handoff's own comment), and the
+        // point-size demotion needs exactly one bit out of it: whether anything asked to
+        // capture gl_PointSize. Derived here, where ResolveTransformFeedbackVaryings has
+        // just filled artifacts.xfbVaryings and before the join moves them away, because a
+        // capture stage that only READS the built-in still has to declare the carrier the
+        // capture binds to - and phase B has no other way to learn that.
+        for (const ProgramObject::XfbVarying& varying : artifacts.xfbVaryings) {
+            if (varying.name == "gl_PointSize") {
+                spirvHandoff.captureRequestsPointSize = true;
+                break;
+            }
+        }
         // Phase B pairs this with its own SpirvArtifacts to insert the completed front end.
         // A COPY, because the GL-thread join moves `artifacts` out of this node before phase B
         // runs - and with the TProgram dropped, because a memo must never hold a glslang arena.

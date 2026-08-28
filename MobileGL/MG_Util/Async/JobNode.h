@@ -9,6 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <MG_Util/Types.h>
+#include <MG_Util/Debug/Log.h>
 #include <MG_State/GLState/ErrorState/ErrorCode.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
 
@@ -35,9 +36,25 @@ namespace MobileGL::MG_Util::Async {
         UniquePtr<ErrorInfo> info;
     };
 
+    // One line of worker-side MGLOG text, with the severity the join replays it at.
+    //
+    // DEBUG is the default and stays the default: nearly every deferred line is per-program
+    // trace that a shipped build compiles out, which is the whole reason this channel could
+    // be a plain string vector for as long as it was. A line a SHIPPED build has to show -
+    // the reason a repair refused, which no other surface records - has to name its level
+    // here, or it is formatted on the worker and then thrown away at replay under the INFO
+    // level every device and CI build pins. Callers that sit on a repeated path latch at
+    // the SOURCE (a per-call-site atomic, exactly what MGLOG_*_ONCE does): the replay below
+    // is one shared site for every job in the tree, so a latch there would silence
+    // unrelated lines.
+    struct DeferredLogLine {
+        Int level = MOBILEGL_LOG_LEVEL_DEBUG;
+        String text;
+    };
+
     struct JobDiagnostics {
-        Vector<DeferredError> errors; // replayed, in ascending `sequence`, by the join
-        Vector<String> logLines;      // worker-side MGLOG text, flushed in order by the join
+        Vector<DeferredError> errors;      // replayed, in ascending `sequence`, by the join
+        Vector<DeferredLogLine> logLines;  // worker-side MGLOG text, flushed in order by the join
     };
 
     // The scheduling primitive every asynchronous compile and link is built on. A node owns

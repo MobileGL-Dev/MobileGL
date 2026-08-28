@@ -384,12 +384,15 @@ namespace MobileGL::MG_State::GLState {
             // the log, for every failing shader. The info log is what names the offending
             // line; the source is recoverable from the application.
             const SizeT firstLineEnd = artifacts.infoLog.find('\n');
-            diagnostics.logLines.push_back(std::format(
-                "ShaderCompileTask: shader {} (stage {}) failed to compile; compileStatus = false. "
-                "Preprocessed source: {} bytes. First log line: {}",
-                externalIndex, static_cast<Int>(stage), shared.preprocessedSource.length(),
-                artifacts.infoLog.substr(0, firstLineEnd == String::npos ? artifacts.infoLog.length()
-                                                                        : firstLineEnd)));
+            diagnostics.logLines.push_back(
+                {MOBILEGL_LOG_LEVEL_DEBUG,
+                 std::format(
+                     "ShaderCompileTask: shader {} (stage {}) failed to compile; compileStatus = false. "
+                     "Preprocessed source: {} bytes. First log line: {}",
+                     externalIndex, static_cast<Int>(stage), shared.preprocessedSource.length(),
+                     artifacts.infoLog.substr(0, firstLineEnd == String::npos
+                                                     ? artifacts.infoLog.length()
+                                                     : firstLineEnd))});
             if (shouldPopulateCache) {
                 fresh->outcome = ShaderPreprocessOutcome::ParseFailed;
                 fresh->infoLog = artifacts.infoLog;

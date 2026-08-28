@@ -441,7 +441,7 @@ TEST(JobNodeException, AnExceptionEscapingABodyCancelsTheJobInsteadOfTerminating
     EXPECT_TRUE(job->IsCancelled());
     EXPECT_FALSE(job->IsComplete());
     ASSERT_EQ(job->diagnostics.logLines.size(), 1u);
-    EXPECT_NE(job->diagnostics.logLines[0].find("boom"), String::npos);
+    EXPECT_NE(job->diagnostics.logLines[0].text.find("boom"), String::npos);
 }
 
 TEST(JobNodeException, ANonStandardExceptionIsContainedToo) {
