@@ -1934,23 +1934,23 @@ namespace MobileGL::MG_Util::SelfTest {
         // 30/15/7 x12; the plain endpoints are 7/3/1), against plain-2D endpoints.
         //
         // WHAT THE DEVICE MEASUREMENTS ACTUALLY SHOWED (round 2): the mirrored field order is
-        // a property of the WHOLE ALLOCATION, not of a mip level, and WHICH allocations get
-        // it is a driver heuristic that keys on texture state during the uploads AND on
-        // context history - and the two interact. Measured on the affected Mali, same shape,
-        // same data: in a raw standalone context, uploads-on-a-default-state texture mirror
-        // while params-first-NEAREST allocations stay plain; in MobileGL's live context the
-        // first deployment's params-first array MIRRORED while a later uploads-first one came
-        // out PLAIN - the raw ordering rule inverted. One- and two-level allocations and
-        // params-first uploads under a mipmapped MIN_FILTER also mirrored raw. The small
-        // arrays the CTS's passing iterations used (7- and 15-texel bases; its src/dst dim
-        // loop is {7, 15}, so a base-30 array only ever appears at level 1) land plain, which
-        // is why the failures looked per-mip-level from the QPA alone. No single allocation
-        // recipe is therefore entitled to speak for "the" layout: the probe allocates the
-        // SAME client-visible texture several ways - the minted-backend order (uploads
-        // first), the params-first order, and the CTS copy-test shape (MAX_LEVEL bounded,
-        // MIN_FILTER left at its mipmapped default; copy tests never set filters) - measures
-        // IN SITU, and a mirror delivered from ANY level of ANY variant is the finding, each
-        // variant guarded by its own upload round-trip control.
+        // a property of the WHOLE ALLOCATION, not of a mip level - a 30x30x12 packed16 array
+        // is born in the mirrored layout at every level, while the small arrays the CTS's
+        // passing iterations used (7- and 15-texel bases; its src/dst dim loop is {7, 15}, so
+        // a base-30 array only ever appears at level 1) are born plain, which is why the
+        // failures looked per-mip-level from the QPA alone. AND the layout is not fixed for
+        // the allocation's lifetime: FBO-ATTACHING the array transitions it to the plain
+        // (renderable) layout, content preserved. That transition is what produced every
+        // seemingly contradictory measurement of this campaign - a probe that direct-read its
+        // array before copying relayouted its own subject and reported the device clean in
+        // the very process whose CTS copies kept mirroring, and the raw matrix's one
+        // "clean" 30x30x12 array was exactly the one that had been direct-read first. It is
+        // also why the CTS's own "source image was not modified" checks always passed: they
+        // read through an FBO attach, after the copy already went wrong. So: subject copies
+        // FIRST, every control that attaches the array AFTER, and because the driver's
+        // allocation heuristic beyond the size threshold is not fully mapped, the probe tries
+        // several allocation recipes of the same client-visible texture and a mirror from ANY
+        // level of ANY recipe is the finding.
         constexpr GLsizei kPacked16BaseSize = 30;
         constexpr GLsizei kPacked16Layers = 12;
         constexpr GLsizei kPacked16DstSize = 7;
@@ -2114,21 +2114,29 @@ namespace MobileGL::MG_Util::SelfTest {
             return true;
         }
 
-        // One recipe's whole measurement: allocate, round-trip control, both subject copies.
-        // Only a mirror that matches the PREDICTION while the variant's own round trip is
-        // clean counts; everything else is that variant's no-verdict (logged as such).
+        // One recipe's whole measurement: allocate, both subject copies, THEN the round-trip
+        // control. The order is load-bearing: FBO-ATTACHING THE ARRAY TRANSITIONS IT to the
+        // plain (renderable) layout on the affected driver, so a round-trip read taken before
+        // the copies RELAYOUTS the subject and measures a texture the application's copy
+        // never sees - round two's first deployment did exactly that and reported the device
+        // clean while the CTS bodies kept failing in the same process. Copies first, the
+        // control after: the attach-driven transition preserves content, so the read still
+        // answers "the upload was intact" without disturbing what the copies measured. Only a
+        // mirror that matches the PREDICTION while that control holds counts; everything else
+        // is that recipe's no-verdict (logged as such).
         Bool RunPacked16Recipe(const GLESFunctionsTable& gl, Packed16Recipe recipe) {
             Bool mirrored = false;
             const GLuint array = MakePacked16ArrayTexture(gl, recipe);
             GLubyte direct[4] = {0, 0, 0, 0};
             GLubyte level0[4] = {0, 0, 0, 0};
             GLubyte level1[4] = {0, 0, 0, 0};
-            if (array == 0 || !ReadPacked16Texel(gl, array, true, 1, direct)) {
-                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (the array could not be built or "
-                        "read back)",
+            if (array == 0 || !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 0, level0) ||
+                !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 1, level1)) {
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (a subject copy could not run)",
                         kPacked16CopyProbeName, Packed16RecipeName(recipe));
-            } else if (!Packed16TexelNear(direct, kPacked16Expected)) {
-                // The variant's own round trip: reading the level DIRECTLY decodes the driver's
+            } else if (!ReadPacked16Texel(gl, array, true, 1, direct) ||
+                       !Packed16TexelNear(direct, kPacked16Expected)) {
+                // The recipe's own round trip: reading the level directly decodes the driver's
                 // own storage and must deliver the word whatever layout it picked. A wrong
                 // answer means the UPLOAD is what corrupts - a different defect, and one the
                 // widening's raw-copy reasoning says nothing about.
@@ -2137,10 +2145,6 @@ namespace MobileGL::MG_Util::SelfTest {
                         "copy, is what diverges)",
                         kPacked16CopyProbeName, Packed16RecipeName(recipe), direct[0], direct[1],
                         direct[2], direct[3]);
-            } else if (!Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 0, level0) ||
-                       !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 1, level1)) {
-                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (a subject copy could not run)",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
             } else if (Packed16TexelNear(level0, kPacked16Mirrored) ||
                        Packed16TexelNear(level1, kPacked16Mirrored)) {
                 mirrored = true;

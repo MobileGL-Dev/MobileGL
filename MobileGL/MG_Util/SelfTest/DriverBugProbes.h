@@ -307,29 +307,30 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // The affected Mali stores SOME 16-bit packed allocations (RGB565 / RGB5_A1 / RGBA4) with
     // their fields packed from the other end of the word. The mirrored layout is an
-    // ALLOCATION property, not a mip-level one - the failing device delivers the mirror from
-    // level 0 and level 1 alike, which is what vetoed the first deployment's "level 0 is the
-    // clean control" design - and WHICH allocations get it is a heuristic keying on texture
-    // state during the uploads and on context history, measured to INVERT between a raw
-    // standalone context and MobileGL's live one. No single allocation recipe is therefore
-    // entitled to speak for the layout: the probe builds the CTS's failing shape (three-level
-    // chains both endpoints: 30/15/7 x12 array, 7/3/1 plain, FUNCTIONAL_TEST_N_LEVELS = 3)
-    // with three recipes - uploads-first (the minted-backend-texture order), params-first,
-    // and the CTS copy-test shape (MAX_LEVEL bounded, MIN_FILTER left mipmapped-default) -
-    // in situ, in the very context the application's copies run in. Uploads and readbacks
-    // decode each image's own layout consistently, so nothing but a raw texel-block move can
-    // see the divergence - which is exactly what glCopyImageSubData is defined to be, and why
-    // the whole KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* matrix fails there while
-    // every other suite touching these formats passes.
+    // ALLOCATION property, not a mip-level one - the failing device's 30x30x12 array is born
+    // mirrored at level 0 and level 1 alike, which is what vetoed the first deployment's
+    // "level 0 is the clean control" design - and it is not fixed for the allocation's
+    // lifetime either: FBO-ATTACHING the array transitions it to the plain layout, content
+    // preserved, which is why a probe that direct-reads its array before copying relayouts
+    // its own subject and measures a texture the application's copies never see (the second
+    // deployment's miss), and why the CTS's "source not modified" checks always passed. The
+    // probe builds the CTS's failing shape (three-level chains both endpoints: 30/15/7 x12
+    // array, 7/3/1 plain, FUNCTIONAL_TEST_N_LEVELS = 3) with several allocation recipes,
+    // copies FIRST, in situ, and a mirror delivered from any level of any recipe is the
+    // finding. Uploads and readbacks decode each image's layout of the moment consistently,
+    // so nothing but a raw texel-block move can see the divergence - which is exactly what
+    // glCopyImageSubData is defined to be, and why the whole KHR-GL4x.copy_image
+    // rgb5/rgb5_a1/rgba4 x *2d_array* matrix fails there while every other suite touching
+    // these formats passes.
     //
     // CONTROLS. The machinery: an identical copy between two SAME-shape plain-2D images,
     // which share a layout whatever it is, so it must deliver the word on any driver that can
     // run copy_image on these formats - a driver that cannot reaches no verdict instead of
-    // being reported as this. And per recipe, the array's own round trip: a direct FBO
-    // readback of its level 1 must answer the word, or the UPLOAD is what corrupts - a
-    // different defect. The subjects must also match the mirror PREDICTION, not merely differ
-    // from the word - a copy that delivered anything else is a different defect and reaches
-    // no verdict either. Restores every piece of GL state it touches.
+    // being reported as this. And per recipe, AFTER its subject copies, the array's own round
+    // trip: a direct FBO readback of its level 1 must answer the word, or the UPLOAD is what
+    // corrupts - a different defect. The subjects must also match the mirror PREDICTION, not
+    // merely differ from the word - a copy that delivered anything else is a different defect
+    // and reaches no verdict either. Restores every piece of GL state it touches.
     Bool ProbeCopyImageMirrorsPacked16FieldOrder(const MG_External::GLESFunctionsTable& gl);
 
     // ProbeCopyImageMirrorsPacked16FieldOrder(), evaluated at most once per process. The
