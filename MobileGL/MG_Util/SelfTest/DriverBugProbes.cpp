@@ -1934,17 +1934,20 @@ namespace MobileGL::MG_Util::SelfTest {
         // 30/15/7 x12; the plain endpoints are 7/3/1), against plain-2D endpoints.
         //
         // WHAT THE DEVICE MEASUREMENTS ACTUALLY SHOWED (round 2): the mirrored field order is a
-        // property of the WHOLE ALLOCATION, not of a mip level. In MobileGL's live context this
-        // array shape lands in the *_REV layout at EVERY level - the first deployment's control
-        // copy out of LEVEL 0 delivered the mirror too, which is what vetoed its own verdict -
-        // while the small arrays the CTS's passing iterations used (7- and 15-texel bases; its
-        // src/dst dim loop is {7, 15}, so a base-30 array only ever appears at level 1) land in
-        // the plain layout. A raw standalone context on the same driver additionally showed one-
-        // and two-level 30x30x12 arrays mirrored where a fresh three-level one is not, so the
-        // driver's layout choice depends on allocation shape AND context history. The probe
-        // therefore measures IN SITU - this very context is the one the application's copies run
-        // in - and treats a mirror delivered from ANY level as the finding, with the machinery
-        // controls below instead of a per-level "clean" assumption that does not exist.
+        // property of the WHOLE ALLOCATION, not of a mip level, and the driver picks it from
+        // the texture state IN FORCE WHILE THE LEVELS ARE UPLOADED. Measured raw on the
+        // affected Mali (same shape, same data, same context): three uploads with NEAREST and
+        // MAX_LEVEL=2 already set land in the plain layout, while the same three uploads on a
+        // fresh texture still at the driver defaults - parameters set only afterwards, which
+        // is exactly the order a freshly minted MobileGL backend texture performs - land in
+        // the *_REV layout at EVERY level; one- and two-level allocations and params-first
+        // uploads under a mipmapped MIN_FILTER mirror too. The small arrays the CTS's passing
+        // iterations used (7- and 15-texel bases; its src/dst dim loop is {7, 15}, so a
+        // base-30 array only ever appears at level 1) land plain, which is why the failures
+        // looked per-mip-level from the QPA alone. The probe therefore allocates exactly the
+        // way MobileGL does (uploads first), measures IN SITU, and treats a mirror delivered
+        // from ANY level as the finding, with machinery controls below instead of a per-level
+        // "clean" assumption that does not exist.
         constexpr GLsizei kPacked16BaseSize = 30;
         constexpr GLsizei kPacked16Layers = 12;
         constexpr GLsizei kPacked16DstSize = 7;
@@ -1969,18 +1972,22 @@ namespace MobileGL::MG_Util::SelfTest {
         constexpr Int kPacked16Tolerance = 4;
 
         // A three-level GL_RGB5_A1 2D array (30/15/7, twelve layers each) allocated the way
-        // MobileGL's own mutable-texture path allocates one (glTexImage3D per level), with
-        // every texel of every level holding kPacked16Word. MAX_LEVEL is clamped to the
-        // CTS's makeTextureComplete(0, 2) shape, which also keeps the chain complete - some
-        // drivers refuse glCopyImageSubData on an incomplete texture.
+        // MobileGL's own mutable-texture path allocates one, ORDER INCLUDED: glTexImage3D per
+        // level FIRST, on a fresh texture still at the driver defaults, and the parameters
+        // only afterwards. The order is load-bearing on the affected Mali: uploads-then-params
+        // (what a freshly minted backend texture gets - the storage sync runs before the
+        // parameter re-push, see SyncTextureObjectToBackend) lands this allocation in the
+        // mirrored layout at every level, while the same calls with NEAREST and MAX_LEVEL set
+        // BEFORE the uploads land it in the plain one - a params-first probe measured "clean"
+        // in the very context whose params-after textures were mirroring, which is exactly the
+        // miss round two exists to fix. MAX_LEVEL still ends at the CTS's
+        // makeTextureComplete(0, 2) shape, which keeps the chain complete - some drivers
+        // refuse glCopyImageSubData on an incomplete texture.
         GLuint MakePacked16ArrayTexture(const GLESFunctionsTable& gl) {
             GLuint texture = 0;
             gl.glGenTextures(1, &texture);
             if (texture == 0) return 0;
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
             for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = kPacked16BaseSize >> level;
                 const Vector<Uint16> words(
@@ -1988,6 +1995,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, level, GL_RGB5_A1, size, size, kPacked16Layers, 0,
                                 GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, words.data());
             }
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
             return texture;
         }
@@ -1998,21 +2008,24 @@ namespace MobileGL::MG_Util::SelfTest {
         // A plain-2D endpoint with the CTS's three-level 7/3/1 chain, every texel of every
         // level holding `fill`: 0xFFFF (the CTS's own (1,1,1,1) destination fill, so a copy
         // that silently did nothing reads as "no verdict" rather than as either prediction),
-        // or kPacked16Word for the machinery control's source.
+        // or kPacked16Word for the machinery control's source. Uploads first, parameters
+        // after, for the same in-situ fidelity as the array above - this is the allocation
+        // discipline every MobileGL-minted texture gets, and the shape the failing bodies'
+        // clean plain endpoints had.
         GLuint MakePacked16FlatTexture(const GLESFunctionsTable& gl, Uint16 fill) {
             GLuint texture = 0;
             gl.glGenTextures(1, &texture);
             if (texture == 0) return 0;
             gl.glBindTexture(GL_TEXTURE_2D, texture);
-            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
             for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = std::max<GLsizei>(kPacked16DstSize >> level, 1);
                 const Vector<Uint16> texels(static_cast<SizeT>(size) * size, fill);
                 gl.glTexImage2D(GL_TEXTURE_2D, level, GL_RGB5_A1, size, size, 0, GL_RGBA,
                                 GL_UNSIGNED_SHORT_5_5_5_1, texels.data());
             }
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
             gl.glBindTexture(GL_TEXTURE_2D, 0);
             return texture;
         }
