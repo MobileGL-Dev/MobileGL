@@ -174,6 +174,13 @@ namespace {
             GLsizei height = 0;
             GLsizei layers = 0;
             unsigned levelMask = 0;
+            // The device rule the probe reproduces: the mirrored layout is only picked when
+            // the levels were uploaded onto a texture still at the driver defaults - any
+            // glTexParameteri BEFORE the first upload steers the driver to the plain layout.
+            // Modelling it makes a params-first probe (the round-one regression: it measured
+            // "clean" in the very context whose params-after textures mirrored) stop
+            // detecting, which turns that mistake into a red test instead of a silent miss.
+            bool paramsTouchedBeforeUpload = false;
         };
         std::map<GLuint, FakeArrayAllocation> packedArrayAllocations;
         // framebuffer id -> the plain 2D texture glFramebufferTexture2D attached.
@@ -488,6 +495,12 @@ namespace {
                 g_fake.multisampleAlphaSwizzle[g_fake.boundMultisampleTexture] =
                     static_cast<GLenum>(param);
             }
+            // A parameter write on a 2D array that has no uploaded level yet steers the
+            // driver's layout choice to the plain order (see FakeArrayAllocation).
+            if (target == GL_TEXTURE_2D_ARRAY &&
+                g_fake.packedArrayAllocations.count(g_fake.boundArrayTexture) == 0) {
+                g_fake.packedArrayAllocations[g_fake.boundArrayTexture].paramsTouchedBeforeUpload = true;
+            }
         };
         // The packed16 probe's endpoints. A plain 2D image stores its 5551 words in the
         // canonical (non-REV) order on every knob setting - the defect is confined to array
@@ -532,7 +545,8 @@ namespace {
             const bool measuredShape = allocation != g_fake.packedArrayAllocations.end() &&
                                        allocation->second.width == 30 && allocation->second.height == 30 &&
                                        allocation->second.layers == 12 &&
-                                       allocation->second.levelMask == 0b111u;
+                                       allocation->second.levelMask == 0b111u &&
+                                       !allocation->second.paramsTouchedBeforeUpload;
             if (measuredShape && g_fake.packed16ArrayAllocationMirrored) {
                 word = MirrorPacked5551(word);
             }
