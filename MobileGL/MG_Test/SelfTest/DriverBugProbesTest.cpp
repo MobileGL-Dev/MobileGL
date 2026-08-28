@@ -110,11 +110,15 @@ namespace {
 
         // Probe 7: the driver's PHYSICAL field order for a 16-bit packed texel at a non-zero
         // mip level of a 2D array is the *_REV mirror of the plain-image order. Modelled at
-        // upload, which is where the real defect lives: the words such a level stores are the
-        // mirrored re-encoding, the raw copy moves them verbatim, and the plain 2D readback
-        // decodes them with the non-REV order - exactly the 0x0047 -> 0x8C20 arithmetic the
-        // affected Mali hands back. Uploads and readbacks of the SAME image stay consistent,
-        // which is why only the copy path can observe the knob.
+        // the raw copy, which is the only path that can observe it (uploads and readbacks of
+        // the same image decode the driver's own layout consistently): a copy whose SOURCE is
+        // such a level delivers the mirrored re-encoding, which the plain 2D readback then
+        // decodes with the non-REV order - exactly the 0x0047 -> 0x8C20 arithmetic the
+        // affected Mali hands back. The mirror only engages for the allocation the CTS
+        // failures were measured on - a THREE-level 30x30x12 array - so a probe that stopped
+        // building the triggering shape (fewer levels, other dimensions) stops detecting,
+        // which is exactly what these tests are for: on the real driver a 14x14 base's level 1
+        // measured clean, and nobody has measured a two-level chain at all.
         bool packed16ArrayMipFieldOrderMirrored = false;
         // The inconclusive path: EVERY array level stores mirrored words, level 0 included, so
         // the probe's level-0 control copy is dirty too and no verdict may be reached.
@@ -156,6 +160,16 @@ namespace {
         // One word per level is all the packed16 probe distinguishes: it uploads a uniform
         // fill and reads one texel.
         std::map<std::pair<GLuint, GLint>, GLushort> packedTexelWords;
+        // 2D-array texture id -> its allocation shape, as glTexImage3D built it. What the
+        // packed16 mirror is gated on: level-0 dimensions plus a mask of the levels actually
+        // allocated, so only the measured three-level 30x30x12 chain diverges.
+        struct FakeArrayAllocation {
+            GLsizei width = 0;
+            GLsizei height = 0;
+            GLsizei layers = 0;
+            unsigned levelMask = 0;
+        };
+        std::map<GLuint, FakeArrayAllocation> packedArrayAllocations;
         // framebuffer id -> the plain 2D texture glFramebufferTexture2D attached.
         std::map<GLuint, GLuint> framebuffer2DAttachment;
         GLuint boundArrayTexture = 0;
@@ -460,6 +474,7 @@ namespace {
                         ++it;
                     }
                 }
+                g_fake.packedArrayAllocations.erase(textures[i]);
             }
         };
         funcs.glTexParameteri = [](GLenum target, GLenum pname, GLint param) {
@@ -479,27 +494,41 @@ namespace {
             std::memcpy(&word, pixels, sizeof(word));
             g_fake.packedTexelWords[{g_fake.boundTexture2D, level}] = word;
         };
-        // The defect itself, at the upload where the physical layout is chosen: a mirrored
-        // array level stores the re-encoded word. Its own readback would decode it back
-        // consistently - only the raw copy below ever leaks the layout.
-        funcs.glTexImage3D = [](GLenum target, GLint level, GLint, GLsizei, GLsizei, GLsizei, GLint,
-                                GLenum, GLenum type, const void* pixels) {
+        // Records the allocation shape the mirror below is gated on, and the uploaded word.
+        funcs.glTexImage3D = [](GLenum target, GLint level, GLint, GLsizei width, GLsizei height,
+                                GLsizei depth, GLint, GLenum, GLenum type, const void* pixels) {
             if (target != GL_TEXTURE_2D_ARRAY || type != GL_UNSIGNED_SHORT_5_5_5_1 || pixels == nullptr) return;
             GLushort word = 0;
             std::memcpy(&word, pixels, sizeof(word));
-            const bool mirrored = g_fake.packed16EveryArrayLevelMirrored ||
-                                  (g_fake.packed16ArrayMipFieldOrderMirrored && level >= 1);
-            g_fake.packedTexelWords[{g_fake.boundArrayTexture, level}] =
-                mirrored ? MirrorPacked5551(word) : word;
+            g_fake.packedTexelWords[{g_fake.boundArrayTexture, level}] = word;
+            auto& allocation = g_fake.packedArrayAllocations[g_fake.boundArrayTexture];
+            if (level == 0) {
+                allocation.width = width;
+                allocation.height = height;
+                allocation.layers = depth;
+            }
+            if (level >= 0 && level < 8) allocation.levelMask |= 1u << level;
         };
-        // A raw texel-block move: the PHYSICAL word travels, whichever layout wrote it.
+        // A raw texel-block move: the PHYSICAL word travels. The defect lives here - a source
+        // level whose storage keeps the mirrored layout delivers the re-encoded word - and it
+        // only exists for the allocation it was measured on: three levels of a 30x30x12 array.
         funcs.glCopyImageSubData = [](GLuint srcName, GLenum, GLint srcLevel, GLint, GLint, GLint,
                                       GLuint dstName, GLenum, GLint dstLevel, GLint, GLint, GLint,
                                       GLsizei, GLsizei, GLsizei) {
             if (g_fake.packed16CopyDoesNothing) return;
             const auto source = g_fake.packedTexelWords.find({srcName, srcLevel});
             if (source == g_fake.packedTexelWords.end()) return;
-            g_fake.packedTexelWords[{dstName, dstLevel}] = source->second;
+            GLushort word = source->second;
+            const auto allocation = g_fake.packedArrayAllocations.find(srcName);
+            const bool measuredShape = allocation != g_fake.packedArrayAllocations.end() &&
+                                       allocation->second.width == 30 && allocation->second.height == 30 &&
+                                       allocation->second.layers == 12 &&
+                                       allocation->second.levelMask == 0b111u;
+            if (measuredShape && (g_fake.packed16EveryArrayLevelMirrored ||
+                                  (g_fake.packed16ArrayMipFieldOrderMirrored && srcLevel >= 1))) {
+                word = MirrorPacked5551(word);
+            }
+            g_fake.packedTexelWords[{dstName, dstLevel}] = word;
         };
         funcs.glTexSubImage2D = [](GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum,
                                    const void*) {};

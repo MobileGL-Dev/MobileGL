@@ -309,9 +309,13 @@ namespace MobileGL::MG_Util::SelfTest {
     // Uploads and readbacks decode that layout consistently, so nothing but a raw texel-block
     // move can see it - which is exactly what glCopyImageSubData is defined to be, and why
     // the whole KHR-GL4x.copy_image rgb5/rgb5_a1/rgba4 x *2d_array* matrix fails there while
-    // every other suite touching these formats passes. The texture reproduces the failing
-    // shape verbatim (a 30x30x12 two-level array; a 14x14 base's level 1 measured clean on
-    // the same driver, so a minimal shape might not manifest the layout).
+    // every other suite touching these formats passes. The textures reproduce the failing
+    // shape verbatim - THREE-level chains on both endpoints (30/15/7 x12 for the array,
+    // 7/3/1 for the plain 2D image), exactly the CTS's FUNCTIONAL_TEST_N_LEVELS = 3
+    // allocation - because a 14x14 base's level 1 measured clean on the same driver, so
+    // every deviation from the measured shape risks landing on the clean side of whatever
+    // allocation threshold picks the driver's layout, and a probe miss here is not a red
+    // test: it is the widening silently staying inert with all 18 bodies still failing.
     //
     // THE CONTROL is the identical copy out of mip level 0, which is clean on the affected
     // driver too: it proves copy_image works between these images at all and that the

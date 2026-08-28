@@ -11,6 +11,7 @@
 #include <Config.h>
 #include <MG_Util/Debug/Log.h>
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <string>
@@ -1932,10 +1933,17 @@ namespace MobileGL::MG_Util::SelfTest {
         // 2D array whose base level is 30x30x12 showed the divergence at LEVEL 1 (the same
         // suite's level-0 copies and a 14x14 base's level 1 round-trip clean), so the probe
         // reproduces those dimensions rather than a minimal shape that might sit on the clean
-        // side of whatever allocation threshold picks the driver's layout.
+        // side of whatever allocation threshold picks the driver's layout. VERBATIM INCLUDES
+        // THE LEVEL COUNT: the CTS allocates THREE-level chains on BOTH endpoints
+        // (FUNCTIONAL_TEST_N_LEVELS = 3, makeTextureComplete(0, 2): 30/15/7 x12 for the array,
+        // 7/3/1 for the plain image), and every device data point above came from those
+        // allocations - a chain one level shorter has never been measured on the affected
+        // driver, and a probe miss here is not a red anything, it is the widening silently
+        // staying inert with all 18 bodies red.
         constexpr GLsizei kPacked16BaseSize = 30;
         constexpr GLsizei kPacked16Layers = 12;
         constexpr GLsizei kPacked16DstSize = 7;
+        constexpr GLint kPacked16Levels = 3;
 
         // One GL_RGB5_A1 texel, as the client word the probe uploads everywhere:
         // (R, G, B, A) = (0, 1, 3, 1) under GL_UNSIGNED_SHORT_5_5_5_1. Chosen because 5551 is
@@ -1955,9 +1963,10 @@ namespace MobileGL::MG_Util::SelfTest {
         // adjacent 5-bit values apart.
         constexpr Int kPacked16Tolerance = 4;
 
-        // A 2-level GL_RGB5_A1 2D array allocated the way MobileGL's own mutable-texture path
-        // allocates one (glTexImage3D per level), with every texel of both levels holding
-        // kPacked16Word. MAX_LEVEL is clamped so the two-level chain is complete - some
+        // A three-level GL_RGB5_A1 2D array (30/15/7, twelve layers each) allocated the way
+        // MobileGL's own mutable-texture path allocates one (glTexImage3D per level), with
+        // every texel of every level holding kPacked16Word. MAX_LEVEL is clamped to the
+        // CTS's makeTextureComplete(0, 2) shape, which also keeps the chain complete - some
         // drivers refuse glCopyImageSubData on an incomplete texture.
         GLuint MakePacked16ArrayTexture(const GLESFunctionsTable& gl) {
             GLuint texture = 0;
@@ -1966,8 +1975,8 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
             gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 1);
-            for (GLint level = 0; level < 2; ++level) {
+            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
+            for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = kPacked16BaseSize >> level;
                 const Vector<Uint16> words(
                     static_cast<SizeT>(size) * static_cast<SizeT>(size) * kPacked16Layers, kPacked16Word);
@@ -1978,9 +1987,9 @@ namespace MobileGL::MG_Util::SelfTest {
             return texture;
         }
 
-        // A one-level GL_RGB5_A1 2D destination filled with 0xFFFF - the CTS's own (1,1,1,1)
-        // destination fill - so a copy that silently did nothing reads as "no verdict" rather
-        // than as either prediction.
+        // The plain-2D destination, three levels (7/3/1) like the CTS's, every level filled
+        // with 0xFFFF - the CTS's own (1,1,1,1) destination fill - so a copy that silently
+        // did nothing reads as "no verdict" rather than as either prediction.
         GLuint MakePacked16DstTexture(const GLESFunctionsTable& gl) {
             GLuint texture = 0;
             gl.glGenTextures(1, &texture);
@@ -1988,10 +1997,13 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glBindTexture(GL_TEXTURE_2D, texture);
             gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-            const Vector<Uint16> fill(static_cast<SizeT>(kPacked16DstSize) * kPacked16DstSize, Uint16{0xFFFF});
-            gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB5_A1, kPacked16DstSize, kPacked16DstSize, 0, GL_RGBA,
-                            GL_UNSIGNED_SHORT_5_5_5_1, fill.data());
+            gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
+            for (GLint level = 0; level < kPacked16Levels; ++level) {
+                const GLsizei size = std::max<GLsizei>(kPacked16DstSize >> level, 1);
+                const Vector<Uint16> fill(static_cast<SizeT>(size) * size, Uint16{0xFFFF});
+                gl.glTexImage2D(GL_TEXTURE_2D, level, GL_RGB5_A1, size, size, 0, GL_RGBA,
+                                GL_UNSIGNED_SHORT_5_5_5_1, fill.data());
+            }
             gl.glBindTexture(GL_TEXTURE_2D, 0);
             return texture;
         }
@@ -2103,6 +2115,13 @@ namespace MobileGL::MG_Util::SelfTest {
             MGLOG_I("[driver-bug] %s probe reached no verdict (the level-1 copy read back "
                     "(%d, %d, %d, %d), which is neither the word nor its mirror)",
                     kPacked16CopyProbeName, subject[0], subject[1], subject[2], subject[3]);
+        } else {
+            // The clean verdict is logged too: on a device run the FIRST question is whether
+            // this probe executed at all, and a silent clean path is indistinguishable from a
+            // probe that never ran.
+            MGLOG_I("[driver-bug] %s probe: a copy out of the array's level 1 delivered the word "
+                    "intact - the field order is consistent",
+                    kPacked16CopyProbeName);
         }
         if (array != 0) gl.glDeleteTextures(1, &array);
         Restore(gl, saved);
@@ -2285,21 +2304,40 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeCopyImagePacked16FieldOrderBug(const GLESFunctionsTable& gl) {
             if (!CopyImageMirrorsPacked16FieldOrder(gl)) return std::nullopt;
-            return DriverBugFinding{
-                "glCopyImageSubData mirrors 16-bit packed texels at a non-zero array mip level",
-                DriverBugVerdict::Fixed,
+            // The mitigation is a knob (MOBILEGL_WIDEN_PACKED16_STORAGE), so the row consults
+            // it: under ForceOff - the documented negative control - the corruption is
+            // replayed verbatim, and a hardcoded "Fixed" would be exactly the kind of
+            // reassurance this file exists to refuse. Auto and ForceOn both widen once this
+            // probe has fired. Should POST ever run before env parsing, the field still holds
+            // its Auto default - which is also what the widening itself consults, so the row
+            // and the behaviour cannot disagree.
+            const Bool widened = MG_Config::Features.EsprytWidenPacked16Storage !=
+                                 MG_Config::QuirkOverride::ForceOff;
+            String detail =
                 "the driver's physical field order for a 16-bit packed texel (RGB565 / RGB5_A1 / "
                 "RGBA4) at a non-zero mip level of a GL_TEXTURE_2D_ARRAY is the *_REV mirror of "
                 "the order every other image uses, so a glCopyImageSubData - a raw texel-block "
                 "move - between such a level and any other image lands the R/G/B/A fields "
                 "reversed (a 5551 word 0x0047 arrives as 0x8C20). Uploads and readbacks of the "
                 "same level are clean - the driver decodes its own layout consistently, which is "
-                "this probe's control - so only the raw-copy path ever crosses the two layouts. "
-                "MobileGL stores these three formats as 8-bit-per-channel ES storage on this "
-                "driver instead (GL_RGB8 / GL_RGBA8, the storage their canonical shadow already "
-                "holds and the client word round-trips through exactly), so no 16-bit packed "
-                "image is left for a copy to disagree about, at twice the memory for images of "
-                "those formats"};
+                "this probe's control - so only the raw-copy path ever crosses the two layouts. ";
+            if (widened) {
+                detail +=
+                    "MobileGL stores these three formats as 8-bit-per-channel ES storage on this "
+                    "driver instead (GL_RGB8 / GL_RGBA8, the storage their canonical shadow "
+                    "already holds and the client word round-trips through exactly), so no "
+                    "16-bit packed image is left for a copy to disagree about, at twice the "
+                    "memory for images of those formats; override with "
+                    "MOBILEGL_WIDEN_PACKED16_STORAGE";
+                return DriverBugFinding{
+                    "glCopyImageSubData mirrors 16-bit packed texels at a non-zero array mip level",
+                    DriverBugVerdict::Fixed, detail};
+            }
+            detail += "MOBILEGL_WIDEN_PACKED16_STORAGE=0 keeps the native narrow storage, so such "
+                      "copies are left exactly as the driver delivers them, mirrored words included";
+            return DriverBugFinding{
+                "glCopyImageSubData mirrors 16-bit packed texels at a non-zero array mip level",
+                DriverBugVerdict::Unfixable, detail};
         }
 
         // The table. One row per known driver bug; see the header for how to add a sibling.

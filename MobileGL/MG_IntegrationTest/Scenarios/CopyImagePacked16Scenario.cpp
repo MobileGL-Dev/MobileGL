@@ -20,10 +20,12 @@
 // copy path ever crossed the two layouts and why the CTS's "source image was not modified"
 // checks always passed.
 //
-// The array is 30x30x12 with two levels because that is the shape the failures pin: the same
-// suite's level-0 copies and a 14x14 base's level 1 measured clean on the same driver, so a
-// smaller array might sit on the clean side of whatever allocation threshold picks the
-// driver's layout.
+// The array is 30x30x12 with THREE levels and the flat endpoint is 7x7 with three levels
+// (7/3/1) because that is the allocation the failures pin - the CTS builds every functional
+// texture with FUNCTIONAL_TEST_N_LEVELS = 3 (makeTextureComplete(0, 2)) - and the same
+// suite's level-0 copies and a 14x14 base's level 1 measured clean on the same driver, so
+// any deviation from the measured shape (a smaller array, a shorter chain) might sit on the
+// clean side of whatever allocation threshold picks the driver's layout.
 //
 // The repair under test is the packed16 storage widening
 // (PixelFormatNormalizeOptionBit::WidenPacked16Norm): where the POST probe
@@ -48,6 +50,7 @@
 // failure on both backends means the scenario is wrong, and a failure on DirectGLES alone
 // means the widening (or the narrow path it replaces) is.
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -160,8 +163,9 @@ namespace MGITest {
                 return usable;
             }
 
-            // The CTS's own mutable shape: glTexImage3D per level, filter NEAREST, the chain
-            // clamped to the two levels it has.
+            // The CTS's own mutable shape: glTexImage3D per level, filter NEAREST, THREE levels
+            // (30/15/7) with the chain clamped to them. Level 2 carries its own fill so nothing
+            // below can pass by reading a level that was never written.
             GLuint MakeArrayTexture(const PackedFormatCase& format, const std::vector<GLushort>& level0,
                                     const std::vector<GLushort>& level1) {
                 GLuint texture = 0;
@@ -170,15 +174,21 @@ namespace MGITest {
                 glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
                 glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 1);
+                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, 2);
                 glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, static_cast<GLint>(format.internalFormat), kBaseSize, kBaseSize,
                              kLayers, 0, format.transferFormat, format.transferType, level0.data());
                 glTexImage3D(GL_TEXTURE_2D_ARRAY, 1, static_cast<GLint>(format.internalFormat), kLevel1Size,
                              kLevel1Size, kLayers, 0, format.transferFormat, format.transferType, level1.data());
+                const int level2Size = kLevel1Size / 2;
+                const auto level2 = MakeWords(format.transferType, level2Size * level2Size * kLayers, 211);
+                glTexImage3D(GL_TEXTURE_2D_ARRAY, 2, static_cast<GLint>(format.internalFormat), level2Size,
+                             level2Size, kLayers, 0, format.transferFormat, format.transferType, level2.data());
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
                 return texture;
             }
 
+            // Three levels (7/3/1) like the CTS's plain endpoints; `texels` is level 0, the one
+            // every assertion reads.
             GLuint MakeFlatTexture(const PackedFormatCase& format, const std::vector<GLushort>& texels) {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
@@ -186,9 +196,15 @@ namespace MGITest {
                 glBindTexture(GL_TEXTURE_2D, texture);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
                 glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(format.internalFormat), kFlatSize, kFlatSize, 0,
                              format.transferFormat, format.transferType, texels.data());
+                for (int level = 1; level <= 2; ++level) {
+                    const int size = std::max(kFlatSize >> level, 1);
+                    const auto fill = MakeWords(format.transferType, size * size, 97 + level);
+                    glTexImage2D(GL_TEXTURE_2D, level, static_cast<GLint>(format.internalFormat), size, size, 0,
+                                 format.transferFormat, format.transferType, fill.data());
+                }
                 glBindTexture(GL_TEXTURE_2D, 0);
                 return texture;
             }
