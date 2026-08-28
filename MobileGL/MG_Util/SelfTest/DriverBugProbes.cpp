@@ -1933,21 +1933,24 @@ namespace MobileGL::MG_Util::SelfTest {
         // the CTS's three-level chain (FUNCTIONAL_TEST_N_LEVELS = 3, makeTextureComplete(0, 2):
         // 30/15/7 x12; the plain endpoints are 7/3/1), against plain-2D endpoints.
         //
-        // WHAT THE DEVICE MEASUREMENTS ACTUALLY SHOWED (round 2): the mirrored field order is a
-        // property of the WHOLE ALLOCATION, not of a mip level, and the driver picks it from
-        // the texture state IN FORCE WHILE THE LEVELS ARE UPLOADED. Measured raw on the
-        // affected Mali (same shape, same data, same context): three uploads with NEAREST and
-        // MAX_LEVEL=2 already set land in the plain layout, while the same three uploads on a
-        // fresh texture still at the driver defaults - parameters set only afterwards, which
-        // is exactly the order a freshly minted MobileGL backend texture performs - land in
-        // the *_REV layout at EVERY level; one- and two-level allocations and params-first
-        // uploads under a mipmapped MIN_FILTER mirror too. The small arrays the CTS's passing
-        // iterations used (7- and 15-texel bases; its src/dst dim loop is {7, 15}, so a
-        // base-30 array only ever appears at level 1) land plain, which is why the failures
-        // looked per-mip-level from the QPA alone. The probe therefore allocates exactly the
-        // way MobileGL does (uploads first), measures IN SITU, and treats a mirror delivered
-        // from ANY level as the finding, with machinery controls below instead of a per-level
-        // "clean" assumption that does not exist.
+        // WHAT THE DEVICE MEASUREMENTS ACTUALLY SHOWED (round 2): the mirrored field order is
+        // a property of the WHOLE ALLOCATION, not of a mip level, and WHICH allocations get
+        // it is a driver heuristic that keys on texture state during the uploads AND on
+        // context history - and the two interact. Measured on the affected Mali, same shape,
+        // same data: in a raw standalone context, uploads-on-a-default-state texture mirror
+        // while params-first-NEAREST allocations stay plain; in MobileGL's live context the
+        // first deployment's params-first array MIRRORED while a later uploads-first one came
+        // out PLAIN - the raw ordering rule inverted. One- and two-level allocations and
+        // params-first uploads under a mipmapped MIN_FILTER also mirrored raw. The small
+        // arrays the CTS's passing iterations used (7- and 15-texel bases; its src/dst dim
+        // loop is {7, 15}, so a base-30 array only ever appears at level 1) land plain, which
+        // is why the failures looked per-mip-level from the QPA alone. No single allocation
+        // recipe is therefore entitled to speak for "the" layout: the probe allocates the
+        // SAME client-visible texture several ways - the minted-backend order (uploads
+        // first), the params-first order, and the CTS copy-test shape (MAX_LEVEL bounded,
+        // MIN_FILTER left at its mipmapped default; copy tests never set filters) - measures
+        // IN SITU, and a mirror delivered from ANY level of ANY variant is the finding, each
+        // variant guarded by its own upload round-trip control.
         constexpr GLsizei kPacked16BaseSize = 30;
         constexpr GLsizei kPacked16Layers = 12;
         constexpr GLsizei kPacked16DstSize = 7;
@@ -1971,23 +1974,50 @@ namespace MobileGL::MG_Util::SelfTest {
         // adjacent 5-bit values apart.
         constexpr Int kPacked16Tolerance = 4;
 
-        // A three-level GL_RGB5_A1 2D array (30/15/7, twelve layers each) allocated the way
-        // MobileGL's own mutable-texture path allocates one, ORDER INCLUDED: glTexImage3D per
-        // level FIRST, on a fresh texture still at the driver defaults, and the parameters
-        // only afterwards. The order is load-bearing on the affected Mali: uploads-then-params
-        // (what a freshly minted backend texture gets - the storage sync runs before the
-        // parameter re-push, see SyncTextureObjectToBackend) lands this allocation in the
-        // mirrored layout at every level, while the same calls with NEAREST and MAX_LEVEL set
-        // BEFORE the uploads land it in the plain one - a params-first probe measured "clean"
-        // in the very context whose params-after textures were mirroring, which is exactly the
-        // miss round two exists to fix. MAX_LEVEL still ends at the CTS's
-        // makeTextureComplete(0, 2) shape, which keeps the chain complete - some drivers
-        // refuse glCopyImageSubData on an incomplete texture.
-        GLuint MakePacked16ArrayTexture(const GLESFunctionsTable& gl) {
+        // The allocation recipes the probe tries. Same client-visible texture, same data -
+        // only the order and the filter state during the uploads move, because those are the
+        // knobs the driver's layout heuristic was measured keying on (differently in
+        // different contexts).
+        enum class Packed16Recipe : Uint8 {
+            // glTexImage3D per level on a fresh texture at driver defaults, parameters after:
+            // the order a freshly minted MobileGL backend texture performs (the storage sync
+            // runs before the parameter re-push, see SyncTextureObjectToBackend).
+            UploadsFirst,
+            // NEAREST and MAX_LEVEL set before the uploads: the shape an application that
+            // configures its sampler state ahead of its data gets.
+            ParamsFirst,
+            // MAX_LEVEL bounded but MIN_FILTER left at its mipmapped default: the CTS
+            // copy-test texture verbatim - copy tests never touch filters, and the chain is
+            // complete because all three levels exist under MAX_LEVEL = 2.
+            CtsShape,
+        };
+        constexpr Packed16Recipe kPacked16Recipes[] = {Packed16Recipe::UploadsFirst,
+                                                       Packed16Recipe::ParamsFirst,
+                                                       Packed16Recipe::CtsShape};
+        const char* Packed16RecipeName(Packed16Recipe recipe) {
+            switch (recipe) {
+            case Packed16Recipe::UploadsFirst: return "uploads-first";
+            case Packed16Recipe::ParamsFirst: return "params-first";
+            case Packed16Recipe::CtsShape: return "cts-shape";
+            }
+            return "?";
+        }
+
+        // A three-level GL_RGB5_A1 2D array (30/15/7, twelve layers each, every texel holding
+        // kPacked16Word) allocated per `recipe`. Every recipe ends mipmap-complete - some
+        // drivers refuse glCopyImageSubData on an incomplete texture.
+        GLuint MakePacked16ArrayTexture(const GLESFunctionsTable& gl, Packed16Recipe recipe) {
             GLuint texture = 0;
             gl.glGenTextures(1, &texture);
             if (texture == 0) return 0;
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+            if (recipe == Packed16Recipe::ParamsFirst) {
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            }
+            if (recipe != Packed16Recipe::UploadsFirst) {
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
+            }
             for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = kPacked16BaseSize >> level;
                 const Vector<Uint16> words(
@@ -1995,9 +2025,11 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, level, GL_RGB5_A1, size, size, kPacked16Layers, 0,
                                 GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, words.data());
             }
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
+            if (recipe == Packed16Recipe::UploadsFirst) {
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_LEVEL, kPacked16Levels - 1);
+            }
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
             return texture;
         }
@@ -2081,6 +2113,56 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             return true;
         }
+
+        // One recipe's whole measurement: allocate, round-trip control, both subject copies.
+        // Only a mirror that matches the PREDICTION while the variant's own round trip is
+        // clean counts; everything else is that variant's no-verdict (logged as such).
+        Bool RunPacked16Recipe(const GLESFunctionsTable& gl, Packed16Recipe recipe) {
+            Bool mirrored = false;
+            const GLuint array = MakePacked16ArrayTexture(gl, recipe);
+            GLubyte direct[4] = {0, 0, 0, 0};
+            GLubyte level0[4] = {0, 0, 0, 0};
+            GLubyte level1[4] = {0, 0, 0, 0};
+            if (array == 0 || !ReadPacked16Texel(gl, array, true, 1, direct)) {
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (the array could not be built or "
+                        "read back)",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
+            } else if (!Packed16TexelNear(direct, kPacked16Expected)) {
+                // The variant's own round trip: reading the level DIRECTLY decodes the driver's
+                // own storage and must deliver the word whatever layout it picked. A wrong
+                // answer means the UPLOAD is what corrupts - a different defect, and one the
+                // widening's raw-copy reasoning says nothing about.
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (the array's own level-1 readback "
+                        "answered (%d, %d, %d, %d) instead of the word - the upload, not the "
+                        "copy, is what diverges)",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), direct[0], direct[1],
+                        direct[2], direct[3]);
+            } else if (!Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 0, level0) ||
+                       !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 1, level1)) {
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (a subject copy could not run)",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
+            } else if (Packed16TexelNear(level0, kPacked16Mirrored) ||
+                       Packed16TexelNear(level1, kPacked16Mirrored)) {
+                mirrored = true;
+                MGLOG_I("[driver-bug] %s probe [%s]: copies delivered level 0 (%d, %d, %d, %d) / "
+                        "level 1 (%d, %d, %d, %d) - the 1_5_5_5_REV re-encoding of the word - "
+                        "THIS ALLOCATION'S FIELD ORDER IS MIRRORED",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1],
+                        level0[2], level0[3], level1[0], level1[1], level1[2], level1[3]);
+            } else if (Packed16TexelNear(level0, kPacked16Expected) &&
+                       Packed16TexelNear(level1, kPacked16Expected)) {
+                MGLOG_I("[driver-bug] %s probe [%s]: both levels copied the word intact",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
+            } else {
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (copies read back level 0 "
+                        "(%d, %d, %d, %d) / level 1 (%d, %d, %d, %d), neither the word nor its "
+                        "mirror)",
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1],
+                        level0[2], level0[3], level1[0], level1[1], level1[2], level1[3]);
+            }
+            if (array != 0) gl.glDeleteTextures(1, &array);
+            return mirrored;
+        }
     } // namespace
 
     Bool ProbeCopyImageMirrorsPacked16FieldOrder(const GLESFunctionsTable& gl) {
@@ -2114,19 +2196,14 @@ namespace MobileGL::MG_Util::SelfTest {
         Drain(gl);
 
         Bool detected = false;
-        const GLuint array = MakePacked16ArrayTexture(gl);
         const GLuint flatSource = MakePacked16FlatTexture(gl, kPacked16Word);
         GLubyte machinery[4] = {0, 0, 0, 0};
-        GLubyte direct[4] = {0, 0, 0, 0};
-        GLubyte level0[4] = {0, 0, 0, 0};
-        GLubyte level1[4] = {0, 0, 0, 0};
-        // CONTROL ONE, the machinery: the same copy between two 2D images of the same
-        // three-level shape. Two identical allocations share the driver's layout whatever it
-        // is, so this must deliver the word on ANY driver that can run copy_image on these
-        // formats at all - a driver that cannot reaches no verdict instead of being reported
-        // as this.
-        if (array == 0 || flatSource == 0 ||
-            !Packed16CopyLandsTexel(gl, flatSource, GL_TEXTURE_2D, 0, machinery)) {
+        // THE MACHINERY CONTROL: a copy between two 2D images of the same three-level shape
+        // and allocation discipline. Two identical allocations share the driver's layout
+        // whatever it is, so this must deliver the word on ANY driver that can run copy_image
+        // on these formats at all - a driver that cannot reaches no verdict instead of being
+        // reported as this.
+        if (flatSource == 0 || !Packed16CopyLandsTexel(gl, flatSource, GL_TEXTURE_2D, 0, machinery)) {
             MGLOG_I("[driver-bug] %s probe reached no verdict (the 2D-to-2D machinery control "
                     "could not run)",
                     kPacked16CopyProbeName);
@@ -2135,55 +2212,17 @@ namespace MobileGL::MG_Util::SelfTest {
                     "read back (%d, %d, %d, %d) instead of the word's (%d, %d, %d, %d))",
                     kPacked16CopyProbeName, machinery[0], machinery[1], machinery[2], machinery[3],
                     kPacked16Expected[0], kPacked16Expected[1], kPacked16Expected[2], kPacked16Expected[3]);
-        } else if (!ReadPacked16Texel(gl, array, true, 1, direct) ||
-                   !Packed16TexelNear(direct, kPacked16Expected)) {
-            // CONTROL TWO, the array's own round trip: reading the level DIRECTLY decodes the
-            // driver's own storage and must deliver the word whatever layout it picked. A wrong
-            // answer here means the UPLOAD is what corrupts - a different defect, and one the
-            // widening's raw-copy reasoning says nothing about.
-            MGLOG_I("[driver-bug] %s probe reached no verdict (the array's own level-1 readback "
-                    "answered (%d, %d, %d, %d) instead of the word - the upload, not the copy, "
-                    "is what diverges here)",
-                    kPacked16CopyProbeName, direct[0], direct[1], direct[2], direct[3]);
-        } else if (!Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 0, level0) ||
-                   !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 1, level1)) {
-            MGLOG_I("[driver-bug] %s probe reached no verdict (an array-source subject copy "
-                    "could not run)",
-                    kPacked16CopyProbeName);
         } else {
-            // THE SUBJECTS: the same copy out of the array's levels 0 and 1. The mirror is an
-            // allocation property, not a level property - the affected device delivers it from
-            // BOTH levels of this array in MobileGL's context - so a mirror from EITHER level
-            // is the finding, and each must match the mirror PREDICTION, not merely differ
-            // from the word: anything else is a different defect and reaches no verdict.
-            const Bool level0Mirrored = Packed16TexelNear(level0, kPacked16Mirrored);
-            const Bool level1Mirrored = Packed16TexelNear(level1, kPacked16Mirrored);
-            const Bool level0Clean = Packed16TexelNear(level0, kPacked16Expected);
-            const Bool level1Clean = Packed16TexelNear(level1, kPacked16Expected);
-            if (level0Mirrored || level1Mirrored) {
-                detected = true;
-                MGLOG_I("[driver-bug] %s probe: copies out of the array delivered level 0 "
-                        "(%d, %d, %d, %d) and level 1 (%d, %d, %d, %d) - the 1_5_5_5_REV "
-                        "re-encoding of the word - THE ALLOCATION'S FIELD ORDER IS MIRRORED",
-                        kPacked16CopyProbeName, level0[0], level0[1], level0[2], level0[3],
-                        level1[0], level1[1], level1[2], level1[3]);
-            } else if (!level0Clean || !level1Clean) {
-                MGLOG_I("[driver-bug] %s probe reached no verdict (array copies read back level 0 "
-                        "(%d, %d, %d, %d) and level 1 (%d, %d, %d, %d), neither the word nor its "
-                        "mirror)",
-                        kPacked16CopyProbeName, level0[0], level0[1], level0[2], level0[3],
-                        level1[0], level1[1], level1[2], level1[3]);
-            } else {
-                // The clean verdict is logged too: on a device run the FIRST question is
-                // whether this probe executed at all, and a silent clean path is
-                // indistinguishable from a probe that never ran.
-                MGLOG_I("[driver-bug] %s probe: copies out of both array levels delivered the "
-                        "word intact - the field order is consistent",
-                        kPacked16CopyProbeName);
+            // THE SUBJECTS: every allocation recipe of the same array, each with its own
+            // round-trip control; a mirror from any level of any recipe is the finding. Every
+            // recipe logs its own verdict either way, so a device run always shows whether
+            // this probe executed and what each allocation delivered - a silent clean path
+            // would be indistinguishable from a probe that never ran.
+            for (const Packed16Recipe recipe : kPacked16Recipes) {
+                detected = RunPacked16Recipe(gl, recipe) || detected;
             }
         }
         if (flatSource != 0) gl.glDeleteTextures(1, &flatSource);
-        if (array != 0) gl.glDeleteTextures(1, &array);
         Restore(gl, saved);
         return detected;
     }
