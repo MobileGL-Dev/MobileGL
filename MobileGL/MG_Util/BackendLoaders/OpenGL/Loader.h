@@ -1235,10 +1235,10 @@ namespace MobileGL {
             // GL_RENDERER contains both "ANGLE" and "llvmpipe".
             Bool IsAngleLlvmpipeRenderer = false;
             // IsAngleLlvmpipeRenderer combined with the
-            // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle:
+            // MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle:
             // sampler min filters should drop their mipmap component.
             Bool AvoidSamplerMipmapMinFilter = false;
-            // IsAngleLlvmpipeRenderer combined with the MOBILEGL_AVOID_EXPLICIT_LOD_BIAS
+            // IsAngleLlvmpipeRenderer combined with the MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS
             // feature toggle: LOD-bias emulation should not touch explicit-LOD lookups.
             Bool AvoidExplicitLodBias = false;
             // True when indirect draws leak the command's baseInstance word ("reserved,

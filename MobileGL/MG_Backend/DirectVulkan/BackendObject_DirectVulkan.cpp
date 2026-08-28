@@ -624,7 +624,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (nonZeroIndirectBaseInstanceSupported) {
             extensions.push_back(E_GL_ARB_base_instance);
         }
-        if (shaderSubgroupSupported && !MG_Config::Features.DisableSubgroup) {
+        if (shaderSubgroupSupported && !MG_Config::Features.MagmaDisableSubgroup) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
         // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the Vulkan

@@ -1198,8 +1198,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Until that reconciliation exists, advertising here would be the same lie the comment
         // above refuses to tell, just with an extra prerequisite met. Set
-        // MOBILEGL_ENABLE_GLES_TEXTURE_VIEW=1 to re-enable it for that work.
-        if (textureViewSupported && MG_Config::Features.EnableGlesTextureView) {
+        // MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 to re-enable it for that work.
+        if (textureViewSupported && MG_Config::Features.EsprytEnableTextureView) {
             extensions.push_back(E_GL_ARB_texture_view);
         }
         // Only advertised when the host ES driver actually filters anisotropically: the sampler

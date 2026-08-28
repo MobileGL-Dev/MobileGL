@@ -193,12 +193,12 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None):
     env["PYTHON"] = "python"
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"
     if backend_info["use_angle"]:
-        env["MOBILEGL_USE_ANGLE"] = "1"
+        env["MOBILEGL_ESPRYT_USE_ANGLE"] = "1"
         env["MOBILEGL_TRACE_ANGLE_VARIANT"] = (
             BLISS_ANGLE_VARIANT if case["name"] == BLISS_CASE else DEFAULT_ANGLE_VARIANT
         )
     else:
-        env.pop("MOBILEGL_USE_ANGLE", None)
+        env.pop("MOBILEGL_ESPRYT_USE_ANGLE", None)
         env.pop("MOBILEGL_TRACE_ANGLE_VARIANT", None)
     result = subprocess.run(command, cwd=ROOT, env=env)
     copy_goldens(case, backend)

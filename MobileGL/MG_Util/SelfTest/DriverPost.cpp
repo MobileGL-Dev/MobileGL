@@ -1557,7 +1557,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // Native iterationRP compute witness. This deliberately uses a separate
         // throwaway Vulkan device rather than the real renderer's queues, and it
-        // treats MOBILEGL_DISABLE_SUBGROUP as irrelevant: the row reports what the
+        // treats MOBILEGL_MAGMA_DISABLE_SUBGROUP as irrelevant: the row reports what the
         // driver does, not what MobileGL elects to advertise to applications.
         void ProbeVulkanIterationRPWitness(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                            VkInstance instance, VkPhysicalDevice physicalDevice,

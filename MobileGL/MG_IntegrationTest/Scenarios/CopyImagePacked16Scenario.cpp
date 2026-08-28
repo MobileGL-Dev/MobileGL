@@ -31,7 +31,7 @@
 // The repair under test is the packed16 storage widening
 // (PixelFormatNormalizeOptionBit::WidenPacked16Norm): where the POST probe
 // (SelfTest::CopyImageMirrorsPacked16FieldOrder) measures the mirror - or
-// MOBILEGL_WIDEN_PACKED16_STORAGE forces it - the three formats are stored as
+// MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE forces it - the three formats are stored as
 // GL_RGB8/GL_RGBA8, leaving no 16-bit packed image for a copy to disagree about. The client
 // word still round-trips exactly: the canonical shadow is already UNorm8, and an n-bit field
 // encodes to UNorm8 and back losslessly for every n <= 8.
@@ -40,7 +40,7 @@
 //   * the ambient registrations take the narrow path on a clean driver (llvmpipe has no
 //     mirror, so Auto keeps the native 16-bit storage - the pre-existing behaviour stays
 //     covered);
-//   * the DirectGLES.WidenedPacked16. registration pins MOBILEGL_WIDEN_PACKED16_STORAGE=1,
+//   * the DirectGLES.WidenedPacked16. registration pins MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1,
 //     which is the storage every affected device will actually run - without it the repair
 //     is unfalsifiable off-device, because no CI driver has the bug that arms it.
 // The Mali mirror itself CANNOT be reproduced here; only the on-device CTS run can show the

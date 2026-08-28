@@ -22,7 +22,7 @@
 
 namespace MobileGL::MG_Util::BackendLoader {
     static Bool UseAngle() {
-        return MG_Config::Features.UseAngle;
+        return MG_Config::Features.EsprytUseAngle;
     }
 
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS) && defined(__ANDROID__)
@@ -1762,9 +1762,9 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.IsAngleLlvmpipeRenderer =
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
         caps.AvoidSamplerMipmapMinFilter =
-            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidSamplerMipmapMinFilter;
+            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.EsprytAvoidSamplerMipmapMinFilter;
         caps.AvoidExplicitLodBias =
-            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.AvoidExplicitLodBias;
+            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.EsprytAvoidExplicitLodBias;
         MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
                 caps.SupportsDisjointTimerQuery ? "true" : "false");
         MGLOG_I("    GL_KHR_parallel_shader_compile supported: %s",

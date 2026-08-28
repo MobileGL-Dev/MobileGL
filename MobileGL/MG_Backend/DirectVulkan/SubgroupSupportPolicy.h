@@ -39,18 +39,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline Bool ShouldEmulateSubgroups(const Bool nativeSubgroupSupported) {
         return MG_Config::Features.MagmaEmulateSubgroup && !nativeSubgroupSupported &&
-               !MG_Config::Features.DisableSubgroup;
+               !MG_Config::Features.MagmaDisableSubgroup;
     }
 
     inline Bool ShouldFixIterationRPSubgroupScratch() {
         // Auto is ON: the patch is fingerprint-gated to iterationRP's reduction and
         // grows one under-declared array; every other module passes through untouched.
-        return MG_Config::Features.FixIterationRPSubgroupScratch !=
+        return MG_Config::Features.MagmaFixIterationRPSubgroupScratch !=
                MG_Config::QuirkOverride::ForceOff;
     }
 
     inline Bool ShouldFixIterationRPBarrier() {
-        return MG_Config::Features.IterationRPFixBarrier;
+        return MG_Config::Features.MagmaIterationRPFixBarrier;
     }
 
     inline Bool ShouldDeriveNumSubgroups() {
@@ -58,6 +58,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // contract to hold, and the derived ceil() value is the one the renderer can pin
         // with REQUIRE_FULL_SUBGROUPS - the driver builtin is the value with no
         // cross-driver guarantee (Adreno returns 1 for an 8-subgroup dispatch).
-        return MG_Config::Features.DeriveNumSubgroups != MG_Config::QuirkOverride::ForceOff;
+        return MG_Config::Features.MagmaDeriveNumSubgroups != MG_Config::QuirkOverride::ForceOff;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

@@ -50,7 +50,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // driver stores some packed16 allocations with a mirrored field order
         // (PixelFormatNormalizeOptionBit::WidenPacked16Norm). True only for
         // GL_RGB565/GL_RGB5(_A1)/GL_RGBA4, and only where the POST probe measured the
-        // divergence (or MOBILEGL_WIDEN_PACKED16_STORAGE forces it). The transfer paths
+        // divergence (or MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE forces it). The transfer paths
         // consult it too: the packed-norm re-upload leg must stand down when the ES storage
         // is no longer 16-bit packed.
         Bool UsesWidenedPacked16NormStorage(TextureInternalFormat internalFormat);
@@ -532,7 +532,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // avoidExplicitLodBias leaves lookups that already carry an explicit LOD untouched,
         // so their constant level stays constant; only the implicit-LOD forms take the bias.
         // Off by default and only ever set on ANGLE + llvmpipe, where injecting the uniform
-        // into a constant LOD crashes the driver (MOBILEGL_AVOID_EXPLICIT_LOD_BIAS).
+        // into a constant LOD crashes the driver (MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS).
         String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias = false);
     } // namespace PrgramImpl
 

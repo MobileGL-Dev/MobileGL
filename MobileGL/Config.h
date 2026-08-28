@@ -69,34 +69,34 @@ namespace MobileGL::MG_Config {
     struct FeaturesTable {
         // MOBILEGL_DISABLE_TIMERQUERY: do not advertise or use GPU timer queries.
         Bool DisableTimerQuery = false;
-        // MOBILEGL_ENABLE_GLES_TEXTURE_VIEW: advertise GL_ARB_texture_view on DirectGLES when
+        // MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW: advertise GL_ARB_texture_view on DirectGLES when
         // the host ES driver has EXT/OES_texture_view. Off by default: the host extension is
         // present on Adreno 830 and the functional half of KHR-GL4{2,3}.texture_view still fails
         // there, because the view's ES internalformat is normalized independently of the storage
         // it aliases (see BackendObject_DirectGLES::BuildAdvertisedExtensions). The flag exists
         // so that work can be done without editing the gate.
-        Bool EnableGlesTextureView = false;
+        Bool EsprytEnableTextureView = false;
         // MOBILEGL_ENABLE_SPIRV_VALIDATION: validate generated and transformed SPIR-V.
         // Disabled by default because validation is a diagnostics-only cost.
         Bool EnableSpirvValidation = false;
-        // MOBILEGL_USE_ANGLE: load ANGLE EGL/GLES libraries.
-        Bool UseAngle = false;
+        // MOBILEGL_ESPRYT_USE_ANGLE: load ANGLE EGL/GLES libraries.
+        Bool EsprytUseAngle = false;
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS)
         // MOBILEGL_TRACE_ANGLE_VARIANT: signed trace-APK ANGLE build short hash.
         String TraceAngleVariant;
 #endif
-        // MOBILEGL_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support,
+        // MOBILEGL_MAGMA_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support,
         // including the opt-in emulated compute path below.
-        Bool DisableSubgroup = false;
+        Bool MagmaDisableSubgroup = false;
         // MOBILEGL_MAGMA_EMULATE_SUBGROUP: implement GL_KHR_shader_subgroup's compute
         // stage on a 32-lane VIRTUAL subgroup lowered to workgroup-shared memory
         // (ShaderTranspiler::EmulateSubgroupsPass). Strictly a last resort: it only ever
         // engages when this flag is set AND the device has no native subgroup support at
         // all - a device with real subgroup operations always uses them natively,
         // whatever their width (the known iterationRP defect is patched by
-        // FixIterationRPSubgroupScratch below instead). Off by default.
+        // MagmaFixIterationRPSubgroupScratch below instead). Off by default.
         Bool MagmaEmulateSubgroup = false;
-        // MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH: patch iterationRP's own bug - the
+        // MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: patch iterationRP's own bug - the
         // pack declares `shared vec2 prefixSumCache[32]` for a 512-invocation exposure
         // reduction and indexes it by gl_SubgroupID, so any device with sub-16-lane
         // subgroups (8-lane lavapipe -> 64 subgroups) writes shared memory out of
@@ -106,12 +106,12 @@ namespace MobileGL::MG_Config {
         // so every other shader passes through byte-identical - as does iterationRP
         // itself on >= 16-lane devices. Auto is ON; ForceOff replays the pack's bug
         // verbatim.
-        QuirkOverride FixIterationRPSubgroupScratch = QuirkOverride::Auto;
-        // MOBILEGL_ITERATIONRP_FIX_BARRIER: repair Program 203's missing workgroup
+        QuirkOverride MagmaFixIterationRPSubgroupScratch = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: repair Program 203's missing workgroup
         // rendezvous between its two reductions over prefixSumCache. Off by default and
         // fingerprint-gated by FixIterationRPBarrierPass when enabled.
-        Bool IterationRPFixBarrier = false;
-        // MOBILEGL_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
+        Bool MagmaIterationRPFixBarrier = false;
+        // MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
         // ceil(workgroup invocations / gl_SubgroupSize) on the NATIVE subgroup path
         // (ShaderTranspiler::DeriveNumSubgroupsPass). Auto is ON: GL requires
         // gl_SubgroupID < gl_NumSubgroups, Adreno's builtin reports 1 while the same
@@ -119,7 +119,7 @@ namespace MobileGL::MG_Config {
         // whenever the pipeline can request REQUIRE_FULL_SUBGROUPS (which the renderer
         // does whenever local_size_x is a multiple of the native width). ForceOff returns
         // to the raw driver builtin.
-        QuirkOverride DeriveNumSubgroups = QuirkOverride::Auto;
+        QuirkOverride MagmaDeriveNumSubgroups = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
@@ -132,16 +132,16 @@ namespace MobileGL::MG_Config {
         Bool MagmaR11G11B10FFallback = false;
         // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
         Uint32 MagmaFramesInFlight = 3;
-        // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
+        // MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER: avoid mipmap min filters in samplers,
         // resolves certain rendering bugs on ANGLE + llvmpipe.
-        Bool AvoidSamplerMipmapMinFilter = false;
-        // MOBILEGL_AVOID_EXPLICIT_LOD_BIAS: leave an already-explicit LOD argument alone when
+        Bool EsprytAvoidSamplerMipmapMinFilter = false;
+        // MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS: leave an already-explicit LOD argument alone when
         // emulating GL_TEXTURE_LOD_BIAS, instead of adding the bias uniform to it. Injecting
         // the uniform turns a compile-time-constant LOD into a runtime expression, which
         // sends ANGLE + llvmpipe down a mip-selection path that dereferences a NULL
         // descriptor and kills the process. Deviates from spec (Vulkan adds the bias to
         // OpImageSampleExplicitLod), so it is an avoidance for that stack only.
-        Bool AvoidExplicitLodBias = false;
+        Bool EsprytAvoidExplicitLodBias = false;
         // MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS: emit a tessellation/geometry program's
         // inter-stage interface blocks WITHOUT their layout(location=) qualifier, letting ES
         // match them by block name and member sequence instead. The Mali ES driver delivers
@@ -161,29 +161,29 @@ namespace MobileGL::MG_Config {
         Bool CoherentAsFlush = false;
         // MOBILEGL_TRACE_SKIP_AUTODESTROY: skip teardown in the ELF destructor (Init.cpp).
         Bool TraceSkipAutodestroy = false;
-        // MOBILEGL_DISABLE_UBO_RING: force the DirectGLES global-UBO upload back to the
+        // MOBILEGL_ESPRYT_DISABLE_UBO_RING: force the DirectGLES global-UBO upload back to the
         // per-draw glBufferSubData path instead of the persistent-mapped ring allocator
         // (negative control / driver-bug escape hatch).
-        Bool DisableUboRing = false;
-        // MOBILEGL_DISABLE_UNPACK_RING: force DirectGLES texture uploads back to
+        Bool EsprytDisableUboRing = false;
+        // MOBILEGL_ESPRYT_DISABLE_UNPACK_RING: force DirectGLES texture uploads back to
         // glTexSubImage from the client pointer instead of staging them through the
         // persistent-mapped unpack-PBO ring (negative control / driver-bug escape
         // hatch).
-        Bool DisableUnpackRing = false;
-        // MOBILEGL_DISABLE_UPLOAD_RING: force DirectGLES app buffer updates
+        Bool EsprytDisableUnpackRing = false;
+        // MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING: force DirectGLES app buffer updates
         // (glBufferSubData / map flushes) back to the immediate driver upload instead
         // of queueing them for the staged-copy flush through the persistent-mapped
         // upload ring (negative control / driver-bug escape hatch; the immediate
         // upload stalls on drivers that resolve the WAR hazard on the CPU, e.g. Mali).
-        Bool DisableUploadRing = false;
-        // MOBILEGL_DISABLE_INVALIDATE_FLUSH: skip the glMapBufferRange(WRITE |
+        Bool EsprytDisableUploadRing = false;
+        // MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH: skip the glMapBufferRange(WRITE |
         // INVALIDATE_RANGE) tier of the DirectGLES pending-range flush and go straight
         // to the upload ring's staged glCopyBufferSubData (negative control / escape
         // hatch for a driver whose range-invalidating map misbehaves). The map tier is
         // what keeps a partial write into a large in-flight buffer priced by the RANGE:
         // on Mali both the immediate glBufferSubData and a staged copy into a busy
         // mutable store ghost the whole destination on the CPU.
-        Bool DisableInvalidateFlush = false;
+        Bool EsprytDisableInvalidateFlush = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
         // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
@@ -204,10 +204,10 @@ namespace MobileGL::MG_Config {
         // gl_FragDepth writers, and fully color-masked attachments are exempt (see
         // PipelineFactory::ShouldSuppressDepthWrite). Auto detects Qualcomm.
         QuirkOverride MagmaDisableBlendedDepthWriteQuirk = QuirkOverride::Auto;
-        // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS: leave the Vulkan robustBufferAccess device
+        // MOBILEGL_MAGMA_DISABLE_ROBUST_BUFFER_ACCESS: leave the Vulkan robustBufferAccess device
         // feature off. It is enabled by default to match GL's defined out-of-range fetch
         // behavior; this escape hatch exists to measure or dodge its GPU cost on a device.
-        Bool DisableRobustBufferAccess = false;
+        Bool MagmaDisableRobustBufferAccess = false;
         // MOBILEGL_MAGMA_MULTIDRAW_MODE: preferred DirectVulkan multi-draw dispatch tier
         // ("ext" | "indirect" | "unroll", see MultiDrawMode). Clamped to device support;
         // unset picks the best supported tier.
@@ -248,7 +248,7 @@ namespace MobileGL::MG_Config {
         // miscompiled shader: if a device ever renders differently with the cache
         // on, one run with this falsy says so.
         QuirkOverride ShaderTranslationCache = QuirkOverride::Auto;
-        // MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION: DirectGLES' gl_ViewportIndex routing
+        // MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION: DirectGLES' gl_ViewportIndex routing
         // emulation - the builtin becomes a flat varying, the fragment stage gets a
         // per-pass gate, and a routed draw is REPLAYED once per distinct viewport state
         // with the real glViewport/glScissor/glDepthRangef set for it. Auto is ON, and
@@ -260,8 +260,8 @@ namespace MobileGL::MG_Config {
         // the pre-emulation path, extension passthrough where it exists and
         // LowerViewportIndexPass' demote-to-a-plain-global where it does not - and is
         // the negative control the emulation is measured against.
-        QuirkOverride ViewportArrayEmulation = QuirkOverride::Auto;
-        // MOBILEGL_WIDEN_PACKED16_STORAGE: DirectGLES stores GL_RGB565/GL_RGB5(A1)/GL_RGBA4
+        QuirkOverride EsprytViewportArrayEmulation = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE: DirectGLES stores GL_RGB565/GL_RGB5(A1)/GL_RGBA4
         // images as 8-bit-per-channel ES storage (GL_RGB8/GL_RGBA8) instead of the driver's
         // native 16-bit packed formats. Auto defers to a POST driver-bug probe
         // (SelfTest::CopyImageMirrorsPacked16FieldOrder): some Mali drivers store SOME

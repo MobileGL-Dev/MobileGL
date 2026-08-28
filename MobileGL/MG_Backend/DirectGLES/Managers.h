@@ -230,7 +230,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // still holding what glViewport/glScissor/glDepthRange broadcast to all sixteen - collapses
     // to a single pass with an all-ones gate mask, i.e. one draw and no behaviour change at all.
     //
-    // Whether emulation runs. Off only under MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION falsy, which
+    // Whether emulation runs. Off only under MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION falsy, which
     // restores the pre-emulation path as a negative control.
     Bool ViewportArrayEmulationEnabled();
     // Whether ANY program built in this process has come out with a viewport gate. Sticky once
@@ -627,7 +627,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // which is what to watch if this ring ever shows up in an RSS regression: it
         // grows on demand from 4 MiB and is capped, not unbounded.
         //
-        // False when the feature is disabled (MOBILEGL_DISABLE_UNPACK_RING),
+        // False when the feature is disabled (MOBILEGL_ESPRYT_DISABLE_UNPACK_RING),
         // EXT_buffer_storage / fences are missing, the ES context is not current, or
         // ring creation already failed under this context. Callers then upload from
         // the client pointer exactly as before.
@@ -656,7 +656,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // draw-time sync drains them: bytes staged into this ring, then one
         // glCopyBufferSubData per merged range - the copy is ordered on the GPU
         // timeline, so the hazard costs no CPU wait. Reclamation contract identical
-        // to the other two rings. MOBILEGL_DISABLE_UPLOAD_RING restores the
+        // to the other two rings. MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING restores the
         // historical immediate-upload path (negative control / escape hatch).
         void UploadRingOnPresent();
     } // namespace BufferImpl

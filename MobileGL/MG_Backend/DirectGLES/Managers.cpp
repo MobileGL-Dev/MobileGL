@@ -54,7 +54,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // the driver fifteen more rectangles to rasterize against, and nothing in MobileGL has ever
     // programmed the indexed state it would need.
     Bool ViewportArrayEmulationEnabled() {
-        return MG_Config::Features.ViewportArrayEmulation != MG_Config::QuirkOverride::ForceOff;
+        return MG_Config::Features.EsprytViewportArrayEmulation != MG_Config::QuirkOverride::ForceOff;
     }
 
     Bool g_anyProgramRoutesViewportIndex = false;
@@ -75,13 +75,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static Bool ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe() {
         // IsAngleLlvmpipeRenderer combined with the
-        // MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle,
+        // MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER feature toggle,
         // both resolved in FillInGLESCapabilities.
         return g_GLESCapabilities.AvoidSamplerMipmapMinFilter;
     }
 
     static Bool ShouldAvoidExplicitLodBiasOnAngleLlvmpipe() {
-        // IsAngleLlvmpipeRenderer combined with the MOBILEGL_AVOID_EXPLICIT_LOD_BIAS
+        // IsAngleLlvmpipeRenderer combined with the MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS
         // feature toggle, both resolved in FillInGLESCapabilities.
         return g_GLESCapabilities.AvoidExplicitLodBias;
     }
@@ -823,7 +823,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // now: kill switch off, the ES copy entry point resolved, and the ring's
             // own availability gate (EXT_buffer_storage + fences + live context) up.
             Bool UploadRingUsableNow() {
-                if (MG_Config::Features.DisableUploadRing) return false;
+                if (MG_Config::Features.EsprytDisableUploadRing) return false;
                 if (!g_GLESFuncs.glCopyBufferSubData) return false;
                 return RingAvailable(g_uploadRing);
             }
@@ -846,7 +846,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //      stores also kills the ghost, but eagerly commits every arena's
             //      full extent - +hundreds of MB - which LMK'd the whole device.)
             //   2. The staging ring + glCopyBufferSubData: the copy is ordered on
-            //      the GPU timeline, no CPU wait (MOBILEGL_DISABLE_INVALIDATE_FLUSH
+            //      the GPU timeline, no CPU wait (MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH
             //      forces this tier as the map path's negative control).
             //   3. Direct glBufferSubData (potentially stalling) when neither the
             //      map entry points nor the ring exist.
@@ -871,7 +871,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // frontend size and the backend store disagree (a pending respecify
                 // resolves that later; bytes past either end have nowhere to land).
                 const SizeT limit = std::min(bufferObject.GetSize(), resource.storageSize);
-                const Bool mapUsable = !MG_Config::Features.DisableInvalidateFlush &&
+                const Bool mapUsable = !MG_Config::Features.EsprytDisableInvalidateFlush &&
                                        g_GLESFuncs.glMapBufferRange && g_GLESFuncs.glUnmapBuffer;
                 const Bool ringUsable = UploadRingUsableNow();
                 for (const auto& range : ranges) {
@@ -1065,7 +1065,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // keeps the legacy immediate upload: draw-time sync never flushes
                 // ranges for it, and its mapping publishes writes by itself.
                 if ((resource->persistentMapped && resource->persistentPtr) ||
-                    MG_Config::Features.DisableUploadRing) {
+                    MG_Config::Features.EsprytDisableUploadRing) {
                     UploadRangeNow(*resource, bufferObject, offset, offset + size);
                     resource->syncedChangeSerial = bufferObject.GetChangeSerial();
                     return;
@@ -1093,7 +1093,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // flush at draw-time sync; only the zero-copy persistent store and the
                 // negative-control kill switch keep the immediate paths below.
                 if (!(resource->persistentMapped && resource->persistentPtr) &&
-                    !MG_Config::Features.DisableUploadRing) {
+                    !MG_Config::Features.EsprytDisableUploadRing) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add(range);
                     return;
@@ -1901,7 +1901,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } // namespace
 
         Bool UboRingAvailable() {
-            if (MG_Config::Features.DisableUboRing) return false;
+            if (MG_Config::Features.EsprytDisableUboRing) return false;
             return RingAvailable(g_uboRing);
         }
 
@@ -1914,7 +1914,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void UboRingOnPresent() { RingOnPresent(g_uboRing); }
 
         Bool UnpackRingAvailable() {
-            if (MG_Config::Features.DisableUnpackRing) return false;
+            if (MG_Config::Features.EsprytDisableUnpackRing) return false;
             return RingAvailable(g_unpackRing);
         }
 
@@ -6489,7 +6489,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Int advertisedMaxSamples =
                 std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
             // Armed by the EMULATION as well as by the missing extension, and the emulation is on
-            // by default (MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION). Having the extension is not a
+            // by default (MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION). Having the extension is not a
             // reason to keep the builtin: it only ever gave the SHADER a compilable name, while
             // the driver's INDEXED viewport state was never programmed by anything in MobileGL
             // (SyncRenderState pushes index 0 and stops), so an extension-capable driver

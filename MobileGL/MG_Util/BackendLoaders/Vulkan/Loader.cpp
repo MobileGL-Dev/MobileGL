@@ -92,7 +92,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
 
         Bool IsShaderSubgroupForcedDisabled() {
-            return MG_Config::Features.DisableSubgroup;
+            return MG_Config::Features.MagmaDisableSubgroup;
         }
     } // namespace
 
@@ -272,7 +272,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                 supportsShaderSubgroup ? "true" : "false", caps.SupportsShaderSubgroup ? "true" : "false",
                 subgroupProps.subgroupSize, subgroupProps.supportedStages, subgroupProps.supportedOperations);
         if (supportsShaderSubgroup && forceDisableShaderSubgroup) {
-            MGLOG_W("Vulkan shader subgroup support forced off by MOBILEGL_DISABLE_SUBGROUP");
+            MGLOG_W("Vulkan shader subgroup support forced off by MOBILEGL_MAGMA_DISABLE_SUBGROUP");
         }
 
         return true;

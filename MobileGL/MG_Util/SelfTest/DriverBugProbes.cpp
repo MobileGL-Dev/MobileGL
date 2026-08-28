@@ -2407,7 +2407,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeCopyImagePacked16FieldOrderBug(const GLESFunctionsTable& gl) {
             if (!CopyImageMirrorsPacked16FieldOrder(gl)) return std::nullopt;
-            // The mitigation is a knob (MOBILEGL_WIDEN_PACKED16_STORAGE), so the row consults
+            // The mitigation is a knob (MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE), so the row consults
             // it: under ForceOff - the documented negative control - the corruption is
             // replayed verbatim, and a hardcoded "Fixed" would be exactly the kind of
             // reassurance this file exists to refuse. Auto and ForceOn both widen once this
@@ -2433,12 +2433,12 @@ namespace MobileGL::MG_Util::SelfTest {
                     "already holds and the client word round-trips through exactly), so no "
                     "16-bit packed image is left for a copy to disagree about, at twice the "
                     "memory for images of those formats; override with "
-                    "MOBILEGL_WIDEN_PACKED16_STORAGE";
+                    "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE";
                 return DriverBugFinding{
                     "glCopyImageSubData mirrors 16-bit packed texels between differently-laid-out images",
                     DriverBugVerdict::Fixed, detail};
             }
-            detail += "MOBILEGL_WIDEN_PACKED16_STORAGE=0 keeps the native narrow storage, so such "
+            detail += "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=0 keeps the native narrow storage, so such "
                       "copies are left exactly as the driver delivers them, mirrored words included";
             return DriverBugFinding{
                 "glCopyImageSubData mirrors 16-bit packed texels between differently-laid-out images",

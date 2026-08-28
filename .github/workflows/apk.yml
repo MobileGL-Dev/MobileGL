@@ -417,12 +417,12 @@ jobs:
 
       - name: Retrace and validate
         env:
-          MOBILEGL_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
+          MOBILEGL_ESPRYT_USE_ANGLE: ${{ matrix.backend.name == 'DirectGLES' && '1' || '0' }}
           MOBILEGL_TRACE_ANGLE_VARIANT: ${{ matrix.case.name == 'minecraft-1.21.4-fabric-iris-bliss-in-world' && '90a62123d794' || 'ec889e6ea831' }}
           MOBILEGL_MAGMA_R11G11B10F_FALLBACK: ${{ matrix.backend.name == 'DirectVulkan' && '1' || '0' }}
-          MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
-          MOBILEGL_DERIVE_NUM_SUBGROUPS: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
-          MOBILEGL_ITERATIONRP_FIX_BARRIER: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
+          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
+          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
+          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: ${{ matrix.backend.name == 'DirectVulkan' && matrix.case.name == 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' && '1' || '0' }}
         run: |
           apk_file="android-retrace-apks/MobileGL-plugin-trace-release-${GITHUB_SHA}.apk"
           test -f "${apk_file}"

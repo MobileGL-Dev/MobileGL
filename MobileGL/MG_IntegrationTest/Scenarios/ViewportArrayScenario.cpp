@@ -525,7 +525,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
         //
         // Everything above is a claim about pixels, and a claim about pixels cannot tell an
         // emulation that works from a backend that was going to be right anyway. This case builds
-        // the SAME program in a process started with MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0
+        // the SAME program in a process started with MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION=0
         // (the NoViewportArrayEmulation. ctest entry) and requires case 1's
         // result to COLLAPSE: with no routing, every geometry invocation rasterizes against
         // viewport 0's rectangle, so the last invocation paints the whole surface and every cell
@@ -551,10 +551,10 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             // entry for it, so the control still runs in every ctest run; anywhere else - the
             // ambient ctest entries, or the binary run straight from a device shell - the
             // emulation is on and this case skips.
-            if (AmbientQuirkFromEnvironment("MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION") != AmbientQuirk::Off) {
+            if (AmbientQuirkFromEnvironment("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION") != AmbientQuirk::Off) {
                 GTEST_SKIP() << "this is the negative control for the emulation and needs it off for the "
                                 "whole process; the NoViewportArrayEmulation. ctest entry runs it with "
-                                "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0";
+                                "MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION=0";
             }
 
             IntTarget target = MakeIntTarget(kSurfaceSide, kSurfaceSide);

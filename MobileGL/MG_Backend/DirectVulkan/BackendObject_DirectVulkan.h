@@ -70,7 +70,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     const RendererInfo& GetRendererIdentity();
 
     // The full OpenGL extension list Magma advertises (glGetString(GL_EXTENSIONS)) for
-    // a device with the given raw capabilities. The MOBILEGL_DISABLE_SUBGROUP and
+    // a device with the given raw capabilities. The MOBILEGL_MAGMA_DISABLE_SUBGROUP and
     // MOBILEGL_DISABLE_TIMERQUERY escape hatches are applied inside, so callers pass
     // the detected device support (passing an already-gated value is harmless).
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,

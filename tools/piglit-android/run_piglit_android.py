@@ -118,7 +118,7 @@ def backend_env(backend, device_dir, use_angle=False):
         'MOBILEGL_LOG_FILE_PATH': f'{device_dir}/mobilegl.log',
     }
     if backend == 'DirectGLES':
-        env['MOBILEGL_USE_ANGLE'] = '1' if use_angle else '0'
+        env['MOBILEGL_ESPRYT_USE_ANGLE'] = '1' if use_angle else '0'
     if backend == 'DirectVulkan':
         # The device ICD usually lacks VK_EXT_headless_surface, which the
         # MobileGL pbuffer path needs; use a real ANativeWindow from

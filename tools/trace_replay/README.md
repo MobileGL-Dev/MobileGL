@@ -284,7 +284,7 @@ unflushed persistent maps, e.g. the Create fixtures), pass
 `MOBILEGL_COHERENT_AS_FLUSH=1`. For cases registered with
 `avoid_angle_llvmpipe_explicit_lod_bias` (DirectGLES on ANGLE llvmpipe, e.g. the
 sundial-lite fixture), pass `--ez avoid_angle_llvmpipe_explicit_lod_bias true` so
-the replay runs with `MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1`.
+the replay runs with `MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS=1`.
 
 ## Benchmark mode (frame timing)
 
@@ -380,7 +380,7 @@ ln -sf $ANGLE/libEGL.so    libEGL.so
 ln -sf $ANGLE/libGLESv2.so libGLESv2.so
 ln -sf $ANGLE/libvulkan.so.1 libvulkan.so.1   # else eglInitialize fails
 
-MOBILEGL_USE_ANGLE=1 \
+MOBILEGL_ESPRYT_USE_ANGLE=1 \
 LD_LIBRARY_PATH=~/angle-farm:/path/to/build/ \
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
 ANGLE_DEFAULT_PLATFORM=vulkan \

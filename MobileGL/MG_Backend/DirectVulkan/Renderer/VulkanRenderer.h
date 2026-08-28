@@ -563,7 +563,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Native subgroup topology, queried at device creation for the compute-module
         // subgroup repairs (SubgroupSupportPolicy.h) and the REQUIRE_FULL_SUBGROUPS
         // stage flag; 0 / false when the device has no usable compute subgroups or
-        // MOBILEGL_DISABLE_SUBGROUP forced them off.
+        // MOBILEGL_MAGMA_DISABLE_SUBGROUP forced them off.
         Uint32 m_nativeSubgroupSize = 0;
         Bool m_nativeSubgroupSupported = false;
         Bool m_computeFullSubgroupsFeatureEnabled = false;

@@ -88,7 +88,7 @@ bool UseAngleForRequest(const Request& request) {
     if (request.useAngle) {
         return true;
     }
-    const char* value = getenv("MOBILEGL_USE_ANGLE");
+    const char* value = getenv("MOBILEGL_ESPRYT_USE_ANGLE");
     return value != nullptr && strcmp(value, "1") == 0;
 }
 
@@ -146,21 +146,21 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         unsetenv("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
     }
     if (UseAngleForRequest(request)) {
-        setenv("MOBILEGL_USE_ANGLE", "1", 1);
+        setenv("MOBILEGL_ESPRYT_USE_ANGLE", "1", 1);
         setenv("MOBILEGL_TRACE_ANGLE_VARIANT", request.angleVariant.c_str(), 1);
     } else {
-        unsetenv("MOBILEGL_USE_ANGLE");
+        unsetenv("MOBILEGL_ESPRYT_USE_ANGLE");
         unsetenv("MOBILEGL_TRACE_ANGLE_VARIANT");
     }
     if (request.avoidAngleLlvmpipeSamplerMipmapMinFilter) {
-        setenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
+        setenv("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", 1);
     } else {
-        unsetenv("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        unsetenv("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
     }
     if (request.avoidAngleLlvmpipeExplicitLodBias) {
-        setenv("MOBILEGL_AVOID_EXPLICIT_LOD_BIAS", "1", 1);
+        setenv("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS", "1", 1);
     } else {
-        unsetenv("MOBILEGL_AVOID_EXPLICIT_LOD_BIAS");
+        unsetenv("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
     }
     if (request.coherentAsFlush) {
         setenv("MOBILEGL_COHERENT_AS_FLUSH", "1", 1);
@@ -168,19 +168,19 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
     if (request.fixIterationRPSubgroupScratch) {
-        setenv("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH", "1", 1);
+        setenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH", "1", 1);
     } else {
-        unsetenv("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+        unsetenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
     }
     if (request.deriveNumSubgroups) {
-        setenv("MOBILEGL_DERIVE_NUM_SUBGROUPS", "1", 1);
+        setenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS", "1", 1);
     } else {
-        unsetenv("MOBILEGL_DERIVE_NUM_SUBGROUPS");
+        unsetenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
     }
     if (request.iterationRPFixBarrier) {
-        setenv("MOBILEGL_ITERATIONRP_FIX_BARRIER", "1", 1);
+        setenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER", "1", 1);
     } else {
-        unsetenv("MOBILEGL_ITERATIONRP_FIX_BARRIER");
+        unsetenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
     }
     if (request.fboAttachmentDumps.empty()) {
         unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");

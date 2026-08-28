@@ -162,37 +162,37 @@ namespace MobileGL::MG_ConfigLoader {
     inline void InitFeatures() {
         auto& features = MG_Config::Features;
         features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
-        features.EnableGlesTextureView = QueryEnvFlag("MOBILEGL_ENABLE_GLES_TEXTURE_VIEW");
+        features.EsprytEnableTextureView = QueryEnvFlag("MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW");
         features.EnableSpirvValidation = QueryEnvFlag("MOBILEGL_ENABLE_SPIRV_VALIDATION");
-        features.UseAngle = QueryEnvFlag("MOBILEGL_USE_ANGLE");
+        features.EsprytUseAngle = QueryEnvFlag("MOBILEGL_ESPRYT_USE_ANGLE");
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS)
         QueryEnvVariable("MOBILEGL_TRACE_ANGLE_VARIANT", features.TraceAngleVariant, "");
 #endif
-        features.DisableSubgroup = QueryEnvFlag("MOBILEGL_DISABLE_SUBGROUP");
+        features.MagmaDisableSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_DISABLE_SUBGROUP");
         features.MagmaEmulateSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_EMULATE_SUBGROUP");
-        features.FixIterationRPSubgroupScratch =
-            QueryEnvQuirkOverride("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-        features.IterationRPFixBarrier = QueryEnvFlag("MOBILEGL_ITERATIONRP_FIX_BARRIER");
-        features.DeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_DERIVE_NUM_SUBGROUPS");
+        features.MagmaFixIterationRPSubgroupScratch =
+            QueryEnvQuirkOverride("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+        features.MagmaIterationRPFixBarrier = QueryEnvFlag("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
+        features.MagmaDeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
-        features.AvoidSamplerMipmapMinFilter =
-            QueryEnvFlag("MOBILEGL_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
-        features.AvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_AVOID_EXPLICIT_LOD_BIAS");
+        features.EsprytAvoidSamplerMipmapMinFilter =
+            QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
         features.EsprytUnlocatedIoBlocks = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
-        features.DisableUboRing = QueryEnvFlag("MOBILEGL_DISABLE_UBO_RING");
-        features.DisableUnpackRing = QueryEnvFlag("MOBILEGL_DISABLE_UNPACK_RING");
-        features.DisableUploadRing = QueryEnvFlag("MOBILEGL_DISABLE_UPLOAD_RING");
-        features.DisableInvalidateFlush = QueryEnvFlag("MOBILEGL_DISABLE_INVALIDATE_FLUSH");
+        features.EsprytDisableUboRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UBO_RING");
+        features.EsprytDisableUnpackRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UNPACK_RING");
+        features.EsprytDisableUploadRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING");
+        features.EsprytDisableInvalidateFlush = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH");
         features.EsprytForceDepthStencilReadbackEmulation =
             QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
         features.MagmaDisableBlendedDepthWriteQuirk =
             QueryEnvQuirkOverride("MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE");
-        features.DisableRobustBufferAccess = QueryEnvFlag("MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS");
+        features.MagmaDisableRobustBufferAccess = QueryEnvFlag("MOBILEGL_MAGMA_DISABLE_ROBUST_BUFFER_ACCESS");
         features.MagmaMultiDrawMode = QueryEnvMultiDrawMode("MOBILEGL_MAGMA_MULTIDRAW_MODE");
         features.EsprytMultiDrawMode = QueryEnvGLESMultiDrawMode("MOBILEGL_ESPRYT_MULTIDRAW_MODE");
         features.AsyncShaderCompile = QueryEnvQuirkOverride("MOBILEGL_ASYNC_SHADER_COMPILE");
@@ -200,10 +200,10 @@ namespace MobileGL::MG_ConfigLoader {
         features.AsyncOptimisticShaderStatus =
             QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
         features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
-        features.ViewportArrayEmulation =
-            QueryEnvQuirkOverride("MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION");
+        features.EsprytViewportArrayEmulation =
+            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
         features.EsprytWidenPacked16Storage =
-            QueryEnvQuirkOverride("MOBILEGL_WIDEN_PACKED16_STORAGE");
+            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
     }
 
     inline void InitBackendType() {

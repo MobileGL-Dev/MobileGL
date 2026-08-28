@@ -13214,8 +13214,8 @@ void main() {
         // Match GL's robust buffer-fetch behavior where the Vulkan device supports it. This covers
         // out-of-range fetches; arbitrary GL vertex strides/offsets still need the explicit tight
         // repack in VertexInputStateFactory when they violate Vulkan's address-alignment rules.
-        // MOBILEGL_DISABLE_ROBUST_BUFFER_ACCESS leaves it off to measure or dodge its GPU cost.
-        deviceFeatures.robustBufferAccess = MG_Config::Features.DisableRobustBufferAccess
+        // MOBILEGL_MAGMA_DISABLE_ROBUST_BUFFER_ACCESS leaves it off to measure or dodge its GPU cost.
+        deviceFeatures.robustBufferAccess = MG_Config::Features.MagmaDisableRobustBufferAccess
                                                 ? VK_FALSE
                                                 : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
@@ -13590,13 +13590,13 @@ void main() {
             subgroupPropertyQuery.pNext = &subgroupProperties;
             getPhysicalDeviceProperties2(m_physicalDevice.handle, &subgroupPropertyQuery);
             // Mirrors the loader's HasUsableShaderSubgroupSupport gate, including the
-            // MOBILEGL_DISABLE_SUBGROUP escape hatch, so the module lowerings can never
+            // MOBILEGL_MAGMA_DISABLE_SUBGROUP escape hatch, so the module lowerings can never
             // disagree with the advertised capabilities.
             const Bool usableSubgroups =
                 subgroupProperties.subgroupSize > 0 &&
                 (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                 (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
-            if (usableSubgroups && !MG_Config::Features.DisableSubgroup) {
+            if (usableSubgroups && !MG_Config::Features.MagmaDisableSubgroup) {
                 m_nativeSubgroupSize = subgroupProperties.subgroupSize;
                 m_nativeSubgroupSupported = true;
             }

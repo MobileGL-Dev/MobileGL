@@ -38,20 +38,20 @@ Usage:
     [--reuse-fixture] \
     --timeout-seconds N
 
-Set MOBILEGL_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
+Set MOBILEGL_ESPRYT_USE_ANGLE=1 to run DirectGLES replay with packaged ANGLE
 instead of the device system GLES driver.
 Set MOBILEGL_TRACE_ANGLE_VARIANT to the packaged ANGLE short hash used by
 DirectGLES replay.
 Set MOBILEGL_RETRACE_USE_PBUFFER=1 or pass --use-pbuffer to run DirectGLES
 against an offscreen EGL pbuffer instead of the Activity surface.
-Set MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1,
-MOBILEGL_DERIVE_NUM_SUBGROUPS=1, and MOBILEGL_ITERATIONRP_FIX_BARRIER=1 to
+Set MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1,
+MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1, and MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1 to
 forward the corresponding iterationRP SPIR-V repairs into the APK process.
 Pass --avoid-angle-llvmpipe-sampler-mipmap-min-filter for DirectGLES traces that
 need ANGLE llvmpipe sampler mipmap filters downgraded to avoid driver stalls.
 Pass --avoid-angle-llvmpipe-explicit-lod-bias for DirectGLES traces whose shaders
 sample with an explicit LOD that ANGLE llvmpipe cannot take a LOD bias on
-(MOBILEGL_AVOID_EXPLICIT_LOD_BIAS=1).
+(MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS=1).
 Pass --coherent-as-flush for traces whose engine writes persistent
 GL_MAP_FLUSH_EXPLICIT_BIT maps it never flushes (MOBILEGL_COHERENT_AS_FLUSH=1).
 Pass --benchmark to replay the whole trace as a frame-timing benchmark instead of
@@ -348,7 +348,7 @@ run_retrace() {
   if [ -n "${alternate_golden_path}" ]; then
     alternate_golden_app_path="${app_dir}/input/alternate-golden.png"
   fi
-  if [ "${MOBILEGL_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
+  if [ "${MOBILEGL_ESPRYT_USE_ANGLE:-}" = "1" ] && [ "${backend}" = "DirectGLES" ]; then
     use_angle=1
     test -n "${MOBILEGL_TRACE_ANGLE_VARIANT:-}" || die "MOBILEGL_TRACE_ANGLE_VARIANT is required for DirectGLES ANGLE replay"
   fi
@@ -388,13 +388,13 @@ run_retrace() {
   if [ "${coherent_as_flush}" -eq 1 ]; then
     set -- "$@" --ez coherent_as_flush true
   fi
-  if [ "${MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH:-}" = "1" ]; then
+  if [ "${MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH:-}" = "1" ]; then
     set -- "$@" --ez fix_iterationrp_subgroup_scratch true
   fi
-  if [ "${MOBILEGL_DERIVE_NUM_SUBGROUPS:-}" = "1" ]; then
+  if [ "${MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS:-}" = "1" ]; then
     set -- "$@" --ez derive_num_subgroups true
   fi
-  if [ "${MOBILEGL_ITERATIONRP_FIX_BARRIER:-}" = "1" ]; then
+  if [ "${MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER:-}" = "1" ]; then
     set -- "$@" --ez iterationrp_fix_barrier true
   fi
   if [ -n "${texture_2d_dumps}" ]; then

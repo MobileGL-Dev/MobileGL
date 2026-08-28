@@ -105,9 +105,9 @@ bool MatchOption(const std::string &arg, const char *name, std::string &inlineVa
 
 bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     request.backend = "DirectGLES";
-    request.fixIterationRPSubgroupScratch = ReadEnvFlag("MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-    request.deriveNumSubgroups = ReadEnvFlag("MOBILEGL_DERIVE_NUM_SUBGROUPS");
-    request.iterationRPFixBarrier = ReadEnvFlag("MOBILEGL_ITERATIONRP_FIX_BARRIER");
+    request.fixIterationRPSubgroupScratch = ReadEnvFlag("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
+    request.deriveNumSubgroups = ReadEnvFlag("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
+    request.iterationRPFixBarrier = ReadEnvFlag("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];

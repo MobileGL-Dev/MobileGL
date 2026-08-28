@@ -288,9 +288,9 @@ if (MOBILEGL_ITEST_VK_ICD)
     if (MOBILEGL_ITEST_VK_ICD MATCHES "lvp_icd|lavapipe")
         message(STATUS "Integration tests: lavapipe ICD - forcing the iterationRP repairs on")
         list(APPEND MGL_ITEST_VULKAN_ENV
-            "MOBILEGL_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1"
-            "MOBILEGL_DERIVE_NUM_SUBGROUPS=1"
-            "MOBILEGL_ITERATIONRP_FIX_BARRIER=1")
+            "MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1"
+            "MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1"
+            "MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1")
     endif()
 endif()
 
@@ -353,7 +353,7 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ASYNC_SHADER_COMPILE=1"
     "MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1" ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_FORCE_VIEWPORT_ARRAY_EMULATION=0" ${MGL_ITEST_COMMON_ENV})
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION=0" ${MGL_ITEST_COMMON_ENV})
 # MOBILEGL_LOG_FILE_PATH alongside the pin, because the arming assertion needs somewhere to
 # read the library's own report from. The strip's arming signal is a latched MGLOG_I and there
 # is no other way for a test process to learn that it fired - MG_Config is not reachable from
@@ -364,7 +364,7 @@ mgl_itest_join_environment(MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/unlocated-io-blocks.log"
     ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_WIDEN_PACKED16_STORAGE=1" ${MGL_ITEST_COMMON_ENV})
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1" ${MGL_ITEST_COMMON_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
