@@ -9,6 +9,7 @@
 #include "DriverPost.h"
 #include "DriverPostIterationRPWitness.h"
 #include "DriverPostIterationRPWitnessSpv.h"
+#include "PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/BackendLoaders/OpenGL/Loader.h"
 #include <Config.h>
 #include <MGGitHash.h>
@@ -1555,6 +1556,282 @@ namespace MobileGL::MG_Util::SelfTest {
                              disabledNote);
         }
 
+        // GL_PRIMITIVES_GENERATED for draws made with transform feedback INACTIVE. GL
+        // defines the query to count them; the DirectVulkan backend serves it from the
+        // stream query's primitivesNeeded, and an affected Mali driver answers 0 there
+        // unless a capture span is open - the exact shape the CTS uses to measure the
+        // tessellator (see PrimitivesGeneratedNoXfbProbe.h). One row:
+        //   PASS - the stream query counts the capture-less draw exactly.
+        //   WARN - it answers 0, and the CLIPPING_INPUT_PRIMITIVES statistics control
+        //          on the same draw answers exactly right, so the renderer substitutes
+        //          a pipeline-statistics pool for such draws (the same probe, run at
+        //          renderer bring-up, is what arms it).
+        //   FAIL (optional) - it answers 0 with no working substitute, or the probe
+        //          could not reach a verdict; applications sizing capture buffers from
+        //          the query get 0.
+        // Throwaway device on purpose, like every probe here: the row reports the
+        // driver, not the renderer's configuration - MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE
+        // steers the renderer, never this row.
+        void ProbeVulkanPrimitivesGeneratedNoXfb(ReportBuilder& builder,
+                                                 PFN_vkGetInstanceProcAddr getInstanceProcAddr,
+                                                 VkInstance instance, VkPhysicalDevice physicalDevice,
+                                                 Uint32 graphicsQueueFamilyIndex,
+                                                 const Vector<VkExtensionProperties>& deviceExtensions,
+                                                 const VkPhysicalDeviceFeatures& features,
+                                                 PFN_vkGetPhysicalDeviceFeatures2 getFeatures2,
+                                                 PFN_vkGetPhysicalDeviceProperties2 getProperties2) {
+            constexpr const char* RowName = "Primitives-generated query without capture";
+            const auto fail = [&](String detail) { builder.FailOptional(RowName, Move(detail)); };
+
+            if (!HasVkExtension(deviceExtensions, VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME) ||
+                getFeatures2 == nullptr || getProperties2 == nullptr) {
+                fail("VK_EXT_transform_feedback is unavailable, so the backend has no GPU counter for "
+                     "GL_PRIMITIVES_GENERATED at all - with or without a capture");
+                return;
+            }
+            VkPhysicalDeviceTransformFeedbackFeaturesEXT xfbFeatures{};
+            xfbFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = &xfbFeatures;
+            getFeatures2(physicalDevice, &features2);
+            VkPhysicalDeviceTransformFeedbackPropertiesEXT xfbProperties{};
+            xfbProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 properties2{};
+            properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            properties2.pNext = &xfbProperties;
+            getProperties2(physicalDevice, &properties2);
+            if (xfbFeatures.transformFeedback != VK_TRUE || xfbProperties.transformFeedbackQueries != VK_TRUE) {
+                fail("the device has VK_EXT_transform_feedback but no usable stream queries "
+                     "(transformFeedbackQueries = false); GL_PRIMITIVES_GENERATED and "
+                     "GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN queries answer 0");
+                return;
+            }
+
+            const auto vkCreateDeviceFn =
+                reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+            const auto vkDestroyDeviceFn =
+                reinterpret_cast<PFN_vkDestroyDevice>(getInstanceProcAddr(instance, "vkDestroyDevice"));
+            const auto vkGetDeviceQueueFn =
+                reinterpret_cast<PFN_vkGetDeviceQueue>(getInstanceProcAddr(instance, "vkGetDeviceQueue"));
+            if (vkCreateDeviceFn == nullptr || vkDestroyDeviceFn == nullptr || vkGetDeviceQueueFn == nullptr) {
+                fail("vkGetInstanceProcAddr could not resolve the device-creation entry points");
+                return;
+            }
+
+            const Float queuePriority = 1.0f;
+            VkDeviceQueueCreateInfo queueInfo{};
+            queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueInfo.queueFamilyIndex = graphicsQueueFamilyIndex;
+            queueInfo.queueCount = 1;
+            queueInfo.pQueuePriorities = &queuePriority;
+
+            // Only what the probe itself needs: the transform feedback feature (a
+            // stream-query pool may not be created without it), the two candidate
+            // substitutes' features, and tessellationShader for the PATCHES shape -
+            // each only where the device has it. The dedicated
+            // primitives-generated query is taken with BOTH its bits or not at all,
+            // mirroring the renderer (without the discard bit two of the three
+            // shapes may not run inside it).
+            VkPhysicalDeviceFeatures enabledFeatures{};
+            enabledFeatures.pipelineStatisticsQuery = features.pipelineStatisticsQuery;
+            enabledFeatures.tessellationShader = features.tessellationShader;
+            VkPhysicalDeviceTransformFeedbackFeaturesEXT enabledXfbFeatures{};
+            enabledXfbFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_FEATURES_EXT;
+            enabledXfbFeatures.transformFeedback = VK_TRUE;
+            const char* enabledExtensions[2] = {VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME, nullptr};
+            Uint32 enabledExtensionCount = 1;
+
+            Bool primitivesGeneratedQueryUsable = false;
+            VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT enabledPgqFeatures{};
+            enabledPgqFeatures.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
+            if (HasVkExtension(deviceExtensions, VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME)) {
+                VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT pgqQuery{};
+                pgqQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
+                VkPhysicalDeviceFeatures2 pgqFeatures2{};
+                pgqFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+                pgqFeatures2.pNext = &pgqQuery;
+                getFeatures2(physicalDevice, &pgqFeatures2);
+                if (pgqQuery.primitivesGeneratedQuery == VK_TRUE &&
+                    pgqQuery.primitivesGeneratedQueryWithRasterizerDiscard == VK_TRUE) {
+                    primitivesGeneratedQueryUsable = true;
+                    enabledPgqFeatures.primitivesGeneratedQuery = VK_TRUE;
+                    enabledPgqFeatures.primitivesGeneratedQueryWithRasterizerDiscard = VK_TRUE;
+                    enabledPgqFeatures.pNext = &enabledXfbFeatures;
+                    enabledExtensions[enabledExtensionCount++] =
+                        VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME;
+                }
+            }
+
+            VkDeviceCreateInfo deviceInfo{};
+            deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            deviceInfo.pNext = primitivesGeneratedQueryUsable
+                                   ? static_cast<const void*>(&enabledPgqFeatures)
+                                   : static_cast<const void*>(&enabledXfbFeatures);
+            deviceInfo.queueCreateInfoCount = 1;
+            deviceInfo.pQueueCreateInfos = &queueInfo;
+            deviceInfo.enabledExtensionCount = enabledExtensionCount;
+            deviceInfo.ppEnabledExtensionNames = enabledExtensions;
+            deviceInfo.pEnabledFeatures = &enabledFeatures;
+
+            VkDevice device = VK_NULL_HANDLE;
+            const VkResult createResult = vkCreateDeviceFn(physicalDevice, &deviceInfo, nullptr, &device);
+            if (createResult != VK_SUCCESS || device == VK_NULL_HANDLE) {
+                fail(format("vkCreateDevice failed (VkResult = {})", static_cast<Int>(createResult)));
+                return;
+            }
+            const ScopeGuard destroyDevice([&]() { vkDestroyDeviceFn(device, nullptr); });
+
+            VkQueue queue = VK_NULL_HANDLE;
+            vkGetDeviceQueueFn(device, graphicsQueueFamilyIndex, 0, &queue);
+            if (queue == VK_NULL_HANDLE) {
+                fail("vkGetDeviceQueue returned a null graphics queue");
+                return;
+            }
+
+            PrimitivesGeneratedNoXfbProbeContext probeContext;
+            probeContext.device = device;
+            probeContext.queue = queue;
+            probeContext.queueFamilyIndex = graphicsQueueFamilyIndex;
+            probeContext.transformFeedbackQueriesUsable = true;
+            probeContext.primitivesGeneratedQueryUsable = primitivesGeneratedQueryUsable;
+            probeContext.pipelineStatisticsEnabled = enabledFeatures.pipelineStatisticsQuery == VK_TRUE;
+            probeContext.tessellationEnabled = enabledFeatures.tessellationShader == VK_TRUE;
+            auto& fns = probeContext.fns;
+            const auto resolve = [&](const char* name) { return getInstanceProcAddr(instance, name); };
+            fns.vkCreateCommandPool = reinterpret_cast<PFN_vkCreateCommandPool>(resolve("vkCreateCommandPool"));
+            fns.vkDestroyCommandPool =
+                reinterpret_cast<PFN_vkDestroyCommandPool>(resolve("vkDestroyCommandPool"));
+            fns.vkAllocateCommandBuffers =
+                reinterpret_cast<PFN_vkAllocateCommandBuffers>(resolve("vkAllocateCommandBuffers"));
+            fns.vkBeginCommandBuffer =
+                reinterpret_cast<PFN_vkBeginCommandBuffer>(resolve("vkBeginCommandBuffer"));
+            fns.vkEndCommandBuffer = reinterpret_cast<PFN_vkEndCommandBuffer>(resolve("vkEndCommandBuffer"));
+            fns.vkCreateQueryPool = reinterpret_cast<PFN_vkCreateQueryPool>(resolve("vkCreateQueryPool"));
+            fns.vkDestroyQueryPool = reinterpret_cast<PFN_vkDestroyQueryPool>(resolve("vkDestroyQueryPool"));
+            fns.vkCmdResetQueryPool = reinterpret_cast<PFN_vkCmdResetQueryPool>(resolve("vkCmdResetQueryPool"));
+            fns.vkCmdBeginQuery = reinterpret_cast<PFN_vkCmdBeginQuery>(resolve("vkCmdBeginQuery"));
+            fns.vkCmdEndQuery = reinterpret_cast<PFN_vkCmdEndQuery>(resolve("vkCmdEndQuery"));
+            fns.vkCmdBeginQueryIndexedEXT =
+                reinterpret_cast<PFN_vkCmdBeginQueryIndexedEXT>(resolve("vkCmdBeginQueryIndexedEXT"));
+            fns.vkCmdEndQueryIndexedEXT =
+                reinterpret_cast<PFN_vkCmdEndQueryIndexedEXT>(resolve("vkCmdEndQueryIndexedEXT"));
+            fns.vkCreateRenderPass = reinterpret_cast<PFN_vkCreateRenderPass>(resolve("vkCreateRenderPass"));
+            fns.vkDestroyRenderPass =
+                reinterpret_cast<PFN_vkDestroyRenderPass>(resolve("vkDestroyRenderPass"));
+            fns.vkCreateFramebuffer =
+                reinterpret_cast<PFN_vkCreateFramebuffer>(resolve("vkCreateFramebuffer"));
+            fns.vkDestroyFramebuffer =
+                reinterpret_cast<PFN_vkDestroyFramebuffer>(resolve("vkDestroyFramebuffer"));
+            fns.vkCmdBeginRenderPass =
+                reinterpret_cast<PFN_vkCmdBeginRenderPass>(resolve("vkCmdBeginRenderPass"));
+            fns.vkCmdEndRenderPass = reinterpret_cast<PFN_vkCmdEndRenderPass>(resolve("vkCmdEndRenderPass"));
+            fns.vkCreateShaderModule =
+                reinterpret_cast<PFN_vkCreateShaderModule>(resolve("vkCreateShaderModule"));
+            fns.vkDestroyShaderModule =
+                reinterpret_cast<PFN_vkDestroyShaderModule>(resolve("vkDestroyShaderModule"));
+            fns.vkCreatePipelineLayout =
+                reinterpret_cast<PFN_vkCreatePipelineLayout>(resolve("vkCreatePipelineLayout"));
+            fns.vkDestroyPipelineLayout =
+                reinterpret_cast<PFN_vkDestroyPipelineLayout>(resolve("vkDestroyPipelineLayout"));
+            fns.vkCreateGraphicsPipelines =
+                reinterpret_cast<PFN_vkCreateGraphicsPipelines>(resolve("vkCreateGraphicsPipelines"));
+            fns.vkDestroyPipeline = reinterpret_cast<PFN_vkDestroyPipeline>(resolve("vkDestroyPipeline"));
+            fns.vkCmdBindPipeline = reinterpret_cast<PFN_vkCmdBindPipeline>(resolve("vkCmdBindPipeline"));
+            fns.vkCmdDraw = reinterpret_cast<PFN_vkCmdDraw>(resolve("vkCmdDraw"));
+            fns.vkCreateFence = reinterpret_cast<PFN_vkCreateFence>(resolve("vkCreateFence"));
+            fns.vkDestroyFence = reinterpret_cast<PFN_vkDestroyFence>(resolve("vkDestroyFence"));
+            fns.vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(resolve("vkQueueSubmit"));
+            fns.vkWaitForFences = reinterpret_cast<PFN_vkWaitForFences>(resolve("vkWaitForFences"));
+            fns.vkGetQueryPoolResults =
+                reinterpret_cast<PFN_vkGetQueryPoolResults>(resolve("vkGetQueryPoolResults"));
+            fns.vkDeviceWaitIdle = reinterpret_cast<PFN_vkDeviceWaitIdle>(resolve("vkDeviceWaitIdle"));
+
+            const PrimitivesGeneratedNoXfbMeasurement measurement =
+                RunPrimitivesGeneratedNoXfbProbe(probeContext);
+            if (!measurement.ran) {
+                fail(format("the probe could not run ({}); the renderer's bring-up probe decides the "
+                            "reroute independently",
+                            measurement.failureReason));
+                return;
+            }
+
+            const auto shapeFacts = [](const char* name,
+                                       const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+                if (!shape.drawn) {
+                    return format("{} not drawn (no tessellationShader)", name);
+                }
+                String facts = format("{}: stream answered {} of {} expected", name, shape.streamGenerated,
+                                      shape.expectedPrimitives);
+                if (shape.primitivesGeneratedExtMeasured) {
+                    facts += format(", dedicated query answered {}", shape.primitivesGeneratedExt);
+                }
+                if (shape.statisticsMeasured) {
+                    facts += format(", statistics control answered {}", shape.statisticsClippingInput);
+                }
+                if (!shape.primitivesGeneratedExtMeasured && !shape.statisticsMeasured) {
+                    facts += ", no control (neither VK_EXT_primitives_generated_query with its "
+                             "discard feature nor pipelineStatisticsQuery is available)";
+                }
+                return facts;
+            };
+            const String facts = shapeFacts("triangles", measurement.trianglesPlain) + "; " +
+                                 shapeFacts("triangles under discard", measurement.trianglesDiscard) +
+                                 "; " + shapeFacts("patches under discard", measurement.patchesDiscard);
+
+            switch (EvaluatePrimitivesGeneratedNoXfbVerdict(measurement)) {
+            case PrimitivesGeneratedNoXfbVerdict::StreamCounts:
+                builder.Pass(RowName,
+                             "the stream query counts a draw made with no capture span open, as "
+                             "VK_EXT_transform_feedback defines (" +
+                                 facts + ")");
+                return;
+            case PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute:
+                builder.Warn(RowName,
+                             "the stream query answers 0 for a draw made with no capture span open - "
+                             "the shape the CTS measures the tessellator with - while a "
+                             "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT query around an identical replay answers "
+                             "exactly right, rasterizer discard included, so the renderer "
+                             "accumulates GL_PRIMITIVES_GENERATED for such draws through the "
+                             "dedicated query instead (one extra query slot per XFB-inactive draw "
+                             "inside a GENERATED span; " +
+                                 facts + ")");
+                return;
+            case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute:
+                builder.Warn(RowName,
+                             "the stream query answers 0 for a draw made with no capture span open - "
+                             "the shape the CTS measures the tessellator with - while a "
+                             "clipping-invocations statistics query around an identical replay answers exactly "
+                             "right, rasterizer discard included, so the renderer accumulates "
+                             "GL_PRIMITIVES_GENERATED for such draws through a pipeline-statistics "
+                             "pool instead (one extra query slot per XFB-inactive draw inside a "
+                             "GENERATED span; " +
+                                 facts + ")");
+                return;
+            case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly:
+                fail("the stream query answers 0 for a draw made with no capture span open, and the "
+                     "clipping-invocations statistics substitute counts the plain draw exactly but "
+                     "reads 0 under rasterizer discard - so the renderer reroutes XFB-inactive draws "
+                     "(repairing undiscarded queries at no cost to the rest) and the CTS's "
+                     "tessellator-measuring shape, which needs the discarded count, remains broken "
+                     "on this driver (" +
+                     facts + ")");
+                return;
+            case PrimitivesGeneratedNoXfbVerdict::Unfixable:
+                fail("the stream query answers 0 for a draw made with no capture span open and the "
+                     "device offers no working statistics substitute; an application sizing a capture "
+                     "buffer from GL_PRIMITIVES_GENERATED gets 0 (" +
+                     facts + ")");
+                return;
+            case PrimitivesGeneratedNoXfbVerdict::Inconclusive:
+                break;
+            }
+            fail("the probe reached no verdict - the answers fit neither the defect nor health, and "
+                 "MobileGL declines to repair a driver it does not understand (" +
+                 facts + ")");
+        }
+
         // Native iterationRP compute witness. This deliberately uses a separate
         // throwaway Vulkan device rather than the real renderer's queues, and it
         // treats MOBILEGL_MAGMA_DISABLE_SUBGROUP as irrelevant: the row reports what the
@@ -2651,6 +2928,10 @@ namespace MobileGL::MG_Util::SelfTest {
 
         ProbeVulkanIterationRPWitness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,
                                      properties, subgroupPropertiesAvailable, subgroupProperties);
+
+        ProbeVulkanPrimitivesGeneratedNoXfb(builder, getInstanceProcAddr, instance, physicalDevice,
+                                            graphicsQueueFamilyIndex, deviceExtensions, features,
+                                            vkGetPhysicalDeviceFeatures2Fn, vkGetPhysicalDeviceProperties2Fn);
 
         if (HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) {
             builder.Pass("VK_KHR_draw_indirect_count",

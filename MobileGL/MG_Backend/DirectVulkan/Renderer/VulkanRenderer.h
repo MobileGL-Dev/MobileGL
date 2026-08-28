@@ -24,6 +24,7 @@
 #include "MG_Util/Math/VectorTypes.h"
 #include <Includes.h>
 #include <MG_Backend/BackendObject.h>
+#include <MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h>
 #include <vk_mem_alloc.h>
 
 #include "../VkIncludes.h"
@@ -717,15 +718,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<Uint32> m_xfbQueryActiveSlots[2];
         Bool m_xfbQuerySlotOpen = false;
         Uint32 m_xfbQueryOpenSlot = 0;
+        // GL_PRIMITIVES_GENERATED reroute for draws made while transform feedback is
+        // INACTIVE. The stream pool's primitivesNeeded is defined to count those draws
+        // too, but a Mali driver (and Mesa lavapipe) answers 0 unless a capture span
+        // is open (the CTS's tessellator-measuring shape). Where the bring-up probe
+        // finds that defect with a working control - or
+        // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE forces it - such draws accumulate the
+        // GENERATED count through this pool instead, whose type the arming picks:
+        // VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT where the device hosts the dedicated
+        // query with its rasterizer-discard feature (exact semantics by definition -
+        // the extension exists because GL needs this count without a capture), else a
+        // VK_QUERY_TYPE_PIPELINE_STATISTICS pool over clipping-stage invocations (one
+        // per primitive reaching primitive clipping - after every vertex processing
+        // stage, before rasterizer discard - which is the same set).
+        // XFB-ACTIVE draws keep the stream slot (exact today, and WRITTEN needs it);
+        // paused-span draws keep the frontend's CPU accounting (see the paused counter
+        // in DirectVulkan.cpp) and never open a reroute slot, or they would count
+        // twice. One GL query span may therefore hold slots of both pools.
+        Bool m_pipelineStatisticsQueryFeatureEnabled = false;
+        // VK_EXT_primitives_generated_query: base feature, and the
+        // ...WithRasterizerDiscard feature without which a discarding draw inside the
+        // query is invalid usage (so the reroute never picks the dedicated pool on a
+        // base-only device - GL applications toggle discard freely).
+        Bool m_primitivesGeneratedQueryFeatureEnabled = false;
+        Bool m_primitivesGeneratedQueryDiscardFeatureEnabled = false;
+        // tessellationShader was enabled at device creation (it is taken whenever the
+        // device advertises it); gates the probe's PATCHES shape.
+        Bool m_tessellationShaderFeatureEnabled = false;
+        MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind =
+            MG_Util::SelfTest::PrimGenRerouteKind::None;
+        VkQueryPool m_primGenReroutePool = VK_NULL_HANDLE;
+        Uint32 m_primGenRerouteSlotCursor = 0;
+        Vector<Uint32> m_primGenRerouteActiveSlots;
+        Bool m_primGenRerouteSlotOpen = false;
+        Uint32 m_primGenRerouteOpenSlot = 0;
+        // Runs the bring-up probe (memoized per process) and decides
+        // m_primGenRerouteKind. Called at the end of device creation: it records on
+        // m_graphicsQueue, which nothing else is using yet.
+        void ArmPrimGenReroute();
 
     public:
         // kind: 0 = PRIMITIVES_WRITTEN, 1 = PRIMITIVES_GENERATED.
         Bool StartXfbQueryCapture(Uint32 kind);
-        void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots);
-        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, Bool wantGenerated, Uint64& outPrimitives);
+        void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots, Vector<Uint32>& outRerouteSlots);
+        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots,
+                                   Bool wantGenerated, Uint64& outPrimitives);
 
     private:
-        void BeginXfbQueryForDraw(VkCommandBuffer commandBuffer);
+        void BeginXfbQueryForDraw(VkCommandBuffer commandBuffer, Bool xfbActive);
         void EndXfbQueryForDraw(VkCommandBuffer commandBuffer);
 
         VkCommandPool m_commandPool = VK_NULL_HANDLE;

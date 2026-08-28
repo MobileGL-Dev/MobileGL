@@ -28,6 +28,7 @@
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Math/HalfFloat.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
 #include <algorithm>
@@ -3277,6 +3278,16 @@ void main() {
             vkDestroyQueryPool(m_device, m_xfbQueryPool, nullptr);
             m_xfbQueryPool = VK_NULL_HANDLE;
         }
+        if (m_primGenReroutePool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(m_device, m_primGenReroutePool, nullptr);
+            m_primGenReroutePool = VK_NULL_HANDLE;
+        }
+        m_primGenRerouteActiveSlots.clear();
+        m_primGenRerouteSlotCursor = 0;
+        m_primGenRerouteSlotOpen = false;
+        // Not sticky across renderers: the next bring-up re-decides it (from the
+        // per-process probe memo, so it re-decides without re-probing).
+        m_primGenRerouteKind = MG_Util::SelfTest::PrimGenRerouteKind::None;
         m_bufferManager.Shutdown();
 
         // Device is idle (vkDeviceWaitIdle above); query pools can be destroyed.
@@ -11299,7 +11310,7 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
-        BeginXfbQueryForDraw(commandBuffer);
+        BeginXfbQueryForDraw(commandBuffer, xfbActive);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDraw(commandBuffer,
             payload.params.vertexCount,
@@ -11385,23 +11396,70 @@ void main() {
             }
             s_vkResetQueryPool(m_device, m_xfbQueryPool, 0, kXfbQuerySlots);
         }
+        // The reroute pool, on the first GENERATED span that needs it. A creation
+        // failure disarms rather than failing the capture: the stream path still
+        // answers (with the driver's defect), which beats answering nothing.
+        if (kind == 1 && m_primGenRerouteKind != MG_Util::SelfTest::PrimGenRerouteKind::None &&
+            m_primGenReroutePool == VK_NULL_HANDLE) {
+            VkQueryPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            poolInfo.queryCount = kXfbQuerySlots;
+            if (m_primGenRerouteKind == MG_Util::SelfTest::PrimGenRerouteKind::PrimitivesGeneratedExt) {
+                // The query Vulkan defines for this GL target; counts vertex stream 0
+                // when begun with plain vkCmdBeginQuery.
+                poolInfo.queryType = VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT;
+            } else {
+                poolInfo.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+                // The clipping-stage INVOCATION counter: one per primitive reaching
+                // primitive clipping (GL's CLIPPING_INPUT_PRIMITIVES) - post-tess/GS,
+                // pre-clip, and per spec still counted under rasterizer discard, which
+                // is exactly the set GL_PRIMITIVES_GENERATED is defined over. The
+                // stage's OUTPUT count (CLIPPING_PRIMITIVES_BIT) would be wrong:
+                // clipping may drop or split primitives.
+                poolInfo.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT;
+            }
+            if (vkCreateQueryPool(m_device, &poolInfo, nullptr, &m_primGenReroutePool) != VK_SUCCESS) {
+                MGLOG_E_ONCE("StartXfbQueryCapture: reroute pool creation failed; the "
+                             "PRIMITIVES_GENERATED reroute is disarmed and XFB-inactive draws keep "
+                             "the stream query");
+                m_primGenReroutePool = VK_NULL_HANDLE;
+                m_primGenRerouteKind = MG_Util::SelfTest::PrimGenRerouteKind::None;
+            } else {
+                s_vkResetQueryPool(m_device, m_primGenReroutePool, 0, kXfbQuerySlots);
+            }
+        }
         m_xfbQueryActiveSlots[kind].clear();
         m_xfbQueryCaptureActive[kind] = true;
+        if (kind == 1) {
+            m_primGenRerouteActiveSlots.clear();
+        }
         return true;
     }
 
-    void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots) {
+    void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots,
+                                             Vector<Uint32>& outRerouteSlots) {
         if (kind > 1) {
             return;
         }
         outSlots = Move(m_xfbQueryActiveSlots[kind]);
         m_xfbQueryActiveSlots[kind].clear();
         m_xfbQueryCaptureActive[kind] = false;
+        outRerouteSlots.clear();
+        if (kind == 1) {
+            outRerouteSlots = Move(m_primGenRerouteActiveSlots);
+            m_primGenRerouteActiveSlots.clear();
+        }
     }
 
-    Bool VulkanRenderer::ResolveXfbQueryResult(const Vector<Uint32>& slots, Bool wantGenerated, Uint64& outPrimitives) {
+    Bool VulkanRenderer::ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots,
+                                               Bool wantGenerated, Uint64& outPrimitives) {
         outPrimitives = 0;
-        if (slots.empty() || m_xfbQueryPool == VK_NULL_HANDLE) {
+        const Bool haveStreamSlots = !slots.empty() && m_xfbQueryPool != VK_NULL_HANDLE;
+        // Reroute slots only ever accumulate the GENERATED target (see
+        // BeginXfbQueryForDraw); WRITTEN never opens one.
+        const Bool haveRerouteSlots =
+            wantGenerated && !rerouteSlots.empty() && m_primGenReroutePool != VK_NULL_HANDLE;
+        if (!haveStreamSlots && !haveRerouteSlots) {
             return true;
         }
         auto& frame = m_frameContext.GetCurrent();
@@ -11413,44 +11471,104 @@ void main() {
                 return false;
             }
         }
-        for (const Uint32 slot : slots) {
-            Uint64 pair[2] = {0, 0}; // {primitivesWritten, primitivesNeeded}
-            const VkResult result =
-                vkGetQueryPoolResults(m_device, m_xfbQueryPool, slot, 1, sizeof(pair), pair, sizeof(pair),
-                                      VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-            if (result == VK_SUCCESS) {
-                outPrimitives += pair[wantGenerated ? 1 : 0];
+        if (haveStreamSlots) {
+            for (const Uint32 slot : slots) {
+                Uint64 pair[2] = {0, 0}; // {primitivesWritten, primitivesNeeded}
+                const VkResult result =
+                    vkGetQueryPoolResults(m_device, m_xfbQueryPool, slot, 1, sizeof(pair), pair, sizeof(pair),
+                                          VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                if (result == VK_SUCCESS) {
+                    outPrimitives += pair[wantGenerated ? 1 : 0];
+                }
+            }
+        }
+        if (haveRerouteSlots) {
+            for (const Uint32 slot : rerouteSlots) {
+                // Both reroute pool kinds answer one 64-bit primitive count per slot.
+                Uint64 generated = 0;
+                const VkResult result = vkGetQueryPoolResults(
+                    m_device, m_primGenReroutePool, slot, 1, sizeof(generated), &generated,
+                    sizeof(generated), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                if (result == VK_SUCCESS) {
+                    outPrimitives += generated;
+                }
             }
         }
         return true;
     }
 
-    void VulkanRenderer::BeginXfbQueryForDraw(VkCommandBuffer commandBuffer) {
+    void VulkanRenderer::BeginXfbQueryForDraw(VkCommandBuffer commandBuffer, Bool xfbActive) {
         m_xfbQuerySlotOpen = false;
+        m_primGenRerouteSlotOpen = false;
         if ((!m_xfbQueryCaptureActive[0] && !m_xfbQueryCaptureActive[1]) || m_xfbQueryPool == VK_NULL_HANDLE) {
             return;
         }
-        const Uint32 slot = m_xfbQuerySlotCursor;
-        m_xfbQuerySlotCursor = (m_xfbQuerySlotCursor + 1) % kXfbQuerySlots;
-        // Slots are never host-reset at read time (both GL targets may reference one
-        // slot); recycle them here instead.
-        s_vkResetQueryPool(m_device, m_xfbQueryPool, slot, 1);
-        s_vkCmdBeginQueryIndexedEXT(commandBuffer, m_xfbQueryPool, slot, 0, 0);
-        for (Uint32 kind = 0; kind < 2; ++kind) {
-            if (m_xfbQueryCaptureActive[kind]) {
-                m_xfbQueryActiveSlots[kind].push_back(slot);
+        // A draw made while the GL span is merely PAUSED is CPU-accounted by the
+        // frontend's paused-primitive counter, whose delta the GENERATED resolve adds
+        // (DirectVulkan.cpp); a reroute slot for it would count it twice. Only a
+        // draw with no capture AND no paused span is the stream query's silent case.
+        const Bool glSpanPausedDraw = MG_State::pGLContext != nullptr &&
+                                      MG_State::pGLContext->IsTransformFeedbackActive() &&
+                                      MG_State::pGLContext->IsTransformFeedbackPaused();
+        const Bool rerouteGenerated = m_xfbQueryCaptureActive[1] &&
+                                      m_primGenRerouteKind != MG_Util::SelfTest::PrimGenRerouteKind::None &&
+                                      m_primGenReroutePool != VK_NULL_HANDLE && !xfbActive &&
+                                      !glSpanPausedDraw;
+        // The stream slot stays for WRITTEN whatever the reroute does (with capture
+        // inactive its primitivesWritten is 0, which is the correct WRITTEN answer),
+        // and for GENERATED wherever this draw is not rerouted - so one GL query span
+        // may accumulate stream slots (XFB-active draws) and reroute slots
+        // (XFB-inactive draws) side by side.
+        const Bool wantStreamSlot =
+            m_xfbQueryCaptureActive[0] || (m_xfbQueryCaptureActive[1] && !rerouteGenerated);
+        if (wantStreamSlot) {
+            const Uint32 slot = m_xfbQuerySlotCursor;
+            m_xfbQuerySlotCursor = (m_xfbQuerySlotCursor + 1) % kXfbQuerySlots;
+            // Slots are never host-reset at read time (both GL targets may reference one
+            // slot); recycle them here instead.
+            s_vkResetQueryPool(m_device, m_xfbQueryPool, slot, 1);
+            s_vkCmdBeginQueryIndexedEXT(commandBuffer, m_xfbQueryPool, slot, 0, 0);
+            if (m_xfbQueryCaptureActive[0]) {
+                m_xfbQueryActiveSlots[0].push_back(slot);
             }
+            if (m_xfbQueryCaptureActive[1] && !rerouteGenerated) {
+                m_xfbQueryActiveSlots[1].push_back(slot);
+            }
+            m_xfbQuerySlotOpen = true;
+            m_xfbQueryOpenSlot = slot;
         }
-        m_xfbQuerySlotOpen = true;
-        m_xfbQueryOpenSlot = slot;
+        if (rerouteGenerated) {
+            // Latched at INFO on purpose: it is the pinned integration lane's arming
+            // observable (the shape UnlocatedIoBlockScenario asserts), and the builds
+            // CI runs compile INFO in.
+            MGLOG_I_ONCE("PRIMITIVES_GENERATED reroute engaged: an XFB-inactive draw accumulates "
+                         "through the %s pool",
+                         m_primGenRerouteKind ==
+                                 MG_Util::SelfTest::PrimGenRerouteKind::PrimitivesGeneratedExt
+                             ? "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT"
+                             : "clipping-invocations statistics");
+            const Uint32 slot = m_primGenRerouteSlotCursor;
+            m_primGenRerouteSlotCursor = (m_primGenRerouteSlotCursor + 1) % kXfbQuerySlots;
+            // Same recycle-at-begin discipline as the stream pool. Both pool kinds
+            // are begun with plain vkCmdBeginQuery (a PRIMITIVES_GENERATED_EXT
+            // query begun this way counts vertex stream 0).
+            s_vkResetQueryPool(m_device, m_primGenReroutePool, slot, 1);
+            vkCmdBeginQuery(commandBuffer, m_primGenReroutePool, slot, 0);
+            m_primGenRerouteActiveSlots.push_back(slot);
+            m_primGenRerouteSlotOpen = true;
+            m_primGenRerouteOpenSlot = slot;
+        }
     }
 
     void VulkanRenderer::EndXfbQueryForDraw(VkCommandBuffer commandBuffer) {
-        if (!m_xfbQuerySlotOpen) {
-            return;
+        if (m_xfbQuerySlotOpen) {
+            s_vkCmdEndQueryIndexedEXT(commandBuffer, m_xfbQueryPool, m_xfbQueryOpenSlot, 0);
+            m_xfbQuerySlotOpen = false;
         }
-        s_vkCmdEndQueryIndexedEXT(commandBuffer, m_xfbQueryPool, m_xfbQueryOpenSlot, 0);
-        m_xfbQuerySlotOpen = false;
+        if (m_primGenRerouteSlotOpen) {
+            vkCmdEndQuery(commandBuffer, m_primGenReroutePool, m_primGenRerouteOpenSlot);
+            m_primGenRerouteSlotOpen = false;
+        }
     }
 
     Bool VulkanRenderer::BeginOcclusionForDraw(VkCommandBuffer commandBuffer) {
@@ -11500,7 +11618,7 @@ void main() {
         VkCommandBuffer& commandBuffer = frame.commandBuffer;
 
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
-        BeginXfbQueryForDraw(commandBuffer);
+        BeginXfbQueryForDraw(commandBuffer, xfbActive);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
         vkCmdDrawIndexed(commandBuffer,
             payload.params.indexCount,
@@ -13333,6 +13451,13 @@ void main() {
         // occlusion result still satisfies any-samples-style consumers.
         deviceFeatures.occlusionQueryPrecise = supportedDeviceFeatures.occlusionQueryPrecise;
         m_occlusionQueryPreciseEnabled = deviceFeatures.occlusionQueryPrecise == VK_TRUE;
+        m_tessellationShaderFeatureEnabled = deviceFeatures.tessellationShader == VK_TRUE;
+        // Backs the GL_PRIMITIVES_GENERATED reroute's statistics tier (see the
+        // m_primGenReroute* members): a VK_QUERY_TYPE_PIPELINE_STATISTICS pool may only
+        // be created with this feature enabled. Enabled wherever the device has it - the
+        // feature alone costs nothing; pools exist only where the reroute is armed.
+        deviceFeatures.pipelineStatisticsQuery = supportedDeviceFeatures.pipelineStatisticsQuery;
+        m_pipelineStatisticsQueryFeatureEnabled = deviceFeatures.pipelineStatisticsQuery == VK_TRUE;
 
         VkDeviceCreateInfo deviceCreateInfo{};
         deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -13658,6 +13783,38 @@ void main() {
                 deviceCreateInfo.pNext = &transformFeedbackFeatures;
                 m_transformFeedbackFeatureEnabled = true;
                 MGLOG_I("Enabled optional device extension: %s", VK_EXT_TRANSFORM_FEEDBACK_EXTENSION_NAME);
+            }
+        }
+        // VK_EXT_primitives_generated_query - the query Vulkan defines for GL's
+        // GL_PRIMITIVES_GENERATED precisely because the stream query above needs no
+        // capture by spec but drivers disagree. Taken with BOTH the base feature and the
+        // rasterizer-discard feature or not at all: without the latter, a discarding draw
+        // inside the query is invalid usage, and GL applications toggle discard freely.
+        // Only the PRIMITIVES_GENERATED reroute consumes it (see ArmPrimGenReroute).
+        m_primitivesGeneratedQueryFeatureEnabled = false;
+        m_primitivesGeneratedQueryDiscardFeatureEnabled = false;
+        VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT primitivesGeneratedQueryFeatures{};
+        primitivesGeneratedQueryFeatures.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
+        if (IsExtensionSupported(availableExtensions, VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME) &&
+            getPhysicalDeviceFeatures2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{};
+            featureQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            featureQuery.pNext = &primitivesGeneratedQueryFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            if (primitivesGeneratedQueryFeatures.primitivesGeneratedQuery == VK_TRUE &&
+                primitivesGeneratedQueryFeatures.primitivesGeneratedQueryWithRasterizerDiscard == VK_TRUE) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
+                                               VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME)) {
+                    enabledDeviceExtensions.push_back(VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME);
+                }
+                primitivesGeneratedQueryFeatures.primitivesGeneratedQueryWithNonZeroStreams = VK_FALSE;
+                primitivesGeneratedQueryFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &primitivesGeneratedQueryFeatures;
+                m_primitivesGeneratedQueryFeatureEnabled = true;
+                m_primitivesGeneratedQueryDiscardFeatureEnabled = true;
+                MGLOG_I("Enabled optional device extension: %s",
+                        VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME);
             }
         }
         // VK_EXT_provoking_vertex. Two independent features live behind one extension:
@@ -14009,6 +14166,105 @@ void main() {
         m_timerQuerySupported = m_timestampValidBits > 0 && m_timestampPeriodNs > 0.0f;
         MGLOG_I("Timer queries %s (timestampValidBits=%u, timestampPeriod=%f ns/tick)",
                 m_timerQuerySupported ? "supported" : "not supported", m_timestampValidBits, m_timestampPeriodNs);
+
+        // Last, because it records on m_graphicsQueue: decide the PRIMITIVES_GENERATED
+        // reroute for XFB-inactive draws. Nothing else has touched the queue yet.
+        ArmPrimGenReroute();
+    }
+
+    void VulkanRenderer::ArmPrimGenReroute() {
+        using namespace MG_Util::SelfTest;
+        m_primGenRerouteKind = PrimGenRerouteKind::None;
+        const MG_Config::QuirkOverride overrideSetting = MG_Config::Features.MagmaPrimGenQueryReroute;
+        // Without stream queries the GENERATED path never opens a slot at all, so
+        // there is nothing to reroute - whatever the override says.
+        if (!m_xfbQueriesSupported || !m_hostQueryResetEnabled) {
+            return;
+        }
+        const Bool primitivesGeneratedQueryUsable =
+            m_primitivesGeneratedQueryFeatureEnabled && m_primitivesGeneratedQueryDiscardFeatureEnabled;
+        PrimitivesGeneratedNoXfbVerdict verdict = PrimitivesGeneratedNoXfbVerdict::Inconclusive;
+        // The probe only matters under Auto (ForceOn bypasses the verdict, ForceOff
+        // never asks), and the answer is a device property - so it is memoized per
+        // process rather than re-paid on every renderer recreation.
+        if (overrideSetting == MG_Config::QuirkOverride::Auto) {
+            static const PrimitivesGeneratedNoXfbMeasurement s_measurement = [&]() {
+                PrimitivesGeneratedNoXfbProbeContext probeContext;
+                probeContext.device = m_device;
+                probeContext.queue = m_graphicsQueue;
+                probeContext.queueFamilyIndex =
+                    static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                probeContext.transformFeedbackQueriesUsable = m_xfbQueriesSupported;
+                probeContext.primitivesGeneratedQueryUsable = primitivesGeneratedQueryUsable;
+                probeContext.pipelineStatisticsEnabled = m_pipelineStatisticsQueryFeatureEnabled;
+                probeContext.tessellationEnabled = m_tessellationShaderFeatureEnabled;
+                auto& fns = probeContext.fns;
+                fns.vkCreateCommandPool = vkCreateCommandPool;
+                fns.vkDestroyCommandPool = vkDestroyCommandPool;
+                fns.vkAllocateCommandBuffers = vkAllocateCommandBuffers;
+                fns.vkBeginCommandBuffer = vkBeginCommandBuffer;
+                fns.vkEndCommandBuffer = vkEndCommandBuffer;
+                fns.vkCreateQueryPool = vkCreateQueryPool;
+                fns.vkDestroyQueryPool = vkDestroyQueryPool;
+                fns.vkCmdResetQueryPool = vkCmdResetQueryPool;
+                fns.vkCmdBeginQuery = vkCmdBeginQuery;
+                fns.vkCmdEndQuery = vkCmdEndQuery;
+                fns.vkCmdBeginQueryIndexedEXT = s_vkCmdBeginQueryIndexedEXT;
+                fns.vkCmdEndQueryIndexedEXT = s_vkCmdEndQueryIndexedEXT;
+                fns.vkCreateRenderPass = vkCreateRenderPass;
+                fns.vkDestroyRenderPass = vkDestroyRenderPass;
+                fns.vkCreateFramebuffer = vkCreateFramebuffer;
+                fns.vkDestroyFramebuffer = vkDestroyFramebuffer;
+                fns.vkCmdBeginRenderPass = vkCmdBeginRenderPass;
+                fns.vkCmdEndRenderPass = vkCmdEndRenderPass;
+                fns.vkCreateShaderModule = vkCreateShaderModule;
+                fns.vkDestroyShaderModule = vkDestroyShaderModule;
+                fns.vkCreatePipelineLayout = vkCreatePipelineLayout;
+                fns.vkDestroyPipelineLayout = vkDestroyPipelineLayout;
+                fns.vkCreateGraphicsPipelines = vkCreateGraphicsPipelines;
+                fns.vkDestroyPipeline = vkDestroyPipeline;
+                fns.vkCmdBindPipeline = vkCmdBindPipeline;
+                fns.vkCmdDraw = vkCmdDraw;
+                fns.vkCreateFence = vkCreateFence;
+                fns.vkDestroyFence = vkDestroyFence;
+                fns.vkQueueSubmit = vkQueueSubmit;
+                fns.vkWaitForFences = vkWaitForFences;
+                fns.vkGetQueryPoolResults = vkGetQueryPoolResults;
+                fns.vkDeviceWaitIdle = vkDeviceWaitIdle;
+                return RunPrimitivesGeneratedNoXfbProbe(probeContext);
+            }();
+            verdict = EvaluatePrimitivesGeneratedNoXfbVerdict(s_measurement);
+            if (!s_measurement.ran) {
+                MGLOG_W("PRIMITIVES_GENERATED probe did not run (%s); XFB-inactive draws keep the "
+                        "stream query", s_measurement.failureReason.c_str());
+            } else {
+                const auto logShape = [](const char* name,
+                                         const MG_Util::SelfTest::PrimitivesGeneratedNoXfbShapeMeasurement&
+                                             shape) {
+                    MGLOG_I("PRIMITIVES_GENERATED probe %s: drawn=%d stream=%llu/%llu pgq=%llu(%d) "
+                            "stat=%llu(%d)",
+                            name, shape.drawn ? 1 : 0,
+                            static_cast<unsigned long long>(shape.streamGenerated),
+                            static_cast<unsigned long long>(shape.expectedPrimitives),
+                            static_cast<unsigned long long>(shape.primitivesGeneratedExt),
+                            shape.primitivesGeneratedExtMeasured ? 1 : 0,
+                            static_cast<unsigned long long>(shape.statisticsClippingInput),
+                            shape.statisticsMeasured ? 1 : 0);
+                };
+                logShape("triangles", s_measurement.trianglesPlain);
+                logShape("triangles+discard", s_measurement.trianglesDiscard);
+                logShape("patches+discard", s_measurement.patchesDiscard);
+            }
+        }
+        m_primGenRerouteKind = ChoosePrimitivesGeneratedReroute(
+            overrideSetting, verdict, primitivesGeneratedQueryUsable, m_pipelineStatisticsQueryFeatureEnabled);
+        if (m_primGenRerouteKind != PrimGenRerouteKind::None) {
+            MGLOG_I("PRIMITIVES_GENERATED for XFB-inactive draws will accumulate through a %s pool%s",
+                    m_primGenRerouteKind == PrimGenRerouteKind::PrimitivesGeneratedExt
+                        ? "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT"
+                        : "clipping-invocations pipeline-statistics",
+                    overrideSetting == MG_Config::QuirkOverride::ForceOn ? " (forced on)" : "");
+        }
     }
 
     void VulkanRenderer::CreateAllocator() {

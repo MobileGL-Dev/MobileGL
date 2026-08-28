@@ -1206,6 +1206,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             SharedPtr<VkTimerQueryManager::TimestampRecord> end;
             // Kind::Occlusion - pool slots recorded between Begin/End; summed at result time.
             Vector<Uint32> occlusionSlots;
+            // Kind::XfbGenerated - reroute-pool slots for the span's XFB-INACTIVE
+            // draws, where the renderer's reroute is armed (the affected driver's
+            // stream query counts nothing without an open capture; see
+            // VulkanRenderer::BeginXfbQueryForDraw). Summed alongside the stream
+            // slots above, which keep the span's XFB-active draws.
+            Vector<Uint32> rerouteSlots;
             // Renderer generation the records were written under (see
             // g_rendererGeneration). A stale generation resolves as available
             // with a final zero result: the records' pool indices and frame
@@ -1313,7 +1319,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (query->kind == VulkanTimerQuery::Kind::XfbWritten ||
             query->kind == VulkanTimerQuery::Kind::XfbGenerated) {
             Uint64 primitives = 0;
-            if (!pVulkanRenderer->ResolveXfbQueryResult(query->occlusionSlots,
+            if (!pVulkanRenderer->ResolveXfbQueryResult(query->occlusionSlots, query->rerouteSlots,
                                                         query->kind == VulkanTimerQuery::Kind::XfbGenerated,
                                                         primitives)) {
                 return false;
@@ -1377,7 +1383,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return;
         }
         pVulkanRenderer->StopXfbQueryCapture(
-            query->kind == VulkanTimerQuery::Kind::XfbGenerated ? 1u : 0u, query->occlusionSlots);
+            query->kind == VulkanTimerQuery::Kind::XfbGenerated ? 1u : 0u, query->occlusionSlots,
+            query->rerouteSlots);
     }
 
     BackendQueryHandle BeginOcclusionQuery() {

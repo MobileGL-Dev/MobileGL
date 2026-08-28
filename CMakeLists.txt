@@ -314,6 +314,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/SelfTest/DriverBugProbes.cpp
     MobileGL/MG_Util/SelfTest/DriverPost.cpp
     MobileGL/MG_Util/SelfTest/DriverPostIterationRPWitness.cpp
+    MobileGL/MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.cpp
 
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp

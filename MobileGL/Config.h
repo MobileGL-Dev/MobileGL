@@ -287,6 +287,22 @@ namespace MobileGL::MG_Config {
         // negative control that replays the corruption. Costs 2x the memory of the affected
         // formats where it engages, which is why Auto is probe-gated rather than always-on.
         QuirkOverride EsprytWidenPacked16Storage = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE: DirectVulkan's GL_PRIMITIVES_GENERATED
+        // reroute for draws made while transform feedback is INACTIVE. The stream query
+        // (VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT primitivesNeeded) is defined to count
+        // them, but a Mali driver - and Mesa lavapipe - answers 0 unless a capture span is
+        // open, which is exactly the shape the CTS uses to measure the tessellator, so ~29
+        // tessellation tests per tree size a capture buffer from the 0 and die on the
+        // zero-length map. Auto defers to a device probe at renderer bring-up
+        // (SelfTest::RunPrimitivesGeneratedNoXfbProbe), which measures two substitutes on
+        // the same capture-less draws and arms the best proven one: the dedicated
+        // VK_EXT_primitives_generated_query (exact semantics by definition; lavapipe passes
+        // it, rasterizer discard included), else a clipping-invocations pipeline-statistics
+        // pool (see the verdict vocabulary for its rasterizer-discard split). ForceOn pins
+        // the reroute structurally wherever a pool can exist (the arming-observable lane,
+        // immune to the probe's verdict moving), and ForceOff is the negative control that
+        // replays the driver's silence.
+        QuirkOverride MagmaPrimGenQueryReroute = QuirkOverride::Auto;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config

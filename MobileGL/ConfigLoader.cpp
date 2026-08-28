@@ -205,6 +205,7 @@ namespace MobileGL::MG_ConfigLoader {
             QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
         features.EsprytWidenPacked16Storage =
             QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
+        features.MagmaPrimGenQueryReroute = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE");
     }
 
     inline void InitBackendType() {
