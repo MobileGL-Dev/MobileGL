@@ -631,7 +631,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // --- driver capability bits that arm or steer a pass ---
         // Whether LowerViewportIndexForEssl runs on this module. NOT the raw
         // GL_OES_viewport_array bit any more: the routing emulation arms the pass even where the
-        // extension exists (Config.h, ViewportArrayEmulation), so the extension alone no longer
+        // extension exists (Config.h, EsprytViewportArrayEmulation), so the extension alone no longer
         // decides, and a key carrying only it would serve a module lowered under one setting to a
         // link made under the other.
         Bool viewportIndexLoweringArmed = false;
