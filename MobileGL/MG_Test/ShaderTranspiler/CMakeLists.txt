@@ -18,6 +18,7 @@ add_executable(
         FlattenAtomicCounterBlockTest.cpp
         WidenImageFormatsTest.cpp
         GlslangCaptureTest.cpp
+        DemotePointSizeTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

@@ -499,6 +499,19 @@ TEST_F(TranslationCacheTest, L1KeyMovesWithEveryInputThatMovesTheSpirv) {
         v.nativeFloat64 = true;
         variants.emplace_back("nativeFloat64", BuildSpirvTranslationKey(v));
     }
+    {   // CompileEnv::DemotesTessellationPointSize(): phase B rewrites the cached modules
+        // under it (the point-size demotion), so one key shape would describe two module
+        // sets - built-in kept vs carried as a varying with the capability stripped.
+        SpirvTranslationKeyInputs v = base;
+        v.demoteTessellationPointSize = true;
+        variants.emplace_back("demoteTessellationPointSize", BuildSpirvTranslationKey(v));
+    }
+    {   // ... and its geometry twin, keyed separately because the ES loader really does
+        // probe the two extension families independently.
+        SpirvTranslationKeyInputs v = base;
+        v.demoteGeometryPointSize = true;
+        variants.emplace_back("demoteGeometryPointSize", BuildSpirvTranslationKey(v));
+    }
     // ---- inputs the WIDENED payload pulled into the key ----
     // They cannot move a word of the generated SPIR-V, but they do shape the reflection the
     // payload now carries, so they have to split the key. This is the group that would go
@@ -648,6 +661,48 @@ TEST_F(TranslationCacheTest, NativeFloat64IsOutOfTheFrontendFingerprintAndInside
     kept.nativeFloat64 = nativeEnv.ConsumesFloat64Natively();
 
     EXPECT_FALSE(BuildSpirvTranslationKey(demoted) == BuildSpirvTranslationKey(kept))
+        << "one L1 entry would then describe two different module sets";
+}
+
+// The second and third capability bits under the same placement rule as nativeFloat64:
+// out of the front-end fingerprint (glslang produces the same thing either way), inside
+// the L1 key (phase B's point-size demotion rewrites the cached modules under them). The
+// accessor direction is pinned too, because it is INVERTED relative to the params field
+// and a swap of the arms would disable the device repair with every rendering test green.
+TEST_F(TranslationCacheTest, PointSizeDemotionBitsAreOutOfTheFrontendFingerprintAndInsideTheL1Key) {
+    CompileEnv none;      // no backend at all: never demote, standalone compiles stay standard
+    CompileEnv hosting;   // a backend that hosts the built-in
+    CompileEnv demoting;  // a backend that cannot
+    hosting.backend = BackendType::DirectVulkan;
+    demoting.backend = BackendType::DirectVulkan;
+    demoting.params.SupportsTessellationPointSize = false;
+    demoting.params.SupportsGeometryPointSize = false;
+
+    EXPECT_FALSE(none.DemotesTessellationPointSize());
+    EXPECT_FALSE(none.DemotesGeometryPointSize());
+    EXPECT_FALSE(hosting.DemotesTessellationPointSize());
+    EXPECT_FALSE(hosting.DemotesGeometryPointSize());
+    EXPECT_TRUE(demoting.DemotesTessellationPointSize());
+    EXPECT_TRUE(demoting.DemotesGeometryPointSize());
+
+    EXPECT_EQ(ComputeFrontendCompileEnvFingerprint(hosting), ComputeFrontendCompileEnvFingerprint(demoting))
+        << "the point-size capability leaked into the front-end fingerprint";
+    EXPECT_NE(ComputeCompileEnvFingerprint(hosting), ComputeCompileEnvFingerprint(demoting))
+        << "the whole-environment fingerprint has to notice it - it is a DynamicBackendParameters "
+           "field, hashed by object representation";
+
+    const Vector<SpirvTranslationKeyInputs::Stage> stages{{GL_VERTEX_SHADER, kVertexSource},
+                                                          {GL_FRAGMENT_SHADER, kFragmentSource}};
+    SpirvTranslationKeyInputs demotedKey = BaselineSpirvInputs(stages);
+    demotedKey.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(demoting);
+    demotedKey.demoteTessellationPointSize = demoting.DemotesTessellationPointSize();
+    demotedKey.demoteGeometryPointSize = demoting.DemotesGeometryPointSize();
+    SpirvTranslationKeyInputs keptKey = BaselineSpirvInputs(stages);
+    keptKey.frontendFingerprint = ComputeFrontendCompileEnvFingerprint(hosting);
+    keptKey.demoteTessellationPointSize = hosting.DemotesTessellationPointSize();
+    keptKey.demoteGeometryPointSize = hosting.DemotesGeometryPointSize();
+
+    EXPECT_FALSE(BuildSpirvTranslationKey(demotedKey) == BuildSpirvTranslationKey(keptKey))
         << "one L1 entry would then describe two different module sets";
 }
 
