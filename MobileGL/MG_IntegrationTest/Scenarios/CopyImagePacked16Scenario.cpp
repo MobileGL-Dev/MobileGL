@@ -320,6 +320,9 @@ namespace MGITest {
                 const GLfloat clearColor[4] = {static_cast<GLfloat>(8 % (max + 1)) / max,
                                                static_cast<GLfloat>(maxGreen / 2) / maxGreen,
                                                static_cast<GLfloat>(max - 2) / max, 1.0f};
+                // The context is shared with every scenario in this process; a scissor left on
+                // would clip the clear and hand the copy undefined renderbuffer texels.
+                glDisable(GL_SCISSOR_TEST);
                 glClearBufferfv(GL_COLOR, 0, clearColor);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << format.name << ": setup failed";
