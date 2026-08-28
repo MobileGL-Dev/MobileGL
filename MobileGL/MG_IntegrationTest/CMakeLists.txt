@@ -104,6 +104,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PrimitivesGeneratedNoXfbScenario.cpp
     Scenarios/XfbRepeatedCaptureScenario.cpp
     Scenarios/TessellationXfbCaptureScenario.cpp
+    Scenarios/PointSizeDemotionScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
@@ -373,6 +374,19 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/primgen-query-reroute.log"
     ${MGL_ITEST_VULKAN_ENV})
+# The point-size demotion pinned on, per backend, with a per-lane log file for the arming
+# assertion - the same MOBILEGL_LOG_FILE_PATH reasoning as the UnlocatedIoBlocks lane above.
+# Two lanes because the demotion runs in the SHARED phase-B chain and each backend then
+# consumes it differently (Espryt respells the driver-side capture request, Magma binds the
+# SPIR-V Xfb decorations to the carrier).
+mgl_itest_join_environment(MGL_ITEST_GLES_POINT_SIZE_DEMOTION_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_POINT_SIZE_DEMOTION=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/point-size-demotion-gles.log"
+    ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_POINT_SIZE_DEMOTION=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/point-size-demotion-vulkan.log"
+    ${MGL_ITEST_VULKAN_ENV})
 
 # TIMEOUT on every entry: a GPU test that wedges must fail the run, not hang it.
 set(MGL_ITEST_TIMEOUT 120)
@@ -588,4 +602,31 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT}"
+)
+
+# PointSizeDemotionScenario with the demotion PINNED ON, per backend, for the reason every
+# pinned lane above exists: llvmpipe and lavapipe both HOST gl_PointSize in tessellation and
+# geometry stages, so the ambient registrations run these captures through the built-in and
+# the demotion - the path every affected Mali device actually takes - would execute nowhere.
+# The ambient runs stay the negative control: same scenario, same CPU-computed bytes, native
+# path. Both backends, because the demotion is shared phase-B work with two different
+# consumers (the ESSL capture respelling vs the SPIR-V Xfb carrier binding).
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.PointSizeDemotion."
+    TEST_FILTER "PointSizeDemotionScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_POINT_SIZE_DEMOTION_ENVIRONMENT}"
+)
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.PointSizeDemotion."
+    TEST_FILTER "PointSizeDemotionScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}"
 )
