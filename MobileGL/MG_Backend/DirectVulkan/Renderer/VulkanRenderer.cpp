@@ -10703,19 +10703,30 @@ void main() {
                         "GetTexImage: failed to materialize pending clear for textureId=%d",
                         textureObject->GetExternalIndex());
 
+        // WHICH FACE the caller asked for. glGetTexImage names one face of a cube map through the
+        // TARGET token (GL_TEXTURE_CUBE_MAP_NEGATIVE_X and friends, GL 4.6 core 8.11), and a cube
+        // map's six faces are its VkImage's six ARRAY LAYERS - so unless the token is turned into a
+        // baseArrayLayer, every face token reads layer 0 and the whole cube answers as +X. The
+        // image's own target cannot supply this: a plain GL_TEXTURE_CUBE_MAP is not an array target,
+        // so the layer arithmetic below leaves it at one layer starting at zero, which is precisely
+        // the layer this face index has to displace. Same conversion, same reason, as
+        // VkClearManager's / VkRenderPassManager's ResolveAttachmentBaseArrayLayer, which resolve an
+        // ATTACHMENT's face; this is the readback's copy of it. Zero for every other target,
+        // including a cube map ARRAY - that one arrives as TextureUploadTarget::CubeMapArray with
+        // its layer-faces already counted in the level's z, not as a face token.
+        const Bool isCubeFaceTarget = textureUploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+            textureUploadTarget <= TextureUploadTarget::CubeMapNegativeZ;
+        const Int glCubeFaceLayer = isCubeFaceTarget
+            ? static_cast<Int>(textureUploadTarget) - static_cast<Int>(TextureUploadTarget::CubeMapPositiveX)
+            : 0;
+
         if ((resource->aspect & VK_IMAGE_ASPECT_COLOR_BIT) == 0) {
             if (format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL || format == GL_STENCIL_INDEX) {
                 const auto levelSize =
                     textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
-                const Bool isCubeFace = textureUploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
-                    textureUploadTarget <= TextureUploadTarget::CubeMapNegativeZ;
                 // Storage space: `resource` is the storage texture's, so a view's level and
                 // layer have to be shifted into its numbering (see ToStorageMipLevel).
-                const Int glArrayLayer = isCubeFace
-                    ? static_cast<Int>(textureUploadTarget) -
-                        static_cast<Int>(TextureUploadTarget::CubeMapPositiveX)
-                    : 0;
-                const Uint32 arrayLayer = ToStorageArrayLayer(textureObject.get(), glArrayLayer);
+                const Uint32 arrayLayer = ToStorageArrayLayer(textureObject.get(), glCubeFaceLayer);
                 const Uint32 storageLevel = ToStorageMipLevel(textureObject.get(), level);
                 // A 1D array's levelSize.y() is its LAYER count, and those layers are the rows
                 // GL wants back - but in Vulkan they are array layers of a one-row image, not
@@ -10810,7 +10821,10 @@ void main() {
         // Storage space, as above: a texture view reads its own level 0 out of whichever level
         // and layer of the parent it opened onto.
         copyRegion.imageSubresource.mipLevel = ToStorageMipLevel(textureObject.get(), level);
-        copyRegion.imageSubresource.baseArrayLayer = ToStorageArrayLayer(textureObject.get(), 0);
+        // glCubeFaceLayer, not 0: the cube face the target token named (see above). Non-zero for
+        // exactly one shape - a plain cube map read one face at a time - and layerCount is 1 there,
+        // so the copy stays inside the six layers the image has.
+        copyRegion.imageSubresource.baseArrayLayer = ToStorageArrayLayer(textureObject.get(), glCubeFaceLayer);
         copyRegion.imageSubresource.layerCount = static_cast<Uint32>(arrayLayers);
         copyRegion.imageExtent = {static_cast<Uint32>(width),
                                   is1dArrayImage ? 1u : static_cast<Uint32>(height),

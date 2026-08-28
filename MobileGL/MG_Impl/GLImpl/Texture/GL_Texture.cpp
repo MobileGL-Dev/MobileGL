@@ -5078,9 +5078,15 @@ namespace MobileGL::MG_Impl::GLImpl {
     // The half of the GetTexImage/GetTextureImage error set (GL 4.6 core 8.11) that depends on the
     // resolved texture object rather than on how it was named. Shared because the by-name entry
     // point does not route through GetTexImage_State and so used to enforce none of it.
+    // `imagesQueried` is how many of the texture's upload-target images the query hands back, and
+    // exists for the destination-size check at the bottom. Zero means "all of them", which is what
+    // the whole-level forms return - every face of a cube map. glGetTextureSubImage naming ONE cube
+    // face passes 1: sizing that request against six faces' worth would reject the only buffer a
+    // single-face read has any reason to pass.
     Bool ValidateTextureImageQuery(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLint level,
                                    TextureInputFormat textureInputFormat, TexturePixelDataType texturePixelDataType,
-                                   GLsizei bufSize, const void* pixels, const char* caller) {
+                                   GLsizei bufSize, const void* pixels, const char* caller,
+                                   SizeT imagesQueried = 0) {
         if (!TextureImpl::ValidateTextureObject(textureObject)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -5196,12 +5202,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return false;
             }
 
-            // Tightly packed, and summed over every face because a cube map query returns all
-            // six. Pack pixel-store state only ever grows this, so a request rejected here
-            // could not have fit under any packing.
+            // Tightly packed, and summed over every face because a whole-level cube map query
+            // returns all six - unless the caller named a single face, which is what a non-zero
+            // imagesQueried says. Pack pixel-store state only ever grows this, so a request
+            // rejected here could not have fit under any packing.
+            const SizeT imageCount = imagesQueried != 0 ? imagesQueried : uploadTargets.size();
             const SizeT required = MG_Util::CalculateInputTextureImageSize(textureInputFormat,
                                                                            texturePixelDataType, texelSize) *
-                                   uploadTargets.size();
+                                   imageCount;
 
             if (bufSize >= 0 && static_cast<SizeT>(bufSize) < required) {
                 MG_State::pGLContext->RecordError(
@@ -6423,6 +6431,23 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // The half glGetTextureImage and glGetTextureSubImage share: which of the two readbacks answers,
+    // for ONE named upload target. Factored out so the sub-image form can name a cube FACE - the
+    // by-name spelling of the face token glGetTexImage takes - instead of re-deriving the target and
+    // silently landing on the +X face the way the delegation it replaces did.
+    static void GetTextureImageForUploadTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                               TextureUploadTarget uploadTarget, GLint level, GLenum format,
+                                               GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
+        if (MG_Backend::pActiveBackendObject != nullptr &&
+            MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
+            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage != nullptr) {
+            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
+                                                                  bufSize, pixels);
+            return;
+        }
+        CopyTextureImageToClientOrPBO_State(textureObject, uploadTarget, level, format, type, bufSize, pixels, caller);
+    }
+
     void GetTextureImage(GLuint texture, GLint level, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
@@ -6431,16 +6456,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        __func__)) {
             return;
         }
-        const auto uploadTarget = GetPrimaryUploadTarget(textureObject);
-        if (MG_Backend::pActiveBackendObject != nullptr &&
-            MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
-            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage != nullptr) {
-            MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
-                                                                  bufSize, pixels);
-            return;
-        }
-        CopyTextureImageToClientOrPBO_State(textureObject, uploadTarget, level, format, type, bufSize, pixels,
-                                            __func__);
+        GetTextureImageForUploadTarget(textureObject, GetPrimaryUploadTarget(textureObject), level, format, type,
+                                       bufSize, pixels, __func__);
     }
 
     void GetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels) {
@@ -6484,9 +6501,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         const auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
-        const Bool isFullLevelRead = xoffset == 0 && yoffset == 0 && zoffset == 0 &&
-                                     width == texelSize.x() && height == texelSize.y() &&
-                                     depth == texelSize.z();
+        // On a cube map, z is the FACE axis. A cube map's level is stored per face, so its level
+        // size reads z = 1 whichever face named it - but GL 4.6 core 8.11.4 addresses the six faces
+        // of a cube map through zoffset/depth, exactly the six layers a face token names for
+        // glGetTexImage. Without this arm the z range was measured against that 1 and only zoffset 0
+        // (the +X face) was expressible; the other five were rejected as a partial read.
+        //
+        // Only ONE face at a time. depth > 1 would have to concatenate faces into the destination,
+        // which is the same unimplemented multi-image packing the check below still refuses.
+        const Bool isSingleCubeFaceRead = textureObject->GetTarget() == TextureTarget::TextureCubeMap &&
+                                          depth == 1 && zoffset < 6;
+        const Bool isFullLevelRead = xoffset == 0 && yoffset == 0 && width == texelSize.x() &&
+                                     height == texelSize.y() &&
+                                     (isSingleCubeFaceRead || (zoffset == 0 && depth == texelSize.z()));
         if (!isFullLevelRead) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -6495,7 +6522,17 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        GetTextureImage(texture, level, format, type, bufSize, pixels);
+        const TextureUploadTarget readUploadTarget =
+            isSingleCubeFaceRead ? static_cast<TextureUploadTarget>(
+                                       static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + zoffset)
+                                 : uploadTarget;
+        if (!ValidateTextureImageQuery(textureObject, level, MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                       MG_Util::ConvertGLEnumToTexturePixelDataType(type), bufSize, pixels, __func__,
+                                       isSingleCubeFaceRead ? 1u : 0u)) {
+            return;
+        }
+        GetTextureImageForUploadTarget(textureObject, readUploadTarget, level, format, type, bufSize, pixels,
+                                       __func__);
     }
 
     // A buffer texture carries none of the sampler or level state these queries report. Reached by
