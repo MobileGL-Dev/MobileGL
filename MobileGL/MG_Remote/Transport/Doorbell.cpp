@@ -103,8 +103,11 @@ namespace MobileGL::MG_Remote::Transport {
                 // one pending, which is all a doorbell promises.
                 return;
             }
-            if (written < 0 && errno == EPIPE) {
-                return; // peer gone; the waiter learns it from its own read
+            if (written < 0 && (errno == EPIPE || errno == ECONNRESET)) {
+                // The peer is gone: it can never ring back either, so latch it
+                // here too rather than waiting for a Park to discover it.
+                m_dead = true;
+                return;
             }
             MGLOG_D("MG_Remote doorbell: send failed (errno=%d)", errno);
             return;
@@ -112,7 +115,7 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     bool SocketDoorbell::Park(std::uint32_t timeoutMs) {
-        if (m_fd < 0) {
+        if (m_fd < 0 || m_dead) {
             return false;
         }
         const auto start = std::chrono::steady_clock::now();
@@ -139,28 +142,78 @@ namespace MobileGL::MG_Remote::Transport {
             if (ready == 0) {
                 return false; // timed out
             }
-            Reset();
-            return true;
+            // revents has to be inspected, not just `ready > 0`. Once the peer
+            // closes its end the descriptor is permanently poll-ready with
+            // nothing to read (measured on Linux: revents=POLLIN|POLLHUP,
+            // recv()==0), so treating any readiness as a wakeup turns every
+            // park on a dead peer into a 100% CPU spin - unbounded, because
+            // Doorbell::Wait re-parks until its deadline and kWaitForever has
+            // none.
+            if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
+                MGLOG_D("MG_Remote doorbell: fd %d unusable (revents=0x%X)", m_fd,
+                        static_cast<unsigned>(pfd.revents));
+                m_dead = true;
+                return false;
+            }
+            if ((pfd.revents & POLLIN) != 0) {
+                if (Drain() != 0) {
+                    return true; // a real wakeup byte
+                }
+                if (m_dead) {
+                    return false; // EOF, not an event
+                }
+                // Ready but empty and still alive: someone else drained it.
+                // Report the wakeup and let the caller re-test its condition.
+                return true;
+            }
+            if ((pfd.revents & POLLHUP) != 0) {
+                m_dead = true;
+                return false;
+            }
+            // Readiness with no bit we requested or recognise: there is
+            // nothing to consume and no way to make progress, so refuse to
+            // poll this descriptor again.
+            MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd,
+                    static_cast<unsigned>(pfd.revents));
+            m_dead = true;
+            return false;
         }
     }
 
-    void SocketDoorbell::Reset() {
-        if (m_fd < 0) {
-            return;
-        }
+    std::uint64_t SocketDoorbell::Drain() {
         // Level-triggered to edge-triggered: swallow every queued byte so one
         // stale wakeup cannot make later Parks return without an event.
+        std::uint64_t consumed = 0;
         std::uint8_t scratch[64];
         for (;;) {
             const ssize_t got = ::recv(m_fd, scratch, sizeof(scratch), MSG_DONTWAIT);
             if (got > 0) {
+                consumed += static_cast<std::uint64_t>(got);
                 continue;
             }
-            if (got < 0 && errno == EINTR) {
+            if (got == 0) {
+                // Orderly shutdown on a stream socket: the peer is gone and
+                // will never ring again.
+                m_dead = true;
+                return consumed;
+            }
+            if (errno == EINTR) {
                 continue;
             }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return consumed; // drained
+            }
+            MGLOG_D("MG_Remote doorbell: recv failed (errno=%d)", errno);
+            m_dead = true;
+            return consumed;
+        }
+    }
+
+    void SocketDoorbell::Reset() {
+        if (m_fd < 0 || m_dead) {
             return;
         }
+        (void)Drain();
     }
 
 #endif // !_WIN32
