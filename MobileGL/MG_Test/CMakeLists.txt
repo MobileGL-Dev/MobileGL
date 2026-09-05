@@ -76,6 +76,9 @@ add_subdirectory(VertexArray)
 add_subdirectory(Program)
 add_subdirectory(Query)
 add_subdirectory(Pipeline)
+# The MGPipe catalogue arithmetic: no GL context and no driver, just the .def, the seven
+# generated files and the payload layouts.
+add_subdirectory(Pipe)
 add_subdirectory(ShaderTranspiler)
 add_subdirectory(Util)
 add_subdirectory(SelfTest)
