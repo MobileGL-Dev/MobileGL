@@ -1568,6 +1568,15 @@ namespace {
         int respecifyCalls = 0;
         int flushCalls = 0;
         Bool provideMap = true; // false => backend declines, exercising the shadow fallback
+        // Only recorded by the variant of the ops table that offers ResidentSubData: the
+        // bytes a CPU write handed the backend for a GPU-ordered landing into an adopted
+        // store, held back from `gpu` until a readback "retires" them.
+        struct ResidentWrite {
+            SizeT offset = 0;
+            Vector<Uint8> bytes;
+        };
+        Vector<ResidentWrite> residentWrites;
+        int readbackCalls = 0;
     };
 
     ZeroCopyMockBackend* g_zeroCopyMock = nullptr;
@@ -1603,6 +1612,39 @@ namespace {
         .FlushMappedRange = ZeroCopyMock_Flush,
         .OnDestroy = ZeroCopyMock_OnDestroy,
         .AcquirePersistentMap = ZeroCopyMock_AcquirePersistentMap,
+    };
+
+    // The same backend with the GPU-ordered landing ops a staging-ring backend offers: a
+    // CPU write into an adopted store is queued (the mapping is NOT written through), and
+    // a readback is what lands the queue before the application reads.
+    void ZeroCopyMock_ResidentSubData(MG_State::GLState::BufferObject&, SizeT offset, DataPtr data) {
+        if (!g_zeroCopyMock) return;
+        auto& write = g_zeroCopyMock->residentWrites.emplace_back();
+        write.offset = offset;
+        const auto* bytes = static_cast<const Uint8*>(data.data);
+        write.bytes.assign(bytes, bytes + data.size);
+    }
+    void ZeroCopyMock_ReadbackFromGpu(MG_State::GLState::BufferObject&) {
+        if (!g_zeroCopyMock) return;
+        ++g_zeroCopyMock->readbackCalls;
+        for (const auto& write : g_zeroCopyMock->residentWrites) {
+            // Reported, not asserted: an ASSERT here would return out of the readback and
+            // leave the remaining landings unapplied, which reads as a different failure.
+            EXPECT_LE(write.offset + write.bytes.size(), g_zeroCopyMock->gpu.size());
+            if (write.offset + write.bytes.size() > g_zeroCopyMock->gpu.size()) continue;
+            Memcpy(g_zeroCopyMock->gpu.data() + write.offset, write.bytes.data(), write.bytes.size());
+        }
+        g_zeroCopyMock->residentWrites.clear();
+    }
+
+    const MG_State::GLState::BufferBackendOps kResidentSubDataMockOps = {
+        .Respecify = ZeroCopyMock_Respecify,
+        .SubData = ZeroCopyMock_SubData,
+        .ResidentSubData = ZeroCopyMock_ResidentSubData,
+        .FlushMappedRange = ZeroCopyMock_Flush,
+        .OnDestroy = ZeroCopyMock_OnDestroy,
+        .AcquirePersistentMap = ZeroCopyMock_AcquirePersistentMap,
+        .ReadbackFromGpu = ZeroCopyMock_ReadbackFromGpu,
     };
 
     struct ScopedBackendOps {
@@ -2072,5 +2114,863 @@ TEST_F(BufferTest, RedefiningANonAdoptedBufferIsUnchanged) {
     EXPECT_EQ(std::memcmp(bufferObject->MappedData(), after, sizeof(after)), 0);
     EXPECT_EQ(mock.respecifyCalls, 1);
 
+    g_zeroCopyMock = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// A NON-persistent write map of an ADOPTED store. glMapBuffer / glMapBufferRange hand
+// the application a staging copy regardless of where the store lives, and GL requires
+// the bytes it wrote there to be visible to every later command once glUnmapBuffer
+// returns. Residency used to come only from a coherent persistent map - which writes
+// in place and never has a staging copy - so the unmap simply skipped the copy-back
+// for a resident store. Residency now also comes from a shader storage binding
+// (EnsureGpuResidentStorage at draw time) and from large-store adoption, both of which
+// an application then re-initialises through an ordinary map/write/unmap: the
+// conformance suite re-seeds every SSBO that way before each draw, and every re-seed
+// after the first draw was dropped on the floor. These pin the landing for each map
+// shape, on the backend that writes the coherent mapping in place and on the one that
+// takes the bytes for a GPU-ordered landing, plus the shadow path as the control.
+namespace {
+    constexpr SizeT kAdoptedInts = 16;
+
+    // A buffer of kAdoptedInts sequential ints, adopted by the mock backend exactly as an
+    // SSBO binding does at draw time. The per-write counters are zeroed afterwards so a
+    // test only sees the traffic of the map it makes.
+    SharedPtr<MG_State::GLState::BufferObject> MakeAdoptedBuffer(ZeroCopyMockBackend& mock, GLenum target,
+                                                                 GLuint& buffer) {
+        GenBuffers(1, &buffer);
+        BindBuffer(target, buffer);
+        Vector<GLint> initial(kAdoptedInts);
+        for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
+        BufferData(target, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
+                   GL_DYNAMIC_DRAW);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+        auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+        EXPECT_NE(bufferObject, nullptr);
+        if (bufferObject == nullptr) return nullptr;
+        EXPECT_TRUE(bufferObject->EnsureGpuResidentStorage());
+        EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+        EXPECT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(mock.gpu.data()));
+        mock.subDataCalls = 0;
+        mock.flushCalls = 0;
+        mock.respecifyCalls = 0;
+        return bufferObject;
+    }
+
+    const GLint* GpuInts(const ZeroCopyMockBackend& mock) {
+        return reinterpret_cast<const GLint*>(mock.gpu.data());
+    }
+} // namespace
+
+TEST_F(BufferTest, ANonPersistentReadWriteRangeMapOfAnAdoptedStoreLandsAtUnmap) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    // The conformance suite's shape: the whole store, READ|WRITE, then a full rewrite.
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        {0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    // A non-persistent map is a staging copy, seeded from the adopted store...
+    EXPECT_NE(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
+    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(mapped[i], static_cast<GLint>(i));
+    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1000 + static_cast<GLint>(i);
+    // ...that the store does not see until the unmap.
+    EXPECT_EQ(GpuInts(mock)[0], 0);
+    bufferObject->ReleaseMemory();
+
+    EXPECT_FALSE(bufferObject->IsMapped());
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        EXPECT_EQ(GpuInts(mock)[i], 1000 + static_cast<GLint>(i)) << "int " << i;
+    }
+    EXPECT_EQ(std::memcmp(bufferObject->MappedData(), mock.gpu.data(), mock.gpu.size()), 0);
+    // The landing publishes the change for cached consumers...
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    // ...but dispatches no transfer op: the backend keeps no separate copy of an
+    // adopted store, and its flush op would only upload the mapping onto itself.
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.acquireMapCalls, 1);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, GlMapBufferWriteOnlyAndReadWriteOfAnAdoptedStoreLandAtUnmap) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    // glMapBuffer(GL_WRITE_ONLY): the staging copy is still seeded (no invalidate bit),
+    // so a partial write keeps the untouched ints.
+    Uint64 serial = bufferObject->GetChangeSerial();
+    auto* writeOnly = static_cast<GLint*>(bufferObject->AcquireMemory(true, false, true));
+    ASSERT_NE(writeOnly, nullptr);
+    EXPECT_NE(static_cast<void*>(writeOnly), static_cast<void*>(mock.gpu.data()));
+    writeOnly[0] = 100;
+    writeOnly[1] = 200;
+    bufferObject->ReleaseMemory();
+    EXPECT_EQ(GpuInts(mock)[0], 100);
+    EXPECT_EQ(GpuInts(mock)[1], 200);
+    EXPECT_EQ(GpuInts(mock)[2], 2);
+    EXPECT_EQ(GpuInts(mock)[kAdoptedInts - 1], static_cast<GLint>(kAdoptedInts - 1));
+    EXPECT_GT(bufferObject->GetChangeSerial(), serial);
+
+    // glMapBuffer(GL_READ_WRITE): reads see the previous landing, and the next one lands too.
+    serial = bufferObject->GetChangeSerial();
+    auto* readWrite = static_cast<GLint*>(bufferObject->AcquireMemory(true, true, true));
+    ASSERT_NE(readWrite, nullptr);
+    EXPECT_EQ(readWrite[0], 100);
+    EXPECT_EQ(readWrite[1], 200);
+    readWrite[2] = 300;
+    bufferObject->ReleaseMemory();
+    EXPECT_EQ(GpuInts(mock)[0], 100);
+    EXPECT_EQ(GpuInts(mock)[1], 200);
+    EXPECT_EQ(GpuInts(mock)[2], 300);
+    EXPECT_GT(bufferObject->GetChangeSerial(), serial);
+
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, AWriteMapInvalidatingAnAdoptedStoreLandsTheWholeRangeAtUnmap) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        {0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Write | BufferMappingAccessBit::InvalidateBuffer));
+    ASSERT_NE(mapped, nullptr);
+    EXPECT_NE(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
+    // The whole range is undefined by contract, so the application rewrites all of it.
+    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = -static_cast<GLint>(i) - 1;
+    bufferObject->ReleaseMemory();
+
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        EXPECT_EQ(GpuInts(mock)[i], -static_cast<GLint>(i) - 1) << "int " << i;
+    }
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// A range map at an offset off the alignment grid: the staging store is biased by the
+// offset's phase (see AcquireMemoryRange), and the landing has to read from the biased
+// start and write to the mapped offset - not from data(), not to 0.
+TEST_F(BufferTest, ARangeMapAtAnUnalignedOffsetOfAnAdoptedStoreLandsInPlace) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_ARRAY_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    // Ints 3..6, i.e. byte offset 12 - inside the first alignment, so the bias is non-zero.
+    constexpr SizeT kFirst = 3;
+    constexpr SizeT kCount = 4;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    ASSERT_NE(range.start % MG_State::GLState::MIN_MAP_BUFFER_ALIGNMENT, 0u);
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    // Seeded from the right place...
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(mapped[i], static_cast<GLint>(kFirst + i));
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 500 + static_cast<GLint>(i);
+    bufferObject->ReleaseMemory();
+
+    // ...and landed in the right place, with everything outside the range untouched.
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 500 + static_cast<GLint>(i - kFirst)
+                                                                    : static_cast<GLint>(i);
+        EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
+    }
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// FLUSH_EXPLICIT on an adopted store: only the flushed bytes land, at the flush, and the
+// unmap lands nothing more - the application promised to flush what it wanted kept.
+TEST_F(BufferTest, AnExplicitFlushOfAWriteMapOfAnAdoptedStoreLandsOnlyTheFlushedBytes) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    // Ints 2..13 mapped (offset 8, off the grid again), all of them rewritten...
+    constexpr SizeT kFirst = 2;
+    constexpr SizeT kCount = 12;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 700 + static_cast<GLint>(i);
+    // ...but only ints 5..8 (map-relative ints 3..6) flushed.
+    constexpr SizeT kFlushFirst = 3;
+    constexpr SizeT kFlushCount = 4;
+    bufferObject->FlushMemoryRange(kFlushFirst * sizeof(GLint), kFlushCount * sizeof(GLint));
+    const Uint64 flushSerial = bufferObject->GetChangeSerial();
+    EXPECT_GT(flushSerial, baseSerial);
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    auto expectOnlyFlushedBytesLanded = [&](const char* when) {
+        for (SizeT i = 0; i < kAdoptedInts; ++i) {
+            const Bool flushed = i >= kFirst + kFlushFirst && i < kFirst + kFlushFirst + kFlushCount;
+            const GLint expected = flushed ? 700 + static_cast<GLint>(i - kFirst) : static_cast<GLint>(i);
+            EXPECT_EQ(GpuInts(mock)[i], expected) << when << ": int " << i;
+        }
+    };
+    expectOnlyFlushedBytesLanded("after the flush");
+
+    bufferObject->ReleaseMemory();
+    expectOnlyFlushedBytesLanded("after the unmap");
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// The other kind of backend: one that takes the bytes for a GPU-ordered landing instead
+// of letting the frontend write the coherent mapping in place. The unmap hands it the
+// mapped offset and the bias-adjusted bytes, leaves the mapping alone, and marks a GPU
+// write outstanding so the next read reconciles through the readback.
+TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheUnmappedBytesForAGpuOrderedLanding) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    constexpr SizeT kFirst = 3;
+    constexpr SizeT kCount = 5;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 900 + static_cast<GLint>(i);
+    bufferObject->ReleaseMemory();
+
+    // The op got exactly the mapped range's bytes at the mapped offset...
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.residentWrites[0].offset, range.start);
+    ASSERT_EQ(mock.residentWrites[0].bytes.size(), kCount * sizeof(GLint));
+    const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(handed[i], 900 + static_cast<GLint>(i)) << "int " << i;
+    // ...the mapping itself was not written through...
+    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.readbackCalls, 0);
+
+    // ...and the pending flag makes the next read pull the landing back first.
+    const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
+    EXPECT_EQ(mock.readbackCalls, 1);
+    EXPECT_TRUE(mock.residentWrites.empty());
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 900 + static_cast<GLint>(i - kFirst)
+                                                                    : static_cast<GLint>(i);
+        EXPECT_EQ(readBack[i], expected) << "int " << i;
+    }
+    // A second read has nothing outstanding to reconcile.
+    bufferObject->AcquireMemory(false, true, false);
+    EXPECT_EQ(mock.readbackCalls, 1);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesAnExplicitlyFlushedRangeTheSameWay) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    constexpr SizeT kFirst = 2;
+    constexpr SizeT kCount = 8;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 800 + static_cast<GLint>(i);
+    constexpr SizeT kFlushFirst = 5;
+    constexpr SizeT kFlushCount = 2;
+    bufferObject->FlushMemoryRange(kFlushFirst * sizeof(GLint), kFlushCount * sizeof(GLint));
+
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.residentWrites[0].offset, (kFirst + kFlushFirst) * sizeof(GLint));
+    ASSERT_EQ(mock.residentWrites[0].bytes.size(), kFlushCount * sizeof(GLint));
+    const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
+    EXPECT_EQ(handed[0], 800 + static_cast<GLint>(kFlushFirst));
+    EXPECT_EQ(handed[1], 800 + static_cast<GLint>(kFlushFirst + 1));
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    // The unmap of a FLUSH_EXPLICIT map adds nothing.
+    bufferObject->ReleaseMemory();
+    EXPECT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// The CTS idiom end to end through the GL entry points: an SSBO made resident by a
+// draw, re-seeded with glMapBufferRange(READ|WRITE) + glUnmapBuffer.
+TEST_F(BufferTest, MapBufferRangeAndUnmapBufferReseedAnAdoptedShaderStorageBuffer) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    for (GLint pass = 1; pass <= 3; ++pass) {
+        auto* mapped = static_cast<GLint*>(
+            MapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)),
+                           GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
+        ASSERT_NE(mapped, nullptr);
+        ASSERT_EQ(GetError(), GL_NO_ERROR);
+        for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = pass * 100 + static_cast<GLint>(i);
+        EXPECT_TRUE(UnmapBuffer(GL_SHADER_STORAGE_BUFFER));
+        ASSERT_EQ(GetError(), GL_NO_ERROR);
+        for (SizeT i = 0; i < kAdoptedInts; ++i) {
+            EXPECT_EQ(GpuInts(mock)[i], pass * 100 + static_cast<GLint>(i)) << "pass " << pass << " int " << i;
+        }
+    }
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// The control: a store the backend declined to adopt keeps the shadow model exactly as
+// before - the staging copy is written back into the shadow and the backend's flush op
+// carries the range down.
+TEST_F(BufferTest, ANonPersistentWriteMapOfAShadowBackedStoreStillFlushesThroughTheBackend) {
+    ZeroCopyMockBackend mock;
+    mock.provideMap = false;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    Vector<GLint> initial(kAdoptedInts);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
+    BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
+               GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    EXPECT_FALSE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    mock.flushCalls = 0;
+    mock.subDataCalls = 0;
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    constexpr SizeT kFirst = 3;
+    constexpr SizeT kCount = 4;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 600 + static_cast<GLint>(i);
+    bufferObject->ReleaseMemory();
+
+    EXPECT_EQ(mock.flushCalls, 1);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    const auto* shadow = reinterpret_cast<const GLint*>(bufferObject->MappedData());
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 600 + static_cast<GLint>(i - kFirst)
+                                                                    : static_cast<GLint>(i);
+        EXPECT_EQ(shadow[i], expected) << "int " << i;
+    }
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// The other three CPU-sourced writes that share the unmap landing's route into an
+// adopted store - glBufferSubData, a clear, and a copy - on both kinds of backend: the
+// one that lets the frontend write the coherent mapping in place, and the one that takes
+// the bytes for a GPU-ordered landing, where the offset it is handed is the only thing
+// deciding where they end up.
+TEST_F(BufferTest, GlBufferSubDataIntoAnAdoptedStoreLandsInPlaceWithoutABackendTransfer) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_ARRAY_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    constexpr SizeT kFirst = 4;
+    const GLint updated[] = {70, 71, 72};
+    BufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(kFirst * sizeof(GLint)), sizeof(updated), updated);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + 3) ? updated[i - kFirst] : static_cast<GLint>(i);
+        EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
+    }
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesAGlBufferSubDataAtItsOffset) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_ARRAY_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    constexpr SizeT kFirst = 4;
+    const GLint updated[] = {70, 71, 72};
+    BufferSubData(GL_ARRAY_BUFFER, static_cast<GLintptr>(kFirst * sizeof(GLint)), sizeof(updated), updated);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.residentWrites[0].offset, kFirst * sizeof(GLint));
+    ASSERT_EQ(mock.residentWrites[0].bytes.size(), sizeof(updated));
+    EXPECT_EQ(std::memcmp(mock.residentWrites[0].bytes.data(), updated, sizeof(updated)), 0);
+    // The mapping itself is left alone until the backend's ordered copy runs.
+    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+
+    const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
+    EXPECT_EQ(mock.readbackCalls, 1);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + 3) ? updated[i - kFirst] : static_cast<GLint>(i);
+        EXPECT_EQ(readBack[i], expected) << "int " << i;
+    }
+    EXPECT_EQ(mock.subDataCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, GlClearBufferSubDataRepeatsItsPatternThroughAnAdoptedStoreInPlace) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    // A four-byte pattern, so the repeat - not a memset - is what fills the range.
+    constexpr SizeT kFirst = 5;
+    constexpr SizeT kCount = 6;
+    const GLint value = 0x0A0B0C0D;
+    ClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R32I, static_cast<GLintptr>(kFirst * sizeof(GLint)),
+                       static_cast<GLsizeiptr>(kCount * sizeof(GLint)), GL_RED_INTEGER, GL_INT, &value);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? value : static_cast<GLint>(i);
+        EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
+    }
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheExpandedClearPattern) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    constexpr SizeT kFirst = 5;
+    constexpr SizeT kCount = 6;
+    const GLint value = 0x0A0B0C0D;
+    ClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R32I, static_cast<GLintptr>(kFirst * sizeof(GLint)),
+                       static_cast<GLsizeiptr>(kCount * sizeof(GLint)), GL_RED_INTEGER, GL_INT, &value);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    // The backend takes the FINAL bytes, so the pattern arrives already repeated.
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.residentWrites[0].offset, kFirst * sizeof(GLint));
+    ASSERT_EQ(mock.residentWrites[0].bytes.size(), kCount * sizeof(GLint));
+    const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(handed[i], value) << "int " << i;
+    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+
+    const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
+    EXPECT_EQ(mock.readbackCalls, 1);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? value : static_cast<GLint>(i);
+        EXPECT_EQ(readBack[i], expected) << "int " << i;
+    }
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+namespace {
+    // A plain (never adopted) buffer of kAdoptedInts ints, each `bias` above its index,
+    // bound to `target` as the source of a copy.
+    GLuint MakeCopySource(GLenum target, GLint bias) {
+        GLuint buffer = 0;
+        GenBuffers(1, &buffer);
+        BindBuffer(target, buffer);
+        Vector<GLint> bytes(kAdoptedInts);
+        for (SizeT i = 0; i < kAdoptedInts; ++i) bytes[i] = bias + static_cast<GLint>(i);
+        BufferData(target, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), bytes.data(), GL_STATIC_DRAW);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+        return buffer;
+    }
+} // namespace
+
+TEST_F(BufferTest, GlCopyBufferSubDataIntoAnAdoptedStoreLandsAtTheDestinationOffset) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+    GLuint destination = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_COPY_WRITE_BUFFER, destination);
+    ASSERT_NE(bufferObject, nullptr);
+    const GLuint source = MakeCopySource(GL_COPY_READ_BUFFER, 900);
+
+    // Deliberately different source and destination offsets: only the destination one
+    // may decide where the bytes land.
+    constexpr SizeT kSrcFirst = 1;
+    constexpr SizeT kDstFirst = 6;
+    constexpr SizeT kCount = 3;
+    CopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, static_cast<GLintptr>(kSrcFirst * sizeof(GLint)),
+                      static_cast<GLintptr>(kDstFirst * sizeof(GLint)),
+                      static_cast<GLsizeiptr>(kCount * sizeof(GLint)));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    for (SizeT i = 0; i < kAdoptedInts; ++i) {
+        const GLint expected = (i >= kDstFirst && i < kDstFirst + kCount)
+            ? 900 + static_cast<GLint>(kSrcFirst + i - kDstFirst)
+            : static_cast<GLint>(i);
+        EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
+    }
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+
+    GLuint toDelete[] = {destination, source};
+    DeleteBuffers(2, toDelete);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesACopyAtTheDestinationOffset) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint destination = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_COPY_WRITE_BUFFER, destination);
+    ASSERT_NE(bufferObject, nullptr);
+    const GLuint source = MakeCopySource(GL_COPY_READ_BUFFER, 900);
+
+    constexpr SizeT kSrcFirst = 1;
+    constexpr SizeT kDstFirst = 6;
+    constexpr SizeT kCount = 3;
+    CopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, static_cast<GLintptr>(kSrcFirst * sizeof(GLint)),
+                      static_cast<GLintptr>(kDstFirst * sizeof(GLint)),
+                      static_cast<GLsizeiptr>(kCount * sizeof(GLint)));
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.residentWrites[0].offset, kDstFirst * sizeof(GLint));
+    ASSERT_EQ(mock.residentWrites[0].bytes.size(), kCount * sizeof(GLint));
+    const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
+    for (SizeT i = 0; i < kCount; ++i) {
+        EXPECT_EQ(handed[i], 900 + static_cast<GLint>(kSrcFirst + i)) << "int " << i;
+    }
+    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+
+    GLuint toDelete[] = {destination, source};
+    DeleteBuffers(2, toDelete);
+    g_zeroCopyMock = nullptr;
+}
+
+// A PERSISTENT map of an adopted store is the one write shape that needs no landing at
+// all: it wrote the coherent mapping in place. Its explicit flush therefore publishes the
+// change and dispatches nothing - not the backend's flush op (whose upload would be the
+// mapping onto itself) and not the resident landing op (whose bytes are already there).
+TEST_F(BufferTest, AnExplicitFlushOfAPersistentMapOfAnAdoptedStoreOnlyPublishesTheChange) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_SHADER_STORAGE_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    constexpr SizeT kFirst = 2;
+    constexpr SizeT kCount = 8;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
+                   BufferMappingAccessBit::FlushExplicit));
+    ASSERT_NE(mapped, nullptr);
+    // The application writes the store itself: the map IS the adopted memory.
+    EXPECT_EQ(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data() + range.start));
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 400 + static_cast<GLint>(i);
+
+    constexpr SizeT kFlushFirst = 3;
+    constexpr SizeT kFlushCount = 2;
+    bufferObject->FlushMemoryRange(kFlushFirst * sizeof(GLint), kFlushCount * sizeof(GLint));
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_TRUE(mock.residentWrites.empty());
+    EXPECT_TRUE(bufferObject->HasDefinedContent());
+    // Every byte the map wrote is in the store, flushed or not - it was written there.
+    for (SizeT i = 0; i < kCount; ++i) {
+        EXPECT_EQ(GpuInts(mock)[kFirst + i], 400 + static_cast<GLint>(i)) << "int " << i;
+    }
+
+    const Uint64 flushSerial = bufferObject->GetChangeSerial();
+    bufferObject->ReleaseMemory();
+    EXPECT_EQ(bufferObject->GetChangeSerial(), flushSerial); // the unmap adds nothing
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_TRUE(mock.residentWrites.empty());
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// A flush of nothing wrote no byte, so it may not report the store as written: an
+// orphaning respecification prices a "has content" store as a full-size upload.
+TEST_F(BufferTest, AZeroLengthExplicitFlushOfAnAdoptedStoreLeavesItUndefined) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), nullptr,
+               GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    ASSERT_FALSE(bufferObject->HasDefinedContent());
+    ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    const Uint64 baseSerial = bufferObject->GetChangeSerial();
+
+    auto* mapped = bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)},
+                                                    BufferMappingAccessBit::Write |
+                                                        BufferMappingAccessBit::Persistent |
+                                                        BufferMappingAccessBit::FlushExplicit);
+    ASSERT_NE(mapped, nullptr);
+    bufferObject->FlushMemoryRange(0, 0);
+    EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
+    EXPECT_FALSE(bufferObject->HasDefinedContent());
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    bufferObject->ReleaseMemory();
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// A write map that discards the range it maps reads nothing of the store: its staging
+// copy is not seeded from it. Reconciling an adopted store at map time would run the
+// backend's drain-and-wait for no reader, once per map, on the streaming arena the
+// adoption exists to keep cheap - so it is deferred, not dropped: the first map that DOES
+// read the bytes still pays for it, and every queued landing is still applied, in order.
+TEST_F(BufferTest, AWriteMapThatDiscardsWhatItMapsDoesNotReconcileAnAdoptedStoreAtMapTime) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_ARRAY_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    // An earlier write is queued for its GPU-ordered landing...
+    const GLint firstInt = 55;
+    BufferSubData(GL_ARRAY_BUFFER, 0, sizeof(firstInt), &firstInt);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    ASSERT_EQ(mock.residentWrites.size(), 1u);
+    EXPECT_EQ(mock.readbackCalls, 0);
+
+    // ...and the map that discards its range does not wait for it.
+    constexpr SizeT kFirst = 8;
+    constexpr SizeT kCount = 4;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::InvalidateRange));
+    ASSERT_NE(mapped, nullptr);
+    EXPECT_EQ(mock.readbackCalls, 0);
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 300 + static_cast<GLint>(i);
+    bufferObject->ReleaseMemory();
+    ASSERT_EQ(mock.residentWrites.size(), 2u);
+
+    // The first read reconciles both landings, oldest first.
+    const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
+    EXPECT_EQ(mock.readbackCalls, 1);
+    EXPECT_EQ(readBack[0], firstInt);
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(readBack[kFirst + i], 300 + static_cast<GLint>(i)) << "int " << i;
+
+    // The control: a map that keeps what it maps still reconciles before seeding.
+    BufferSubData(GL_ARRAY_BUFFER, 0, sizeof(firstInt), &firstInt);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    auto* seeded = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
+    ASSERT_NE(seeded, nullptr);
+    EXPECT_EQ(mock.readbackCalls, 2);
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(seeded[i], 300 + static_cast<GLint>(i)) << "int " << i;
+    bufferObject->ReleaseMemory();
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// Adoption releases the CPU shadow, and a persistent map that did not itself adopt
+// (FLUSH_EXPLICIT is excluded from adoption) handed the application a pointer into that
+// shadow which GL keeps valid while the buffer is drawn with - which is exactly when a
+// storage binding asks for residency. So a mapped buffer keeps the shadow model.
+TEST_F(BufferTest, AStorageBindingDoesNotAdoptTheStoreWhileTheApplicationHoldsAMapping) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    Vector<GLint> initial(kAdoptedInts);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
+    BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
+               GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    const auto* shadowBase = bufferObject->MappedData();
+
+    constexpr SizeT kFirst = 2;
+    constexpr SizeT kCount = 4;
+    const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
+    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
+        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
+                   BufferMappingAccessBit::FlushExplicit));
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_EQ(static_cast<const void*>(mapped), static_cast<const void*>(shadowBase + range.start));
+
+    EXPECT_FALSE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_EQ(mock.acquireMapCalls, 0);
+    // The application's pointer is still the store's: it survived the binding.
+    EXPECT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(shadowBase));
+    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 250 + static_cast<GLint>(i);
+    bufferObject->FlushMemoryRange(0, kCount * sizeof(GLint));
+    EXPECT_EQ(mock.flushCalls, 1);
+    const auto* shadowInts = reinterpret_cast<const GLint*>(bufferObject->MappedData());
+    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(shadowInts[kFirst + i], 250 + static_cast<GLint>(i));
+
+    // Unmapped, the next binding adopts as usual.
+    bufferObject->ReleaseMemory();
+    EXPECT_TRUE(bufferObject->EnsureGpuResidentStorage());
+    EXPECT_TRUE(bufferObject->IsBackendPersistentMapped());
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+// Respecifying a store hands any adoption back and replaces the bytes, so the staged
+// bytes of a map that is still live have nowhere to land: copying a whole mapped range
+// into storage that is released on the next line is pure waste.
+TEST_F(BufferTest, RespecifyingAStoreWhileItIsMappedDoesNotLandTheStagedBytesIntoIt) {
+    ZeroCopyMockBackend mock;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kResidentSubDataMockOps);
+    GLuint buffer = 0;
+    auto bufferObject = MakeAdoptedBuffer(mock, GL_ARRAY_BUFFER, buffer);
+    ASSERT_NE(bufferObject, nullptr);
+
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1234;
+
+    bufferObject->Respecify(kAdoptedInts * sizeof(GLint), nullptr);
+    EXPECT_TRUE(mock.residentWrites.empty());
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.respecifyCalls, 1);
+    EXPECT_FALSE(bufferObject->IsMapped());
+    EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
+    EXPECT_FALSE(bufferObject->HasDefinedContent());
+
+    DeleteBuffers(1, &buffer);
+    g_zeroCopyMock = nullptr;
+}
+
+TEST_F(BufferTest, RespecifyingAShadowBackedStoreWhileItIsMappedPushesNoRangeDown) {
+    ZeroCopyMockBackend mock;
+    mock.provideMap = false;
+    g_zeroCopyMock = &mock;
+    ScopedBackendOps scopedOps(&kZeroCopyMockOps);
+
+    GLuint buffer = 0;
+    GenBuffers(1, &buffer);
+    BindBuffer(GL_ARRAY_BUFFER, buffer);
+    Vector<GLint> initial(kAdoptedInts, 7);
+    BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
+               GL_DYNAMIC_DRAW);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
+    ASSERT_NE(bufferObject, nullptr);
+    mock.flushCalls = 0;
+    mock.subDataCalls = 0;
+    mock.respecifyCalls = 0;
+
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Write));
+    ASSERT_NE(mapped, nullptr);
+    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1234;
+
+    bufferObject->Respecify(kAdoptedInts * sizeof(GLint), nullptr);
+    EXPECT_EQ(mock.flushCalls, 0);
+    EXPECT_EQ(mock.subDataCalls, 0);
+    EXPECT_EQ(mock.respecifyCalls, 1);
+    EXPECT_FALSE(bufferObject->IsMapped());
+    EXPECT_FALSE(bufferObject->HasDefinedContent());
+
+    DeleteBuffers(1, &buffer);
     g_zeroCopyMock = nullptr;
 }
