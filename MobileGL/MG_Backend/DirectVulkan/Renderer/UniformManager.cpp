@@ -20,6 +20,7 @@
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include "MG_Util/Metrics/PipeStats.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/ShaderTranspiler/Types.h"
 #include <Config.h>
@@ -2058,6 +2059,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         out.payload = outData;
         out.payloadSize = outSize;
+        if (MG_Util::PipeStats::Enabled()) {
+            // D-B8: these are the bytes Magma repacks into its own UBO ring, i.e. exactly
+            // the host payload a split build would have to ship with set_shader_buffers.
+            // Espryt binds the frontend buffer to the driver and contributes nothing here,
+            // which is why the class is named for the payload and not for the call.
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboNamed,
+                                         static_cast<Uint64>(outSize));
+        }
 
         // Zero-copy direct bind: for a persistent-mapped coherent app buffer whose full reflected
         // block fits within the aligned bound range, point the descriptor straight at the app's

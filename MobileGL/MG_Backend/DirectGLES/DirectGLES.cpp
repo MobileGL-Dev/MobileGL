@@ -28,6 +28,7 @@
 #include <MG_Util/Converters/MGToGL/RenderStateEnumConverter.h>
 #include <MG_Util/Math/HalfFloat.h>
 #include <MG_Util/Metrics/BufferMetrics.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <Config.h>
 #include <atomic>
@@ -1412,9 +1413,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Uint64 CurrentUnitBindingsEpoch(Int maxTouchedUnit) {
             const Uint64 contextId = MG_State::pGLContext->GetTextureContextId();
             const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            if (MG_Util::PipeStats::Enabled()) {
+                // Two accessor calls whichever way the shutter goes; only the unit WALK is
+                // gated, and that walk reads no GLContext accessor of its own.
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 2);
+            }
             if (g_observedUnitBindingsContextId == contextId && g_observedUnitBindingsMaxUnit == maxTouchedUnit &&
                 g_observedUnitBindingsGeneration == bindGeneration) {
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytUnitBindingsEpoch, /*hit=*/true);
+                }
                 return g_unitBindingsEpoch;
+            }
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytUnitBindingsEpoch, /*hit=*/false);
             }
             if (g_observedUnitBindingsContextId != contextId || g_observedUnitBindingsMaxUnit != maxTouchedUnit ||
                 !UnitBindingsUnchanged(maxTouchedUnit, g_observedUnitBindings)) {
@@ -1505,6 +1517,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             keys.maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
             keys.samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
             keys.unitBindingsEpoch = CurrentUnitBindingsEpoch(keys.maxTouchedUnit);
+            if (MG_Util::PipeStats::Enabled()) {
+                // The three reads above; CurrentUnitBindingsEpoch counts its own two.
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
+            }
             return keys;
         }
 
@@ -1534,6 +1550,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_unitTextureSyncListEpoch == unitBindingsEpoch &&
                 g_unitTextureSyncListSamplingGeneration == samplingGeneration &&
                 PairingsIntact(g_unitTextureSyncList)) {
+                if (MG_Util::PipeStats::Enabled()) {
+                    // Gate 2 of section 2.3.1. The served path walks the memoised entries
+                    // and reads no GLContext accessor at all.
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytTextureSyncList, /*hit=*/true);
+                }
                 for (const auto& entry : g_unitTextureSyncList) {
                     // Aggregate gate == the conjunction of the three callees' own
                     // early-outs (see IsDrawSyncClean); skipping on true is
@@ -1546,6 +1567,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     entry.backend->SyncMipmapsToBackend(*entry.slot);
                 }
             } else {
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytTextureSyncList, /*hit=*/false);
+                    // One GetTextureUnitObject per touched unit in the rebuild walk below.
+                    MG_Util::PipeStats::AddCalls(
+                        MG_Util::PipeStats::CallClass::AccessorCalls,
+                        maxTouchedUnit >= 0 ? static_cast<Uint64>(maxTouchedUnit) + 1u : 0u);
+                }
                 g_unitTextureSyncListValid = false;
                 g_unitTextureSyncList.clear();
                 for (Int index = 0; index <= maxTouchedUnit; ++index) {
@@ -2006,7 +2034,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool colorMaskWidenDirty = appliedWidenMask != g_syncedColorMaskAlphaWidenMask;
             if (!forceFullPush && !colorMaskWidenDirty && g_hasSyncedRenderState &&
                 currentRenderStateVersion == g_syncedRenderStateVersion) {
+                // Gate 1 of section 2.3.1: the steady-state cost of this whole function is
+                // the one Uint16 read above plus this compare.
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytRenderState, /*hit=*/true);
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 1);
+                }
                 return;
+            }
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytRenderState, /*hit=*/false);
+                // The version read above, the parameter-block fetch and the viewport fetch
+                // below - the three accessor calls this function makes unconditionally on a
+                // miss. The conditional sRGB capability read further down is deliberately
+                // NOT counted (see the inventory in PipeStats.cpp).
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
             }
 
             const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
@@ -2924,6 +2966,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // cross-TU call with a guarded static inside - repeating it per stage showed
         // up in draw-loop profiles.
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        if (MG_Util::PipeStats::Enabled()) {
+            // THE per-draw denominator for Espryt, plus this function's own two accessor
+            // calls (the VAO and the draw program). Everything the callees below read is
+            // counted by the callees that are instrumented; the rest is not counted (see
+            // the inventory in PipeStats.cpp).
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 2);
+        }
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion,
@@ -3370,6 +3420,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             if (BufferImpl::UboRingAllocate(bindSize, offset)) {
                                 std::memcpy(static_cast<Uint8*>(BufferImpl::UboRingMappedPtr()) + offset,
                                             currentProgram->MapUBO(), uboSize);
+                                if (MG_Util::PipeStats::Enabled()) {
+                                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
+                                                                 static_cast<Uint64>(uboSize));
+                                }
                                 ringSlot = {uboContentVersion, BufferImpl::UboRingGeneration(), frameSerial,
                                             offset};
                                 slotValid = true;
@@ -3389,6 +3443,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
                             g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
                                                         currentProgram->MapUBO());
+                            if (MG_Util::PipeStats::Enabled()) {
+                                MG_Util::PipeStats::AddBytes(
+                                    MG_Util::PipeStats::ByteClass::StageUboGlobal,
+                                    static_cast<Uint64>(currentProgram->GetUBOSize()));
+                            }
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
                             backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
                         }
@@ -4306,6 +4365,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_restartIndices.capacity = capacity;
             if (data != nullptr && bytes != 0) {
                 g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget, 0, static_cast<GLsizeiptr>(bytes), data);
+                if (MG_Util::PipeStats::Enabled()) {
+                    // Rewritten index list staged on the draw path: in a split build these
+                    // bytes are the index-mirror-versus-ship decision of section 8.
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageIndexClient,
+                                                 static_cast<Uint64>(bytes));
+                }
             }
             return true;
         }
@@ -10638,6 +10703,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::UnpackRingOnPresent();
         BufferImpl::UploadRingOnPresent();
         BufferImpl::TrimBufferPool();
+
+        // THE frame boundary for the MGPipe counters: publish this frame's plots, fold the
+        // frame into the run totals and, every 120th frame, emit the summary line.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::OnPresent();
+        }
     }
 
     void DestroyEGLContext() {

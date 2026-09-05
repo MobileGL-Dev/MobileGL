@@ -15,6 +15,7 @@
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/DataTypeConverter.h>
 #include <MG_Util/Converters/MGToGL/BufferEnumConverter.h>
@@ -779,6 +780,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const void* initialData =
                     (size > 0 && bufferObject.HasDefinedContent()) ? bufferObject.MappedData() : nullptr;
                 g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size, initialData, usage);
+                if (MG_Util::PipeStats::Enabled() && initialData != nullptr) {
+                    // An ORPHANING respecify passes NULL and moves nothing, which is exactly
+                    // why the test is on initialData rather than on size.
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                 static_cast<Uint64>(size));
+                }
                 resource.storageSize = size;
                 resource.storageInitialized = true;
                 resource.pendingRespecify = false;
@@ -886,6 +893,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const SizeT start = std::min(range.start, end);
                     const SizeT size = end - start;
                     if (size == 0) continue;
+                    if (MG_Util::PipeStats::Enabled()) {
+                        // Counted once per queued range, before the three delivery shapes
+                        // below diverge: all three move exactly these bytes, and it is the
+                        // byte count - not the shape - that sizes SEG_STAGE.
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(size));
+                    }
                     // The invalidating map's fast path is SHAPE-dependent on this Mali
                     // driver: a whole-buffer invalidation renames the store outright,
                     // and a large range gets fresh pages - but a small unaligned range
@@ -953,6 +967,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (write.offset >= limit) continue;
                     const SizeT size = std::min(write.bytes.size(), limit - write.offset);
                     if (size == 0) continue;
+                    if (MG_Util::PipeStats::Enabled()) {
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(size));
+                    }
                     SizeT ringOffset = 0;
                     if (ringUsable && size <= kUploadRingMaxBytes &&
                         RingAllocate(g_uploadRing, size, ringOffset)) {
@@ -2545,6 +2563,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER,
                                              static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
                                              converted.data(), GL_STREAM_DRAW);
+                    if (MG_Util::PipeStats::Enabled()) {
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                                     static_cast<Uint64>(converted.size() * sizeof(Float)));
+                    }
                     // GL ignores `normalized` for floating-point array types, so it is not
                     // forwarded here either.
                     g_GLESFuncs.glVertexAttribPointer(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
@@ -2575,6 +2597,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
                 g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uploadSize), clientData,
                                          GL_STREAM_DRAW);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                                 static_cast<Uint64>(uploadSize));
+                }
 
                 if (!attrib.IsInteger) {
                     const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
@@ -4390,6 +4416,42 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 StageBlocksIntoUnpackRing(stagingBlocks, stagingBlockCount);
                             if (ringStaged) {
                                 BufferImpl::BindPixelUnpackBufferId(BufferImpl::UnpackRingBufferId());
+                            }
+                            if (MG_Util::PipeStats::Enabled()) {
+                                // One emission per (upload target, level) that ships texels;
+                                // the switch below turns it into either one union-box job or
+                                // dirtyRectCount rect jobs. The box/rect split is counted
+                                // separately from the bytes on purpose: SSIM is blind to it
+                                // and the +6 ms/frame Mali cliff was a shape regression, not
+                                // a byte regression (plan section 7.3).
+                                const Bool rectShape = subRectEligible && dirtyRectCount >= 2;
+                                Uint64 shippedBytes = 0;
+                                if (rectShape) {
+                                    for (SizeT r = 0; r < dirtyRectCount; ++r) {
+                                        const auto& rect = dirtyRects[r];
+                                        shippedBytes += static_cast<Uint64>(rect.hi.x() - rect.lo.x()) *
+                                                        static_cast<Uint64>(rect.hi.y() - rect.lo.y()) *
+                                                        static_cast<Uint64>(std::max(rect.hi.z() - rect.lo.z(), 1)) *
+                                                        static_cast<Uint64>(bpp);
+                                    }
+                                } else if (subRectEligible) {
+                                    shippedBytes = static_cast<Uint64>(regionSize.x()) *
+                                                   static_cast<Uint64>(regionSize.y()) *
+                                                   static_cast<Uint64>(std::max(regionSize.z(), 1)) *
+                                                   static_cast<Uint64>(bpp);
+                                } else {
+                                    shippedBytes = static_cast<Uint64>(byteSize);
+                                }
+                                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture,
+                                                             shippedBytes);
+                                MG_Util::PipeStats::AddCalls(
+                                    MG_Util::PipeStats::CallClass::TextureUploadEmissions, 1);
+                                MG_Util::PipeStats::AddCalls(
+                                    rectShape ? MG_Util::PipeStats::CallClass::TextureUploadRectEmissions
+                                              : MG_Util::PipeStats::CallClass::TextureUploadBoxEmissions,
+                                    1);
+                                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadJobs,
+                                                             rectShape ? static_cast<Uint64>(dirtyRectCount) : 1u);
                             }
                             switch (MapToBackendTextureTarget(stateTextureObject->GetTarget())) {
                             case TextureTarget::Texture2D:

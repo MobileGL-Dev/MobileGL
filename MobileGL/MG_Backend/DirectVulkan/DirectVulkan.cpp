@@ -13,6 +13,7 @@
 #include "MG_State/GLState/ErrorState/ErrorInfo.h"
 #include "MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h"
 #include "MG_Util/Converters/GLToMG/TextureEnumConverter.h"
+#include "MG_Util/Metrics/PipeStats.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/Miscellany/IndexGenerator.h"
 #include <atomic>
@@ -1430,5 +1431,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void Present() {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Present called with null VulkanRenderer");
         pVulkanRenderer->Present();
+        // THE frame boundary for the MGPipe counters, at the backend entry point rather
+        // than inside VulkanRenderer::Present: that function has an early return for the
+        // no-usable-swapchain case, and a suspended frame is still a frame the counters
+        // must close.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::OnPresent();
+        }
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

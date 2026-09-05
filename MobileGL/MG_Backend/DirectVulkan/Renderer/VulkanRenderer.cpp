@@ -27,6 +27,7 @@
 #include "MG_Util/Converters/MGToVk/RenderStateEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Math/HalfFloat.h"
+#include "MG_Util/Metrics/PipeStats.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
@@ -4999,8 +5000,18 @@ void main() {
                 entry.pipelineStateHash == pipelineStateHash &&
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
                 entry.transformFlags == transformFlags) {
+                if (MG_Util::PipeStats::Enabled()) {
+                    // Gate 5 of section 2.3.1. On a hit this whole function cost the one
+                    // GetPipelineStateVersion read above plus this value compare.
+                    MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaPipelineMemo, /*hit=*/true);
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 1);
+                }
                 return entry.pipeline;
             }
+        }
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaPipelineMemo, /*hit=*/false);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 1);
         }
 
         // Shape gate. Behind the memo probe deliberately: only a pipeline that was created
@@ -5156,6 +5167,17 @@ void main() {
             // so the loss was near-total rather than a corner case.
             syntheticVertexInputState.pNext = vis.state.pNext;
             pipelineVertexInputState = &syntheticVertexInputState;
+        }
+        if (MG_Util::PipeStats::Enabled()) {
+            // THE payload-builder walk section 2.3.1 says only runs on a pipeline memo
+            // miss. Counted as a constant: the unconditional accessor reads between here
+            // and the end of the payload build (the six capability reads, the draw-FBO
+            // slot, the two stencil faces, the polygon mode, sample shading + min sample
+            // shading, patch vertices, the depth mask and the depth func, and the second
+            // draw-FBO slot read). Reads that are themselves conditional - the cull-mode
+            // ternary, the logic-op fetch, the two tessellation default-level reads - are
+            // deliberately excluded, so this stays a LOWER bound like every other tally.
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 15);
         }
         auto cullFaceEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace);
         auto depthTestEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest);
@@ -5890,7 +5912,17 @@ void main() {
         if (shadow.dynamicTailValid && shadow.dynamicTailParamsVersion == paramsVersion &&
             shadow.dynamicTailExtentX == extent.x() && shadow.dynamicTailExtentY == extent.y() &&
             shadow.dynamicTailIsDefaultFbo == isDefaultFbo) {
+            // Gate 6 of section 2.3.1: one version read plus a four-integer compare.
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaDynamicTail, /*hit=*/true);
+                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 1);
+            }
             return;
+        }
+        if (MG_Util::PipeStats::Enabled()) {
+            // The version read above and the bulk parameter fetch that builds the value key.
+            MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaDynamicTail, /*hit=*/false);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 2);
         }
         const VkSurfaceTransformFlagBitsKHR preTransform = m_swapchainObject.GetPreTransform();
         // Second-level VALUE gate: the version moved, but RenderState's version counts
@@ -6365,6 +6397,15 @@ void main() {
             MOBILEGL_ASSERT(idxUploadOk, "SetupDraw fast path: failed to upload index buffer");
         }
         ApplyDynamicDrawStateTail(frame, snap.renderPassExtent, snap.drawFboIsDefault, snap.viewportCount);
+        if (MG_Util::PipeStats::Enabled()) {
+            // The six accessor reads this function makes unconditionally on the path that
+            // reaches here: the draw program, the VAO, the draw-FBO slot, the pipeline
+            // state version, the texture bind generation and the sampling-resolution
+            // generation. The XFB-active probe is elided on a device without the feature
+            // and the parameter-block fetch only runs when the pipeline state version
+            // moved, so neither is counted (lower bound, as everywhere else).
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 6);
+        }
         return true;
     }
 
@@ -6390,8 +6431,26 @@ void main() {
                 return false;
             }
         }
+        if (MG_Util::PipeStats::Enabled()) {
+            // THE per-draw denominator for Magma, plus the draw-program read above. Placed
+            // here rather than inside TrySetupDrawFastPath because the fast path has 27
+            // decline returns and one success return: counting the gate from the caller is
+            // the only shape that cannot miss one.
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 1);
+        }
         if (TrySetupDrawFastPath(frame, mode, aspects, drawParams, pIndexBufferView)) {
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaDrawFastPath, /*hit=*/true);
+            }
             return true;
+        }
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::MagmaDrawFastPath, /*hit=*/false);
+            // The three reads the full path makes immediately below (draw FBO, VAO,
+            // program). The accessor reads the declined fast path had already made before
+            // it turned back are NOT counted.
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
         }
         const auto& drawFbo =
                 MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
