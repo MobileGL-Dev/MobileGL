@@ -23,6 +23,17 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+if (MSVC)
+    # This test compiles library sources of its own; pulling the whole static
+    # library in as well (the directory-wide MG_Test link option) would define
+    # them twice, so that option is dropped for this one target.
+    get_target_property(_program_util_link_options ProgramUtilTest LINK_OPTIONS)
+    if (_program_util_link_options)
+        list(REMOVE_ITEM _program_util_link_options /WHOLEARCHIVE:MobileGL_s)
+        set_target_properties(ProgramUtilTest PROPERTIES LINK_OPTIONS "${_program_util_link_options}")
+    endif()
+endif()
+
 add_executable(
         ProgramTest
         ProgramTest.cpp
