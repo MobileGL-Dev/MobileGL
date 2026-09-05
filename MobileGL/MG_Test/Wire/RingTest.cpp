@@ -10,6 +10,7 @@
 // invariants, wrap-around, backpressure, the generation bump after a hard
 // drain, and a real two-thread producer/consumer run.
 
+#include <MG_Remote/Transport/Doorbell.h>
 #include <MG_Remote/Transport/Ring.h>
 
 #include <gtest/gtest.h>
@@ -118,6 +119,27 @@ TEST(RingTest, RejectsANonPowerOfTwoCapacity) {
     RingProducer producer(&control, bytes.data(), 1000, RingCursorSet::Cmd);
     EXPECT_FALSE(producer.Valid());
     EXPECT_EQ(producer.Reserve(1, kRecNone, 8), nullptr);
+}
+
+TEST(RingTest, RejectsACapacityTheRecordHeaderCannotDescribe) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    // 4 GiB is a legal power of two, but RingRecordHeader::size is 32 bits and
+    // both a record's size and a wrap filler's size are bounded only by the
+    // capacity: they would be truncated on the way in and then bounds-checked
+    // in their truncated form on the way out. Nothing is mapped here - the
+    // constructor rejects before it ever touches the base pointer.
+    std::uint8_t dummy = 0;
+    constexpr std::uint64_t kFourGiB = 4ull * 1024 * 1024 * 1024;
+    EXPECT_GT(kFourGiB, kMaxRingCapacity);
+    RingProducer producer(&control, &dummy, kFourGiB, RingCursorSet::Cmd);
+    EXPECT_FALSE(producer.Valid());
+    RingConsumer consumer(&control, &dummy, kFourGiB, RingCursorSet::Cmd);
+    EXPECT_FALSE(consumer.Valid());
+
+    // The largest ring the header CAN describe stays accepted.
+    RingProducer biggest(&control, &dummy, 1ull << 31, RingCursorSet::Cmd);
+    EXPECT_TRUE(biggest.Valid());
 }
 
 TEST(RingTest, RoundTripsRecordsInOrder) {
@@ -322,4 +344,88 @@ TEST(RingTest, SpscProducerConsumerThreadsAgreeOnEveryRecord) {
     EXPECT_EQ(consumed.load(), kRecords);
     EXPECT_TRUE(ring.Invariants());
     EXPECT_EQ(ring.Control().cmdRetiredTail.load(), ring.Control().cmdHead.load());
+}
+
+// The publish/park protocol end to end, in both directions: publish the
+// watermark, THEN NotifyIfParked; park with Doorbell::Wait. A lost wakeup on
+// either side shows up as a Wait that times out with work available rather
+// than as a hang, so the failure is a red test and not a stuck CI job.
+//
+// This cannot prove the seq_cst fence pairing (no test can - x86 needs the
+// store buffer to hold the release store across the flag read, and it usually
+// does not), but it does exercise the exact call order the fences assume, so a
+// future edit that rings the bell BEFORE publishing has somewhere to fail.
+TEST(RingTest, DoorbellHandoffWakesBothSidesOnEveryPublish) {
+    // 4 byte payloads: every record is exactly 16 bytes and 4096 is a multiple
+    // of that, so no wrap filler ever appears and "head != tail" is exactly
+    // "a record is waiting".
+    RingFixture ring(4096);
+    CondVarDoorbell consumerBell;
+    CondVarDoorbell producerBell;
+    std::atomic<bool> ok{true};
+    constexpr int kRecords = 2000;
+    constexpr std::uint64_t kRecordBytes = 16;
+
+    std::thread consumerThread([&] {
+        int seen = 0;
+        while (seen < kRecords) {
+            const bool woke = consumerBell.Wait(
+                ring.Control().consumerParked,
+                [&] {
+                    return ring.Control().cmdHead.load(std::memory_order_acquire) !=
+                           ring.Consumer().LocalTail();
+                },
+                kDefaultSpinUs, 5000);
+            if (!woke) {
+                ok.store(false); // a wakeup was lost, or the producer stalled
+                return;
+            }
+            RingRecordView view{};
+            bool corrupt = false;
+            while (ring.Consumer().Pop(view, &corrupt)) {
+                std::uint32_t value = 0;
+                std::memcpy(&value, view.payload, sizeof(value));
+                if (value != static_cast<std::uint32_t>(seen)) {
+                    ok.store(false);
+                    return;
+                }
+                ++seen;
+            }
+            if (corrupt) {
+                ok.store(false);
+                return;
+            }
+            ring.Consumer().PublishRetired();
+            NotifyIfParked(producerBell, ring.Control().producerParked);
+        }
+    });
+
+    for (int i = 0; i < kRecords && ok.load(); ++i) {
+        void* payload = nullptr;
+        while ((payload = ring.Producer().Reserve(1, kRecNone, sizeof(std::uint32_t))) == nullptr) {
+            if (!ok.load()) {
+                break;
+            }
+            if (!producerBell.Wait(
+                    ring.Control().producerParked,
+                    [&] { return ring.Producer().FreeBytes() >= kRecordBytes; }, kDefaultSpinUs,
+                    5000)) {
+                ok.store(false);
+                break;
+            }
+        }
+        if (payload == nullptr) {
+            break;
+        }
+        const std::uint32_t value = static_cast<std::uint32_t>(i);
+        std::memcpy(payload, &value, sizeof(value));
+        // Publish first, ring second. The other order reopens the lost-wakeup
+        // window no matter how strong the flag's memory order is.
+        ring.Producer().Publish();
+        NotifyIfParked(consumerBell, ring.Control().consumerParked);
+    }
+
+    consumerThread.join();
+    EXPECT_TRUE(ok.load());
+    EXPECT_TRUE(ring.Invariants());
 }

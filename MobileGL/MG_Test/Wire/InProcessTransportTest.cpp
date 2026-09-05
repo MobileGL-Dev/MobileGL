@@ -217,6 +217,62 @@ TEST(InProcessTransportTest, HandsOverADescriptorAndItsSideband) {
     ::close(pipeFds[0]);
     ::close(pipeFds[1]);
 }
+
+TEST(InProcessTransportTest, AFrameWakeupIsNotEatenByAWaiterOnDescriptors) {
+    std::unique_ptr<InProcessTransport> client;
+    std::unique_ptr<InProcessTransport> server;
+    InProcessTransport::CreatePair(client, server);
+
+    // Two readers on the SAME endpoint, blocked on two different predicates.
+    // With one condition_variable per direction and notify_one, the SendFrame
+    // below could be delivered to the descriptor waiter, which re-tests its
+    // own predicate and goes back to sleep - and the message then sits
+    // undelivered until some unrelated later event. ITransport narrows the
+    // contract to one dedicated reader thread, but that is a comment, and the
+    // first caller that splits its reader should not have to discover this.
+    std::atomic<bool> fdWaiterStarted{false};
+    std::thread fdWaiter([&] {
+        std::vector<std::uint8_t> sideband(FdPassing::kMaxSidebandBytes);
+        MobileGLMutableByteSpan span{sideband.data(), sideband.size()};
+        int fd = -1;
+        std::uint64_t size = 0;
+        fdWaiterStarted.store(true);
+        // Never offered a descriptor: this one ends on the Shutdown below.
+        EXPECT_EQ(client->ReceiveFd(&fd, span, &size, kWaitForever),
+                  MOBILEGL_ERR_TRANSPORT_CLOSED);
+        EXPECT_EQ(fd, -1);
+    });
+    while (!fdWaiterStarted.load()) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    std::atomic<bool> frameWaiterStarted{false};
+    std::string got;
+    std::thread frameWaiter([&] {
+        frameWaiterStarted.store(true);
+        got = Receive(*client, 4000);
+    });
+    while (!frameWaiterStarted.load()) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    const std::string message = "wake the right waiter";
+    const auto start = std::chrono::steady_clock::now();
+    ASSERT_EQ(server->SendFrame(Span(message)), MOBILEGL_OK);
+    frameWaiter.join();
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+
+    EXPECT_EQ(got, message);
+    // Not "eventually, when the receive timed out and re-checked".
+    EXPECT_LT(elapsedMs, 2000);
+
+    client->Shutdown();
+    fdWaiter.join();
+}
 #endif
 
 TEST(InProcessTransportTest, DoorbellWakesAParkedWaiter) {

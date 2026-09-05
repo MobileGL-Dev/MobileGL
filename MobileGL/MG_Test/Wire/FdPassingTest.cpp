@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -247,4 +248,58 @@ TEST(FdPassingTest, SocketDoorbellTimesOutAndRemembersAnEarlyWakeup) {
 
     ::close(sockets[0]);
     ::close(sockets[1]);
+}
+
+// A doorbell whose peer has hung up must report that, not keep saying "ready".
+// Park used to treat any `poll` return > 0 as a wakeup without ever looking at
+// revents, and a closed peer leaves a stream socket permanently poll-ready
+// with nothing to read - so Doorbell::Wait re-parked in a tight loop at full
+// clock, unbounded when the caller passed kWaitForever. That is the pathology
+// the bidirectional doorbell exists to prevent, arrived at from the other
+// side.
+TEST(FdPassingTest, SocketDoorbellStopsParkingWhenThePeerHangsUp) {
+    // A SOCK_STREAM pair, not FdPassing::CreateSocketPair's datagram pair:
+    // measured on Linux, a closed peer makes a stream end report
+    // POLLIN|POLLHUP with recv()==0, while a datagram end reports no readiness
+    // at all. The stream shape is what the spawn transport will use, and it is
+    // the shape that used to spin.
+    int sockets[2] = {-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+
+    SocketDoorbell waiterBell(sockets[0], kDoorbellRingAdvanced, /*ownsFd=*/true);
+    ASSERT_EQ(::close(sockets[1]), 0);
+
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_FALSE(waiterBell.Park(kWaitForever));
+    EXPECT_TRUE(waiterBell.Dead());
+    // Latched: no second syscall storm either.
+    EXPECT_FALSE(waiterBell.Park(kWaitForever));
+
+    // ...and a Wait with no deadline at all gives up instead of re-parking.
+    std::atomic<std::uint32_t> parked{0};
+    EXPECT_FALSE(waiterBell.Wait(
+        parked, [] { return false; }, /*spinUs=*/0, kWaitForever));
+    EXPECT_EQ(parked.load(), 0u);
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - start)
+                  .count(),
+              1000);
+}
+
+TEST(FdPassingTest, SocketDoorbellStillDeliversTheLastRingBeforeAHangup) {
+    int sockets[2] = {-1, -1};
+    ASSERT_EQ(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+
+    SocketDoorbell waiterBell(sockets[0], kDoorbellRingAdvanced, /*ownsFd=*/true);
+    SocketDoorbell notifierBell(sockets[1], kDoorbellRingAdvanced, /*ownsFd=*/false);
+
+    // Ring, then die. Detecting the hangup must not swallow the wakeup that
+    // was already queued - the peer's last publish is the one a waiter is
+    // most likely to be blocked on.
+    notifierBell.Notify();
+    ASSERT_EQ(::close(sockets[1]), 0);
+
+    EXPECT_TRUE(waiterBell.Park(1000));
+    EXPECT_TRUE(waiterBell.Dead());
+    EXPECT_FALSE(waiterBell.Park(kWaitForever));
 }
