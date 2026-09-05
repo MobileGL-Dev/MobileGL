@@ -5168,17 +5168,6 @@ void main() {
             syntheticVertexInputState.pNext = vis.state.pNext;
             pipelineVertexInputState = &syntheticVertexInputState;
         }
-        if (MG_Util::PipeStats::Enabled()) {
-            // THE payload-builder walk section 2.3.1 says only runs on a pipeline memo
-            // miss. Counted as a constant: the unconditional accessor reads between here
-            // and the end of the payload build (the six capability reads, the draw-FBO
-            // slot, the two stencil faces, the polygon mode, sample shading + min sample
-            // shading, patch vertices, the depth mask and the depth func, and the second
-            // draw-FBO slot read). Reads that are themselves conditional - the cull-mode
-            // ternary, the logic-op fetch, the two tessellation default-level reads - are
-            // deliberately excluded, so this stays a LOWER bound like every other tally.
-            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 15);
-        }
         auto cullFaceEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::CullFace);
         auto depthTestEnabled = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::DepthTest);
         auto polygonOffsetFillEnabled =
@@ -5264,6 +5253,24 @@ void main() {
             return VK_NULL_HANDLE;
         }
 
+        if (MG_Util::PipeStats::Enabled()) {
+            // THE payload-builder walk section 2.3.1 says only runs on a pipeline memo miss.
+            // Counted as a constant, and counted HERE rather than at the top of the walk:
+            // the list-topology primitive-restart refusal above returns VK_NULL_HANDLE after
+            // only ten of these reads have run, and a tally that fires before an early return
+            // is an OVER-count, which breaks the lower-bound contract every other tally keeps.
+            //
+            // The 15 are: the six capability reads (cull face, depth test, polygon offset
+            // fill, rasterizer discard, colour logic op, stencil test), the draw-FBO slot
+            // read that gates depth/stencil, the two stencil face states, the polygon mode,
+            // the min sample shading value, the patch vertex count, the depth mask, the depth
+            // func, and the second draw-FBO slot read below. The sample-shading CAPABILITY
+            // read is the one excluded: it sits behind && on m_sampleRateShadingFeatureEnabled
+            // and does not run on a device without the feature. The other conditional reads -
+            // the cull-mode ternary, the logic-op fetch, the two tessellation default-level
+            // reads - are excluded for the same reason, so this stays a LOWER bound.
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 15);
+        }
         PipelineFactory::PipelineCreatePayload payload {
             .programHash = programObj.hash,
             .vertexInputHash = vertexLayoutHash,

@@ -56,6 +56,7 @@ namespace {
         // Every other class untouched, the residual-value-block placeholder included.
         EXPECT_EQ(PS::TotalBytes(PS::ByteClass::StageUboGlobal), 0u);
         EXPECT_EQ(PS::TotalBytes(PS::ByteClass::StageUboNamed), 0u);
+        EXPECT_EQ(PS::TotalBytes(PS::ByteClass::StageIndirectCmd), 0u);
         EXPECT_EQ(PS::TotalBytes(PS::ByteClass::ResidualValueBlock), 0u);
     }
 
@@ -123,12 +124,12 @@ namespace {
         PS::AddBytes(PS::ByteClass::StageBuffer, 4096);
         PS::OnPresent();
 
-        const String line = PS::FormatSummaryLine();
+        const String line = PS::FormatWindowLine();
         EXPECT_NE(line.find("MGPipe stats:"), String::npos) << line;
         EXPECT_NE(line.find("draws=4"), String::npos) << line;
         // 50 accessor calls over 4 draws, two decimals, no <iomanip>.
         EXPECT_NE(line.find("acc/draw=12.50"), String::npos) << line;
-        EXPECT_NE(line.find("buf=4096"), String::npos) << line;
+        EXPECT_NE(line.find("buf=4096.00"), String::npos) << line;
         for (Uint32 i = 0; i < static_cast<Uint32>(PS::Gate::Count); ++i) {
             EXPECT_NE(line.find("="), String::npos);
         }
@@ -136,26 +137,82 @@ namespace {
         EXPECT_NE(line.find("tex[emit="), String::npos) << line;
     }
 
+    // Per-frame fields carry two decimals for the same reason acc/draw does: they are small
+    // and load-bearing (bytes/f sizes SEG_STAGE), and integer division silently rounds a
+    // whole unit off each of them. 26 draws over 14 frames is 1.86, not 1.
+    TEST_F(PipeStatsTest, PerFrameFieldsKeepTwoDecimals) {
+        PS::AddCalls(PS::CallClass::Draws, 26);
+        PS::AddBytes(PS::ByteClass::StageBuffer, 1360);
+        for (Uint32 i = 0; i < 14; ++i) {
+            PS::OnPresent();
+        }
+
+        const String line = PS::FormatWindowLine();
+        EXPECT_NE(line.find("draws/f=1.86"), String::npos) << line;
+        EXPECT_NE(line.find("buf=97.14"), String::npos) << line;
+    }
+
     // Successive summaries report WINDOWS, not run totals: a run total over a workload that
     // changes shape (load, then steady state) averages away the very number section 2.3.1
-    // wants.
+    // wants. Advancing the window is an explicit call, not a side effect of formatting.
     TEST_F(PipeStatsTest, SummaryLinesReportDisjointWindows) {
         PS::AddCalls(PS::CallClass::Draws, 10);
         PS::OnPresent();
-        const String first = PS::FormatSummaryLine();
+        const String first = PS::FormatWindowLine();
         EXPECT_NE(first.find("draws=10"), String::npos) << first;
+        PS::AdvanceSummaryWindow();
 
         PS::AddCalls(PS::CallClass::Draws, 3);
         PS::OnPresent();
-        const String second = PS::FormatSummaryLine();
+        const String second = PS::FormatWindowLine();
         EXPECT_NE(second.find("draws=3"), String::npos) << second;
         EXPECT_NE(second.find("frames=2"), String::npos) << second;
     }
 
-    TEST_F(PipeStatsTest, SummaryLineSurvivesZeroDraws) {
+    // FormatWindowLine is pure. It used to rewrite the window bases as a side effect of
+    // formatting, so any second reader - a probe, a test, a second reporting channel -
+    // silently zeroed the next window.
+    TEST_F(PipeStatsTest, FormattingTwiceDoesNotConsumeTheWindow) {
+        PS::AddCalls(PS::CallClass::Draws, 7);
         PS::OnPresent();
-        const String line = PS::FormatSummaryLine();
-        EXPECT_NE(line.find("acc/draw=0.00"), String::npos) << line;
+
+        const String first = PS::FormatWindowLine();
+        const String second = PS::FormatWindowLine();
+        EXPECT_EQ(first, second) << first << "\n" << second;
+        EXPECT_NE(second.find("draws=7"), String::npos) << second;
+
+        // ...and advancing explicitly does close it.
+        PS::AdvanceSummaryWindow();
+        const String third = PS::FormatWindowLine();
+        EXPECT_NE(third.find("draws=0"), String::npos) << third;
+    }
+
+    TEST_F(PipeStatsTest, SummaryLineSurvivesZeroDraws) {
+        PS::AddCalls(PS::CallClass::AccessorCalls, 12);
+        PS::OnPresent();
+        const String line = PS::FormatWindowLine();
+        // No draw in the window means there is no per-draw number - and "0.00" beside a
+        // non-zero acc= would read as one.
+        EXPECT_NE(line.find("acc/draw=n/a"), String::npos) << line;
+        EXPECT_NE(line.find("acc=12"), String::npos) << line;
+    }
+
+    // A window with no Present in it has no per-frame reading at all. This used to divide by
+    // a faked 1 and print the window TOTALS under a "/f" label: a scenario slice that draws
+    // 47 times and never presents reported 1,404,550 staged bytes as a per-frame figure,
+    // which is a 47x overstatement of the SEG_STAGE sizing input this package exists to
+    // produce.
+    TEST_F(PipeStatsTest, SummaryLineSurvivesZeroFrames) {
+        PS::AddCalls(PS::CallClass::Draws, 47);
+        PS::AddBytes(PS::ByteClass::StageBuffer, 1404550);
+
+        const String line = PS::FormatWindowLine();
+        EXPECT_EQ(PS::FrameCount(), 0u);
+        EXPECT_NE(line.find("window=0"), String::npos) << line;
+        EXPECT_NE(line.find("draws/f=n/a"), String::npos) << line;
+        // The bracket is relabelled rather than divided: totals, and marked as totals.
+        EXPECT_EQ(line.find("bytes/f["), String::npos) << line;
+        EXPECT_NE(line.find("bytes[buf=1404550"), String::npos) << line;
     }
 
     TEST_F(PipeStatsTest, JsonDumpNamesEveryCounter) {
@@ -191,6 +248,7 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageUboNamed), "stage-ubo-named");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageVertexClient), "stage-vertex-client");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageIndexClient), "stage-index-client");
+        EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageIndirectCmd), "stage-indirect-cmd");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::PersistentMapPush), "persistent-map-push");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::ResidualValueBlock), "residual-value-block");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");

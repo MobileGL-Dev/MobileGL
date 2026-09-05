@@ -13,6 +13,7 @@
 #include "MG_State/GLState/Core.h"
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
+#include "MG_Util/Metrics/PipeStats.h"
 
 #include <Config.h>
 #include <algorithm>
@@ -3148,6 +3149,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 continue;
             }
             packBox(dst, item.regionLo, item.regionSize);
+        }
+
+        if (MG_Util::PipeStats::Enabled()) {
+            // Same shape split as Espryt's: one union box per item, or one job per rect of
+            // a refined rect list. The box/rect decision is invisible to SSIM and is what
+            // the +6 ms/frame Mali cliff of section 7.3 was, so it is counted apart from
+            // the bytes.
+            Uint64 boxEmissions = 0;
+            Uint64 rectEmissions = 0;
+            Uint64 jobs = 0;
+            for (const auto& item : uploadItems) {
+                if (item.rects.empty()) {
+                    ++boxEmissions;
+                    jobs += isCombinedDepthStencil ? 2u : 1u;
+                } else {
+                    ++rectEmissions;
+                    jobs += static_cast<Uint64>(item.rects.size());
+                }
+            }
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture,
+                                         static_cast<Uint64>(stagingSize));
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadEmissions,
+                                         static_cast<Uint64>(uploadItems.size()));
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadBoxEmissions, boxEmissions);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadRectEmissions, rectEmissions);
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadJobs, jobs);
         }
 
         const VkImageAspectFlags aspectMask = GetAspectMaskForFormat(outResource.format);

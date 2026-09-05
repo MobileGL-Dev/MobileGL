@@ -32,9 +32,12 @@
 // perfectly-predicted branch, and none of the counter state is touched. The counters
 // themselves are relaxed atomics rather than plain integers because texture and buffer
 // staging can be reached from more than one thread; relaxed adds cost nothing extra on the
-// off path, which never reaches them.
+// off path, which never reaches them. The off-path cost is not a guess: see the paired
+// A/B in the branch's evidence.
 //
-// WHAT IS COUNTED AND WHAT IS NOT: see the site inventory in PipeStats.cpp.
+// WHAT IS COUNTED AND WHAT IS NOT: see the site inventory in PipeStats.cpp. That inventory
+// is the contract - it names every path that is NOT wired, because a byte class that reads
+// zero while a real copy runs uncounted is worse than a missing counter.
 namespace MobileGL::MG_Util::PipeStats {
 
     // Byte classes. Every one of these names a population of bytes that would have to be
@@ -42,9 +45,11 @@ namespace MobileGL::MG_Util::PipeStats {
     // the frontend, which is why they are grouped this way rather than by call site.
     enum class ByteClass : Uint32 {
         // Buffer object contents flushed to the driver: glBufferData / glBufferSubData /
-        // map-write ranges / the persistent upload ring.
+        // map-write ranges / the persistent upload ring (Espryt), and every host->device
+        // copy of a buffer object's contents (Magma).
         StageBuffer = 0,
-        // Texel bytes handed to glTexSubImage & friends, whichever upload shape was chosen.
+        // Texel bytes handed to glTexSubImage & friends / packed into the Vulkan upload
+        // staging slice, whichever upload shape was chosen.
         StageTexture,
         // The default-uniform-block ("global UBO") image, uploaded at most once per program
         // per frame.
@@ -53,10 +58,16 @@ namespace MobileGL::MG_Util::PipeStats {
         // ring. Espryt binds the frontend buffer straight to the driver and contributes
         // nothing here - which is exactly the asymmetry D-B8 is about.
         StageUboNamed,
-        // Client-memory vertex arrays uploaded into a scratch VBO on the draw path.
+        // Client-memory vertex arrays uploaded into a scratch VBO / transient arena slice on
+        // the draw path.
         StageVertexClient,
         // Client-memory / rewritten index data staged on the draw path.
         StageIndexClient,
+        // Draw-parameter bytes a backend synthesises and stages for the draw itself: the
+        // indirect-command array and the compute path's per-draw info array. These are the
+        // bytes that become MGPipe command-record payload once the boundary is explicit,
+        // which is why they are not folded into the index class.
+        StageIndirectCmd,
         // Bytes pushed because a persistently mapped range was published to the backend.
         PersistentMapPush,
         // PLACEHOLDER (plan section 6.3): the residual value block does not exist yet. The
@@ -126,7 +137,7 @@ namespace MobileGL::MG_Util::PipeStats {
 
     inline Bool Enabled() { return g_pipeStatsEnabled; }
 
-    // Latches g_pipeStatsEnabled from MG_Config::Features.PipeStats and resets every
+    // Latches g_pipeStatsEnabled from MG_Config::Features.PipeStats and clears every
     // counter. Called from MobileGL::Initialize() right after the config load.
     void Init();
 
@@ -158,13 +169,20 @@ namespace MobileGL::MG_Util::PipeStats {
     const char* NameOf(CallClass callClass);
     const char* NameOf(Gate gate);
 
-    // The compact fixed-format one-liner MGLOG_I prints. Same text in the log and in the
-    // test, so the format is pinned by a test rather than by the log reader's memory.
-    String FormatSummaryLine();
+    // The compact fixed-format one-liner MGLOG_I prints, covering the CURRENT window (see
+    // AdvanceSummaryWindow). PURE: calling it twice returns the same text and changes no
+    // counter, so a probe, a test or a second reporting channel can format the window
+    // without stealing it from the log.
+    String FormatWindowLine();
+    // Closes the current window: the run totals as of now become the base the next
+    // FormatWindowLine() subtracts. Emitting the line and advancing the window are separate
+    // on purpose - the pair used to be one function whose name promised a formatter.
+    void AdvanceSummaryWindow();
     // The teardown dump. Run totals only: a per-frame JSON stream is a different tool.
     String FormatJson();
 
-    // Test hooks. Not used by any shipping path.
+    // Test hooks, used by no shipping path. Init() clears the counters through an internal
+    // ResetCounters() rather than by calling ResetForTesting().
     void SetEnabledForTesting(Bool enabled);
     void ResetForTesting();
 

@@ -2059,14 +2059,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         out.payload = outData;
         out.payloadSize = outSize;
-        if (MG_Util::PipeStats::Enabled()) {
-            // D-B8: these are the bytes Magma repacks into its own UBO ring, i.e. exactly
-            // the host payload a split build would have to ship with set_shader_buffers.
-            // Espryt binds the frontend buffer to the driver and contributes nothing here,
-            // which is why the class is named for the payload and not for the call.
-            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboNamed,
-                                         static_cast<Uint64>(outSize));
-        }
 
         // Zero-copy direct bind: for a persistent-mapped coherent app buffer whose full reflected
         // block fits within the aligned bound range, point the descriptor straight at the app's
@@ -2084,6 +2076,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 out.range = blockSize;
                 out.dynamicOffset = rangeStart;
             }
+        }
+        if (MG_Util::PipeStats::Enabled() && !out.directBindable) {
+            // D-B8: the bytes Magma repacks into its own UBO ring, i.e. exactly the host
+            // payload a split build would have to ship with set_shader_buffers. Espryt binds
+            // the frontend buffer to the driver and contributes nothing here, which is why
+            // the class is named for the payload and not for the call. Counted AFTER the
+            // zero-copy direct-bind decision: a direct bind repacks nothing, and counting it
+            // here reported a copy that never happened.
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboNamed,
+                                         static_cast<Uint64>(outSize));
         }
         return true;
     }
@@ -2292,6 +2294,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         outBuffer = slice.buffer;
         outRange = ubo.payloadSize;
         outDynamicOffset = static_cast<Uint32>(slice.offset);
+        if (isGlobalUbo && MG_Util::PipeStats::Enabled()) {
+            // Magma's half of stage-ubo-global, so the class means the same on both
+            // backends. The memo hit above returns before this, so a frame that reuses the
+            // slice correctly contributes nothing.
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
+                                         static_cast<Uint64>(ubo.payloadSize));
+        }
         if (isGlobalUbo) {
             m_globalUboMemo[m_globalUboMemoNext] =
                 GlobalUboSliceMemo{uboProgramLifetimeId, uboFrameSerial, uboContentVersion,

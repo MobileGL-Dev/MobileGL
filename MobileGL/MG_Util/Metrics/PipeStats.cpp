@@ -15,42 +15,69 @@
 // ---------------------------------------------------------------------------------------
 // SITE INVENTORY - what these counters DO and DO NOT cover.
 //
+// This list is the contract. A byte class that reads 0 while a real copy runs uncounted is
+// worse than a missing counter, because the zero is then read as an answer, so every path
+// that moves bytes and is NOT wired is named here by file and function.
+//
 // Byte classes
-//   stage-buffer         DirectGLES Managers.cpp: RespecifyStorageNow's glBufferData,
-//                        FlushPendingRangesNow's three shapes (map-write, glBufferSubData,
-//                        upload-ring stage). Covers every byte Espryt hands the driver for
-//                        a buffer object's contents.
-//                        NOT covered: DirectVulkan's own buffer staging (its buffer bytes
-//                        reach the GPU through a persistent map the frontend already owns,
-//                        so there is no second copy to count) - see the note on
+//   stage-buffer         ESPRYT (DirectGLES Managers.cpp): RespecifyStorageNow's
+//                        glBufferData, FlushPendingRangesNow's three shapes (map-write,
+//                        glBufferSubData, upload-ring stage), and the pool-recycle reseed
+//                        in SyncBufferObject.
+//                        MAGMA (DirectVulkan VkBufferManager.cpp): every host->device copy
+//                        of a buffer object's contents - SwapStorageAndUploadAll, the
+//                        StagedRangeCopy staging fill, the in-place uploads in OnRespecify /
+//                        OnSubData / OnFlushMappedRange, the AcquirePersistentMap seed, the
+//                        AcquireResidentSlice initial upload and the AcquireStreamedSlice
+//                        arena fill.
+//                        NOT covered: bytes an app writes THROUGH a persistent map. Those
+//                        never pass through either backend (D4/D-B4) - see
 //                        persistent-map-push.
-//   stage-texture        DirectGLES Managers.cpp texture upload: the bytes of whichever of
+//   stage-texture        ESPRYT (Managers.cpp texture upload): the bytes of whichever of
 //                        the three upload shapes ran (rect list / union box / whole level).
-//                        NOT covered: the DirectVulkan texture staging path, and Espryt's
-//                        compressed-texture and readback paths.
-//   stage-ubo-global     DirectGLES.cpp default-uniform-block image, both the UBO-ring
-//                        memcpy and the glBufferSubData fallback.
+//                        MAGMA (VkTextureManager.cpp): the packed staging slice of an
+//                        upload batch item set.
+//                        NOT covered: Espryt's compressed-texture path, and both backends'
+//                        readback (device->host) paths, which are a different direction and
+//                        want their own class when the reverse channel of section 7 exists.
+//   stage-ubo-global     ESPRYT (DirectGLES.cpp): the default-uniform-block image, both the
+//                        UBO-ring memcpy and the glBufferSubData fallback.
+//                        MAGMA (UniformManager::ResolveDynamicUboDescriptor): the same
+//                        image, counted after the per-frame slice memo, so a frame that
+//                        re-uses the slice correctly contributes nothing.
 //   stage-ubo-named      DirectVulkan UniformManager::ResolveUniformBufferPayload - the
-//                        bytes Magma repacks into its own UBO ring. Espryt contributes
-//                        nothing by construction (D-B8).
-//   stage-vertex-client  DirectGLES BackendVertexArrayObject::SyncClientSideAttributesFor-
-//                        DrawArrays, both the Float64-narrowing and the verbatim shapes.
-//                        NOT covered: the DirectVulkan converted-vertex-stream cache.
-//   stage-index-client   DirectGLES index rewriting (the primitive-restart substitution
-//                        buffer).
-//                        NOT covered: DirectVulkan's index staging.
+//                        bytes Magma repacks into its own UBO ring, counted AFTER the
+//                        zero-copy direct-bind decision (a direct bind repacks nothing).
+//                        Espryt contributes nothing by construction (D-B8).
+//   stage-vertex-client  ESPRYT: BackendVertexArrayObject::SyncClientSideAttributesFor-
+//                        DrawArrays (both the Float64-narrowing and the verbatim shapes)
+//                        and the VBO-backed Float64->Float32 narrowing scratch upload.
+//                        MAGMA: VkBufferManager::UploadTransient(BufferKind::Vertex), which
+//                        is the single chokepoint for the converted-vertex-stream and
+//                        client-array staging.
+//   stage-index-client   ESPRYT: the primitive-restart substitution buffer, and MultiDraw's
+//                        rewritten (rebased) index stream.
+//                        MAGMA: VkBufferManager::UploadTransient(BufferKind::Index).
+//   stage-indirect-cmd   ESPRYT MultiDraw.cpp: the DrawElementsIndirectCommand array staged
+//                        for the indirect tiers, and the compute tier's per-draw info
+//                        array. Kept out of stage-index-client because these are draw
+//                        PARAMETERS - the population that becomes MGPipe command-record
+//                        payload, not resource bytes.
+//                        NOT covered: Magma builds no such array (it issues one vkCmdDraw*
+//                        per sub-draw), so this class is Espryt-only by construction.
 //   persistent-map-push  Not wired in P0: today a persistent map is a permanent address
 //                        space donation (D4/D-B4) that survives the whole monolith track,
 //                        so there is no push to count until the IPC track breaks it.
 //   residual-value-block Placeholder, always 0 until P2 (plan section 6.3).
 //
 // Call classes
-//   draws                DirectGLES PrepareForDraw and DirectVulkan TrySetupDrawFastPath's
-//                        caller-visible entry. A dispatch is not a draw and is not counted.
+//   draws                DirectGLES PrepareForDraw and DirectVulkan SetupDraw's entry. A
+//                        dispatch is not a draw and is not counted.
 //   accessor-calls       STATIC TALLIES at the instrumented entry points, NOT a wrapper
 //                        around all 293 pGLContext-> sites. Each instrumented function adds
 //                        the number of GLContext accessor calls that its OWN body executed
-//                        on the path taken. Covered: PrepareForDraw's own reads,
+//                        on the path taken, and each tally sits AFTER the last early return
+//                        that would skip those reads. Covered: PrepareForDraw's own reads,
 //                        SyncRenderState, CaptureDrawTextureSyncKeys/CurrentUnitBindings-
 //                        Epoch, SyncNeccessaryTextures' walk, TrySetupDrawFastPath,
 //                        GetOrCreatePipeline and ApplyDynamicDrawStateTail. NOT covered:
@@ -59,7 +86,7 @@
 //                        memo miss), and every non-draw entry point. The number is
 //                        therefore a LOWER BOUND on the per-draw accessor count, and it is
 //                        the bound over exactly the six gates section 2.3.1 tabulates.
-//   texture-*            DirectGLES texture upload, per (target, level) emission.
+//   texture-*            Per (target, level) emission, both backends.
 //
 // Gates: the six of section 2.3.1, each counted exactly once per probe.
 //
@@ -122,9 +149,24 @@ namespace MobileGL::MG_Util::PipeStats {
             return bucket;
         }
 
+        // Two decimals without <iomanip>. Every per-frame and per-draw field in the summary
+        // goes through this: the numbers are small (a per-draw accessor count in the 10-25
+        // band, a per-frame byte count that sizes SEG_STAGE), so truncating integer division
+        // loses up to a whole unit on exactly the figures the package exists to produce.
+        // A zero denominator is "n/a" rather than a division by a faked 1.
+        String FormatFixed2(Uint64 numerator, Uint64 denominator) {
+            if (denominator == 0) {
+                return "n/a";
+            }
+            const Uint64 hundredths = (numerator * 100 + denominator / 2) / denominator;
+            return std::to_string(hundredths / 100) + "." + (hundredths % 100 < 10 ? "0" : "") +
+                   std::to_string(hundredths % 100);
+        }
+
         const char* const kByteClassNames[kByteClassCount] = {
-            "stage-buffer",       "stage-texture",      "stage-ubo-global",    "stage-ubo-named",
-            "stage-vertex-client", "stage-index-client", "persistent-map-push", "residual-value-block",
+            "stage-buffer",        "stage-texture",       "stage-ubo-global",
+            "stage-ubo-named",     "stage-vertex-client", "stage-index-client",
+            "stage-indirect-cmd",  "persistent-map-push", "residual-value-block",
         };
         const char* const kCallClassNames[kCallClassCount] = {
             "draws", "accessor-calls", "tex-upload-emissions", "tex-upload-box", "tex-upload-rect",
@@ -134,19 +176,57 @@ namespace MobileGL::MG_Util::PipeStats {
             "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",
             "magma-draw-fastpath", "magma-pipeline-memo",      "magma-dynamic-tail",
         };
+        // Tracy needs a stable string literal per series, and a gate is TWO series: plotting
+        // only the misses (which is what the first cut did) hides the denominator, and a
+        // gate's whole point is the ratio.
+        const char* const kGateHitPlotNames[kGateCount] = {
+            "espryt-render-state-hit", "espryt-texture-sync-list-hit", "espryt-unit-bindings-epoch-hit",
+            "magma-draw-fastpath-hit", "magma-pipeline-memo-hit",      "magma-dynamic-tail-hit",
+        };
+        const char* const kGateMissPlotNames[kGateCount] = {
+            "espryt-render-state-miss", "espryt-texture-sync-list-miss", "espryt-unit-bindings-epoch-miss",
+            "magma-draw-fastpath-miss", "magma-pipeline-memo-miss",      "magma-dynamic-tail-miss",
+        };
         // Short forms, so the per-120-frame line stays one terminal line wide.
-        const char* const kByteClassShort[kByteClassCount] = {"buf",  "tex",  "ubog", "ubon",
-                                                              "vtxc", "idxc", "pmap", "resid"};
+        const char* const kByteClassShort[kByteClassCount] = {"buf",  "tex",  "ubog", "ubon", "vtxc",
+                                                              "idxc", "icmd", "pmap", "resid"};
         const char* const kGateShort[kGateCount] = {"ers", "etl", "eub", "mfp", "mpm", "mdt"};
 
+        void ResetCounters() {
+            for (Uint32 i = 0; i < kByteClassCount; ++i) {
+                g_frameBytes[i].store(0, std::memory_order_relaxed);
+                g_totalBytes[i].store(0, std::memory_order_relaxed);
+                g_windowBaseBytes[i] = 0;
+            }
+            for (Uint32 i = 0; i < kCallClassCount; ++i) {
+                g_frameCalls[i].store(0, std::memory_order_relaxed);
+                g_totalCalls[i].store(0, std::memory_order_relaxed);
+                g_windowBaseCalls[i] = 0;
+            }
+            for (Uint32 i = 0; i < kGateCount; ++i) {
+                g_frameGateHit[i].store(0, std::memory_order_relaxed);
+                g_totalGateHit[i].store(0, std::memory_order_relaxed);
+                g_frameGateMiss[i].store(0, std::memory_order_relaxed);
+                g_totalGateMiss[i].store(0, std::memory_order_relaxed);
+                g_windowBaseGateHit[i] = 0;
+                g_windowBaseGateMiss[i] = 0;
+            }
+            for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
+                g_totalPayloadBuckets[i].store(0, std::memory_order_relaxed);
+            }
+            g_frameCount.store(0, std::memory_order_relaxed);
+            g_windowBaseFrames = 0;
+        }
+
         void EmitSummaryLine() {
-            const String line = FormatSummaryLine();
+            const String line = FormatWindowLine();
             // MGLOG_I on purpose, against the project's usual "MGLOG_D for anything
             // non-critical" rule: the line has to survive an INFO build (that is the only
             // build a device ever runs), it is emitted at most once per 120 frames, and it
             // exists at all only when the operator set MOBILEGL_PIPE_STATS=1. It is an
             // opt-in measurement channel, not per-frame noise.
             MGLOG_I("%s", line.c_str());
+            AdvanceSummaryWindow();
         }
 
         void WriteJsonDump() {
@@ -170,7 +250,7 @@ namespace MobileGL::MG_Util::PipeStats {
     } // namespace
 
     void Init() {
-        ResetForTesting();
+        ResetCounters();
         g_shutdownDone = false;
         g_pipeStatsEnabled = MG_Config::Features.PipeStats;
         if (g_pipeStatsEnabled) {
@@ -218,7 +298,13 @@ namespace MobileGL::MG_Util::PipeStats {
     void OnPresent() {
 #ifdef TRACY_ENABLE
         // One plot per counter, the frame's value. Tracy keeps the series by name, and the
-        // names are the static literals above, which is what TracyPlot requires.
+        // names are the static literals above, which is what TracyPlot requires. A gate is
+        // two series - hits and misses - because the ratio is the deliverable and a miss
+        // count alone cannot be read.
+        //
+        // The payload histogram is deliberately NOT plotted: it is a run-total distribution
+        // over draws (section 4.5.7), not a per-frame scalar, and Tracy has no histogram
+        // series. It reaches the operator through the JSON dump.
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
             TracyPlot(kByteClassNames[i], static_cast<Int64>(Read(g_frameBytes[i])));
         }
@@ -226,7 +312,8 @@ namespace MobileGL::MG_Util::PipeStats {
             TracyPlot(kCallClassNames[i], static_cast<Int64>(Read(g_frameCalls[i])));
         }
         for (Uint32 i = 0; i < kGateCount; ++i) {
-            TracyPlot(kGateNames[i], static_cast<Int64>(Read(g_frameGateMiss[i])));
+            TracyPlot(kGateHitPlotNames[i], static_cast<Int64>(Read(g_frameGateHit[i])));
+            TracyPlot(kGateMissPlotNames[i], static_cast<Int64>(Read(g_frameGateMiss[i])));
         }
 #endif
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
@@ -260,12 +347,16 @@ namespace MobileGL::MG_Util::PipeStats {
     const char* NameOf(CallClass callClass) { return kCallClassNames[static_cast<Uint32>(callClass)]; }
     const char* NameOf(Gate gate) { return kGateNames[static_cast<Uint32>(gate)]; }
 
-    String FormatSummaryLine() {
+    String FormatWindowLine() {
         // Window values: everything since the previous summary. A run total over a workload
         // whose shape changes (load, then steady state) hides exactly the number P2 wants.
         const Uint64 frames = Read(g_frameCount);
         const Uint64 windowFrames = frames - g_windowBaseFrames;
-        const Uint64 divisorFrames = windowFrames == 0 ? 1 : windowFrames;
+        // A window with no Present in it (teardown before the first frame, or a slice whose
+        // whole workload runs off-screen) has NO per-frame reading. Printing the window
+        // totals under a "/f" label there is how a 47x overstatement of the SEG_STAGE sizing
+        // input got printed as a per-frame figure; the label changes instead.
+        const Bool perFrame = windowFrames != 0;
 
         Uint64 bytes[kByteClassCount];
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
@@ -289,21 +380,21 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " frames=" + std::to_string(frames);
         line += " window=" + std::to_string(windowFrames);
         line += " draws=" + std::to_string(draws);
-        line += " draws/f=" + std::to_string(draws / divisorFrames);
+        line += " draws/f=" + FormatFixed2(draws, windowFrames);
         line += " acc=" + std::to_string(accessorCalls);
-        // Two decimals without <iomanip>: the per-draw accessor count is the number section
-        // 2.3.1 wants to an integer's worth of precision, and it is small (10-25).
-        const Uint64 accPerDrawHundredths = draws == 0 ? 0 : (accessorCalls * 100 + draws / 2) / draws;
-        line += " acc/draw=" + std::to_string(accPerDrawHundredths / 100) + "." +
-                (accPerDrawHundredths % 100 < 10 ? "0" : "") + std::to_string(accPerDrawHundredths % 100);
-        line += " bytes/f[";
+        // Same rule as the per-frame fields: a window with no draw in it has no per-draw
+        // number, and "0.00" next to a non-zero acc= is the same lie in a smaller font.
+        line += " acc/draw=" + FormatFixed2(accessorCalls, draws);
+        // "bytes/f[...]" only when there IS a frame to divide by; otherwise the bracket is
+        // labelled "bytes[...]" and carries the window totals verbatim.
+        line += perFrame ? " bytes/f[" : " bytes[";
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
             if (i != 0) {
                 line += " ";
             }
             line += kByteClassShort[i];
             line += "=";
-            line += std::to_string(bytes[i] / divisorFrames);
+            line += perFrame ? FormatFixed2(bytes[i], windowFrames) : std::to_string(bytes[i]);
         }
         line += "] tex[emit=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadEmissions)]);
         line += " box=" + std::to_string(calls[static_cast<Uint32>(CallClass::TextureUploadBoxEmissions)]);
@@ -321,7 +412,10 @@ namespace MobileGL::MG_Util::PipeStats {
             line += std::to_string(gateMiss[i]);
         }
         line += "]";
+        return line;
+    }
 
+    void AdvanceSummaryWindow() {
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
             g_windowBaseBytes[i] = Read(g_totalBytes[i]);
         }
@@ -332,8 +426,7 @@ namespace MobileGL::MG_Util::PipeStats {
             g_windowBaseGateHit[i] = Read(g_totalGateHit[i]);
             g_windowBaseGateMiss[i] = Read(g_totalGateMiss[i]);
         }
-        g_windowBaseFrames = frames;
-        return line;
+        g_windowBaseFrames = Read(g_frameCount);
     }
 
     String FormatJson() {
@@ -374,30 +467,6 @@ namespace MobileGL::MG_Util::PipeStats {
 
     void SetEnabledForTesting(Bool enabled) { g_pipeStatsEnabled = enabled; }
 
-    void ResetForTesting() {
-        for (Uint32 i = 0; i < kByteClassCount; ++i) {
-            g_frameBytes[i].store(0, std::memory_order_relaxed);
-            g_totalBytes[i].store(0, std::memory_order_relaxed);
-            g_windowBaseBytes[i] = 0;
-        }
-        for (Uint32 i = 0; i < kCallClassCount; ++i) {
-            g_frameCalls[i].store(0, std::memory_order_relaxed);
-            g_totalCalls[i].store(0, std::memory_order_relaxed);
-            g_windowBaseCalls[i] = 0;
-        }
-        for (Uint32 i = 0; i < kGateCount; ++i) {
-            g_frameGateHit[i].store(0, std::memory_order_relaxed);
-            g_totalGateHit[i].store(0, std::memory_order_relaxed);
-            g_frameGateMiss[i].store(0, std::memory_order_relaxed);
-            g_totalGateMiss[i].store(0, std::memory_order_relaxed);
-            g_windowBaseGateHit[i] = 0;
-            g_windowBaseGateMiss[i] = 0;
-        }
-        for (Uint32 i = 0; i < kPayloadHistogramBuckets; ++i) {
-            g_totalPayloadBuckets[i].store(0, std::memory_order_relaxed);
-        }
-        g_frameCount.store(0, std::memory_order_relaxed);
-        g_windowBaseFrames = 0;
-    }
+    void ResetForTesting() { ResetCounters(); }
 
 } // namespace MobileGL::MG_Util::PipeStats

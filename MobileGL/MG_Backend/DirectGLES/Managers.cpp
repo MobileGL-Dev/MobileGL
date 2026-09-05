@@ -1538,6 +1538,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     BindBufferId(TempBufferTarget, reused);
                     g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize,
                                                 bufferObject->MappedData());
+                    if (MG_Util::PipeStats::Enabled()) {
+                        // The pool-recycle reseed is a whole-buffer upload on the hot path,
+                        // not a bookkeeping detail: it moves the same bytes a fresh
+                        // glBufferData would.
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(poolSize));
+                    }
                     {
                         const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                         resource->pendingRanges.clear();
@@ -2695,6 +2702,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER,
                                          static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
                                          converted.data(), GL_STREAM_DRAW);
+                if (MG_Util::PipeStats::Enabled()) {
+                    // The VBO-backed half of the 64-bit narrowing. Same population as the
+                    // client-array half above: a stream the backend synthesises per draw.
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                                 static_cast<Uint64>(converted.size() * sizeof(Float)));
+                }
                 stream.valid = true;
                 stream.sourceLifetimeId = sourceLifetimeId;
                 stream.sourceChangeSerial = sourceChangeSerial;

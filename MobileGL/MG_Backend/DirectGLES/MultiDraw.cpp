@@ -9,6 +9,7 @@
 #include "MultiDraw.h"
 #include "Managers.h"
 #include <MG_State/GLState/Core.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <cstring>
 #include <limits>
 
@@ -156,7 +157,10 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // are bound as storage blocks. Respecifies rather than sub-updates: glBufferData
         // orphans the previous store, so the upload never waits on a dispatch still reading
         // the old contents out of the same name.
-        Bool UploadScratch(ScratchBuffer& buffer, SizeT bytes, const void* data) {
+        // statsClass: which MGPipe byte population these bytes belong to. Counted here
+        // rather than at the four call sites so a new tier cannot forget it.
+        Bool UploadScratch(ScratchBuffer& buffer, SizeT bytes, const void* data,
+                           MG_Util::PipeStats::ByteClass statsClass) {
             if (bytes == 0) return true;
             if (!EnsureScratchName(buffer)) return false;
             BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, buffer.id);
@@ -169,6 +173,9 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             buffer.cursor = 0;
             if (data) {
                 g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget, 0, static_cast<GLsizeiptr>(bytes), data);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(statsClass, static_cast<Uint64>(bytes));
+                }
             }
             return true;
         }
@@ -183,7 +190,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         constexpr SizeT kRingAlignment = 16; // >= 4, so both command and uint32-index offsets stay legal
         constexpr SizeT kMinRingBytes = 1u << 16;
 
-        Bool UploadScratchRing(ScratchBuffer& buffer, SizeT bytes, const void* data, SizeT& outOffset) {
+        Bool UploadScratchRing(ScratchBuffer& buffer, SizeT bytes, const void* data,
+                               MG_Util::PipeStats::ByteClass statsClass, SizeT& outOffset) {
             outOffset = 0;
             if (bytes == 0) return true;
             if (!EnsureScratchName(buffer)) return false;
@@ -207,6 +215,9 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             if (data) {
                 g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget, static_cast<GLintptr>(outOffset),
                                             static_cast<GLsizeiptr>(bytes), data);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(statsClass, static_cast<Uint64>(bytes));
+                }
             }
             buffer.cursor += aligned;
             return true;
@@ -417,7 +428,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
             const SizeT commandBytes = g_commandStaging.size() * sizeof(DrawElementsIndirectCommand);
             SizeT commandBase = 0;
-            if (!UploadScratchRing(g_indirectCommands, commandBytes, g_commandStaging.data(), commandBase)) {
+            if (!UploadScratchRing(g_indirectCommands, commandBytes, g_commandStaging.data(),
+                                   MG_Util::PipeStats::ByteClass::StageIndirectCmd, commandBase)) {
                 return false;
             }
 
@@ -532,7 +544,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             }
 
             SizeT indexBase = 0;
-            if (!UploadScratchRing(g_rebasedIndices, total * sizeof(Uint32), g_indexStaging.data(), indexBase)) {
+            if (!UploadScratchRing(g_rebasedIndices, total * sizeof(Uint32), g_indexStaging.data(),
+                                   MG_Util::PipeStats::ByteClass::StageIndexClient, indexBase)) {
                 return false;
             }
 
@@ -737,10 +750,16 @@ void main() {
             if (total == 0) return; // nothing to draw; the ordinary tiers no-op just as well
 
             if (!EnsureComputeProgram()) return;
-            if (!UploadScratch(g_drawInfo, g_drawInfoStaging.size() * sizeof(Uint32), g_drawInfoStaging.data())) {
+            if (!UploadScratch(g_drawInfo, g_drawInfoStaging.size() * sizeof(Uint32), g_drawInfoStaging.data(),
+                               MG_Util::PipeStats::ByteClass::StageIndirectCmd)) {
                 return;
             }
-            if (!UploadScratch(g_flattenedIndices, total * sizeof(Uint32), nullptr)) return;
+            // data == nullptr: pure respecify, the compute pass writes the contents, so no
+            // host bytes cross here and nothing is counted.
+            if (!UploadScratch(g_flattenedIndices, total * sizeof(Uint32), nullptr,
+                               MG_Util::PipeStats::ByteClass::StageIndexClient)) {
+                return;
+            }
 
             BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 0, sourceResource->id);
             BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, 1, g_drawInfo.id);
