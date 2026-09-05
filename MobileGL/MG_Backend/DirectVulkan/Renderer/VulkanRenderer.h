@@ -675,8 +675,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // per object: one group of four slots each, handed out on first use.
         static constexpr SizeT kXfbCounterObjectSlots = 16;
         VkBufferObject m_xfbCounterBuffer;
-        UnorderedMap<Uint, Uint32> m_xfbCounterSlotByObject;
-        Uint32 m_xfbNextCounterSlot = 0;
+        // Which transform feedback object owns each slot group, by the frontend's never-reused
+        // lifetime id (0 = the slot is free). This used to be an UnorderedMap keyed on the GL
+        // NAME, which is recycled by glGenTransformFeedbacks: a deleted-and-recreated object
+        // inherited the dead one's slot, and since nothing ever removed an entry the map also
+        // grew for the life of the context. A fixed table cannot do either: a group is taken over
+        // only from an owner with no OPEN span (see CurrentXfbCounterSlot), so an object whose
+        // counters can still be resumed never loses them, and a dead object's group comes back.
+        Array<Uint64, kXfbCounterObjectSlots> m_xfbCounterSlotOwner{};
+        // Tie-break among reclaimable groups only; never on its own, because the paused span the
+        // groups exist for is by construction the least recently used one.
+        Array<Uint64, kXfbCounterObjectSlots> m_xfbCounterSlotLastUse{};
+        Uint64 m_xfbCounterSlotUseSerial = 0;
         // Set for a slot once a captured draw has been recorded into its span; selects
         // counter-buffer resume on the next captured draw of the same span.
         Array<Bool, kXfbCounterObjectSlots> m_xfbCountersValid{};

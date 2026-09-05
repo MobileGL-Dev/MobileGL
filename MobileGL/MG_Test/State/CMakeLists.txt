@@ -46,6 +46,31 @@ include(GoogleTest)
 gtest_discover_tests(ObjectLifetimeIdTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
 add_executable(
+        TransformFeedbackLifetimeIdTest
+        TransformFeedbackLifetimeIdTest.cpp
+)
+
+target_include_directories(TransformFeedbackLifetimeIdTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(
+        TransformFeedbackLifetimeIdTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+        target_compile_options(TransformFeedbackLifetimeIdTest PRIVATE /Zc:preprocessor)
+endif()
+
+gtest_discover_tests(TransformFeedbackLifetimeIdTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+add_executable(
         RenderStateTest
         RenderStateTest.cpp
 )

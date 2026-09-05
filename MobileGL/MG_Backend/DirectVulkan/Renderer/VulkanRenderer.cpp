@@ -3267,8 +3267,9 @@ void main() {
         }
         m_vertexInputStateFactory.reset();
         m_xfbCounterBuffer.Destroy();
-        m_xfbCounterSlotByObject.clear();
-        m_xfbNextCounterSlot = 0;
+        m_xfbCounterSlotOwner.fill(0);
+        m_xfbCounterSlotLastUse.fill(0);
+        m_xfbCounterSlotUseSerial = 0;
         m_xfbCountersValid.fill(false);
         m_xfbLastSeenGeneration.fill(0);
         if (m_occlusionQueryPool != VK_NULL_HANDLE) {
@@ -11199,16 +11200,66 @@ void main() {
         }
     }
 
+    // Keyed on the frontend's never-reused lifetime id, NOT on the GL name. The name is
+    // recycled the moment glDeleteTransformFeedbacks gives it back, so a name-keyed slot
+    // handed a brand-new object the counter group - and the m_xfbCountersValid /
+    // m_xfbLastSeenGeneration entries - of the object that died under that name.
+    //
+    // Slots are never handed back (there is no backend entry telling this renderer that a span
+    // closed - registering the EndTransformFeedback one would flip the "captures through its own
+    // driver" test FixupGsStripCaptureOrder makes of it), so once all sixteen are owned a new
+    // object has to take one over. The victim is chosen among owners with NO OPEN SPAN: an object
+    // whose span is closed, or which no longer exists at all, can never resume, so its counter
+    // bytes are dead. Least-recently-used ALONE would be exactly the wrong rule - GL only permits
+    // another object to capture while this one is PAUSED, so the paused span whose counters the
+    // slots exist to protect is by construction the least recently used entry. Taking a group over
+    // resets its counter state, because those bytes describe the previous owner's span.
     Uint32 VulkanRenderer::CurrentXfbCounterSlot() {
-        const Uint name = MG_State::pGLContext->GetBoundTransformFeedbackName();
-        const auto it = m_xfbCounterSlotByObject.find(name);
-        if (it != m_xfbCounterSlotByObject.end()) {
-            return it->second;
+        constexpr Uint32 kNoSlot = static_cast<Uint32>(kXfbCounterObjectSlots);
+        const Uint64 identity = MG_State::pGLContext->GetBoundTransformFeedbackLifetimeId();
+        MOBILEGL_ASSERT(identity != 0,
+                        "transform feedback object reported the free-slot sentinel (0) as its identity - "
+                        "every slot would then read as 'mine' without ever being claimed");
+        Uint32 freeSlot = kNoSlot;
+        for (Uint32 slot = 0; slot < kNoSlot; ++slot) {
+            if (m_xfbCounterSlotOwner[slot] == identity) {
+                m_xfbCounterSlotLastUse[slot] = ++m_xfbCounterSlotUseSerial;
+                return slot;
+            }
+            if (m_xfbCounterSlotOwner[slot] == 0 && freeSlot == kNoSlot) {
+                freeSlot = slot;
+            }
         }
-        // Past the tracked set every object shares slot group 0. Only concurrently-paused
-        // spans need distinct groups, and applications do not keep sixteen of those open.
-        const Uint32 slot = m_xfbNextCounterSlot < kXfbCounterObjectSlots ? m_xfbNextCounterSlot++ : 0;
-        m_xfbCounterSlotByObject[name] = slot;
+        Uint32 slot = freeSlot;
+        if (slot == kNoSlot) {
+            for (Uint32 candidate = 0; candidate < kNoSlot; ++candidate) {
+                if (MG_State::pGLContext->HasOpenTransformFeedbackSpan(m_xfbCounterSlotOwner[candidate])) {
+                    continue;
+                }
+                if (slot == kNoSlot || m_xfbCounterSlotLastUse[candidate] < m_xfbCounterSlotLastUse[slot]) {
+                    slot = candidate;
+                }
+            }
+        }
+        if (slot == kNoSlot) {
+            // Sixteen capture spans open at once. Whatever is taken loses its resume offset and
+            // restarts at byte 0 of its capture buffers, which is a wrong picture rather than a
+            // slow one - hence a report rather than a silent choice.
+            MGLOG_E_ONCE("CurrentXfbCounterSlot: all %zu counter groups belong to transform feedback objects "
+                         "with an open capture span; the least recently used one is taken over and that span "
+                         "will restart at offset 0 instead of appending",
+                         kXfbCounterObjectSlots);
+            slot = 0;
+            for (Uint32 candidate = 1; candidate < kNoSlot; ++candidate) {
+                if (m_xfbCounterSlotLastUse[candidate] < m_xfbCounterSlotLastUse[slot]) {
+                    slot = candidate;
+                }
+            }
+        }
+        m_xfbCounterSlotOwner[slot] = identity;
+        m_xfbCounterSlotLastUse[slot] = ++m_xfbCounterSlotUseSerial;
+        m_xfbCountersValid[slot] = false;
+        m_xfbLastSeenGeneration[slot] = 0;
         return slot;
     }
 

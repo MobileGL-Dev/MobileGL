@@ -14,6 +14,8 @@
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <Config.h>
 
+#include <atomic>
+
 namespace MobileGL::MG_State {
     void Init() {
         MGLOG_D("Initializing MobileGL State...");
@@ -1259,6 +1261,33 @@ namespace MobileGL::MG_State {
             return m_renderbufferState.ValidateRenderbufferObject(index);
         }
 
+        Uint64 GLContext::AllocateTransformFeedbackLifetimeId() {
+            // Starts at 1 so a zero-initialised backend slot can never carry a live object's id.
+            static std::atomic<Uint64> nextId{1};
+            return nextId.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        GLContext::GLContext() {
+            // The default transform feedback object (name 0) exists from the start of the context
+            // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialise it.
+            // Materialising it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain
+            // const read instead of an operator[] insert on the draw path.
+            m_boundTransformFeedbackLifetimeId = m_transformFeedbackObjects[0].lifetimeId;
+        }
+
+        Bool GLContext::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
+            if (lifetimeId == 0) return false;
+            for (const auto& [name, object] : m_transformFeedbackObjects) {
+                if (object.lifetimeId != lifetimeId) continue;
+                // The bound object's span state is live in the context; its saved copy is only
+                // written when a bind swaps it out.
+                return name == m_boundTransformFeedback ? m_transformFeedbackActive : object.active;
+            }
+            // No object carries this identity any more: it was deleted, and a deleted object can
+            // never resume.
+            return false;
+        }
+
         void GLContext::SaveBoundTransformFeedbackState() {
             auto& object = m_transformFeedbackObjects[m_boundTransformFeedback];
             for (Uint i = 0; i < MAX_TRANSFORM_FEEDBACK_BUFFERS; ++i) {
@@ -1295,6 +1324,9 @@ namespace MobileGL::MG_State {
             m_transformFeedbackGeneration = object.generation;
             m_transformFeedbackCapturedVertices = object.capturedVertices;
             m_transformFeedbackInputPrimitives = object.inputPrimitives;
+            // Every route that changes which object is bound - BindTransformFeedbackObject and the
+            // revert a delete of the bound object performs - comes through here.
+            m_boundTransformFeedbackLifetimeId = object.lifetimeId;
         }
 
         void GLContext::GenTransformFeedbackNames(Uint number, Vector<Uint>& ids) {
