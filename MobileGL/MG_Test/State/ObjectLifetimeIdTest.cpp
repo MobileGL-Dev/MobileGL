@@ -32,6 +32,7 @@
 #include "Includes.h"
 
 #include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 
 using namespace MobileGL;
@@ -137,4 +138,21 @@ TEST(ObjectLifetimeIdTest, LiveVertexArrayObjectsHaveDistinctLifetimeIds) {
 
 TEST(ObjectLifetimeIdTest, LiveBufferObjectsHaveDistinctLifetimeIds) {
     ExpectDistinctIdsWhileBothAlive<MG_State::GLState::BufferObject>("BufferObject");
+}
+
+// The renderbuffer had no lifetime id at all until plan B §11 P0 gave it one: it is
+// the one FBO attachment source whose identity a backend twin registry can only have
+// keyed on the heap address or the GL name, both of which recycle.
+TEST(ObjectLifetimeIdTest, RenderbufferObjectAtARecycledAddressCarriesAFreshLifetimeId) {
+    using MG_State::GLState::RenderbufferObject;
+    const int reuseCount = ProbeLifetimeIdAcrossAddressReuse<RenderbufferObject>("RenderbufferObject");
+    if (reuseCount == 0) {
+        GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across 64 "
+                        "construct/destroy rounds, so the recycled-address case was never exercised";
+    }
+    RecordProperty("address_reuses_observed", reuseCount);
+}
+
+TEST(ObjectLifetimeIdTest, LiveRenderbufferObjectsHaveDistinctLifetimeIds) {
+    ExpectDistinctIdsWhileBothAlive<MG_State::GLState::RenderbufferObject>("RenderbufferObject");
 }

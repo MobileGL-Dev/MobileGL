@@ -42,9 +42,20 @@ namespace MobileGL {
                 Int GetDepthSize() const;
                 Int GetStencilSize() const;
                 Int GetSamples() const;
+                // Globally-unique, never-reused id for THIS object's lifetime - same contract
+                // and same motivation as BufferObject::GetLifetimeId(),
+                // ProgramObject::GetLifetimeId() and VertexArrayObject::GetLifetimeId(). A
+                // backend that folds a renderbuffer's IDENTITY into a cache key must use this,
+                // never the GL name (LIFO-recycled by glGenRenderbuffers) and never the heap
+                // address (recycled by the allocator): both let a deleted-and-recreated
+                // renderbuffer answer to a dead one's cache entry.
+                Uint64 GetLifetimeId() const { return m_lifetimeId; }
 
             private:
+                static Uint64 AllocateLifetimeId();
+
                 Uint m_externalIndex = 0;
+                const Uint64 m_lifetimeId = AllocateLifetimeId();
                 TextureInternalFormat m_internalFormat = TextureInternalFormat::RGBA;
                 Int m_width = 0;
                 Int m_height = 0;

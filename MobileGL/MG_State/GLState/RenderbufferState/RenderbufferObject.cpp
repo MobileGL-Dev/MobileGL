@@ -9,9 +9,21 @@
 #include "RenderbufferObject.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 
+#include <atomic>
+
 namespace MobileGL {
     namespace MG_State {
         namespace GLState {
+            namespace {
+                // Starts at 1 so a zero-initialized cache slot can never carry a live
+                // renderbuffer's id.
+                std::atomic<Uint64> g_nextRenderbufferLifetimeId{1};
+            }
+
+            Uint64 RenderbufferObject::AllocateLifetimeId() {
+                return g_nextRenderbufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
+            }
+
             RenderbufferObject::RenderbufferObject(Uint externalIndex) : m_externalIndex(externalIndex) {}
 
             Uint RenderbufferObject::GetExternalIndex() const {
