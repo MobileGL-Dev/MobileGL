@@ -1,0 +1,235 @@
+// MobileGL - MobileGL/MG_Pipe/PipeFields.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// Field lists for the G4 shadow comparator (plan B section 10.3-2). One macro per payload
+// in MGPipeTypes.h, listing the fields that carry MEANING - padding is deliberately absent,
+// because MOBILEGL_PIPE_VERIFY has to have ZERO false positives and a padding byte is
+// exactly what makes a memcmp of RenderStateParameters false-DIFFER
+// (DirectGLES.cpp documents that behaviour where it does the same comparison itself).
+//
+// Hand maintained alongside MGPipeTypes.h. Adding a field to a payload without adding it
+// here makes the comparator blind to it; that gap closes in P1, when the verify harness
+// goes live and the comparator's coverage is itself asserted.
+//
+// clang-format off
+
+#define MGP_FIELDS_MGPBlobRef(F) \
+    F(Offset) F(Size) F(Seg)
+
+#define MGP_FIELDS_MGPRange(F) \
+    F(Offset) F(Size)
+
+#define MGP_FIELDS_MGPBox(F) \
+    F(X) F(Y) F(Z) F(W) F(H) F(D)
+
+#define MGP_FIELDS_MGPReplySlot(F) \
+    F(Id)
+
+#define MGP_FIELDS_MGPStateChunk(F) \
+    F(Offset) F(Length)
+
+#define MGP_FIELDS_MGPHandleOnly(F) \
+    F(Handle) F(Kind)
+
+#define MGP_FIELDS_MGPCaps(F) \
+    F(Dynamic) F(CallMask) F(FormatCapabilities) F(RendererInfo)
+
+#define MGP_FIELDS_MGPResourceDesc(F) \
+    F(Resource) F(Target) F(StorageKind) F(BindMask) F(InternalFormat) F(Width) F(Height) F(Depth) \
+    F(ArrayLayers) F(Levels) F(Samples) F(FixedSampleLocations) F(Immutable) F(Usage) F(StorageFlags) \
+    F(HasDefinedContent) F(ImageBindableHint) F(GlNameForDiag) F(ViewOf) F(BufferForTexBuffer) \
+    F(BufOffset) F(BufSize)
+
+#define MGP_FIELDS_MGPFenceWait(F) \
+    F(Fence) F(TimeoutNs)
+
+#define MGP_FIELDS_MGPQueryDesc(F) \
+    F(Query) F(Kind) F(Stream)
+
+#define MGP_FIELDS_MGPQueryResultRequest(F) \
+    F(Query) F(Wait)
+
+#define MGP_FIELDS_MGPRenderStateDesc(F) \
+    F(Cso) F(BaseCso) F(ChunkMask) F(Blob)
+
+#define MGP_FIELDS_MGPBindRenderState(F) \
+    F(Cso) F(Version) F(PipelineVersion)
+
+#define MGP_FIELDS_MGPDynamicState(F) \
+    F(ChunkMask) F(Version) F(Blob)
+
+#define MGP_FIELDS_MGPVertexElements(F) \
+    F(Cso) F(AttributeCount) F(BindingPointCount) F(Blob)
+
+#define MGP_FIELDS_MGPSamplerDesc(F) \
+    F(Cso) F(Parameters)
+
+#define MGP_FIELDS_MGPSamplerView(F) \
+    F(Cso) F(Texture) F(InternalFormat) F(Target) F(MinLevel) F(NumLevels) F(MinLayer) F(NumLayers) \
+    F(Samples) F(FixedSampleLocations)
+
+#define MGP_FIELDS_MGPTextureParams(F) \
+    F(Res) F(BaseLevel) F(MaxLevel) F(Swizzle) F(DepthStencilMode) F(ForceResync) F(MinLod) F(MaxLod) \
+    F(LodBias)
+
+#define MGP_FIELDS_MGPProgramDesc(F) \
+    F(Cso) F(StageMask) F(GlobalUboSize) F(ReservedNumSamplesOffset) F(SpirvStatus) F(NativeFloat64) \
+    F(PointSizeDemoted) F(EnableSpirvValidation) F(Spirv) F(Reflection)
+
+#define MGP_FIELDS_MGPSurface(F) \
+    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget)
+
+#define MGP_FIELDS_MGPFramebufferState(F) \
+    F(Fbo) F(Color) F(Depth) F(Stencil) F(ReadSurface) F(DrawBuffers) F(Width) F(Height) F(Layers) \
+    F(Samples) F(FixedSampleLocations) F(IsDefault) F(Complete) F(ContentHash)
+
+#define MGP_FIELDS_MGPVertexBuffer(F) \
+    F(Res) F(Offset) F(Stride) F(Divisor) F(BindingIndex)
+
+#define MGP_FIELDS_MGPVertexBuffers(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPIndexBuffer(F) \
+    F(Res) F(Offset) F(IndexSize)
+
+#define MGP_FIELDS_MGPIndirectBuffers(F) \
+    F(DrawIndirect) F(Parameter)
+
+#define MGP_FIELDS_MGPBoundView(F) \
+    F(View) F(Texture) F(Unit)
+
+#define MGP_FIELDS_MGPSamplerViews(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPSamplerStates(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPImageView(F) \
+    F(Res) F(Unit) F(InternalFormat) F(Layer) F(Level) F(Layered) F(Access)
+
+#define MGP_FIELDS_MGPShaderImages(F) \
+    F(Start) F(Count) F(ContentHash)
+
+#define MGP_FIELDS_MGPBufferRange(F) \
+    F(Res) F(Offset) F(Size) F(Payload)
+
+#define MGP_FIELDS_MGPShaderBuffers(F) \
+    F(Class) F(Start) F(Count) F(WritableMask) F(ContentHash)
+
+#define MGP_FIELDS_MGPStreamOutputTargets(F) \
+    F(Count) F(Generation) F(ContentHash)
+
+#define MGP_FIELDS_MGPGlobalConstants(F) \
+    F(ShaderCso) F(Version) F(Blob)
+
+#define MGP_FIELDS_MGPAttribValue(F) \
+    F(Location) F(ValueClass) F(Data)
+
+#define MGP_FIELDS_MGPVertexAttribDefaults(F) \
+    F(Mask) F(Count)
+
+#define MGP_FIELDS_MGPPixelPackState(F) \
+    F(Pack)
+
+#define MGP_FIELDS_MGPPatchState(F) \
+    F(Vertices) F(Outer) F(Inner)
+
+#define MGP_FIELDS_ResidualValueBlock(F) \
+    F(RenderState) F(Pack) F(CapabilityBits) F(PatchVertices) F(PatchOuter) F(PatchInner)
+
+#define MGP_FIELDS_MGPResidualValueState(F) \
+    F(Version) F(Blob)
+
+#define MGP_FIELDS_MGPSubRegion(F) \
+    F(X) F(Y) F(Z) F(W) F(H) F(D) F(SrcOffset) F(SrcRowStride) F(SrcSliceStride)
+
+#define MGP_FIELDS_MGPSubData(F) \
+    F(Res) F(Target) F(Level) F(SourceIsVerbatimLevelShadow) F(UnionBox) F(RegionCount) F(Blob)
+
+#define MGP_FIELDS_MGPSubDataComplete(F) \
+    F(Res) F(Target) F(FirstLevel) F(LevelCount) F(PullSerial)
+
+#define MGP_FIELDS_MGPFlushRange(F) \
+    F(Res) F(Offset) F(Size) F(AccessFlags)
+
+#define MGP_FIELDS_MGPReadback(F) \
+    F(Res) F(Offset) F(Size)
+
+#define MGP_FIELDS_MGPCopyRegion(F) \
+    F(Src) F(Dst) F(SrcBox) F(DstX) F(DstY) F(DstZ) F(SrcTarget) F(DstTarget) F(SrcLevel) F(DstLevel)
+
+#define MGP_FIELDS_MGPBlit(F) \
+    F(ReadFbo) F(DrawFbo) F(SrcX0) F(SrcY0) F(SrcX1) F(SrcY1) F(DstX0) F(DstY0) F(DstX1) F(DstY1) \
+    F(Mask) F(Filter)
+
+#define MGP_FIELDS_MGPClear(F) \
+    F(Fbo) F(Kind) F(DrawBufferIndex) F(BufferMask) F(ValueClass) F(ColorValue) F(DepthValue) \
+    F(StencilValue)
+
+#define MGP_FIELDS_MGPMipPlan(F) \
+    F(Res) F(Target) F(BaseLevel) F(LevelCount)
+
+#define MGP_FIELDS_MGPReadbackInfo(F) \
+    F(Res) F(Box) F(Format) F(Type) F(Target) F(Level) F(DstOffset) F(DstSize)
+
+#define MGP_FIELDS_MGPDrawInfo(F) \
+    F(Mode) F(IndexSize) F(Flags) F(InstanceCount) F(StartInstance) F(RestartIndex) F(DrawIdOffset) \
+    F(IndexResource) F(MinIndex) F(MaxIndex) F(XfbCpuCapturedVertices) F(NumDraws)
+
+#define MGP_FIELDS_MGPDrawRange(F) \
+    F(Start) F(Count) F(IndexBias)
+
+#define MGP_FIELDS_MGPDrawIndirect(F) \
+    F(Buffer) F(ParameterBuffer) F(Offset) F(ParameterOffset) F(Stride) F(DrawCount)
+
+#define MGP_FIELDS_MGPGridInfo(F) \
+    F(GridX) F(GridY) F(GridZ) F(BlockX) F(BlockY) F(BlockZ) F(IndirectBuffer) F(IndirectOffset) \
+    F(IsIndirect)
+
+#define MGP_FIELDS_MGPMemoryBarrier(F) \
+    F(Bits) F(ByRegion)
+
+#define MGP_FIELDS_MGPStreamOutputBegin(F) \
+    F(PrimitiveMode)
+
+#define MGP_FIELDS_MGPXfbAccounting(F) \
+    F(CapturedVertices) F(PrimitivesWritten) F(PrimitiveMode)
+
+#define MGP_FIELDS_MGPStreamOutputControl(F) \
+    F(Reserved)
+
+#define MGP_FIELDS_MGPFlush(F) \
+    F(Flags)
+
+#define MGP_FIELDS_MGPPresent(F) \
+    F(FrameSerial)
+
+#define MGP_FIELDS_MGPSwapInterval(F) \
+    F(Interval)
+
+#define MGP_FIELDS_MGPSurfaceInfo(F) \
+    F(Width) F(Height) F(InternalFormat) F(Samples) F(Layers) F(IsDefault)
+
+// Every payload above, in the order the comparator is generated. Keep in sync with the
+// macros; gen_pipe.py reads THIS list to know what to emit.
+#define MGP_VERIFY_PAYLOAD_LIST(P) \
+    P(MGPBlobRef) P(MGPRange) P(MGPBox) P(MGPReplySlot) P(MGPStateChunk) P(MGPHandleOnly) P(MGPCaps) \
+    P(MGPResourceDesc) P(MGPFenceWait) P(MGPQueryDesc) P(MGPQueryResultRequest) P(MGPRenderStateDesc) \
+    P(MGPBindRenderState) P(MGPDynamicState) P(MGPVertexElements) P(MGPSamplerDesc) P(MGPSamplerView) \
+    P(MGPTextureParams) P(MGPProgramDesc) P(MGPSurface) P(MGPFramebufferState) P(MGPVertexBuffer) \
+    P(MGPVertexBuffers) P(MGPIndexBuffer) P(MGPIndirectBuffers) P(MGPBoundView) P(MGPSamplerViews) \
+    P(MGPSamplerStates) P(MGPImageView) P(MGPShaderImages) P(MGPBufferRange) P(MGPShaderBuffers) \
+    P(MGPStreamOutputTargets) P(MGPGlobalConstants) P(MGPAttribValue) P(MGPVertexAttribDefaults) \
+    P(MGPPixelPackState) P(MGPPatchState) P(ResidualValueBlock) P(MGPResidualValueState) \
+    P(MGPSubRegion) P(MGPSubData) P(MGPSubDataComplete) P(MGPFlushRange) P(MGPReadback) \
+    P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPDrawInfo) \
+    P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
+    P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
+    P(MGPSurfaceInfo)
+
+// clang-format on

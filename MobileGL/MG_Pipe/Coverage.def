@@ -1,0 +1,106 @@
+// MobileGL - MobileGL/MG_Pipe/Coverage.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The hand-maintained half of G6 (plan B section 4.7, gate 10.3-5): which MGPipe call
+// answers each backend read point in scripts/data/backend_read_inventory.md (477 rows, 57
+// files, generated from the backends by MobileGL-CS's extract_backend_read_inventory.py).
+//
+// gen_pipe.py joins the inventory's `member` column against MGP_COVERAGE_ACCESSOR_LIST and
+// its `delta` column against MGP_COVERAGE_DELTA_LIST, then writes generated/PipeCoverage.inc
+// with the per-accessor table and prints the coverage summary. Rows matching neither are
+// UNMAPPED: allowed in P0 and merely counted, ZERO from P5 onward, when the gate becomes
+// "regenerate and git diff --exit-code with 0 UNMAPPED".
+//
+// Three pseudo-calls stand for read points that do NOT become a forward call:
+//   kClientResolved   - the frontend answers it itself; the server is never asked
+//                       (section 4.4.6: "the server answers nothing the client can answer").
+//   kReverseChannel   - it becomes one of the ten MGPipeCallbacks (section 7.1).
+//   kStructuralHandle - the row is a SIGNATURE carrying SharedPtr<MG_State...>, which
+//                       becomes an MGPipeHandle parameter; there is no single call to name.
+//
+// clang-format off
+
+// X(Accessor, PipeCall)
+#define MGP_COVERAGE_ACCESSOR_LIST(X)                                    \
+    X(GetActiveTextureUnit,                     SetSamplerViews)         \
+    X(GetBlendColor,                            SetDynamicState)         \
+    X(GetBlendEquationIndexed,                  CreateRenderState)       \
+    X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    X(GetBoundTransformFeedbackName,            SetStreamOutputTargets)  \
+    X(GetBoundVertexArray,                      BindVertexElements)      \
+    /* Polymorphic over BufferTarget: its rows split across set_vertex_buffers,     */  \
+    /* set_index_buffer, set_indirect_buffers and set_shader_buffers once the       */  \
+    /* inventory carries the target argument (P1). Named for the plan's explicit    */  \
+    /* replacement of the DrawIndirect/Parameter pair.                              */  \
+    X(GetBufferBindingSlot,                     SetIndirectBuffers)      \
+    X(GetBufferBindingPoint,                    SetShaderBuffers)        \
+    X(GetBufferBindingPointCount,               SetShaderBuffers)        \
+    X(GetTouchedBufferBindingPointCount,        SetShaderBuffers)        \
+    X(GetClampReadColor,                        SetDynamicState)         \
+    X(GetClearColor,                            SetDynamicState)         \
+    X(GetClearDepth,                            SetDynamicState)         \
+    X(GetClearStencil,                          SetDynamicState)         \
+    X(GetColorMaskIndexed,                      CreateRenderState)       \
+    X(GetCullFaceMode,                          CreateRenderState)       \
+    X(GetCurrentVertexAttribute,                SetVertexAttribDefaults) \
+    X(GetDepthFunc,                             CreateRenderState)       \
+    X(GetDepthMask,                             CreateRenderState)       \
+    X(GetDepthRangeIndexed,                     SetDynamicState)         \
+    X(GetFramebufferBindingSlot,                SetFramebufferState)     \
+    X(GetImageTextureBinding,                   SetShaderImages)         \
+    X(GetLineWidth,                             SetDynamicState)         \
+    X(GetLogicOp,                               CreateRenderState)       \
+    X(GetMaxTouchedTextureUnit,                 SetSamplerViews)         \
+    X(GetMinSampleShadingValue,                 CreateRenderState)       \
+    X(GetPatchDefaultInnerLevel,                SetPatchState)           \
+    X(GetPatchDefaultOuterLevel,                SetPatchState)           \
+    X(GetPatchVertices,                         SetPatchState)           \
+    X(GetPipelineStateVersion,                  BindRenderState)         \
+    X(GetPixelStoreParameters,                  SetPixelPackState)       \
+    X(GetPolygonModeFront,                      CreateRenderState)       \
+    X(GetPolygonOffsetFactor,                   SetDynamicState)         \
+    X(GetPolygonOffsetUnits,                    SetDynamicState)         \
+    X(GetPrimitiveRestartIndex,                 DrawVbo)                 \
+    X(GetProgramForDispatch,                    SetDispatchProgram)      \
+    X(GetProgramForDraw,                        SetDrawProgram)          \
+    X(GetProgramObject,                         CreateShaderState)       \
+    /* Not in ComputePipelineStateHash today even though Vulkan makes it pipeline   */  \
+    /* state; recorded here so the G7 chunk table has to answer for it before it    */  \
+    /* freezes (section 10.3-5).                                                    */  \
+    X(GetProvokingVertexMode,                   CreateRenderState)       \
+    X(GetRenderStateParameters,                 CreateRenderState)       \
+    X(GetRenderStateParametersVersion,          BindRenderState)         \
+    X(GetSamplingResolutionGeneration,          SetSamplerViews)         \
+    X(GetScissorBox,                            SetDynamicState)         \
+    X(GetStencilState,                          CreateRenderState)       \
+    X(GetTextureBindGeneration,                 SetSamplerViews)         \
+    X(GetTextureContextId,                      SetSamplerViews)         \
+    X(GetTextureObject,                         SetSamplerViews)         \
+    X(GetTextureUnitObject,                     SetSamplerViews)         \
+    X(GetTransformFeedbackCapturedVertices,     DrawVbo)                 \
+    X(GetTransformFeedbackGeneration,           SetStreamOutputTargets)  \
+    X(GetTransformFeedbackPausedPrimitiveCounter, EndStreamOutput)       \
+    X(GetTransformFeedbackProgram,              SetStreamOutputTargets)  \
+    X(GetViewport,                              SetDynamicState)         \
+    X(GetViewportIndexed,                       SetDynamicState)         \
+    X(IsCapabilityEnabled,                      CreateRenderState)       \
+    X(IsCapabilityEnabledIndexed,               CreateRenderState)       \
+    X(IsTransformFeedbackActive,                BeginStreamOutput)       \
+    X(IsTransformFeedbackPaused,                PauseStreamOutput)       \
+    X(InvalidateCompileEnv,                     kClientResolved)         \
+    X(ValidateProgramName,                      kClientResolved)         \
+    X(RecordError,                              kReverseChannel)
+
+// X(DeltaKind, PipeCall) - for inventory rows with no accessor in the member column.
+// Read by gen_pipe.py ONLY, never by the C++ preprocessor: the delta kinds are the
+// inventory's own free-text labels, not C tokens.
+#define MGP_COVERAGE_DELTA_LIST(X)                                       \
+    X(handle-ify (wire handle),                 kStructuralHandle)       \
+    X(Buffer ops delta,                         ResourceRespecify)
+
+// clang-format on

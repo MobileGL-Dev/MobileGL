@@ -472,6 +472,10 @@ message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")
 set(MOBILEGL_INCLUDE_DIR
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/MobileGL
+        # The MGPipe boundary headers. They are reachable as <MG_Pipe/MGPipe.h> through the
+        # line above too; this entry lets the client, the backends and MG_Remote spell them
+        # as <MGPipe.h> once MG_Pipe stops being a leaf of the frontend tree.
+        ${CMAKE_SOURCE_DIR}/MobileGL/MG_Pipe
         ${spirv-tools_SOURCE_DIR}
         ${spirv-tools_SOURCE_DIR}/include
         ${spirv-tools_BINARY_DIR}
