@@ -1,5 +1,6 @@
 # MobileGL 前后端进程拆分实施计划（branch `feat/disaggregated`）
 
+> **2026-09-05 追加：本文件是方案 A（replica `GLContext`）。经用户方向修正——backend 应拥有贴近后端 API 的状态机并通过 gallium 式显式接口解耦——推荐路线改为方案 B，见同目录 `PLAN-B-MGPipe.md`（含逐项对比与 GO/NO-GO 对冲路径）。本文件保留：§6-§13（传输、数据面、同步、present、线程、平台、构建）被方案 B 原样继承并以本文为准；§5、§12 的 replica 特化部分已被取代。**
 > 状态：设计定稿 v1（2026-09-05）。基线 `dev@81b17c0b`；实施分支 `feat/disaggregated`（worktree `../MobileGL-disagg`）。
 > 产出方式：7 个只读代码调研 → 4 个独立架构方案 → 3 个评审打分 → 综合 → 3 个对抗性审查（38 条发现）→ 修订；评审记录见同目录 `REVIEW.md`。
 > 上一次尝试 `Feat/CS-Delta-IPC`（2026-08-29/30，worktree `../MobileGL-CS`）的复用/丢弃结论见 §14。
