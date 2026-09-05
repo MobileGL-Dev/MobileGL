@@ -1,0 +1,235 @@
+// MobileGL - MobileGL/MG_Remote/Protocol/protocol.fbs
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// MobileGL disaggregated wire protocol - CONTROL PLANE ONLY.
+//
+// Plan B (docs plan "MGPipe") section 8.1 inherits the transport design of the
+// earlier plan verbatim, and its section 7.1 splits the schema in two:
+//
+//   - rare / variable-length / must-evolve messages -> FlatBuffers *tables*,
+//     carried as complete framed messages over the control channel. That is
+//     everything in this file.
+//   - the hot path -> FlatBuffers *structs* (fixed layout, no vtable, no
+//     offset indirection) written straight into the SEG_CMD ring. Those
+//     records are generated from MG_Pipe/PipeCalls.def and are deliberately
+//     NOT in this schema yet: the call catalogue is a separate P0 deliverable
+//     and record numbering must never churn.
+//
+// Regeneration: scripts/gen_protocol.py (flatc is NOT part of the default
+// build graph). generated/protocol_generated.h is committed and CI's
+// flatc-check regenerates it and runs `git diff --exit-code`.
+
+namespace MobileGL.Wire;
+
+// ---------------------------------------------------------------------------
+// Segments
+// ---------------------------------------------------------------------------
+
+// Segment layout is inherited unchanged (earlier plan section 6.1):
+// SEG_CMD 8MiB / SEG_STAGE 32MiB+ / SEG_REPLY 8MiB / SEG_EVENT 256KiB /
+// SEG_SHADOW[n] / SEG_ADOPT[n].
+enum SegmentKind : ubyte {
+  None = 0,
+  Cmd = 1,     // client-owned command ring (RingControl + records)
+  Stage = 2,   // client-owned bulk staging
+  Reply = 3,   // server-owned reply pool
+  Event = 4,   // server-owned event ring
+  Shadow = 5,  // client-owned per-object shadow (P4.5+)
+  Adopt = 6,   // server-owned adopted store, client RW (>= 16MiB)
+}
+
+// The fd itself never travels in a message: POSIX passes it with SCM_RIGHTS on
+// the aux socket (ITransport::ShareFd), Windows resolves `name`.
+table SegmentRef {
+  id: uint;
+  kind: SegmentKind;
+  sizeBytes: ulong;
+  name: string;
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+table Hello {
+  abiMajor: uint;
+  abiMinor: uint;
+  buildFingerprint: string;
+  backendType: uint;
+  pid: uint;
+  configBlob: [ubyte];
+}
+
+table Welcome {
+  abiMajor: uint;
+  abiMinor: uint;
+  serverPid: uint;
+  cmdRing: SegmentRef;
+  stageRing: SegmentRef;
+  replyPool: SegmentRef;
+  eventRing: SegmentRef;
+}
+
+// ---------------------------------------------------------------------------
+// Capabilities
+// ---------------------------------------------------------------------------
+
+// Replaces the 40 `pActiveBackendObject->` reads plus the 89 caps read sites
+// (plan B appendix A, `get_caps`). The three blobs are byte-for-byte images of
+// the corresponding POD structs; they are versioned by structSize-first
+// discipline, not by this schema.
+table CapsSnapshot {
+  dynamicParameters: [ubyte];
+  rendererInfo: [ubyte];
+  formatCaps: [ubyte];
+  extensions: [string];
+  apiVersion: string;
+  maxComputeWorkGroupCount: [int];  // 3 entries
+  maxComputeWorkGroupSize: [int];   // 3 entries
+  tableSlotMask: ulong;             // which GLFunctionsTable slots the peer registered
+  prefersCpuXfbPrimitiveAccounting: bool;
+}
+
+table DefaultFramebufferInfo {
+  width: int;
+  height: int;
+  colorFormat: uint;
+  depthFormat: uint;
+  stencilFormat: uint;
+}
+
+// ---------------------------------------------------------------------------
+// Surface / EGL lifecycle
+// ---------------------------------------------------------------------------
+
+enum SurfaceOpKind : ubyte {
+  None = 0,
+  InitializeDisplay = 1,
+  CreateWindowSurface = 2,
+  CreatePbufferSurface = 3,
+  ResizeWindowSurface = 4,
+  ReleaseSurface = 5,
+  MakeCurrent = 6,
+  ReleaseCurrent = 7,
+}
+
+enum WindowKind : ubyte {
+  None = 0,
+  AndroidNativeWindow = 1,
+  X11 = 2,
+  Win32Hwnd = 3,
+  Surfaceless = 4,
+  Pbuffer = 5,
+}
+
+table SurfaceOp {
+  seq: ulong;
+  kind: SurfaceOpKind;
+  display: ulong;
+  surface: ulong;
+  windowKind: WindowKind;
+  nativeToken: ulong;   // X11 XID / HWND; Android transfers the window out of band
+  width: int;
+  height: int;
+  swapInterval: int;
+}
+
+table SurfaceReply {
+  seq: ulong;
+  ok: bool;
+  eglMajor: int;
+  eglMinor: int;
+  defaultFb: DefaultFramebufferInfo;
+}
+
+// ---------------------------------------------------------------------------
+// Resync / aux / diagnostics
+// ---------------------------------------------------------------------------
+
+// Sent by the client after it observes a serverEpoch bump (context lost or
+// server restart): every cached ring offset and every server-side object is
+// gone and the whole pushed state has to be replayed.
+table ResyncRequest {
+  serverEpoch: uint;
+}
+
+table ResyncDone {}
+
+enum AuxRequestKind : ubyte {
+  None = 0,
+  FenceClientWait = 1,
+  QueryResult = 2,
+  ScalarGet = 3,
+}
+
+// Requests issued from a thread that is not the ring producer (foreign-thread
+// sync / query polling), so they cannot take the SPSC ring.
+table AuxRequest {
+  seq: ulong;
+  kind: AuxRequestKind;
+  payload: [ubyte];
+}
+
+enum FatalCode : uint {
+  None = 0,
+  ProtocolCorruption = 1,  // record bounds / self-describing length violated
+  RingOverrun = 2,
+  SegmentMismatch = 3,
+  DeviceLost = 4,
+  ServerCrashed = 5,
+  AbiMismatch = 6,
+}
+
+table Fatal {
+  code: FatalCode;
+  message: string;
+}
+
+// Severity-graded per plan B section 8.2: <= Warn is lossy, >= Error is
+// lossless and rate limited.
+enum LogLevel : ubyte {
+  Debug = 0,
+  Info = 1,
+  Warn = 2,
+  Error = 3,
+  Fatal = 4,
+}
+
+table LogLine {
+  level: LogLevel;
+  text: string;
+}
+
+// ---------------------------------------------------------------------------
+// Envelope
+// ---------------------------------------------------------------------------
+
+// Union tags are wire values: only ever APPEND to this list.
+// ProgramReflection from the earlier plan's section 7.1 is intentionally
+// absent - plan B ships program artifacts inside the create_shader_state CSO
+// blob, so if a control-plane reflection message is ever needed it appends
+// here rather than reserving a tag today.
+union CtrlMsg {
+  Hello,
+  Welcome,
+  CapsSnapshot,
+  SurfaceOp,
+  SurfaceReply,
+  ResyncRequest,
+  ResyncDone,
+  AuxRequest,
+  Fatal,
+  LogLine,
+}
+
+table CtrlEnvelope {
+  msg: CtrlMsg;
+}
+
+root_type CtrlEnvelope;
+file_identifier "MGLC";
