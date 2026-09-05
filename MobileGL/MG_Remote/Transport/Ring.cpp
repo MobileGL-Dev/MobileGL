@@ -87,10 +87,12 @@ namespace MobileGL::MG_Remote::Transport {
         : m_control(control), m_base(static_cast<std::uint8_t*>(base)), m_capacity(capacityBytes),
           m_mask(capacityBytes - 1), m_cursors(cursors) {
         if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < sizeof(RingRecordHeader)) {
-            MGLOG_E("MG_Remote ring: producer rejected, capacity %llu must be a power of two of at "
-                    "least %zu bytes over a non-null mapping",
-                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader));
+            capacityBytes < sizeof(RingRecordHeader) || capacityBytes > kMaxRingCapacity) {
+            MGLOG_E("MG_Remote ring: producer rejected, capacity %llu must be a power of two "
+                    "between %zu and %llu bytes over a non-null mapping (the record header's size "
+                    "field is 32-bit, so a bigger ring would truncate it)",
+                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader),
+                    static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;
             m_capacity = 0;
@@ -182,10 +184,12 @@ namespace MobileGL::MG_Remote::Transport {
         : m_control(control), m_base(static_cast<const std::uint8_t*>(base)),
           m_capacity(capacityBytes), m_mask(capacityBytes - 1), m_cursors(cursors) {
         if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < sizeof(RingRecordHeader)) {
-            MGLOG_E("MG_Remote ring: consumer rejected, capacity %llu must be a power of two of at "
-                    "least %zu bytes over a non-null mapping",
-                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader));
+            capacityBytes < sizeof(RingRecordHeader) || capacityBytes > kMaxRingCapacity) {
+            MGLOG_E("MG_Remote ring: consumer rejected, capacity %llu must be a power of two "
+                    "between %zu and %llu bytes over a non-null mapping (the record header's size "
+                    "field is 32-bit, so a bigger ring would truncate it)",
+                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader),
+                    static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;
             m_capacity = 0;

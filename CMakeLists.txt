@@ -458,6 +458,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         MobileGL/MG_Remote/Transport/ShmSegmentWin32.cpp
         MobileGL/MG_Remote/Transport/FdPassing.cpp
         MobileGL/MG_Remote/Transport/InProcessTransport.cpp
+        # Keeps MG_Util/Debug/Log.h - and through it the GL frontend's
+        # umbrella header - out of the header-only wire code (WireLog.h).
+        MobileGL/MG_Remote/Transport/WireLog.cpp
     )
 endif()
 

@@ -111,6 +111,15 @@ namespace MobileGL::MG_Remote::Transport {
 
     inline constexpr std::uint64_t kRingRecordAlignment = 8;
 
+    // Largest ring the 8-byte header can describe. Both a record's size and a
+    // wrap filler's size are bounded only by the capacity and are stored in
+    // RingRecordHeader::size, which is 32 bits by wire contract: a ring of
+    // 4 GiB or more would silently truncate them, and the consumer would then
+    // bounds-check the truncated value against the real one. SEG_CMD is 8 MiB
+    // and SEG_STAGE 32 MiB today, so this is unreachable - it is the same
+    // class of construction-time guard as the power-of-two check beside it.
+    inline constexpr std::uint64_t kMaxRingCapacity = 0xFFFFFFFFull;
+
     // Which cursor triple a producer/consumer pair drives.
     enum class RingCursorSet : std::uint32_t {
         Cmd = 0,
@@ -147,7 +156,8 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         RingProducer() = default;
         // `base` is the ring's byte area (NOT the control page) and
-        // `capacityBytes` must be a power of two.
+        // `capacityBytes` must be a power of two of at least one record header
+        // and at most kMaxRingCapacity. Anything else leaves Valid() false.
         RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes,
                      RingCursorSet cursors);
 

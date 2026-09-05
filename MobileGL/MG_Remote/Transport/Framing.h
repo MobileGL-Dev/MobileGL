@@ -31,7 +31,9 @@
 
 #include "../Protocol/mg_protocol_base.h"
 
-#include <MG_Util/Debug/Log.h>
+// NOT <MG_Util/Debug/Log.h>: that header pulls the GL frontend's umbrella into
+// every translation unit that reassembles a frame. See WireLog.h.
+#include "WireLog.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -54,8 +56,8 @@ namespace MobileGL::MG_Remote::Transport {
     inline MobileGLResult AppendFrame(std::vector<std::uint8_t>& out, const void* payload,
                                       std::uint64_t size) {
         if (size > kMaxFramePayloadSize) {
-            MGLOG_E("MG_Remote framing: refusing to send a %llu byte payload (cap %llu); bulk "
-                    "bytes belong in shm",
+            WireLogError("MG_Remote framing: refusing to send a %llu byte payload (cap %llu); "
+                         "bulk bytes belong in shm",
                     static_cast<unsigned long long>(size),
                     static_cast<unsigned long long>(kMaxFramePayloadSize));
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -163,16 +165,16 @@ namespace MobileGL::MG_Remote::Transport {
             std::memcpy(&length, m_buffer.data() + m_readPos + 4, sizeof(length));
             if (magic != kFrameMagic) {
                 m_failed = true;
-                MGLOG_E("MG_Remote framing: bad frame magic 0x%08X (expected 0x%08X); the control "
-                        "stream is desynchronized and this transport is now dead",
-                        magic, kFrameMagic);
+                WireLogError("MG_Remote framing: bad frame magic 0x%08X (expected 0x%08X); the "
+                             "control stream is desynchronized and this transport is now dead",
+                             magic, kFrameMagic);
                 return MOBILEGL_ERR_PROTOCOL_MISMATCH;
             }
             if (length > kMaxFramePayloadSize) {
                 m_failed = true;
-                MGLOG_E("MG_Remote framing: frame length %u exceeds the %llu byte cap; refusing to "
-                        "allocate on a peer-supplied length",
-                        length, static_cast<unsigned long long>(kMaxFramePayloadSize));
+                WireLogError("MG_Remote framing: frame length %u exceeds the %llu byte cap; "
+                             "refusing to allocate on a peer-supplied length",
+                             length, static_cast<unsigned long long>(kMaxFramePayloadSize));
                 return MOBILEGL_ERR_PROTOCOL_MISMATCH;
             }
             m_pendingSize = length;

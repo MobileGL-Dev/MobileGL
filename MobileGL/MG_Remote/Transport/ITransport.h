@@ -109,10 +109,16 @@ namespace MobileGL::MG_Remote::Transport {
 
         // ---- lifecycle ------------------------------------------------------
 
-        // Idempotent. Unblocks every waiter with MOBILEGL_ERR_TRANSPORT_CLOSED
-        // and releases the endpoint. Messages already queued for this endpoint
-        // stay readable until drained, so a peer that shuts down after sending
-        // does not lose its last message.
+        // Idempotent. Tears down the WHOLE connection, not just this end:
+        // both directions are half-closed, so after either endpoint calls it
+        // neither side can send any more (SendFrame returns
+        // MOBILEGL_ERR_TRANSPORT_CLOSED) and every waiter on either side is
+        // unblocked. That is what closing a socket does, and the spawn
+        // transport behaves the same way, so a one-sided contract here would
+        // be a promise only the in-process implementation could keep.
+        //
+        // Messages already queued stay readable until drained: a peer that
+        // shuts down right after sending does not lose its last message.
         virtual void Shutdown() = 0;
 
         virtual TransportRole Role() const = 0;

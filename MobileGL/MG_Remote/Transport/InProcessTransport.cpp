@@ -39,7 +39,16 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         struct Direction {
             std::mutex mutex;
-            std::condition_variable cv;
+            // One variable per predicate. A single cv signalled with
+            // notify_one would let a SendFrame's wakeup land on a thread
+            // blocked in ReceiveFd, which re-tests its own predicate and goes
+            // straight back to sleep - leaving a queued message undelivered
+            // until some unrelated later event. ITransport narrows the
+            // contract to one dedicated reader thread, but a comment is not a
+            // reason to ship a primitive that breaks the moment someone
+            // splits the reader.
+            std::condition_variable cv;   // messages
+            std::condition_variable fdCv; // fdOffers
             std::deque<std::vector<std::uint8_t>> messages;
             std::deque<FdOffer> fdOffers;
             bool closed = false;
@@ -69,6 +78,7 @@ namespace MobileGL::MG_Remote::Transport {
                     dir.closed = true;
                 }
                 dir.cv.notify_all();
+                dir.fdCv.notify_all();
             }
             // Anything parked on a ring doorbell has to come back too, or a
             // shutdown mid-frame hangs the peer forever.
@@ -207,7 +217,7 @@ namespace MobileGL::MG_Remote::Transport {
             }
             dir.fdOffers.push_back(std::move(offer));
         }
-        dir.cv.notify_one();
+        dir.fdCv.notify_one();
         return MOBILEGL_OK;
 #endif
     }
@@ -244,9 +254,9 @@ namespace MobileGL::MG_Remote::Transport {
         if (dir.fdOffers.empty() && !dir.closed && timeoutMs != 0) {
             const auto ready = [&dir] { return !dir.fdOffers.empty() || dir.closed; };
             if (timeoutMs == kWaitForever) {
-                dir.cv.wait(lock, ready);
+                dir.fdCv.wait(lock, ready);
             } else {
-                dir.cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready);
+                dir.fdCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready);
             }
         }
         if (dir.fdOffers.empty()) {
@@ -266,6 +276,9 @@ namespace MobileGL::MG_Remote::Transport {
 #endif
     }
 
+    // Whole-connection teardown, as ITransport::Shutdown documents: both
+    // directions are half-closed and both ring doorbells are rung, because a
+    // peer parked on a ring doorbell mid-frame would otherwise never come back.
     void InProcessTransport::Shutdown() { m_channel->Close(); }
 
     Doorbell& InProcessTransport::PeerDoorbell() { return m_channel->Bell(1 - m_endpoint); }

@@ -9,12 +9,18 @@
 // The `inproc` transport: two in-memory message queues and a pair of condvar
 // doorbells, one connected endpoint at each end.
 //
-// It is not a test double. `inproc` is a delivery mode of its own (CMake
-// option MOBILEGL_BUILD_DISAGGREGATED_INPROC): the server side is the
-// monolith's own render thread, which is the single largest CPU lever this
-// project has, and it is also the CI form of the split build. What it does NOT
-// exercise is serialization of the byte stream, so the framing codec is
-// covered separately by FramingTest.
+// It is not a test double. `inproc` is a delivery mode of its own - the server
+// side is the monolith's own render thread, which is the single largest CPU
+// lever this project has, and it is also the CI form of the split build. What
+// it does NOT exercise is serialization of the byte stream, so the framing
+// codec is covered separately by FramingTest.
+//
+// It is built by MOBILEGL_BUILD_DISAGGREGATED, the one option this skeleton
+// adds, and selected at RUNTIME (plan appendix B: MOBILEGL_TRANSPORT =
+// monolith / inproc / spawn / ...). The plan also reserves a separate
+// MOBILEGL_BUILD_DISAGGREGATED_INPROC option for the role-isolation shim that
+// a single-process CI build will need; that option does not exist yet, and
+// nothing here depends on it.
 //
 // Messages are queued whole, so no framing bytes are involved; the size cap is
 // still enforced so that a payload which would be illegal on a socket is
