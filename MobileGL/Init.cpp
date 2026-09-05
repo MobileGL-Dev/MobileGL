@@ -17,6 +17,7 @@
 #include <MG_Impl/GLImpl/Sync/GL_Sync.h>
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_State/GLState/ProgramState/ProgramTranslationCache.h>
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
@@ -42,6 +43,11 @@ namespace MobileGL {
             if (logLifecycle) {
                 MGLOG_I("MobileGL closing...");
             }
+            // Before any subsystem the counters name goes away, and before the last frame's
+            // numbers can be lost: emits the final summary line and, when
+            // MOBILEGL_PIPE_STATS_FILE is set, the JSON dump. A no-op when the counters are
+            // off, and idempotent.
+            MG_Util::PipeStats::Shutdown();
             // First, before anything else is torn down. In-flight compile/link jobs own
             // their own inputs and are safe against everything below EXCEPT glslang's
             // process globals and the TShader/TProgram objects hanging off pGLContext,
@@ -102,6 +108,10 @@ namespace MobileGL {
         MGLOG_I("Initializing MobileGL...");
         MG_ConfigLoader::Init();
         MGLOG_I("Config loaded");
+        // Immediately after the config load and before anything can count: the MGPipe
+        // boundary counters latch their enable flag here, so every counting site in the
+        // two backends is a load of an already-settled global for the rest of the run.
+        MG_Util::PipeStats::Init();
         MG_State::Init();
         MGLOG_D("MG_State initialized");
         MG_Backend::Init();

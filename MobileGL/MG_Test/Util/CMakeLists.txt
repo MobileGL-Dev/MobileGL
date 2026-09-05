@@ -35,6 +35,25 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# The MGPipe boundary counters: the enable latch, the byte/call/gate arithmetic, the
+# payload histogram's bucketing and the two report formats. No GL context, no driver.
+add_executable(
+        PipeStatsTest
+        PipeStatsTest.cpp
+)
+
+target_include_directories(PipeStatsTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        PipeStatsTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
 include(GoogleTest)
 gtest_discover_tests(JobNodeTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(LogLevelTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(PipeStatsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

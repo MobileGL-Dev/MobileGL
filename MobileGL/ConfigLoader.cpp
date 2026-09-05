@@ -242,6 +242,7 @@ namespace MobileGL::MG_ConfigLoader {
             QueryEnvQuirkOverride("MOBILEGL_PIPE_LEGACY_MEMOS") != MG_Config::QuirkOverride::ForceOff;
         features.PipeTexelRetainMb = QueryEnvUint32("MOBILEGL_PIPE_TEXEL_RETAIN_MB", 0, 0, 4096);
         features.PipeIndexMirrorMb = QueryEnvUint32("MOBILEGL_PIPE_INDEX_MIRROR_MB", 64, 0, 4096);
+        QueryEnvVariable("MOBILEGL_PIPE_STATS_FILE", features.PipeStatsFile, "");
     }
 
     inline void InitBackendType() {

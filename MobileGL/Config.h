@@ -347,6 +347,10 @@ namespace MobileGL::MG_Config {
         // the server without shipping index bytes per draw. Over budget it degrades to
         // per-draw staging, counted separately in the stats.
         Uint32 PipeIndexMirrorMb = 64;
+        // MOBILEGL_PIPE_STATS_FILE: where the boundary counters' teardown JSON dump goes.
+        // Empty (the default) means no dump; the per-120-frame summary line still goes to
+        // the log whenever PipeStats is on, so a device run needs no writable path.
+        String PipeStatsFile;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config
