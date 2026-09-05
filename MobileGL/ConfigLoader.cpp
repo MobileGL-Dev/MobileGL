@@ -159,6 +159,28 @@ namespace MobileGL::MG_ConfigLoader {
         return static_cast<Uint32>(parsedValue);
     }
 
+    // Same contract as QueryEnvUint32, over 64 bits and accepting a 0x prefix: the one
+    // consumer is a subsystem BITMASK, and a bitmask written in decimal is unreadable.
+    inline Uint64 QueryEnvUint64(const String& key, Uint64 defaultValue) {
+        auto it = acceptedEnvVariablesMap->find(key);
+        if (it == acceptedEnvVariablesMap->end()) {
+            return defaultValue;
+        }
+
+        const String& value = it->second;
+        char* parseEnd = nullptr;
+        errno = 0;
+        const unsigned long long parsedValue = std::strtoull(value.c_str(), &parseEnd, 0);
+        if (parseEnd == value.c_str() || *parseEnd != '\0' || errno == ERANGE) {
+            MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected an integer (decimal or "
+                    "0x-prefixed), using default %llu",
+                    key.c_str(), value.c_str(), static_cast<unsigned long long>(defaultValue));
+            return defaultValue;
+        }
+
+        return static_cast<Uint64>(parsedValue);
+    }
+
     inline void InitFeatures() {
         auto& features = MG_Config::Features;
         features.DisableTimerQuery = QueryEnvFlag("MOBILEGL_DISABLE_TIMERQUERY");
@@ -207,6 +229,19 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytWidenPacked16Storage =
             QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
         features.MagmaPrimGenQueryReroute = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE");
+        // MGPipe. Nothing here needs adding to an allow-list: InitializeAcceptedEnvVariables
+        // accepts every MOBILEGL_ / LIBGL_ prefixed variable in the environment, so a name
+        // that starts with MOBILEGL_ is visible to these queries by construction.
+        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", 0);
+        features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
+        features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
+        // Defaults ON, so the flag has to be read as a tri-state rather than as a plain
+        // truthy check: unset must keep the memos, and only an explicitly falsy value may
+        // drop them.
+        features.PipeLegacyMemos =
+            QueryEnvQuirkOverride("MOBILEGL_PIPE_LEGACY_MEMOS") != MG_Config::QuirkOverride::ForceOff;
+        features.PipeTexelRetainMb = QueryEnvUint32("MOBILEGL_PIPE_TEXEL_RETAIN_MB", 0, 0, 4096);
+        features.PipeIndexMirrorMb = QueryEnvUint32("MOBILEGL_PIPE_INDEX_MIRROR_MB", 64, 0, 4096);
     }
 
     inline void InitBackendType() {

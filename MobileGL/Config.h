@@ -316,6 +316,37 @@ namespace MobileGL::MG_Config {
         // immune to the probe's verdict moving), and ForceOff is the negative control that
         // replays the driver's silence.
         QuirkOverride MagmaPrimGenQueryReroute = QuirkOverride::Auto;
+        // --- MGPipe (the disaggregation plan's explicit frontend/backend boundary) ---
+        // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
+        // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.
+        // 0 - the default and the only shipped value until the migration lands - is "pull
+        // everything", i.e. exactly today's behaviour. One bit of it also turns OFF
+        // client-side content addressing of CSOs, which is the negative control the CSO
+        // design is measured against. Accepts decimal or 0x-prefixed hex.
+        Uint64 PipePush = 0;
+        // MOBILEGL_PIPE_VERIFY: per-draw, per-FIELD shadow comparison of the pushed state
+        // against a snapshot taken from GLContext the old way, printing the first field
+        // that differs and the draw serial. Roughly 5-10x slower and never shipped; it is
+        // the semantic gate that replaces byte identity, and it catches the dangerous
+        // direction - a dirty bit that fires too RARELY - which no purity gate can see.
+        Bool PipeVerify = false;
+        // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
+        // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
+        Bool PipeStats = false;
+        // MOBILEGL_PIPE_LEGACY_MEMOS: keep the pre-handle registries and TwinLookupMemos
+        // alive so the first handle waves have a real old-versus-new arm to be compared
+        // against. ON by default for the whole migration window, deleted with the pull
+        // path itself.
+        Bool PipeLegacyMemos = true;
+        // MOBILEGL_PIPE_TEXEL_RETAIN_MB: LRU budget for texels retained against a
+        // server-initiated texture re-send. Default 0, i.e. OFF: MipmapStorage already
+        // holds a complete CPU shadow, so this cache buys latency, never correctness.
+        Uint32 PipeTexelRetainMb = 0;
+        // MOBILEGL_PIPE_INDEX_MIRROR_MB: budget for the server-side index host mirror,
+        // which is what lets primitive-restart rewriting and multi-draw flattening stay on
+        // the server without shipping index bytes per draw. Over budget it degrades to
+        // per-draw staging, counted separately in the stats.
+        Uint32 PipeIndexMirrorMb = 64;
     };
     extern FeaturesTable Features;
 } // namespace MobileGL::MG_Config
