@@ -192,9 +192,23 @@ namespace MobileGL {
             void (*MemoryBarrierByRegion)(GLbitfield barriers);
             void (*BindImageTexture)(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer,
                                      GLenum access, GLenum format);
+            // The ONLY indexed query that is genuinely a backend one, and only for the pnames
+            // MG_Impl/GLImpl/Getter/GL_Getter.cpp does not already own. Every indexed pname that
+            // names FRONTEND state - the indexed buffer bindings, the per-unit texture/sampler
+            // bindings, the image-unit bindings, the viewport rectangles, the indexed capabilities
+            // - is answered in GL_Getter::GetIntegeri_v and never reaches this entry; the
+            // 64-bit and float/double widths are derived there from the same answer, which is why
+            // no GetInteger64i_v/GetFloati_v/GetDoublei_v table entry exists. In practice this
+            // leaves GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE (also asked directly by
+            // MG_Util/ShaderTranspiler/CompileEnv.cpp) plus whatever pname the frontend has no
+            // case for at all.
             void (*GetIntegeri_v)(GLenum target, GLuint index, GLint* data);
-            void (*GetInteger64i_v)(GLenum target, GLuint index, GLint64* data);
-            void (*GetProgramiv)(GLuint program, GLenum pname, GLint* params);
+            // There is deliberately NO GetProgramiv entry: glGetProgramiv describes the program
+            // the APPLICATION wrote - link status, the transform-feedback mode, the compute local
+            // size - all of which are frontend link artifacts on ProgramObject, and
+            // MG_Impl/GLImpl/Program/GL_Program.cpp answers every one of them from there. Asking a
+            // backend would mean asking about a DIFFERENT program (a SPIRV-Cross-generated ESSL
+            // one, or a SPIR-V module), in a namespace the application never sees.
             // The GL program interface (glGetProgramInterfaceiv / glGetProgramResource*) is NOT
             // a backend query: it describes the program the application wrote, in the
             // application's namespace, which neither backend program is in. It is answered

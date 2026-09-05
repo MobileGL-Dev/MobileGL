@@ -95,8 +95,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
                           GLenum format);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
-    void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
-    void GetProgramiv(GLuint program, GLenum pname, GLint* params);
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
     void GetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);

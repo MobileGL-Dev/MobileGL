@@ -7317,138 +7317,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::SyncImageTextureBinding(unit);
     }
 
+    // Only the pnames MG_Impl/GLImpl/Getter/GL_Getter.cpp has no case for reach here. Every
+    // indexed pname naming FRONTEND state - the indexed buffer bindings, the per-unit
+    // texture/sampler bindings, the image-unit bindings, the viewport rectangles, the indexed
+    // capabilities - is answered there and returns before the table is consulted, so the arms
+    // this function used to carry for GL_SHADER_STORAGE_BUFFER_* and GL_IMAGE_BINDING_* were
+    // unreachable duplicates of the frontend's, and they did not even agree with it (the
+    // frontend reports the range glBindBufferRange was ASKED for, verbatim and unclamped; these
+    // clamped it to the buffer's current storage). In practice what arrives is
+    // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE, which the driver owns.
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data) {
         if (!data) return;
-
-        switch (target) {
-        case GL_SHADER_STORAGE_BUFFER_BINDING: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            *data = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
+        if (g_GLESFuncs.glGetIntegeri_v) {
+            g_GLESFuncs.glGetIntegeri_v(target, index, data);
+        } else {
+            *data = 0;
         }
-        case GL_SHADER_STORAGE_BUFFER_START: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            *data = static_cast<GLint>(point.GetRange().start);
-            return;
-        }
-        case GL_SHADER_STORAGE_BUFFER_SIZE: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            if (!obj) {
-                *data = 0;
-                return;
-            }
-            const auto& range = point.GetRange();
-            const auto start = std::min(range.start, obj->GetSize());
-            const auto end = std::min(range.end, obj->GetSize());
-            *data = static_cast<GLint>(end - start);
-            return;
-        }
-        case GL_IMAGE_BINDING_NAME: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = imageBinding.Texture ? static_cast<GLint>(imageBinding.Texture->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_IMAGE_BINDING_LEVEL: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = imageBinding.Level;
-            return;
-        }
-        case GL_IMAGE_BINDING_LAYERED: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = imageBinding.Layered;
-            return;
-        }
-        case GL_IMAGE_BINDING_LAYER: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = imageBinding.Layer;
-            return;
-        }
-        case GL_IMAGE_BINDING_ACCESS: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = static_cast<GLint>(imageBinding.Access);
-            return;
-        }
-        case GL_IMAGE_BINDING_FORMAT: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            *data = static_cast<GLint>(imageBinding.Format);
-            return;
-        }
-        default:
-            if (g_GLESFuncs.glGetIntegeri_v) {
-                g_GLESFuncs.glGetIntegeri_v(target, index, data);
-            } else {
-                *data = 0;
-            }
-            return;
-        }
-    }
-
-    void GetInteger64i_v(GLenum target, GLuint index, GLint64* data) {
-        if (!data) return;
-
-        switch (target) {
-        case GL_SHADER_STORAGE_BUFFER_START: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            *data = static_cast<GLint64>(point.GetRange().start);
-            return;
-        }
-        case GL_SHADER_STORAGE_BUFFER_SIZE: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            if (!obj) {
-                *data = 0;
-                return;
-            }
-            const auto& range = point.GetRange();
-            const auto start = std::min(range.start, obj->GetSize());
-            const auto end = std::min(range.end, obj->GetSize());
-            *data = static_cast<GLint64>(end - start);
-            return;
-        }
-        default:
-            if (g_GLESFuncs.glGetInteger64i_v) {
-                g_GLESFuncs.glGetInteger64i_v(target, index, data);
-            } else {
-                *data = 0;
-            }
-            return;
-        }
-    }
-
-    void GetProgramiv(GLuint program, GLenum pname, GLint* params) {
-        if (!params) return;
-        GLuint backendProgramId = GetBackendProgramId(program);
-        if (!backendProgramId) {
-            params[0] = 0;
-            return;
-        }
-        g_GLESFuncs.glGetProgramiv(backendProgramId, pname, params);
     }
 
     // NOTE the shape here, and do not "simplify" it back to GetBackendProgramId(): this entry

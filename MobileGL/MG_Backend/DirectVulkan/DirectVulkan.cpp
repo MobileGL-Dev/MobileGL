@@ -78,7 +78,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 blockBindingVersion = 0;
             Vector<StorageBlockResource> storageBlocks;
             Vector<BufferVariableResource> bufferVariables;
-            GLint computeWorkGroupSize[3] = {1, 1, 1};
         };
 
         struct DrawElementsIndirectCommand {
@@ -209,16 +208,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             for (auto& module : modules) {
-                for (Uint32 entryIndex = 0; entryIndex < module.entry_point_count; ++entryIndex) {
-                    const auto& entryPoint = module.entry_points[entryIndex];
-                    if ((entryPoint.shader_stage & SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT) == 0) {
-                        continue;
-                    }
-                    cache.computeWorkGroupSize[0] = static_cast<GLint>(std::max<Uint32>(entryPoint.local_size.x, 1));
-                    cache.computeWorkGroupSize[1] = static_cast<GLint>(std::max<Uint32>(entryPoint.local_size.y, 1));
-                    cache.computeWorkGroupSize[2] = static_cast<GLint>(std::max<Uint32>(entryPoint.local_size.z, 1));
-                }
-
                 uint32_t bindingCount = 0;
                 SpvReflectResult result = spvReflectEnumerateDescriptorBindings(&module, &bindingCount, nullptr);
                 if (result != SPV_REFLECT_RESULT_SUCCESS || bindingCount == 0) {
@@ -683,126 +672,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         (void)format;
     }
 
+    // The two compute limits are the only indexed pnames a backend genuinely owns: they come
+    // from the physical device, and MG_Impl/GLImpl/Getter/GL_Getter.cpp asks for them here so it
+    // can raise the answer to the GL required minimum. Every other indexed pname names FRONTEND
+    // state (the indexed buffer bindings, the per-unit texture/sampler bindings, the image-unit
+    // bindings, the viewport rectangles, the indexed capabilities) and is answered there before
+    // the table is consulted, so the arms this function used to carry for
+    // GL_SHADER_STORAGE_BUFFER_* and GL_IMAGE_BINDING_* were unreachable duplicates - and not
+    // even faithful ones: the frontend reports the range glBindBufferRange was ASKED for,
+    // verbatim, while these clamped it to the buffer's current storage.
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data) {
         if (!data) return;
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetIntegeri_v called with null VulkanRenderer");
+        if (index >= 3) {
+            *data = 0;
+            return;
+        }
         switch (target) {
         case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
-            if (index >= 3) {
-                *data = 0;
-                return;
-            }
             *data = static_cast<GLint>(
                 pVulkanRenderer->GetPhysicalDevice().properties.limits.maxComputeWorkGroupCount[index]);
             return;
         case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
-            if (index >= 3) {
-                *data = 0;
-                return;
-            }
             *data = static_cast<GLint>(
                 pVulkanRenderer->GetPhysicalDevice().properties.limits.maxComputeWorkGroupSize[index]);
             return;
-        case GL_SHADER_STORAGE_BUFFER_BINDING: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            *data = obj ? static_cast<GLint>(obj->GetExternalIndex()) : 0;
-            return;
-        }
-        case GL_SHADER_STORAGE_BUFFER_START: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            *data = static_cast<GLint>(point.GetRange().start);
-            return;
-        }
-        case GL_SHADER_STORAGE_BUFFER_SIZE: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            if (!obj) {
-                *data = 0;
-                return;
-            }
-            const auto& range = point.GetRange();
-            const auto start = std::min(range.start, obj->GetSize());
-            const auto end = std::min(range.end, obj->GetSize());
-            *data = static_cast<GLint>(end - start);
-            return;
-        }
-        case GL_IMAGE_BINDING_NAME:
-        case GL_IMAGE_BINDING_LEVEL:
-        case GL_IMAGE_BINDING_LAYERED:
-        case GL_IMAGE_BINDING_LAYER:
-        case GL_IMAGE_BINDING_ACCESS:
-        case GL_IMAGE_BINDING_FORMAT: {
-            if (index >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) {
-                *data = 0;
-                return;
-            }
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(index));
-            if (target == GL_IMAGE_BINDING_NAME) {
-                *data = imageBinding.Texture ? static_cast<GLint>(imageBinding.Texture->GetExternalIndex()) : 0;
-            } else if (target == GL_IMAGE_BINDING_LEVEL) {
-                *data = imageBinding.Level;
-            } else if (target == GL_IMAGE_BINDING_LAYERED) {
-                *data = imageBinding.Layered;
-            } else if (target == GL_IMAGE_BINDING_LAYER) {
-                *data = imageBinding.Layer;
-            } else if (target == GL_IMAGE_BINDING_ACCESS) {
-                *data = static_cast<GLint>(imageBinding.Access);
-            } else {
-                *data = static_cast<GLint>(imageBinding.Format);
-            }
-            return;
-        }
         default:
             *data = 0;
-            return;
-        }
-    }
-
-    void GetInteger64i_v(GLenum target, GLuint index, GLint64* data) {
-        if (!data) return;
-        switch (target) {
-        case GL_SHADER_STORAGE_BUFFER_START: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            *data = static_cast<GLint64>(point.GetRange().start);
-            return;
-        }
-        case GL_SHADER_STORAGE_BUFFER_SIZE: {
-            auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, index);
-            auto& obj = point.GetBoundObject();
-            if (!obj) {
-                *data = 0;
-                return;
-            }
-            const auto& range = point.GetRange();
-            const auto start = std::min(range.start, obj->GetSize());
-            const auto end = std::min(range.end, obj->GetSize());
-            *data = static_cast<GLint64>(end - start);
-            return;
-        }
-        default:
-            *data = 0;
-            return;
-        }
-    }
-
-    void GetProgramiv(GLuint program, GLenum pname, GLint* params) {
-        if (!params) return;
-        auto* programObject = TryGetDirectVulkanProgram(program);
-        if (!programObject) {
-            params[0] = 0;
-            return;
-        }
-        switch (pname) {
-        case GL_COMPUTE_WORK_GROUP_SIZE: {
-            auto& cache = GetProgramResourceCache(*programObject);
-            params[0] = cache.computeWorkGroupSize[0];
-            params[1] = cache.computeWorkGroupSize[1];
-            params[2] = cache.computeWorkGroupSize[2];
-            return;
-        }
-        default:
-            params[0] = 0;
             return;
         }
     }

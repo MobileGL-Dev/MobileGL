@@ -378,5 +378,191 @@ namespace MGITest {
             EXPECT_GE(viewportDims[1], maxRenderbufferSize);
         }
 
+
+        // THE INDEXED AND PER-PROGRAM QUERIES THAT NAME FRONTEND STATE, pinned on both lanes.
+        //
+        // Both backends used to carry their own arms for GL_SHADER_STORAGE_BUFFER_* and
+        // GL_IMAGE_BINDING_* inside GLFunctionsTable::GetIntegeri_v, and their own
+        // GetInteger64i_v / GetProgramiv table entries. None of it was reachable: GL_Getter and
+        // GL_Program answer every one of these pnames from the frontend's own state and return
+        // before the table is consulted. The duplicates did not even agree - the backend arms
+        // clamped a bound range to the buffer's current storage, which GL 4.6 core tables
+        // 23.4/23.5 do not permit - so the code was one refactor away from becoming the answer.
+        // These cases pin what the frontend actually reports, so a future move of any of it back
+        // behind the interface has to keep saying the same thing.
+        TEST_F(AdvertisedLimitsScenario, IndexedBufferBindingsAreReportedVerbatimOnBothWidths) {
+            GLuint buffer = 0;
+            glGenBuffers(1, &buffer);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, 1024, nullptr, GL_DYNAMIC_DRAW);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            // A range that is NOT the whole buffer, so a clamp to the store would be visible.
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, buffer, 256, 512);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            GLint binding32 = -1;
+            GLint start32 = -1;
+            GLint size32 = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 1, &binding32);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start32);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size32);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(binding32, static_cast<GLint>(buffer));
+            EXPECT_EQ(start32, 256);
+            EXPECT_EQ(size32, 512);
+
+            // The 64-bit width has to agree pname for pname. It has no backend entry of its own
+            // and derives everything from the 32-bit answer above plus its own buffer arm.
+            GLint64 binding64 = -1;
+            GLint64 start64 = -1;
+            GLint64 size64 = -1;
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_BINDING, 1, &binding64);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_START, 1, &start64);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &size64);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(binding64, static_cast<GLint64>(buffer));
+            EXPECT_EQ(start64, static_cast<GLint64>(256));
+            EXPECT_EQ(size64, static_cast<GLint64>(512));
+
+            // An unbound index answers zero rather than erroring or leaking the driver's answer.
+            GLint unbound = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_BINDING, 0, &unbound);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(unbound, 0);
+
+            // THE ARM THAT SEPARATES VERBATIM FROM CLAMPED. GL 4.6 core tables 23.4/23.5 report
+            // the size glBindBufferRange was ASKED for; it does not follow the buffer, so
+            // shrinking the store underneath the binding must not move it. A clamp to the
+            // current storage - which is exactly what both backends' deleted arms did - answers
+            // 128 here, and answers 0 for the bind-then-allocate shape
+            // KHR-GL43.shader_storage_buffer_object.basic-binding uses.
+            glBufferData(GL_SHADER_STORAGE_BUFFER, 128, nullptr, GL_DYNAMIC_DRAW);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            GLint startAfterShrink = -1;
+            GLint sizeAfterShrink = -1;
+            GLint64 sizeAfterShrink64 = -1;
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_START, 1, &startAfterShrink);
+            glGetIntegeri_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &sizeAfterShrink);
+            glGetInteger64i_v(GL_SHADER_STORAGE_BUFFER_SIZE, 1, &sizeAfterShrink64);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(startAfterShrink, 256)
+                << "the bound range's start followed the buffer through a re-specification";
+            EXPECT_EQ(sizeAfterShrink, 512)
+                << "the bound range's size was clamped to the buffer's current 128-byte storage; the range is "
+                   "state of the BINDING POINT and is reported verbatim";
+            EXPECT_EQ(sizeAfterShrink64, static_cast<GLint64>(512))
+                << "the 64-bit width disagreed with the 32-bit one about the same pname";
+
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, 0);
+            glDeleteBuffers(1, &buffer);
+            (void)FirstGLError();
+        }
+
+        TEST_F(AdvertisedLimitsScenario, ImageUnitBindingsAreReportedFromTheFrontendState) {
+            GLint maxImageUnits = 0;
+            glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
+            (void)FirstGLError();
+            if (maxImageUnits < 2) GTEST_SKIP() << "no image units to bind on this lane";
+
+            GLuint texture = 0;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexStorage2D(GL_TEXTURE_2D, 2, GL_RGBA8, 8, 8);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            glBindImageTexture(1, texture, 1, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+
+            struct Expectation {
+                GLenum pname;
+                const char* name;
+                GLint expected;
+            };
+            const Expectation expectations[] = {
+                {GL_IMAGE_BINDING_NAME, "GL_IMAGE_BINDING_NAME", static_cast<GLint>(texture)},
+                {GL_IMAGE_BINDING_LEVEL, "GL_IMAGE_BINDING_LEVEL", 1},
+                {GL_IMAGE_BINDING_LAYERED, "GL_IMAGE_BINDING_LAYERED", GL_FALSE},
+                {GL_IMAGE_BINDING_LAYER, "GL_IMAGE_BINDING_LAYER", 0},
+                {GL_IMAGE_BINDING_ACCESS, "GL_IMAGE_BINDING_ACCESS", GL_READ_ONLY},
+                {GL_IMAGE_BINDING_FORMAT, "GL_IMAGE_BINDING_FORMAT", GL_RGBA8},
+            };
+            for (const Expectation& expectation : expectations) {
+                GLint value = -424242;
+                glGetIntegeri_v(expectation.pname, 1, &value);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << expectation.name;
+                EXPECT_EQ(value, expectation.expected) << expectation.name;
+
+                // Same pname through the wide width - it must not fall through to a driver that
+                // knows nothing about MobileGL's image-unit state.
+                GLint64 wide = -424242;
+                glGetInteger64i_v(expectation.pname, 1, &wide);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << expectation.name << " (64-bit)";
+                EXPECT_EQ(wide, static_cast<GLint64>(expectation.expected)) << expectation.name << " (64-bit)";
+            }
+
+            glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            glDeleteTextures(1, &texture);
+            (void)FirstGLError();
+        }
+
+        // glGetProgramiv(GL_COMPUTE_WORK_GROUP_SIZE) is a LINK ARTIFACT of the program the
+        // application wrote. DirectVulkan used to answer it from its own spirv-reflect cache and
+        // DirectGLES by forwarding to the driver's ESSL program - neither of which the
+        // application ever named - while GL_Program.cpp has always answered it from
+        // ProgramObject::GetComputeLocalSize. This pins the declared local size on both lanes.
+        TEST_F(AdvertisedLimitsScenario, ComputeLocalSizeComesFromTheLinkedProgram) {
+            static const char* kSource = R"(#version 430 core
+layout(local_size_x = 4, local_size_y = 3, local_size_z = 2) in;
+layout(std430, binding = 0) buffer Output { uint g_data[]; };
+void main() { g_data[gl_LocalInvocationIndex] = 1u; }
+)";
+            const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+            glShaderSource(shader, 1, &kSource, nullptr);
+            glCompileShader(shader);
+            GLint compiled = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+            if (compiled == GL_FALSE) {
+                char log[2048] = {};
+                glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
+                glDeleteShader(shader);
+                (void)FirstGLError();
+                GTEST_SKIP() << "no compute shader support on this lane: " << log;
+            }
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, shader);
+            glLinkProgram(program);
+            glDeleteShader(shader);
+            GLint linked = 0;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            if (linked == GL_FALSE) {
+                char log[2048] = {};
+                glGetProgramInfoLog(program, sizeof(log) - 1, nullptr, log);
+                glDeleteProgram(program);
+                (void)FirstGLError();
+                GTEST_SKIP() << "the compute program did not link on this lane: " << log;
+            }
+
+            GLint localSize[3] = {-1, -1, -1};
+            glGetProgramiv(program, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+            EXPECT_EQ(localSize[0], 4);
+            EXPECT_EQ(localSize[1], 3);
+            EXPECT_EQ(localSize[2], 2);
+
+            // A program with no compute stage must answer INVALID_OPERATION, not a stale or
+            // defaulted (1, 1, 1) - the frontend's rule, and the one a backend that answers from
+            // its own reflection cache cannot express.
+            const GLuint empty = glCreateProgram();
+            GLint ignored[3] = {0, 0, 0};
+            glGetProgramiv(empty, GL_COMPUTE_WORK_GROUP_SIZE, ignored);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
+                << "GL 4.6 core 7.13: the query is only defined for a linked program with a compute shader";
+
+            glDeleteProgram(empty);
+            glDeleteProgram(program);
+            (void)FirstGLError();
+        }
+
     } // namespace
 } // namespace MGITest

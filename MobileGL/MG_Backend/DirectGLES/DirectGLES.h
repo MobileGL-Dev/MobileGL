@@ -92,8 +92,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
                           GLenum format);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
-    void GetInteger64i_v(GLenum target, GLuint index, GLint64* data);
-    void GetProgramiv(GLuint program, GLenum pname, GLint* params);
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding);
     Bool InitWindowSurface(NativeWindowType window);
     Bool InitPbufferSurface(EGLint width, EGLint height);
