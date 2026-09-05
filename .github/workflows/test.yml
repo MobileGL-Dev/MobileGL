@@ -295,6 +295,33 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
+  # MobileGL/MG_Remote/Protocol/generated/protocol_generated.h is COMMITTED, and
+  # flatc is deliberately absent from the default build graph (a codegen step in
+  # the graph is how the earlier branch ended up cross-compiling an arm64 flatc
+  # and trying to run it on the host). This job is what keeps the committed
+  # header honest: build the pinned flatc, regenerate, and fail on any diff.
+  # It needs no MobileGL build, so it does not depend on build-linux.
+  flatc-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Check out the FlatBuffers submodule only
+        # Just this one: the schema check has nothing to do with glslang,
+        # SPIRV-Cross or the trace fixtures.
+        run: git submodule update --init 3rdparty/flatbuffers
+
+      - name: Regenerate protocol_generated.h
+        run: python3 scripts/gen_protocol.py --build-dir "${{ runner.temp }}/flatc-build"
+
+      - name: Fail if the committed header is stale
+        run: git diff --exit-code -- MobileGL/MG_Remote/Protocol/generated/protocol_generated.h
+
   benchmark:
     runs-on: ubuntu-latest
     needs: build-linux

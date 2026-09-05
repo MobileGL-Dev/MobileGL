@@ -88,3 +88,8 @@ add_subdirectory(Backend/DirectGLES)
 if (ENABLE_INTEGRATION_TESTS)
     add_subdirectory(Backend/DirectVulkan)
 endif()
+# The wire layer only exists in the disaggregated configuration, so its suite
+# is only registered there. Nothing under MG_Remote is compiled otherwise.
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    add_subdirectory(Wire)
+endif()
