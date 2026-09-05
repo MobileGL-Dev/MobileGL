@@ -778,3 +778,55 @@ jobs:
           )
 
           echo "Deleted ${deleted} intermediate Linux artifact(s); retained ${retained} failed-retrace fixture(s)."
+
+  pipe-gates:
+    name: MGPipe generators and hygiene gates
+    runs-on: ubuntu-latest
+    # Deliberately independent of build-linux: these are source-level gates, they take
+    # seconds, and a broken build must not hide a drifted interface.
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      # The seven generators all read MG_Pipe/*.def, so regenerating and diffing is what
+      # keeps the two interface tables, the wire records, the verify comparators, the
+      # PipeInputs field ids, the read-inventory coverage and the render-state member list
+      # from drifting apart from the catalogue. The generated files are committed
+      # deliberately: the build must not depend on python.
+      - name: Regenerate the MGPipe interface (G1-G7)
+        run: |
+          python3 scripts/gen_pipe.py
+          git diff --exit-code -- MobileGL/MG_Pipe/generated
+
+      # Per-draw fprintf/printf instrumentation has repeatedly been committed by accident,
+      # once inside a mutex critical section. Nothing under these two trees prints to a
+      # stdio stream today - MGLOG_D compiles out in INFO builds and is the only channel
+      # they are allowed to use - so this gate starts with no exceptions, and any addition
+      # to it needs a reason in the pull request rather than a quiet whitelist entry.
+      - name: No stdio instrumentation in MG_Backend or MG_State
+        run: |
+          if grep -rnE 'fprintf[[:space:]]*\(stderr|(^|[^[:alnum:]_>.])printf[[:space:]]*\(' \
+              MobileGL/MG_Backend MobileGL/MG_State; then
+            echo "::error::stdio instrumentation found; use MGLOG_D (compiled out in INFO builds)"
+            exit 1
+          fi
+          echo "no fprintf(stderr / printf( under MobileGL/MG_Backend or MobileGL/MG_State"
+
+      # Informational: the frontend mutation surface an MGPipe aggregate generation has to
+      # cover. It becomes a gate in P1, when the mapping file exists to diff against.
+      - name: MGPipe dirty-surface report
+        run: python3 scripts/gen_pipe_dirty_surface.py --summary
+
+      # Warning only for now: the disaggregation documents are still being written, and a
+      # lint that fails a rewrite in progress teaches people to ignore it. It becomes
+      # --strict when the documents settle.
+      - name: Documentation citation lint
+        run: |
+          shopt -s nullglob
+          documents=(docs/Disaggregated/*.md)
+          if [ ${#documents[@]} -eq 0 ]; then
+            echo "no disaggregation documents to check"
+            exit 0
+          fi
+          python3 scripts/check_doc_citations.py "${documents[@]}" || true
