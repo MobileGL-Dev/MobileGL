@@ -51,6 +51,48 @@ def wait_for_device(serial, attempts=20, delay=15):
     return False
 
 
+def device_file_size(serial, path):
+    r = adb(serial, "shell", f"stat -c %s {path} 2>/dev/null || echo 0", timeout=30)
+    m = re.search(r"(\d+)", r.stdout or "")
+    return int(m.group(1)) if m else 0
+
+
+def run_chunk(serial, cmd, dev_qpa, dev_list, idle_timeout, poll_interval=15):
+    """Run one glcts invocation; give up only when the log stops growing.
+
+    A chunk is thousands of cases and legitimately runs for an hour, so a fixed
+    wall-clock cap would kill healthy invocations and record whichever case was
+    in flight as a crash. A GPU hang, by contrast, stops the .qpa from growing.
+    The timeout is therefore measured from the last observed growth of the
+    device-side log. On expiry the device-side glcts is killed (matched by the
+    caselist path this runner alone uses, so other processes are left alone) and
+    returncode 124 is reported, the same signal a hard timeout used to give.
+    """
+    proc = subprocess.Popen(["adb", "-s", serial, "shell", cmd],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    last_size = -1
+    last_growth = time.time()
+    while True:
+        try:
+            out, err = proc.communicate(timeout=poll_interval)
+            return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            pass
+        size = device_file_size(serial, dev_qpa)
+        now = time.time()
+        if size != last_size:
+            last_size = size
+            last_growth = now
+        elif now - last_growth > idle_timeout:
+            adb(serial, "shell", f"pkill -f {dev_list}", timeout=30)
+            proc.kill()
+            try:
+                proc.communicate(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            return subprocess.CompletedProcess(proc.args, 124, "", "idle timeout")
+
+
 def mem_available_kb(serial):
     r = adb(serial, "shell", "grep MemAvailable /proc/meminfo", timeout=30)
     m = re.search(r"(\d+)", r.stdout or "")
@@ -152,7 +194,8 @@ def main():
     ap.add_argument("--min-mem-kb", type=int, default=400000,
                     help="pause when the device drops below this much available memory")
     ap.add_argument("--chunk-timeout", type=int, default=900,
-                    help="seconds before giving up on one glcts invocation (a GPU hang never returns)")
+                    help="seconds without any growth of the device-side .qpa before the glcts "
+                         "invocation is declared hung and killed (a GPU hang never returns)")
     ap.add_argument("--skip-file", default=None,
                     help="file of case names to exclude, e.g. cases known to hang the device")
     ap.add_argument("--env", action="append", default=[], metavar="K=V",
@@ -239,10 +282,10 @@ def main():
             f"--deqp-log-images=disable --deqp-log-shader-sources=disable "
             f"--deqp-log-filename={dev_qpa} > /dev/null 2>&1; rc=$?; sync; echo RC=$rc"
         )
-        run = adb(args.serial, "shell", cmd, timeout=args.chunk_timeout)
+        run = run_chunk(args.serial, cmd, dev_qpa, dev_list, args.chunk_timeout)
         if run.returncode == 124:
-            print(f"[run_cts] chunk {chunk:04d} timed out after {args.chunk_timeout}s "
-                  f"(likely a GPU hang)", file=sys.stderr)
+            print(f"[run_cts] chunk {chunk:04d}: no log growth for {args.chunk_timeout}s "
+                  f"(likely a GPU hang); killed glcts", file=sys.stderr)
 
         # Some cases hang the GPU hard enough to reboot the device. The log on
         # /data/local/tmp survives that, so wait for the device to come back and

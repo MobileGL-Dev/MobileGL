@@ -67,6 +67,14 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::NotifyContentWrite(SizeT offset, SizeT size) {
+        if (size == 0) {
+            // An empty write moves the serial and nothing else, exactly as NotifySubData
+            // and NotifyFlushMappedRange do: it wrote no byte, so it must not promote an
+            // undefined store to "has content" - that would cost the next orphaning
+            // respecification a full-size upload of bytes the application never wrote.
+            ++m_changeSerial;
+            return;
+        }
         m_hasDefinedContent = true;
         if (m_resource.IsGpuResident()) {
             // The write already landed in coherent GPU memory; the backend has no separate
@@ -111,7 +119,10 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::Respecify(SizeT size, const void* data) {
-        ReleaseMemory();
+        // The store a live mapping wrote into is about to be replaced, so landing those
+        // bytes into it would copy a whole mapped range (an adopted arena's map is the
+        // arena) into storage the next line hands back.
+        ReleaseMemory(false);
         RedefineStorage(size);
         if (data && size > 0) {
             Memcpy(m_resource.Bytes(), data, size);
@@ -136,7 +147,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::AllocateImmutableStorage(SizeT size, const void* data, GLbitfield storageFlags) {
-        ReleaseMemory();
+        // Same as Respecify: the bytes a live mapping staged have nowhere to land, the
+        // store they belong to is being replaced.
+        ReleaseMemory(false);
         RedefineStorage(size);
         if (data) {
             Memcpy(m_resource.Bytes(), data, size);
@@ -190,24 +203,45 @@ namespace MobileGL::MG_State::GLState {
         m_usage = usage;
     }
 
-    void BufferObject::ReleaseMemory() {
+    void BufferObject::ReleaseMemory(Bool landStagedWrites) {
         if (!m_isMapped) return;
 
-        if (m_mappingAccess & BufferMappingAccessBit::Write) { // if we wrote to the buffer
-            // A persistent GPU-resident map wrote straight into coherent GPU memory, so
-            // there is nothing to copy back and no range to push down on unmap.
-            if (!m_resource.IsGpuResident() &&
-                !(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
-                if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
-                    Memcpy(m_resource.Bytes() + m_mappedRange.start, m_stagingData.data() + m_stagingBias,
-                           m_mappedRange.end - m_mappedRange.start);
+        if (landStagedWrites &&
+            (m_mappingAccess & BufferMappingAccessBit::Write)) { // if we wrote to the buffer
+            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
+                const SizeT mappedLength = m_mappedRange.end - m_mappedRange.start;
+                if (m_resource.IsGpuResident()) {
+                    // A persistent map of an adopted store wrote straight into coherent
+                    // GPU memory: nothing to copy back, no range to push down. A
+                    // NON-persistent write map is a different thing: the application
+                    // wrote a staging copy (glMapBuffer and glMapBufferRange hand one out
+                    // regardless of where the store lives), and GL requires those bytes
+                    // to be visible to every later command the moment glUnmapBuffer
+                    // returns. Residency used to come only from a coherent persistent
+                    // map, which never has a staging copy, so the copy-back was simply
+                    // skipped for a resident store; residency now also comes from a
+                    // shader storage binding (EnsureGpuResidentStorage at draw time) and
+                    // from large-store adoption (TryAdoptLargeStorage), both of which an
+                    // application then re-initialises through an ordinary map/write/unmap.
+                    // Skipping the copy-back dropped every one of those writes. Land the
+                    // staged bytes through the same route glBufferSubData takes into an
+                    // adopted store - the backend's flush op is for stores it keeps a
+                    // separate copy of and must not run here.
+                    if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
+                        LandBytesIntoResidentStore(m_mappedRange.start,
+                                                   {m_stagingData.data() + m_stagingBias, mappedLength});
+                    }
+                } else {
+                    if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
+                        Memcpy(m_resource.Bytes() + m_mappedRange.start, m_stagingData.data() + m_stagingBias,
+                               mappedLength);
+                    }
+                    NotifyFlushMappedRange(m_mappedRange, m_mappingAccess);
                 }
-                NotifyFlushMappedRange(m_mappedRange, m_mappingAccess);
             }
-
-            m_stagingData.clear();
         }
 
+        m_stagingData.clear();
         m_isMapped = false;
         m_mappingAccess = BufferMappingAccessBit::Null;
         m_mappedRange = {0, 0};
@@ -227,8 +261,21 @@ namespace MobileGL::MG_State::GLState {
         MOBILEGL_ASSERT(end <= m_mappedRange.end, "Flush range out of bounds: mappedRange.end (%zu) < end (%zu)",
                         m_mappedRange.end, end);
 
-        // FLUSH_EXPLICIT maps are never GPU-resident (only coherent maps are adopted), so
-        // the staged bytes must be copied into the shadow before the backend reads them.
+        // A FLUSH_EXPLICIT map can sit on an adopted store: the map itself never adopts
+        // (only a coherent persistent one does), but a shader storage binding or
+        // large-store adoption may have made the buffer resident before the map. The
+        // flushed bytes then take the same landing as any other CPU write into an
+        // adopted store - a persistent map already wrote them in place and only has
+        // to publish the change, a non-persistent map staged them and has to land
+        // them. The backend's flush op is for stores it keeps a separate copy of.
+        if (m_resource.IsGpuResident()) {
+            if (m_mappingAccess & BufferMappingAccessBit::Persistent) {
+                NotifyContentWrite(start, length);
+            } else {
+                LandBytesIntoResidentStore(start, {m_stagingData.data() + m_stagingBias + offset, length});
+            }
+            return;
+        }
         if (!(m_mappingAccess & BufferMappingAccessBit::Persistent)) {
             Memcpy(m_resource.Bytes() + start, m_stagingData.data() + m_stagingBias + offset, length);
         }
@@ -284,35 +331,48 @@ namespace MobileGL::MG_State::GLState {
                         data.size, m_size);
 
         // An adopted store's Bytes() IS the memory in-flight frames are reading, and
-        // GL orders a glBufferSubData after those already-submitted reads. A backend
-        // that can land the bytes on the GPU timeline takes them here, untouched by
-        // the mapping - the in-place host write below tore the frames still reading
-        // the old bytes. The bytes are not current in the mapping until the backend's
-        // ordered copy executes, so reads reconcile through the same gate GPU-written
-        // buffers use.
-        if (m_resource.IsGpuResident() && data.size > 0 && g_bufferBackendOps &&
-            g_bufferBackendOps->ResidentSubData) {
-            g_bufferBackendOps->ResidentSubData(*this, atOffset, data);
+        // GL orders a glBufferSubData after those already-submitted reads: the write
+        // has to take the resident landing, never a plain host write into the mapping.
+        // Shadow-backed stores need none of this: the Memcpy below touches only the
+        // shadow, and the backend's SubData op does its own ordering against in-flight
+        // work.
+        if (m_resource.IsGpuResident()) {
+            LandBytesIntoResidentStore(atOffset, data);
+            return;
+        }
+
+        Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
+        NotifyContentWrite(atOffset, data.size);
+    }
+
+    // A backend that can land the bytes on the GPU timeline takes them here, untouched
+    // by the mapping - an in-place host write into coherent memory tore the frames
+    // still reading the old bytes (Minecraft patches LIVE chunk sections this way).
+    // The bytes are then not current in the mapping until the backend's ordered copy
+    // executes, so reads reconcile through the same gate GPU-written buffers use.
+    //
+    // Without that op the write lands in place, after retiring the GPU writes this store
+    // is known to be waiting on: a backend that defers work (DirectVulkan's frame command
+    // buffer) may still be holding a recorded-but-unsubmitted dispatch that GL orders this
+    // write AFTER, and writing the mapping now would land the bytes underneath that
+    // dispatch - its increments then execute on top of the newer data and invert the call
+    // order. That gate only knows about work that WROTE the store (MarkGpuWritten); work
+    // that merely READS it - a draw sourcing an adopted vertex arena - is not tracked here,
+    // so a backend without the op still owes the ordering against its own recorded reads.
+    // NotifyContentWrite on a resident store only bumps the serial: the backend has no
+    // separate copy to sync, so no transfer op runs.
+    void BufferObject::LandBytesIntoResidentStore(SizeT offset, DataPtr bytes) {
+        if (bytes.size > 0 && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
+            g_bufferBackendOps->ResidentSubData(*this, offset, bytes);
             m_hasDefinedContent = true;
             ++m_changeSerial;
             m_gpuWritePending = true;
             return;
         }
 
-        // An adopted store's Bytes() IS the memory the GPU reads, and a backend that
-        // defers work (DirectVulkan's frame command buffer) may still be holding a
-        // recorded-but-unsubmitted dispatch that GL orders this write AFTER. Writing
-        // the mapping now would land the bytes underneath that dispatch - its
-        // increments then execute on top of the newer data and invert the call order.
-        // Retire the pending GPU writes first, as FillSubData already does. Shadow-
-        // backed stores need none of this: the Memcpy below touches only the shadow,
-        // and the backend's SubData op does its own ordering against in-flight work.
-        if (m_resource.IsGpuResident()) {
-            SyncGpuWrites();
-        }
-
-        Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
-        NotifyContentWrite(atOffset, data.size);
+        SyncGpuWrites();
+        Memcpy(m_resource.Bytes() + offset, bytes.data, bytes.size);
+        NotifyContentWrite(offset, bytes.size);
     }
 
     void BufferObject::FillSubData(DataPtr pattern, SizeT atOffset, SizeT size) {
@@ -327,8 +387,13 @@ namespace MobileGL::MG_State::GLState {
                         "Cannot fill data while buffer is non-persistently mapped.");
         if (size == 0) return;
 
-        // An adopted store takes the same GPU-timeline landing as UploadSubData: the
-        // in-place write below would tear in-flight readers of the mapping.
+        // An adopted store takes the same landing as UploadSubData: the in-place write
+        // below would tear in-flight readers of the mapping. The pattern is expanded
+        // first because the landing takes the final bytes, not a repeat rule - which is
+        // why only a backend that actually takes them comes through here. Without that
+        // op the landing would memcpy the expansion into the mapping the loop below
+        // fills in place anyway, so a whole-arena clear would allocate a whole arena
+        // for nothing.
         if (m_resource.IsGpuResident() && g_bufferBackendOps && g_bufferBackendOps->ResidentSubData) {
             Vector<Uint8> expanded(size);
             if (pattern.size == 1) {
@@ -338,16 +403,13 @@ namespace MobileGL::MG_State::GLState {
                     Memcpy(expanded.data() + at, pattern.data, pattern.size);
                 }
             }
-            g_bufferBackendOps->ResidentSubData(*this, atOffset, {expanded.data(), size});
-            m_hasDefinedContent = true;
-            ++m_changeSerial;
-            m_gpuWritePending = true;
+            LandBytesIntoResidentStore(atOffset, {expanded.data(), size});
             return;
         }
 
-        // A clear is ordered after all earlier GPU writes. Partial clears additionally need the
-        // retained shadow bytes; whole-store clears need the same synchronization before writing
-        // an adopted persistent mapping that the GPU may still be accessing.
+        // A clear is ordered after all earlier GPU writes; partial clears additionally need
+        // the retained shadow bytes, and a resident store the backend cannot take the bytes
+        // for is written in place, which needs the same synchronization the landing does.
         SyncGpuWrites();
 
         Uint8* dst = m_resource.Bytes() + atOffset;
@@ -381,22 +443,13 @@ namespace MobileGL::MG_State::GLState {
                         size, m_size);
 
         src->SyncGpuWrites();
-        // An adopted DESTINATION takes the same GPU-timeline landing as UploadSubData;
-        // the in-place write below would tear in-flight readers of the mapping.
-        if (m_resource.IsGpuResident() && size > 0 && g_bufferBackendOps &&
-            g_bufferBackendOps->ResidentSubData) {
-            g_bufferBackendOps->ResidentSubData(*this, dstOffset,
-                                                {src->m_resource.Bytes() + srcOffset, size});
-            m_hasDefinedContent = true;
-            ++m_changeSerial;
-            m_gpuWritePending = true;
-            return;
-        }
-        // The DESTINATION needs the same ordering as UploadSubData: an adopted store is
-        // written in place, so pending recorded GPU writes to it must retire before the
-        // copy lands or they would execute on top of it.
+        // An adopted DESTINATION takes the same landing as UploadSubData: the in-place
+        // write below would tear in-flight readers of the mapping, and pending recorded
+        // GPU writes to it must retire before the copy lands or they would execute on
+        // top of it.
         if (m_resource.IsGpuResident()) {
-            SyncGpuWrites();
+            LandBytesIntoResidentStore(dstOffset, {src->m_resource.Bytes() + srcOffset, size});
+            return;
         }
         Memcpy(m_resource.Bytes() + dstOffset, src->m_resource.Bytes() + srcOffset, size);
         NotifyContentWrite(dstOffset, size);
@@ -433,6 +486,16 @@ namespace MobileGL::MG_State::GLState {
         if (m_resource.IsGpuResident()) {
             return true;
         }
+        // Adoption releases the CPU shadow, and a live mapping may BE that shadow: a
+        // persistent map that did not itself adopt (a FLUSH_EXPLICIT one, or a read map)
+        // handed the application shadow + offset, and GL keeps that pointer valid while
+        // the buffer is drawn with - which is exactly when this runs, on the storage
+        // binding walk. Freeing it under the application is a use-after-free, so a mapped
+        // buffer keeps the shadow model until it is unmapped; the binding that follows
+        // adopts then. Same rule as TryAdoptLargeStorage.
+        if (m_isMapped) {
+            return false;
+        }
         if (m_size == 0 || g_bufferBackendOps == nullptr || g_bufferBackendOps->AcquirePersistentMap == nullptr) {
             return false;
         }
@@ -451,7 +514,20 @@ namespace MobileGL::MG_State::GLState {
         // The app is about to look at the bytes; a shader may have rewritten them since
         // the shadow was last authoritative. Also needed for a write map without an
         // invalidate bit, whose staging copy is seeded from the shadow.
-        SyncGpuWrites();
+        //
+        // One map shape looks at nothing: a non-persistent write map that discards the
+        // range it maps gets a staging copy the seeding below skips, so no reader of the
+        // store exists between here and the unmap. Reconciling an ADOPTED store would
+        // still cost the backend's full drain-and-wait (its queued landings are made
+        // visible to the CPU by finishing the pipeline), once per map, on exactly the
+        // streaming arena the adoption exists to keep cheap. The outstanding-write flag
+        // stays set, so the first read that DOES look at the bytes still pays for it.
+        const Bool discardsWhatItMaps =
+            (access & BufferMappingAccessBit::Write) && !(access & BufferMappingAccessBit::Persistent) &&
+            (access & (BufferMappingAccessBit::InvalidateRange | BufferMappingAccessBit::InvalidateBuffer));
+        if (!(m_resource.IsGpuResident() && discardsWhatItMaps)) {
+            SyncGpuWrites();
+        }
         m_isMapped = true;
         m_mappingAccess = access;
         m_mappedRange = range;
