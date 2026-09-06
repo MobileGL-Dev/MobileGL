@@ -17,6 +17,7 @@
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -634,7 +635,38 @@ namespace MobileGL::MG_Pipe {
         // time, and a field whose emitter is not wired here keeps being pulled - so adding a
         // row to Coverage.def can never silently drop a field on the floor before the call
         // that carries it exists.
-        constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState;
+        constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
+                                                  kMGPipeSubsystemPixelPack |
+                                                  kMGPipeSubsystemPatchState |
+                                                  kMGPipeSubsystemVertexAttribDefaults;
+
+        // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
+        // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason
+        // recorded here rather than a silent absence:
+        //
+        //   GetPixelStoreParameters is BOTH halves of the pixel store (m_pixelStore[0] pack
+        //     and [1] unpack) and set_pixel_pack_state deliberately carries only PACK
+        //     (ARCHITECTURE.md 4.6 D5, MGPipeTypes.h). The unpack half has no carrier at all,
+        //     so the field keeps being pulled and the verify comparator keeps proving it.
+        //
+        //   GetCurrentVertexAttribute's three views are NOT bit-identical: GLContext
+        //     CONVERTS between them (SetCurrentVertexAttributeFloat writes (Int32)value into
+        //     intValue), while MGPipeApplySetVertexAttribDefaults memcpys one Data[4] into
+        //     all three and ignores MGPAttribValue::ValueClass, which the wire type carries
+        //     precisely so it does not have to. Until that applier reads ValueClass the
+        //     carrier cannot reproduce the frontend value, so the field keeps being pulled.
+        //     The call is still emitted: the wire shape, the payload bytes and the set-hash
+        //     suppressor are all real, and the residual fill runs AFTER emission, so the
+        //     mirror ends up with the frontend's value either way.
+        constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
+            switch (field) {
+            case MGPipeInputField::GetPixelStoreParameters:
+            case MGPipeInputField::GetCurrentVertexAttribute:
+                return false;
+            default:
+                return true;
+            }
+        }
 
         // The fields the applier writes DIRECTLY, out of the chunk bytes it scattered. Every
         // other emitted field reaches PipeInputs only through
@@ -687,6 +719,69 @@ namespace MobileGL::MG_Pipe {
                 return derives;
             }();
             return answer;
+        }
+
+
+        // set_pixel_pack_state. PACK only, deliberately: nothing on the far side of the
+        // boundary reads unpack state, and the staged-repack upload path does not even issue
+        // glPixelStorei (ARCHITECTURE.md 4.6 D5).
+        Uint64 EmitPixelPackState(GLContext& ctx) {
+            MGPPixelPackState pack{};
+            pack.Pack = ctx.GetPixelStoreParameters(false);
+            MGPipeApplySetPixelPackState(pack);
+            return sizeof(MGPPixelPackState);
+        }
+
+        // set_patch_state. The trio ALSO travels in pipeline chunk P0, and that redundancy is
+        // a trip wire rather than waste: the applier asserts under verify that the two
+        // carriers agree. 28 bytes on a state that changes about once per program.
+        Uint64 EmitPatchState(GLContext& ctx) {
+            const RenderStateParameters& live = ctx.GetRenderStateParameters();
+            MGPPatchState patch{};
+            patch.Vertices = live.PatchVertices;
+            for (SizeT i = 0; i < 4; ++i) patch.Outer[i] = live.PatchDefaultOuterLevel[i];
+            for (SizeT i = 0; i < 2; ++i) patch.Inner[i] = live.PatchDefaultInnerLevel[i];
+            MGPipeApplySetPatchState(patch);
+            return sizeof(MGPPatchState);
+        }
+
+        // set_vertex_attrib_defaults, behind D11's set-hash suppressor: the RESOLVED set - all
+        // 32 values, all three views - is hashed on the client and the call does not go out
+        // when the hash has not moved. That is coalescing rule 4, and this is its one wired
+        // consumer in P2.
+        Uint64 EmitVertexAttribDefaults(GLContext& ctx) {
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            auto& staged = tracker.StagedAttribDefaults();
+            constexpr SizeT kAttribs = MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
+            static_assert(kAttribs <= 32, "MGPVertexAttribDefaults::Mask is a Uint32");
+
+            Array<MG_State::GLState::CurrentVertexAttributeValue, kAttribs> resolved;
+            for (SizeT i = 0; i < kAttribs; ++i) resolved[i] = ctx.GetCurrentVertexAttribute(static_cast<Uint>(i));
+
+            const Uint64 contentHash = XXH64(resolved.data(), sizeof(resolved), 0);
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetVertexAttribDefaults,
+                                                             contentHash)) {
+                return 0;
+            }
+
+            Array<MGPAttribValue, kAttribs> tail{};
+            MGPVertexAttribDefaults header{};
+            for (SizeT i = 0; i < kAttribs; ++i) {
+                if (std::memcmp(&resolved[i], &staged[i], sizeof(resolved[i])) == 0) continue;
+                MGPAttribValue& value = tail[header.Count];
+                value.Location = static_cast<Uint32>(i);
+                // ClassifyVertexAttribType resolves the float/int/uint view on the CLIENT
+                // (MGPipeTypes.h); the frontend keeps all three populated, so the class the
+                // shader input consumes is what decides which one is authoritative.
+                value.ValueClass = 0;
+                std::memcpy(value.Data, resolved[i].floatValue.data(), sizeof(value.Data));
+                header.Mask |= Uint32{1} << static_cast<Uint32>(i);
+                ++header.Count;
+                staged[i] = resolved[i];
+            }
+            if (header.Count == 0) return 0;
+            MGPipeApplySetVertexAttribDefaults(header, tail.data());
+            return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
 
         constexpr Uint32 kAllDynamicChunks =
@@ -792,6 +887,22 @@ namespace MobileGL::MG_Pipe {
                       MGPipeDirtyBit(MGPipeDirty::NewRenderState))) != 0) {
             payloadBytes += EmitRenderState(*ctx, dirty, tracker.FreshlyPrimed());
         }
+        if (tracker.FreshlyPrimed()) {
+            // A fresh context: what the server has is no longer what any slot last emitted.
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+        }
+        if ((pushMask & kMGPipeSubsystemPixelPack) != 0 &&
+            (dirty & MGPipeDirtyBit(MGPipeDirty::NewPixelPack)) != 0) {
+            payloadBytes += EmitPixelPackState(*ctx);
+        }
+        if ((pushMask & kMGPipeSubsystemPatchState) != 0 &&
+            (dirty & MGPipeDirtyBit(MGPipeDirty::NewPatchState)) != 0) {
+            payloadBytes += EmitPatchState(*ctx);
+        }
+        if ((pushMask & kMGPipeSubsystemVertexAttribDefaults) != 0 &&
+            (dirty & MGPipeDirtyBit(MGPipeDirty::NewVertexAttribDefaults)) != 0) {
+            payloadBytes += EmitVertexAttribDefaults(*ctx);
+        }
         if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
             // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
             // P0 and called by nothing; this is its first emitter, and the 24-bucket
@@ -824,6 +935,7 @@ namespace MobileGL::MG_Pipe {
             const Uint64 subsystem = SubsystemForEmitter(emitter);
             const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
                                   (pushMask & subsystem) != 0 &&
+                                  EmittedCallSuppliesTheWholeField(field) &&
                                   (applierDerives || AppliedWithoutDerivation(field));
             if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);
 #if MOBILEGL_PIPE_POISON

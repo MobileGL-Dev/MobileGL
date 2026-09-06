@@ -311,6 +311,7 @@ namespace MobileGL::MG_Pipe {
             m_pack = PixelStoreParameters{};
             m_patch = PatchTrio{};
             m_staged = RenderStateParameters{};
+            m_stagedAttribs = AttribDefaults{};
             m_context = nullptr;
             m_lastDirty = 0;
             m_primed = false;
@@ -352,6 +353,14 @@ namespace MobileGL::MG_Pipe {
         RenderStateParameters& Staged() { return m_staged; }
         const RenderStateParameters& Staged() const { return m_staged; }
 
+        // The same mirror for the 32 glVertexAttrib* defaults: set_vertex_attrib_defaults
+        // names only the attributes that differ from it, which is the var-tail's own
+        // suppressor underneath D11's set-hash one.
+        using AttribDefaults = Array<MG_State::GLState::CurrentVertexAttributeValue,
+                                     MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>;
+        AttribDefaults& StagedAttribDefaults() { return m_stagedAttribs; }
+        const AttribDefaults& StagedAttribDefaults() const { return m_stagedAttribs; }
+
     private:
         static constexpr SizeT Index(MGPipeDirty bit) { return static_cast<SizeT>(bit); }
 
@@ -372,6 +381,7 @@ namespace MobileGL::MG_Pipe {
         PatchTrio m_patch{};
 
         RenderStateParameters m_staged{};
+        AttribDefaults m_stagedAttribs{};
 
         const void* m_context = nullptr;
         Uint32 m_lastDirty = 0;
