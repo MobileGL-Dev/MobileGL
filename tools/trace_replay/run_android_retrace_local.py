@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -225,8 +226,42 @@ def read_benchmark(case, backend, run_index):
     return report
 
 
+def nearest_rank_percentile(values, fraction):
+    """Nearest-rank percentile, the same rule SummarizeSeries uses on the device.
+
+    Nearest rank rather than an interpolating percentile so that every number printed here is a
+    frame that was actually observed, and so that a p95 computed on this side agrees exactly with
+    the p95 the device reported for the same window.
+    """
+    if not values:
+        return -1.0
+    ordered = sorted(values)
+    rank = math.ceil(fraction * len(ordered))
+    if rank < 1:
+        rank = 1
+    return ordered[rank - 1]
+
+
+def cpu_tail(report):
+    """The trailing window of the per-frame CPU series, or [] when the run collected none.
+
+    benchmark.json carries the WHOLE frameCpuTimesMs[] array precisely so that percentiles the
+    device does not compute - p50 and p99, which are what the paired A/B publishes - are a
+    host-side reduction over an artefact that already exists. The window is the same trailing
+    tailFrames the device summarised, so the numbers below sit beside the device's own without
+    being about a different set of frames.
+    """
+    series = report.get("frameCpuTimesMs") or []
+    if not series:
+        return []
+    tail = report.get("tailFrames", 0)
+    if not isinstance(tail, int) or tail <= 0 or tail > len(series):
+        tail = len(series)
+    return series[-tail:]
+
+
 def format_benchmark(report):
-    return (
+    line = (
         f"frames={report.get('totalFrames', -1)}"
         f" total={report.get('totalSeconds', -1):.1f}s"
         f" tail={report.get('tailFrames', -1)}"
@@ -235,6 +270,22 @@ def format_benchmark(report):
         f" p95={report.get('p95FrameMs', -1):.3f}ms"
         f" fps={report.get('fps', -1):.1f}"
     )
+    # The CPU half. It is what the disaggregation A/B is actually read on - wall time under
+    # --benchmark-no-finish still contains everything the retrace thread waited for - so it is
+    # printed on the same line rather than left to whoever remembers to open the JSON.
+    window = cpu_tail(report)
+    if window:
+        line += (
+            f" | cpu mean={report.get('meanFrameCpuMs', -1):.3f}ms"
+            f" p50={nearest_rank_percentile(window, 0.50):.3f}ms"
+            f" p95={report.get('p95FrameCpuMs', -1):.3f}ms"
+            f" p99={nearest_rank_percentile(window, 0.99):.3f}ms"
+        )
+    else:
+        # Not "cpu=0": a run with no per-thread CPU clock and a run that burned no CPU are
+        # different claims, and only one of them is possible.
+        line += " | cpu unavailable (no per-thread CPU clock in this run)"
+    return line
 
 
 def run_benchmark_case(case, backend, args):

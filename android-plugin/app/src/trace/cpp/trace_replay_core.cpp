@@ -827,6 +827,42 @@ std::string BenchmarkResultPath(const Request& request) {
                                                : request.benchmarkResultPath;
 }
 
+// mean / median / nearest-rank p95 over the trailing `tail` entries of one per-frame series.
+//
+// Split out of SummarizeBenchmark rather than duplicated, because the wall series and the CPU
+// series have to be reduced IDENTICALLY or the delta between them stops meaning anything: the same
+// tail window, the same median rule for an even count, the same nearest-rank p95 (so the reported
+// value is always an observed frame, never an interpolation).
+struct SeriesSummary {
+    double meanMs = -1.0;
+    double medianMs = -1.0;
+    double p95Ms = -1.0;
+};
+
+SeriesSummary SummarizeSeries(const std::vector<double>& series, std::size_t tail) {
+    SeriesSummary summary;
+    if (series.empty() || tail == 0 || tail > series.size()) {
+        return summary;
+    }
+    std::vector<double> window(series.end() - static_cast<std::ptrdiff_t>(tail), series.end());
+    double sum = 0.0;
+    for (double value : window) {
+        sum += value;
+    }
+    summary.meanMs = sum / static_cast<double>(tail);
+
+    std::sort(window.begin(), window.end());
+    summary.medianMs =
+            (tail % 2 == 1) ? window[tail / 2] : 0.5 * (window[tail / 2 - 1] + window[tail / 2]);
+    // Nearest-rank p95, so the reported value is always an observed frame time.
+    std::size_t rank = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(tail)));
+    if (rank == 0) {
+        rank = 1;
+    }
+    summary.p95Ms = window[rank - 1];
+    return summary;
+}
+
 // Folds the recorded frame times into the headline numbers. Everything but totalSeconds and
 // the frame count is computed over the trailing benchmarkTailFrames frames only.
 void SummarizeBenchmark(const Request& request, const benchmark::Report& report, Result& result) {
@@ -843,25 +879,20 @@ void SummarizeBenchmark(const Request& request, const benchmark::Report& report,
             std::min(static_cast<std::size_t>(requestedTail), report.frameMs.size());
     result.benchmarkTailFrames = static_cast<int>(tail);
 
-    std::vector<double> window(report.frameMs.end() - static_cast<std::ptrdiff_t>(tail),
-                               report.frameMs.end());
-    double sum = 0.0;
-    for (double frameMs : window) {
-        sum += frameMs;
-    }
-    result.benchmarkMeanMs = sum / static_cast<double>(tail);
-
-    std::sort(window.begin(), window.end());
-    result.benchmarkMedianMs = (tail % 2 == 1)
-                                       ? window[tail / 2]
-                                       : 0.5 * (window[tail / 2 - 1] + window[tail / 2]);
-    // Nearest-rank p95, so the reported value is always an observed frame time.
-    std::size_t rank = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(tail)));
-    if (rank == 0) {
-        rank = 1;
-    }
-    result.benchmarkP95Ms = window[rank - 1];
+    const SeriesSummary wall = SummarizeSeries(report.frameMs, tail);
+    result.benchmarkMeanMs = wall.meanMs;
+    result.benchmarkMedianMs = wall.medianMs;
+    result.benchmarkP95Ms = wall.p95Ms;
     result.benchmarkFps = result.benchmarkMeanMs > 0.0 ? 1000.0 / result.benchmarkMeanMs : -1.0;
+
+    // The CPU series is the same length as the wall series or it is empty (trace_benchmark.cpp
+    // refuses to hand back a partial one), so the same tail window applies unchanged. When it is
+    // empty the three CPU fields stay at -1, which is what the platform having no per-thread CPU
+    // clock looks like - and is not the same reading as a genuine 0.0.
+    const SeriesSummary cpu = SummarizeSeries(report.frameCpuMs, tail);
+    result.benchmarkMeanCpuMs = cpu.meanMs;
+    result.benchmarkMedianCpuMs = cpu.medianMs;
+    result.benchmarkP95CpuMs = cpu.p95Ms;
 }
 
 bool WriteBenchmarkJson(const Request& request,
@@ -886,12 +917,27 @@ bool WriteBenchmarkJson(const Request& request,
     file << "  \"medianFrameMs\": " << result.benchmarkMedianMs << ",\n";
     file << "  \"p95FrameMs\": " << result.benchmarkP95Ms << ",\n";
     file << "  \"fps\": " << result.benchmarkFps << ",\n";
+    file << "  \"meanFrameCpuMs\": " << result.benchmarkMeanCpuMs << ",\n";
+    file << "  \"medianFrameCpuMs\": " << result.benchmarkMedianCpuMs << ",\n";
+    file << "  \"p95FrameCpuMs\": " << result.benchmarkP95CpuMs << ",\n";
     file << "  \"frameTimesMs\": [";
     for (std::size_t i = 0; i < report.frameMs.size(); ++i) {
         if (i > 0) {
             file << ", ";
         }
         file << report.frameMs[i];
+    }
+    file << "],\n";
+    // The WHOLE per-frame CPU array, beside the whole per-frame wall array. This is what makes
+    // p99 - and any other percentile a later question wants - a host-side computation over an
+    // artefact that already exists, instead of a device change. Empty when this platform has no
+    // per-thread CPU clock; an empty array and an array of zeroes are different claims.
+    file << "  \"frameCpuTimesMs\": [";
+    for (std::size_t i = 0; i < report.frameCpuMs.size(); ++i) {
+        if (i > 0) {
+            file << ", ";
+        }
+        file << report.frameCpuMs[i];
     }
     file << "]\n";
     file << "}\n";
@@ -965,6 +1011,9 @@ bool WriteResultJson(const Request& request, const Result& result) {
         file << "  \"benchmarkMeanFrameMs\": " << result.benchmarkMeanMs << ",\n";
         file << "  \"benchmarkMedianFrameMs\": " << result.benchmarkMedianMs << ",\n";
         file << "  \"benchmarkP95FrameMs\": " << result.benchmarkP95Ms << ",\n";
+        file << "  \"benchmarkMeanFrameCpuMs\": " << result.benchmarkMeanCpuMs << ",\n";
+        file << "  \"benchmarkMedianFrameCpuMs\": " << result.benchmarkMedianCpuMs << ",\n";
+        file << "  \"benchmarkP95FrameCpuMs\": " << result.benchmarkP95CpuMs << ",\n";
         file << "  \"benchmarkFps\": " << result.benchmarkFps << "\n";
     } else {
         file << "\n";
@@ -1045,6 +1094,9 @@ Result RunTraceReplay(const Request& request) {
                 << ", meanMs=" << result.benchmarkMeanMs
                 << ", medianMs=" << result.benchmarkMedianMs
                 << ", p95Ms=" << result.benchmarkP95Ms
+                << ", meanCpuMs=" << result.benchmarkMeanCpuMs
+                << ", medianCpuMs=" << result.benchmarkMedianCpuMs
+                << ", p95CpuMs=" << result.benchmarkP95CpuMs
                 << ", fps=" << result.benchmarkFps
                 << ", benchmarkResultPath=" << result.benchmarkResultPath;
         result.message = message.str();

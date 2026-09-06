@@ -5,6 +5,16 @@
 #include <utility>
 #include <dlfcn.h>
 
+// CLOCK_THREAD_CPUTIME_ID is POSIX and present on Linux and on every Android API this replays
+// on; the guard exists so the desktop CLI still builds where it is not, and so that "no CPU
+// series" is a compile-time fact rather than a silently-zero column.
+#if defined(__unix__) || defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+#include <ctime>
+#define MOBILEGL_TRACE_HAVE_THREAD_CPU_CLOCK 1
+#else
+#define MOBILEGL_TRACE_HAVE_THREAD_CPU_CLOCK 0
+#endif
+
 namespace mobilegl_trace {
 namespace benchmark {
 namespace {
@@ -21,6 +31,23 @@ GlFinishFn gGlFinish = nullptr;
 Clock::time_point gStart;
 Clock::time_point gLastBoundary;
 std::vector<double> gFrameMs;
+std::vector<double> gFrameCpuMs;
+double gLastBoundaryCpuMs = 0.0;
+
+// Milliseconds of CPU time this thread has consumed, or -1 where the clock does not exist.
+// Negative once means negative always, so End() reports an EMPTY cpu series rather than a
+// column of zeroes.
+double ThreadCpuMs() {
+#if MOBILEGL_TRACE_HAVE_THREAD_CPU_CLOCK
+    struct timespec now;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now) != 0) {
+        return -1.0;
+    }
+    return static_cast<double>(now.tv_sec) * 1000.0 + static_cast<double>(now.tv_nsec) / 1e6;
+#else
+    return -1.0;
+#endif
+}
 
 // Same resolution order the glws layers use for MobileGL's entry points: the replay driver
 // already dlopen()ed the library with RTLD_GLOBAL before retrace started, so RTLD_NOLOAD
@@ -49,6 +76,9 @@ GlFinishFn ResolveGlFinish() {
 void Begin(bool finishEachFrame) {
     gFrameMs.clear();
     gFrameMs.reserve(kFrameReserve);
+    gFrameCpuMs.clear();
+    gFrameCpuMs.reserve(kFrameReserve);
+    gLastBoundaryCpuMs = ThreadCpuMs();
     gFinishEachFrame = finishEachFrame;
     gResolvedGlFinish = false;
     gGlFinish = nullptr;
@@ -72,8 +102,16 @@ void OnFrameBoundary() {
             gGlFinish();
         }
     }
+    // The CPU reading is taken FIRST and the wall reading second, so the wall delta contains the
+    // cost of the extra syscall rather than the CPU delta hiding inside it: an inflated wall
+    // number is visible, a deflated CPU number is not.
+    const double cpuNow = ThreadCpuMs();
     const Clock::time_point now = Clock::now();
     gFrameMs.push_back(std::chrono::duration<double, std::milli>(now - gLastBoundary).count());
+    if (cpuNow >= 0.0 && gLastBoundaryCpuMs >= 0.0) {
+        gFrameCpuMs.push_back(cpuNow - gLastBoundaryCpuMs);
+    }
+    gLastBoundaryCpuMs = cpuNow;
     gLastBoundary = now;
 }
 
@@ -87,6 +125,13 @@ Report End() {
     report.totalSeconds = std::chrono::duration<double>(Clock::now() - gStart).count();
     report.frameMs = std::move(gFrameMs);
     gFrameMs.clear();
+    // Only hand back a CPU series that lines up frame-for-frame with the wall series. A short
+    // one would be a clock that started failing mid-run, and silently re-indexing it against
+    // frameMs would put frame N's wall time next to frame N+k's CPU time.
+    if (gFrameCpuMs.size() == report.frameMs.size()) {
+        report.frameCpuMs = std::move(gFrameCpuMs);
+    }
+    gFrameCpuMs.clear();
     return report;
 }
 
