@@ -432,6 +432,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "move the pipeline version, not the parameters version, and the tail would stop "                    \
                   "being re-run for it")
 
+        // Viewports, DepthRanges and ScissorBoxes are asserted over the WHOLE array while the
+        // tail reads only element 0. That is deliberately stricter than the reader needs: the
+        // chunk table has no per-element granularity today, so an array that is dynamic at all
+        // is dynamic entirely, and asserting the whole of it says so. If a later phase ever
+        // splits a per-viewport chunk out, this is a build break by design - narrow the assert
+        // to element 0 then, and say why in the same commit.
         MAGMA_TAIL_INPUT_IS_DYNAMIC(Viewports);        // ApplyGLViewportState: Viewports[0]
         MAGMA_TAIL_INPUT_IS_DYNAMIC(DepthRanges);      // ApplyGLViewportState: DepthRanges[0]
         MAGMA_TAIL_INPUT_IS_DYNAMIC(BlendColor);       // ApplyBlendConstants
@@ -3098,6 +3104,13 @@ void main() {
     }
 
     void VulkanRenderer::Initialize() {
+#if MOBILEGL_PIPE_PUSH
+        // P2 D14, and it belongs HERE rather than on a draw: "a Track-H subsystem whose bit is
+        // clear is a STARTUP Fatal{PipeLegacyMemosDisabled}". Checks Magma's own bit only, and
+        // only once this backend is the one being brought up, so an Espryt-side bitmask cannot
+        // kill a Magma run and vice versa.
+        MagmaPipeValidateSubsystemConfiguration();
+#endif
         CreateInstance();
         CreateSurface();
         PickPhysicalDevice();
@@ -3628,22 +3641,21 @@ void main() {
 #if MOBILEGL_PIPE_PUSH
         // ---- P2 D12.4, the handle arm ----
         //
-        // The slot IS the index. No Fibonacci mix of an address, no two-way probe, no
-        // frame-serial recycling choice: slots are dense by construction (the allocator has a
-        // free list plus a high-water mark), so consecutive VAOs land in consecutive entries
-        // and the collision the address hash existed to spread does not arise below the table
-        // size. The whole validation is one handle compare, and a handle cannot alias - Gen
-        // moves on slot REUSE, so a deleted VAO's successor never matches its predecessor's
-        // entry even at the same address and with a byte-identical configuration.
-        if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+        // The slot IS the index, exactly: this table and MagmaPipeVaoIdentity() hold the same
+        // number of entries and the mint hands out slot i + kMGPipeFirstAllocatableSlot for
+        // entry i, so the map from live handle to entry is a BIJECTION. No Fibonacci mix of an
+        // address, no two-way probe here, no frame-serial recycling choice here - not because
+        // eviction stopped being necessary, but because it happens ONE level down, in the
+        // identity table's 2-way LRU, where a single decision serves this table and the
+        // factory's. Two live VAOs cannot land on one entry of this table at all.
+        //
+        // The whole validation is one handle compare, and a handle cannot alias: Gen moves
+        // whenever a slot changes owner, so neither a deleted VAO's successor at the same heap
+        // address nor a VAO whose slot was recycled under LRU pressure can match a predecessor's
+        // entry, even with a byte-identical configuration.
+        if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             const MG_Pipe::MGPipeHandle handle = ResolveVaoHandle(*vao);
-            // Fixed table, so the index wraps rather than growing: nothing in P2 frees a
-            // VertexElementsCso slot yet (the frontend death notification is Espryt 0b's e2,
-            // and buffers are the only kind with one today), so a grow-on-demand vector would
-            // hold one ~1 KB VaoDrawMemo per VAO EVER created. Above the table size this
-            // degrades to a direct-mapped cache validated by the full {slot, gen}, which is
-            // strictly better than the address hash it replaces - never wrong, only colder.
-            const Uint32 index = handle.Slot & (kVaoDrawMemoSlotCount - 1);
+            const Uint32 index = MagmaPipeSlotIndex(handle);
             VaoDrawMemo& entry = m_vaoDrawMemoTable[index];
             if (entry.vaoHandle == handle) {
                 return &entry;
@@ -3660,7 +3672,6 @@ void main() {
             entry.bindings.indexBuffer = nullptr;
             return &entry;
         }
-        MagmaPipeRequireLegacyArm("LookupVaoDrawMemo");
 #endif
         // Multiplicative mix of the (16-byte-aligned) address; take high bits, they
         // carry the most entropy of a multiply.
@@ -5041,6 +5052,21 @@ void main() {
     }
 #endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
+#if MOBILEGL_PIPE_PUSH && !MOBILEGL_PIPE_LEGACY_MEMOS
+    Uint64 VulkanRenderer::ComputePipelineSubsetStateHashFallback() const {
+        // The client's own hash, over the client's own definition of the pipeline subset - the
+        // seven pipeline chunks of the P2 chunk table, which is a strict SUPERSET of what
+        // ComputePipelineStateHash enumerated by hand. The render-pass facts it does not carry
+        // (colorAttachmentCount, the rasterization sample count, and through them the effective
+        // sample mask) are exactly the facts entry.renderPassHash separates, which is why the
+        // CSO handle can key this memo in the first place; this fallback inherits that argument
+        // unchanged.
+        //
+        // Only reached with no render-state CSO bound, and only in a build with no pre-handle
+        // arm to fall back to instead.
+        return MG_Pipe::MGPipeComputePipelineSubsetHash(MGB_CTX->GetRenderStateParameters());
+    }
+#endif
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
@@ -5123,32 +5149,29 @@ void main() {
         // real handle, the legacy arm a real hash and the null handle, and the probe compares
         // both components.
         const MG_Pipe::MGPipeHandle renderStateCso = ResolveBoundRenderStateCso();
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-#if MOBILEGL_PIPE_PUSH
-        if (MG_Pipe::MGPipeHandleIsNull(renderStateCso))
-#endif
-        {
-            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-                m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
-                m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
-                m_pipelineStateHash =
-                    ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
-                m_pipelineStateHashVersion = renderStateVersion;
-                m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
-                m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
-                m_pipelineStateHashValid = true;
-            }
-        }
-#endif
+        // Exactly one of the two state keys is live per draw, and the ternary short-circuits,
+        // so a draw on the handle arm neither hashes nor touches the fallback cache.
         const Uint64 pipelineStateHash =
-#if MOBILEGL_PIPE_PUSH
-            !MG_Pipe::MGPipeHandleIsNull(renderStateCso) ? 0 :
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-            m_pipelineStateHash;
+            !MG_Pipe::MGPipeHandleIsNull(renderStateCso)
+                ? 0
+                : ResolveFallbackPipelineStateHash(renderStateVersion,
+                                                   renderPassEntry.colorAttachmentCount,
+                                                   renderPassEntry.sampleCount);
 #else
-            0;
+        // THE PULL BUILD'S TEXT, statement for statement what the base ref has: G1 admits no
+        // resize of this function, and a helper the compiler merely inlines is not the same
+        // instruction schedule.
+        if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
+            m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
+            m_pipelineStateHash =
+                ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
+            m_pipelineStateHashVersion = renderStateVersion;
+            m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
+            m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
+            m_pipelineStateHashValid = true;
+        }
+        const Uint64 pipelineStateHash = m_pipelineStateHash;
 #endif
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
@@ -6287,7 +6310,7 @@ void main() {
         // the two cannot disagree about whether "the VAO moved". The config version stays:
         // it answers a different question (did this same object's layout change).
         const Bool vaoMoved =
-            MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)
+            MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)
                 ? (!(ResolveVaoHandle(vao) == snap.vaoHandle) ||
                    vao.GetConfigVersion() != snap.vaoConfigVersion)
                 : (static_cast<const void*>(&vao) != snap.vao ||
@@ -6528,32 +6551,24 @@ void main() {
             // fast path's copy of it, and the two must key identically or the fast path would
             // hand back a pipeline the full path would not have matched.
             const MG_Pipe::MGPipeHandle renderStateCso = ResolveBoundRenderStateCso();
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-#if MOBILEGL_PIPE_PUSH
-            if (MG_Pipe::MGPipeHandleIsNull(renderStateCso))
-#endif
-            {
-                if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-                    m_pipelineStateHashColorCount != snap.renderPassColorCount ||
-                    m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
-                    m_pipelineStateHash =
-                        ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
-                    m_pipelineStateHashVersion = renderStateVersion;
-                    m_pipelineStateHashColorCount = snap.renderPassColorCount;
-                    m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
-                    m_pipelineStateHashValid = true;
-                }
-            }
-#endif
             const Uint64 pipelineStateHash =
-#if MOBILEGL_PIPE_PUSH
-                !MG_Pipe::MGPipeHandleIsNull(renderStateCso) ? 0 :
-#endif
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-                m_pipelineStateHash;
+                !MG_Pipe::MGPipeHandleIsNull(renderStateCso)
+                    ? 0
+                    : ResolveFallbackPipelineStateHash(renderStateVersion, snap.renderPassColorCount,
+                                                       snap.renderPassSampleCount);
 #else
-                0;
+            // The pull build's text, statement for statement (see GetOrCreatePipeline).
+            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                m_pipelineStateHashColorCount != snap.renderPassColorCount ||
+                m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
+                m_pipelineStateHash =
+                    ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
+                m_pipelineStateHashVersion = renderStateVersion;
+                m_pipelineStateHashColorCount = snap.renderPassColorCount;
+                m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
+                m_pipelineStateHashValid = true;
+            }
+            const Uint64 pipelineStateHash = m_pipelineStateHash;
 #endif
             const auto memoTransformFlags =
                 ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
@@ -6600,7 +6615,13 @@ void main() {
         snap.vao = static_cast<const void*>(&vao);
         snap.vaoLifetimeId = vao.GetLifetimeId();
 #if MOBILEGL_PIPE_PUSH
-        snap.vaoHandle = ResolveVaoHandle(vao);
+        // Guarded by the SUBSYSTEM, not only by the build switch: with bit 6 clear the field
+        // is dead (vaoMoved takes the address/lifetime-id branch), and minting a handle for it
+        // would put this package's cost inside MOBILEGL_PIPE_PUSH=0 - the all-pull control arm
+        // D14 defines as reproducing P1 exactly, and the arm D.4.3's T2 is measured on.
+        if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+            snap.vaoHandle = ResolveVaoHandle(vao);
+        }
 #endif
         snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.vaoLayoutHash = vaoLayoutHash;
@@ -7184,7 +7205,11 @@ void main() {
                 snap.vao = &vao;
                 snap.vaoLifetimeId = vao.GetLifetimeId();
 #if MOBILEGL_PIPE_PUSH
-                snap.vaoHandle = ResolveVaoHandle(vao);
+                // Subsystem-guarded for the same reason as the other stamping site: the field
+                // is dead with bit 6 clear, and MOBILEGL_PIPE_PUSH=0 has to be P1 exactly.
+                if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+                    snap.vaoHandle = ResolveVaoHandle(vao);
+                }
 #endif
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();

@@ -884,23 +884,72 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The arm is live only when the render-state subsystem is migrated in this run AND the
         // client has actually bound a CSO. The second half is not belt and braces: a tree whose
         // tracker does not emit create/bind_render_state yet has no handle to key on, and
-        // keying every draw on the null handle would alias every render state onto one entry.
+        // delete_render_state clears the binding (MG_Pipe/PipeApply.cpp), so the null handle is
+        // reachable on any tree. Keying every draw on it would alias every render state onto
+        // one memo entry, so a null handle means "fall back to a state hash" - never an abort,
+        // and never a per-draw consultation of the legacy-memo lever: bit 0 is not a Track-H
+        // subsystem (D14 labels only bits 5 and 6 that), and the lever's Fatal is a STARTUP
+        // one, in MagmaPipeValidateSubsystemConfiguration.
+        //
+        // The fallback is warned ONCE rather than logged at debug, and that is deliberate: a
+        // silent fallback is what makes "the CSO arm never ran" easy to miss. W is compiled in
+        // at every shipped log level, _ONCE costs one static bool test, and its ABSENCE from a
+        // run's log is the positive evidence that every draw keyed on a handle.
         //
         // Push-only by construction: the pull build does not compile this function at all, so
         // its two callers are statement-for-statement what they were (G1).
         MG_Pipe::MGPipeHandle ResolveBoundRenderStateCso() const {
             if (!MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
-                MagmaPipeRequireLegacyArm("GetOrCreatePipeline");
                 return MG_Pipe::kMGPipeNullHandle;
             }
             const MG_Pipe::MGPipeHandle boundCso = MG_Pipe::MGPipeApplier().BoundRenderStateCso;
             if (MG_Pipe::MGPipeHandleIsNull(boundCso)) {
-                MGLOG_D_ONCE("MGPipe: kMGPipeSubsystemRenderState is on but no render-state CSO is "
-                             "bound; the pipeline memo falls back to the pre-handle state hash");
-                MagmaPipeRequireLegacyArm("GetOrCreatePipeline");
+                MGLOG_W_ONCE("MGPipe: kMGPipeSubsystemRenderState is on but no render-state CSO is "
+                             "bound; the pipeline memo is running on a state hash, not on the CSO "
+                             "handle (no tracker on this build, or a draw between "
+                             "delete_render_state and the next bind)");
             }
             return boundCso;
         }
+        // The memo key's STATE-HASH half, for a draw that has no CSO handle to key on: the
+        // pre-handle arm, and the fallback of D12.1's handle arm. Cached on the pipeline-state
+        // version plus the two render-pass facts the hash's inputs depend on, so an unchanged
+        // (version, colorAttachmentCount, sampleCount) proves the bytes are unchanged.
+        //
+        // [deviation from D12.1] The brief deletes this gate and its cached fields outright.
+        // They cannot go while a no-CSO draw is reachable - and it is, on any tree: a draw
+        // between delete_render_state and the next bind has no handle. On a tree whose tracker
+        // binds a CSO these five words are written once and never read again; they retire for
+        // real when the pull path does, at P13.
+        Uint64 ResolveFallbackPipelineStateHash(Uint renderStateVersion, Uint32 colorAttachmentCount,
+                                                VkSampleCountFlagBits rasterizationSamples) {
+            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                m_pipelineStateHashColorCount != colorAttachmentCount ||
+                m_pipelineStateHashSampleCount != rasterizationSamples) {
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                m_pipelineStateHash =
+                    ComputePipelineStateHash(colorAttachmentCount, rasterizationSamples);
+#else
+                m_pipelineStateHash = ComputePipelineSubsetStateHashFallback();
+#endif
+                m_pipelineStateHashVersion = renderStateVersion;
+                m_pipelineStateHashColorCount = colorAttachmentCount;
+                m_pipelineStateHashSampleCount = rasterizationSamples;
+                m_pipelineStateHashValid = true;
+            }
+            return m_pipelineStateHash;
+        }
+#endif // MOBILEGL_PIPE_PUSH
+#if MOBILEGL_PIPE_PUSH && !MOBILEGL_PIPE_LEGACY_MEMOS
+        // The same answer as ComputePipelineStateHash, computed from the P2 chunk table
+        // instead of from a hand-written field list, for the build that compiles no
+        // pre-handle arm (cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF). It is the CLIENT's own
+        // hash function - MGPipeComputePipelineSubsetHash over the 396 pipeline bytes - so a
+        // draw keyed on it and a draw keyed on a CSO handle are keyed on the same equivalence
+        // class of state, and the render-pass facts stay separated by renderPassHash either
+        // way. This is what makes the no-legacy build RUNNABLE rather than a configuration
+        // that aborts on the first draw that arrives without a CSO.
+        Uint64 ComputePipelineSubsetStateHashFallback() const;
 #endif
 #if MOBILEGL_PIPE_LEGACY_MEMOS
         // THE PRE-HANDLE ARM (P2 brief D12.1 / D14). Hash of every fixed-function GL state the
@@ -924,7 +973,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the re-key and keeps reading Multisample / SampleMask / SampleMaskValue out of the
         // working block.
         Uint32 ResolveEffectiveSampleMask(VkSampleCountFlagBits rasterizationSamples) const;
-#if MOBILEGL_PIPE_LEGACY_MEMOS
+        // ResolveFallbackPipelineStateHash's cache. Written once and never read again on a
+        // build whose client binds a render-state CSO; see that function for why it survives
+        // the re-key at all.
         Uint m_pipelineStateHashVersion = 0;
         Uint32 m_pipelineStateHashColorCount = 0;
         // The sample count the cached hash was computed at. A pipeline-state input now depends on
@@ -933,7 +984,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkSampleCountFlagBits m_pipelineStateHashSampleCount = VK_SAMPLE_COUNT_1_BIT;
         Uint64 m_pipelineStateHash = 0;
         Bool m_pipelineStateHashValid = false;
-#endif
         // GetShaderTransformFlags memo. NOT pure in the pre-transform alone: the
         // function also reads whether the bound DRAW framebuffer is the default one
         // (only the default framebuffer gets the Y-flip and rotation bits - an FBO
@@ -956,9 +1006,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void InvalidatePipelineMemo() {
             m_pipelineMemoCount = 0;
             m_pipelineMemoNext = 0;
-#if MOBILEGL_PIPE_LEGACY_MEMOS
             m_pipelineStateHashValid = false;
-#endif
         }
         UnorderedMap<ProgramFactory::HashType, VkPipeline> m_computePipelines;
         UniquePtr<ProgramFactory> m_programFactory;
@@ -1359,32 +1407,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // fixed table also makes every VaoDrawMemo/ResolvedVertexBindings pointer
         // stable for the duration of a draw, which the EBO memo handoff
         // (m_currentDrawResolvedEntry) relies on.
+        // [deviation from D12.4] The brief asks for a grow-on-demand Vector. The table is
+        // FIXED, and under the handle arm it is sized to - and is a BIJECTION with - the
+        // identity table that mints the slots (MagmaPipeVaoIdentity), so entry i is slot
+        // i + kMGPipeFirstAllocatableSlot and no two live VAOs can ever share it. Growing on
+        // demand only makes sense against an allocator that frees, and nothing in P2 frees a
+        // VertexElementsCso slot; the eviction that has to happen somewhere happens once, in
+        // the identity table's LRU, instead of twice in two tables that could disagree.
         static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
         Vector<VaoDrawMemo> m_vaoDrawMemoTable;
 #if MOBILEGL_PIPE_PUSH
-        // One-entry memo in front of the slot allocator's lifetimeId -> handle map (P2
-        // D12.4). Acquiring a handle is a hash probe, and LookupVaoDrawMemo runs per draw, so
-        // the arm would otherwise have swapped one probe (the address hash it deletes) for
-        // another. A run of draws over one VAO - the common intra-batch shape - pays a single
-        // Uint64 compare instead.
-        //
-        // A lifetime id is never reused, so a hit can only ever be this same object; the
-        // valid flag exists rather than a zero sentinel because nothing promises the frontend
-        // counter starts above zero.
-        Uint64 m_lastVaoHandleLifetimeId = 0;
-        MG_Pipe::MGPipeHandle m_lastVaoHandle = MG_Pipe::kMGPipeNullHandle;
-        Bool m_lastVaoHandleValid = false;
+        static_assert(kVaoDrawMemoSlotCount == kMagmaVaoIdentityEntries,
+                      "the VAO draw memo table is indexed directly by MagmaPipeSlotIndex, so it has "
+                      "to hold exactly one entry per slot the VAO identity table can mint");
+        // The VAO's {slot, gen}. An array probe (one mask, at most two Uint64 compares), so
+        // there is no memo in front of it: the address multiply plus two-way probe it replaces
+        // cost more than this does, and a cached handle could go stale behind the identity
+        // table's own eviction, which is a class of bug worth not having.
         MG_Pipe::MGPipeHandle ResolveVaoHandle(const MG_State::GLState::VertexArrayObject& vao) {
-            const Uint64 lifetimeId = vao.GetLifetimeId();
-            if (m_lastVaoHandleValid && m_lastVaoHandleLifetimeId == lifetimeId) {
-                return m_lastVaoHandle;
-            }
-            const MG_Pipe::MGPipeHandle handle =
-                MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, lifetimeId);
-            m_lastVaoHandleLifetimeId = lifetimeId;
-            m_lastVaoHandle = handle;
-            m_lastVaoHandleValid = true;
-            return handle;
+            return MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, vao.GetLifetimeId());
         }
 #endif
         // "Is this VAO's content hash already memoized?", asked of whichever side owns the

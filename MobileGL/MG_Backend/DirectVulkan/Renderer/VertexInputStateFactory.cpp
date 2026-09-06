@@ -56,7 +56,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
 #if MOBILEGL_PIPE_PUSH
             if (attr.Buffer) {
-                if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+                // The SAME arm question the other four re-keyed sites ask, through the same
+                // helper: a site that decided for itself could silently key on the pre-handle
+                // identity while its neighbours keyed on the handle.
+                if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
                     const MG_Pipe::MGPipeHandle handle =
                         MagmaPipeHandleOf(MG_Pipe::MGPipeKind::Buffer, attr.Buffer->GetLifetimeId());
                     bufferKey = static_cast<Uint64>(handle.Slot) | (static_cast<Uint64>(handle.Gen) << 32);
@@ -80,21 +83,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_PIPE_PUSH
     VertexInputStateFactory::VaoBackendMemos& VertexInputStateFactory::MemosFor(
         const MG_State::GLState::VertexArrayObject& vao) const {
+        static_assert(kVaoMemoSlotCount == kMagmaVaoIdentityEntries,
+                      "this table is indexed directly by MagmaPipeSlotIndex, so it has to hold "
+                      "exactly one entry per slot the VAO identity table can mint");
         if (m_vaoMemos.empty()) {
             m_vaoMemos.resize(kVaoMemoSlotCount);
         }
-        const Uint64 lifetimeId = vao.GetLifetimeId();
-        if (!m_lastVaoHandleValid || m_lastVaoLifetimeId != lifetimeId) {
-            m_lastVaoHandle = MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, lifetimeId);
-            m_lastVaoLifetimeId = lifetimeId;
-            m_lastVaoHandleValid = true;
-        }
-        const MG_Pipe::MGPipeHandle handle = m_lastVaoHandle;
-        VaoBackendMemos& memos = m_vaoMemos[handle.Slot & (kVaoMemoSlotCount - 1)];
+        const MG_Pipe::MGPipeHandle handle =
+            MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, vao.GetLifetimeId());
+        // One entry per mintable slot - see the static_assert on kVaoMemoSlotCount - so this
+        // index is exact and two live VAOs cannot share an entry. There is no probe in front
+        // of it because the mint itself is one: an array index and at most two Uint64
+        // compares, which is less than the address hash the pre-handle arm ran.
+        VaoBackendMemos& memos = m_vaoMemos[MagmaPipeSlotIndex(handle)];
         if (!(memos.Owner == handle)) {
-            // Someone else's entry (a colliding slot, or a slot whose Gen moved because the
-            // slot was REUSED for a different object). Claim it, contents cleared - never
-            // inherited, which is the whole point of keying on the generation.
+            // A slot whose Gen moved because the identity table recycled it for a different
+            // object. Claim it, contents cleared - never inherited, which is the whole point
+            // of keying on the generation.
             memos = VaoBackendMemos{};
             memos.Owner = handle;
         }
@@ -105,13 +110,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_PIPE_PUSH
     Bool VertexInputStateFactory::TryGetMemoizedHash(const MG_State::GLState::VertexArrayObject& vao,
                                                      Uint64& outHash) const {
-        if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+        if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             const VaoBackendMemos& memos = MemosFor(vao);
             if (memos.HashConfigVersion != vao.GetConfigVersion()) return false;
             outHash = memos.Hash;
             return true;
         }
-        MagmaPipeRequireLegacyArm("VertexInputStateFactory::TryGetMemoizedHash");
 #if MOBILEGL_PIPE_LEGACY_MEMOS
         return vao.GetBackendHashMemo(outHash);
 #else
@@ -125,7 +129,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         HashType hash = 0;
 #if MOBILEGL_PIPE_PUSH
         // P2 D12.5: the same memo, on the backend's side of the boundary.
-        if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+        if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             VaoBackendMemos& memos = MemosFor(vao);
             if (memos.HashConfigVersion == vao.GetConfigVersion()) {
                 return memos.Hash;
@@ -135,7 +139,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             memos.HashConfigVersion = vao.GetConfigVersion();
             return hash;
         }
-        MagmaPipeRequireLegacyArm("VertexInputStateFactory::GetOrComputeHash");
 #endif
 #if MOBILEGL_PIPE_LEGACY_MEMOS
         if (!vao.GetBackendHashMemo(hash)) {
@@ -154,7 +157,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // survives the move and is still what stops a stale pointer being dereferenced: the
         // POINTEE is a cache entry this factory can erase at a frame boundary, and moving the
         // memo does not change that.
-        if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+        if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             VaoBackendMemos& memos = MemosFor(vao);
             if (memos.StateConfigVersion == vao.GetConfigVersion() && memos.State != nullptr &&
                 memos.StateEpoch == m_evictionEpoch) {
@@ -164,10 +167,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             const BackendVertexInputState& resolved =
                 GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
-            // MemosFor is re-taken: GetOrComputeHash above went through it, and a colliding
-            // VAO could have claimed the entry in between (it cannot here, since both calls
-            // name the same VAO, but the reference is not worth keeping live across a call
-            // that can resize the table).
+            // MemosFor is re-taken rather than kept live across GetOrCreateVertexInputState:
+            // the reference is not worth holding across a call that can resize the table.
             VaoBackendMemos& stamp = MemosFor(vao);
             stamp.State = &resolved;
             stamp.StateEpoch = m_evictionEpoch;
@@ -177,12 +178,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // live reader anywhere, so the handle arm retires it rather than moving it.
             return resolved;
         }
-        MagmaPipeRequireLegacyArm("VertexInputStateFactory::GetOrCreateVertexInputState");
 #endif
 #if !MOBILEGL_PIPE_LEGACY_MEMOS
-        // Unreachable: with no legacy arm compiled, MagmaPipeRequireLegacyArm above aborts.
-        // Written out rather than left to fall off the end so the function still has a return
-        // on every path a compiler can see.
+        // Unreachable: with no legacy arm compiled MagmaPipeTrackHArmIsHandles is a compile-
+        // time true, so the handle arm above always returns. Written out rather than left to
+        // fall off the end so the function still has a return on every path a compiler sees.
         return GetOrCreateVertexInputState(vao, GetOrComputeHash(vao));
 #else
         // Per-draw fast path: the VAO carries a pointer to its resolved entry,

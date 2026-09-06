@@ -136,9 +136,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and layoutAuxMasks long ago and its getter has no live reader anywhere in the tree,
         // so the handle arm simply stops writing it (D12.5 says delete rather than move).
         struct VaoBackendMemos {
-            // Whose memos these are. A slot is direct-mapped into the table below, so an
-            // entry can be claimed by a different VAO; the handle compare is what says the
-            // contents are this object's.
+            // Whose memos these are. The identity table can recycle a slot for a different
+            // VAO under LRU pressure, and the handle compare - Gen included - is what says
+            // the contents are this object's and not its predecessor's.
             MG_Pipe::MGPipeHandle Owner = MG_Pipe::kMGPipeNullHandle;
             Uint64 Hash = 0;
             Uint32 HashConfigVersion = ~0u;
@@ -146,16 +146,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 StateEpoch = 0;
             Uint32 StateConfigVersion = ~0u;
         };
-        // Fixed and direct-mapped for the same reason VulkanRenderer's VaoDrawMemo table is
-        // (P2 m3): nothing frees a VertexElementsCso slot yet, so a grow-on-demand table
-        // would keep one entry per VAO ever created. 2048 x 48 B is 96 KB.
+        // Fixed, and a BIJECTION with the identity table that mints the slots
+        // (MagmaPipeVaoIdentity): entry i is slot i + kMGPipeFirstAllocatableSlot, so the
+        // index is exact, no two live VAOs can share an entry, and the eviction decision lives
+        // once - in the identity table's 2-way LRU - instead of once per consumer table.
+        // Pinned against the mint by a static_assert in VertexInputStateFactory.cpp.
+        // 2048 x 48 B is 96 KB.
         static constexpr Uint32 kVaoMemoSlotCount = 2048; // power of two
         mutable Vector<VaoBackendMemos> m_vaoMemos;
-        // One-entry memo in front of the allocator's lifetimeId -> handle probe, same shape
-        // and same reason as VulkanRenderer::ResolveVaoHandle.
-        mutable Uint64 m_lastVaoLifetimeId = 0;
-        mutable MG_Pipe::MGPipeHandle m_lastVaoHandle = MG_Pipe::kMGPipeNullHandle;
-        mutable Bool m_lastVaoHandleValid = false;
         // The entry belonging to `vao`, claimed (and cleared) if the slot currently holds
         // someone else's.
         VaoBackendMemos& MemosFor(const MG_State::GLState::VertexArrayObject& vao) const;
