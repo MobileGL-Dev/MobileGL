@@ -674,7 +674,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // The two compute limits are the only indexed pnames a backend genuinely owns: they come
     // from the physical device, and MG_Impl/GLImpl/Getter/GL_Getter.cpp asks for them here so it
-    // can raise the answer to the GL required minimum. Every other indexed pname names FRONTEND
+    // can raise the answer to the GL required minimum. The same six numbers are carried in
+    // DynamicBackendParameters::MaxComputeWorkGroupCount/Size (filled at capability init from
+    // the same limits), which is their MGPCaps carrier once this entry retires - the
+    // AdvertisedLimitsScenario pins the two against each other. Every other indexed pname names FRONTEND
     // state (the indexed buffer bindings, the per-unit texture/sampler bindings, the image-unit
     // bindings, the viewport rectangles, the indexed capabilities) and is answered there before
     // the table is consulted, so the arms this function used to carry for

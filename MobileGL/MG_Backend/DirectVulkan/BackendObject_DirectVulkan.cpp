@@ -937,6 +937,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             clampLimit("GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks,
                        kMaxAdvertisedBufferBlocks);
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_vulkanCaps.MaxComputeWorkGroupInvocations;
+        // The six per-axis compute limits, from the same VkPhysicalDeviceLimits fields
+        // GLFunctionsTable::GetIntegeri_v (DirectVulkan.cpp) reads live. Carried here so that
+        // MGPCaps has them once the table entry retires (plan B section 4.4.1); GL_Getter floors
+        // them. Not clamped: unlike the block counts these are not amounts an application
+        // allocates, and the frontend already raises them to the GL minimum.
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            m_dynamicParameters.MaxComputeWorkGroupCount[axis] = m_vulkanCaps.MaxComputeWorkGroupCount[axis];
+            m_dynamicParameters.MaxComputeWorkGroupSize[axis] = m_vulkanCaps.MaxComputeWorkGroupSize[axis];
+        }
         m_dynamicParameters.MaxShaderStorageBufferBindings =
             clampLimit("GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS", m_vulkanCaps.MaxShaderStorageBufferBindings,
                        kMaxAdvertisedBufferBlocks);

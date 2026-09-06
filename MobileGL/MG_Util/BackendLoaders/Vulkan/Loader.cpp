@@ -196,6 +196,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxCombinedShaderStorageBlocks = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
         caps.MaxComputeUniformBlocks = SaturateToInt(p.limits.maxPerStageDescriptorUniformBuffers);
         caps.MaxComputeWorkGroupInvocations = SaturateToInt(p.limits.maxComputeWorkGroupInvocations);
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            caps.MaxComputeWorkGroupCount[axis] = SaturateToInt(p.limits.maxComputeWorkGroupCount[axis]);
+            caps.MaxComputeWorkGroupSize[axis] = SaturateToInt(p.limits.maxComputeWorkGroupSize[axis]);
+        }
         caps.MaxShaderStorageBufferBindings = SaturateToInt(p.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = SaturateToInt(p.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =
@@ -333,6 +337,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxCombinedShaderStorageBlocks = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
         caps.MaxComputeUniformBlocks = SaturateToInt(properties.limits.maxPerStageDescriptorUniformBuffers);
         caps.MaxComputeWorkGroupInvocations = SaturateToInt(properties.limits.maxComputeWorkGroupInvocations);
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            caps.MaxComputeWorkGroupCount[axis] = SaturateToInt(properties.limits.maxComputeWorkGroupCount[axis]);
+            caps.MaxComputeWorkGroupSize[axis] = SaturateToInt(properties.limits.maxComputeWorkGroupSize[axis]);
+        }
         caps.MaxShaderStorageBufferBindings = SaturateToInt(properties.limits.maxDescriptorSetStorageBuffers);
         caps.MaxTextureBufferSize = SaturateToInt(properties.limits.maxTexelBufferElements);
         caps.TextureBufferOffsetAlignment =

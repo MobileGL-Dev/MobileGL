@@ -37,6 +37,11 @@ namespace {
         std::size_t ioBlockDraws = 0;
         // Behavior knobs, configured per test before running the probe.
         GLint maxVertexSsboBlocks = 4;
+        // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, answered through glGetIntegeri_v.
+        // Above the GL minimums and distinct per axis, so a loader that left an initialiser in
+        // place or copied one axis into another is caught.
+        GLint maxComputeWorkGroupCount[3] = {70001, 70002, 70003};
+        GLint maxComputeWorkGroupSize[3] = {1500, 1501, 100};
         GLint glesMajorVersion = 3;
         GLint glesMinorVersion = 1;
         GLint maxVertexImageUniforms = 2;
@@ -460,8 +465,20 @@ namespace {
             if (data == nullptr) return;
             for (int i = 0; i < 4; ++i) data[i] = GL_TRUE;
         };
-        funcs.glGetIntegeri_v = [](GLenum, GLuint, GLint* data) {
-            if (data != nullptr) *data = 0;
+        funcs.glGetIntegeri_v = [](GLenum pname, GLuint index, GLint* data) {
+            if (data == nullptr) return;
+            *data = 0;
+            if (index >= 3) return;
+            switch (pname) {
+            case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
+                *data = g_fake.maxComputeWorkGroupCount[index];
+                break;
+            case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
+                *data = g_fake.maxComputeWorkGroupSize[index];
+                break;
+            default:
+                break;
+            }
         };
         funcs.glGetProgramInfoLog = [](GLuint, GLsizei bufSize, GLsizei* length, GLchar* infoLog) {
             if (infoLog != nullptr && bufSize > 0) infoLog[0] = '\0';
@@ -1550,4 +1567,24 @@ TEST(LocatedIoBlockProbe, ReportsTheDefectOnlyWhenTheUnlocatedControlCarriesTheP
     crippled.glReadPixels = nullptr;
     EXPECT_FALSE(ProbeLocatedIoBlocksLosePayload(crippled).detected);
     EXPECT_EQ(g_fake.ioBlockDraws, 0u) << "an entry-point-gated probe must not draw at all";
+}
+
+// The six per-axis compute limits are the backend-owned answers that cross the MGPipe boundary
+// inside MGPCaps (DynamicBackendParameters::MaxComputeWorkGroupCount/Size), so the loader has
+// to take EACH axis from glGetIntegeri_v rather than leave an initialiser - or one axis's
+// answer - in the other slots. The integration side (AdvertisedLimitsScenario) pins the copy
+// against the live getter on both backends; this pins the driver-to-caps step on its own.
+TEST(ComputeWorkGroupCapabilities, TakesEveryAxisFromTheIndexedQuery) {
+    const auto funcs = MakeFakeGLESFunctions();
+    ResetFakeDriver();
+    MobileGL::MG_External::GLESCapabilities caps;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(caps, funcs));
+    for (int axis = 0; axis < 3; ++axis) {
+        EXPECT_EQ(caps.MaxComputeWorkGroupCount[axis], g_fake.maxComputeWorkGroupCount[axis]) << "axis " << axis;
+        EXPECT_EQ(caps.MaxComputeWorkGroupSize[axis], g_fake.maxComputeWorkGroupSize[axis]) << "axis " << axis;
+    }
+    // The initialisers are the GL 4.3 minimums and every fake answer is above them, so a
+    // value equal to its initialiser here would mean the query never ran.
+    EXPECT_GT(caps.MaxComputeWorkGroupCount[0], 65535);
+    EXPECT_GT(caps.MaxComputeWorkGroupSize[2], 64);
 }

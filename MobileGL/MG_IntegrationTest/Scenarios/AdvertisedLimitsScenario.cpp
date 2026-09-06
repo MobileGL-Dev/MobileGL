@@ -26,9 +26,11 @@
 // quantities, so an entry that only fails on DirectVulkan is a translation bug and one that
 // fails on both is a table bug.
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+#include "../Harness/BackendCapsPeek.h"
 #include "../Harness/HeadlessGL.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -562,6 +564,65 @@ void main() { g_data[gl_LocalInvocationIndex] = 1u; }
             glDeleteProgram(empty);
             glDeleteProgram(program);
             (void)FirstGLError();
+        }
+
+        // THE SIX COMPUTE LIMITS THAT OUTLIVE THE GETTER. GL_MAX_COMPUTE_WORK_GROUP_COUNT and
+        // GL_MAX_COMPUTE_WORK_GROUP_SIZE, three axes each, are the only indexed pnames the
+        // DEVICE answers rather than the frontend (glGetIntegeri_v on Espryt, VkPhysicalDevice-
+        // Limits on Magma), and therefore the only ones that have to cross the MGPipe boundary
+        // once GetIntegeri_v is retired (plan B section 4.4.6 / P0.5). They ride in MGPCaps by
+        // inclusion, as DynamicBackendParameters::MaxComputeWorkGroupCount/Size, filled by both
+        // backends at capability init. This case pins that the caps copy and the live getter
+        // answer are one number - the getter floors the backend's raw answer at the GL 4.3
+        // minimum, so the comparison is against the floored caps value - and pins the
+        // GL-visible half on every lane: answerability, the floors, vector/indexed agreement
+        // and the index bound. On a lane where the caps block is out of reach (Android links
+        // the shipping .so) only the GL-visible half runs.
+        TEST_F(AdvertisedLimitsScenario, ComputeWorkGroupLimitsAreTheCapsBlocksAnswer) {
+            struct Axis {
+                GLenum pname;
+                const char* name;
+                GLint minimum[3]; // GL 4.3 core table 23.60
+            };
+            const Axis axes[] = {
+                {GL_MAX_COMPUTE_WORK_GROUP_COUNT, "GL_MAX_COMPUTE_WORK_GROUP_COUNT", {65535, 65535, 65535}},
+                {GL_MAX_COMPUTE_WORK_GROUP_SIZE, "GL_MAX_COMPUTE_WORK_GROUP_SIZE", {1024, 1024, 64}},
+            };
+            int capsCount[3] = {0, 0, 0};
+            int capsSize[3] = {0, 0, 0};
+            const bool capsVisible = PeekComputeWorkGroupCaps(capsCount, capsSize);
+
+            for (const Axis& axis : axes) {
+                GLint indexed[3] = {-1, -1, -1};
+                for (GLuint i = 0; i < 3; ++i) {
+                    glGetIntegeri_v(axis.pname, i, &indexed[i]);
+                    ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << axis.name << "[" << i << "]";
+                    EXPECT_GE(indexed[i], axis.minimum[i])
+                        << axis.name << "[" << i << "] = " << indexed[i]
+                        << " is below the GL 4.3 core table 23.60 minimum " << axis.minimum[i];
+                }
+                GLint vector[3] = {-1, -1, -1};
+                glGetIntegerv(axis.pname, vector);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << axis.name;
+                for (int i = 0; i < 3; ++i) {
+                    EXPECT_EQ(vector[i], indexed[i])
+                        << axis.name << "[" << i << "]: the vector query and the indexed query disagree";
+                }
+                GLint outOfRange = -424242;
+                glGetIntegeri_v(axis.pname, 3, &outOfRange);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_VALUE))
+                    << axis.name << "[3]: an index past the three axes is INVALID_VALUE (GL 4.6 core 22.1)";
+
+                if (!capsVisible) continue;
+                const int* capsAxis = axis.pname == GL_MAX_COMPUTE_WORK_GROUP_COUNT ? capsCount : capsSize;
+                for (int i = 0; i < 3; ++i) {
+                    EXPECT_EQ(std::max(capsAxis[i], axis.minimum[i]), indexed[i])
+                        << axis.name << "[" << i << "]: MGPCaps carries " << capsAxis[i]
+                        << " but glGetIntegeri_v answers " << indexed[i]
+                        << " - the caps block and the getter path must be one number, because P0.5 retires "
+                           "the getter in favour of the caps";
+                }
+            }
         }
 
     } // namespace

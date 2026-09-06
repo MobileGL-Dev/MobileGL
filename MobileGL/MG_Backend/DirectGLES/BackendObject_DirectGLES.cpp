@@ -1415,6 +1415,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageStorageBlocks(m_GLESCapabilities.MaxFragmentShaderStorageBlocks);
         m_dynamicParameters.MaxComputeUniformBlocks = m_GLESCapabilities.MaxComputeUniformBlocks;
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_GLESCapabilities.MaxComputeWorkGroupInvocations;
+        // The six per-axis compute limits: the driver's raw glGetIntegeri_v answers, the same
+        // numbers GLFunctionsTable::GetIntegeri_v forwards live. Carried here so that MGPCaps has
+        // them once the table entry retires (plan B section 4.4.1); GL_Getter floors them.
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            m_dynamicParameters.MaxComputeWorkGroupCount[axis] = m_GLESCapabilities.MaxComputeWorkGroupCount[axis];
+            m_dynamicParameters.MaxComputeWorkGroupSize[axis] = m_GLESCapabilities.MaxComputeWorkGroupSize[axis];
+        }
         // (MaxShaderStorageBufferBindings is assigned above, before the per-stage clamp reads it.)
         // This is the number glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE) hands the application, and
         // on a host without buffer textures it is knowingly a floor MobileGL cannot honour rather

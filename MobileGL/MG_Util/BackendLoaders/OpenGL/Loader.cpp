@@ -1145,6 +1145,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxFragmentShaderStorageBlocks = 4;
         GLint maxComputeUniformBlocks = 12;
         GLint maxComputeWorkGroupInvocations = 128;
+        GLint maxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+        GLint maxComputeWorkGroupSize[3] = {1024, 1024, 64};
         GLint maxShaderStorageBufferBindings = 8;
         GLint maxTextureBufferSize = 65536;
         GLint maxUniformBufferBindings = 24;
@@ -1276,6 +1278,17 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, &maxCombinedShaderStorageBlocks);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_UNIFORM_BLOCKS, &maxComputeUniformBlocks);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &maxComputeWorkGroupInvocations);
+        // The per-axis pair beside it, through the indexed query. ES 3.1 core like the
+        // invocations limit, so it sits inside the same bracketed run: a 3.0 context rejects
+        // it, the drain below swallows the error and the locals keep the GL 4.3 minimums.
+        // These are the six backend-owned indexed answers that cross the MGPipe boundary in
+        // MGPCaps (DynamicBackendParameters::MaxComputeWorkGroupCount/Size).
+        if (glesFuncs.glGetIntegeri_v) {
+            for (GLuint axis = 0; axis < 3; ++axis) {
+                glesFuncs.glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, axis, &maxComputeWorkGroupCount[axis]);
+                glesFuncs.glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, axis, &maxComputeWorkGroupSize[axis]);
+            }
+        }
         glesFuncs.glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &maxShaderStorageBufferBindings);
         // GL_MAX_TEXTURE_BUFFER_SIZE is deliberately NOT batched here: like
         // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT below, the pname only exists once buffer textures do,
@@ -1584,6 +1597,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxFragmentShaderStorageBlocks = maxFragmentShaderStorageBlocks;
         caps.MaxComputeUniformBlocks = maxComputeUniformBlocks;
         caps.MaxComputeWorkGroupInvocations = maxComputeWorkGroupInvocations;
+        for (SizeT axis = 0; axis < 3; ++axis) {
+            caps.MaxComputeWorkGroupCount[axis] = maxComputeWorkGroupCount[axis];
+            caps.MaxComputeWorkGroupSize[axis] = maxComputeWorkGroupSize[axis];
+        }
         caps.MaxShaderStorageBufferBindings = maxShaderStorageBufferBindings;
         caps.MaxTextureBufferSize = maxTextureBufferSize;
         // Through glesFuncs, like every other capability query here: a bare glGetIntegerv resolves
@@ -1681,6 +1698,10 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS: %d", caps.MaxFragmentShaderStorageBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_UNIFORM_BLOCKS: %d", caps.MaxComputeUniformBlocks);
         MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS: %d", caps.MaxComputeWorkGroupInvocations);
+        MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_COUNT: %d %d %d", caps.MaxComputeWorkGroupCount[0],
+                caps.MaxComputeWorkGroupCount[1], caps.MaxComputeWorkGroupCount[2]);
+        MGLOG_I("    GL_MAX_COMPUTE_WORK_GROUP_SIZE: %d %d %d", caps.MaxComputeWorkGroupSize[0],
+                caps.MaxComputeWorkGroupSize[1], caps.MaxComputeWorkGroupSize[2]);
         MGLOG_I("    GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: %d", caps.MaxShaderStorageBufferBindings);
         // Three distinct states, and the suffix must not conflate them: a driver answer, a floor
         // kept because there are no buffer textures to ask about, and a floor kept because the

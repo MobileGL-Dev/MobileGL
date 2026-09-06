@@ -378,6 +378,19 @@ namespace MobileGL {
             Int MaxFragmentShaderStorageBlocks = 8;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
+            // GL_MAX_COMPUTE_WORK_GROUP_COUNT / GL_MAX_COMPUTE_WORK_GROUP_SIZE, one value per
+            // axis. These six, with the invocations limit above, are the only indexed limits a
+            // backend genuinely OWNS - the device answers them (glGetIntegeri_v on DirectGLES,
+            // VkPhysicalDeviceLimits::maxComputeWorkGroupCount/Size on DirectVulkan) - and so
+            // the only ones that survive the retirement of the GetIntegeri_v table entry: they
+            // cross the MGPipe boundary inside MGPCaps, by inclusion of this struct (plan B
+            // section 4.4.1). Every other indexed pname names frontend state. RAW driver
+            // answers, like the invocations limit: GL_Getter and the compile environment floor
+            // them at the shared MIN_COMPUTE_WORK_GROUP_* minimums themselves. The defaults are
+            // the GL 4.3 core minimums (table 23.60) and describe the no-backend case, as
+            // MaxClipDistances' does.
+            Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+            Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.

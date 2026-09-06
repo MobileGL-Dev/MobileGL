@@ -1309,6 +1309,11 @@ namespace MobileGL {
             Int MaxFragmentShaderStorageBlocks = 4;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
+            // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE per axis, as the driver answers
+            // glGetIntegeri_v. Raw: the frontend floors them at the GL minimums itself. The
+            // initialisers are those minimums, for a context that rejects the query.
+            Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+            Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.

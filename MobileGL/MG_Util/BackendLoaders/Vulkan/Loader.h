@@ -56,6 +56,11 @@ namespace MobileGL {
             Int MaxCombinedShaderStorageBlocks = 32;
             Int MaxComputeUniformBlocks = 12;
             Int MaxComputeWorkGroupInvocations = 128;
+            // VkPhysicalDeviceLimits::maxComputeWorkGroupCount / maxComputeWorkGroupSize per
+            // axis, saturated to Int like every other limit here. Raw: the frontend floors them
+            // at the GL minimums itself.
+            Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
+            Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.

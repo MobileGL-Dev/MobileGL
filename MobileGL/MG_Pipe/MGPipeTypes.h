@@ -122,7 +122,10 @@ namespace MobileGL::MG_Pipe {
 
     struct MGPCaps {
         // The ~90 flat scalars the backends already publish, by inclusion rather than by
-        // restatement: a caps field added there must not need a second edit here.
+        // restatement: a caps field added there must not need a second edit here. This is
+        // also where the six per-axis compute limits (MaxComputeWorkGroupCount/Size) ride -
+        // the only indexed answers the device owns, and therefore the only ones that outlive
+        // the GetIntegeri_v table entry (see the PipeCalls.def footer).
         DynamicBackendParameters Dynamic;
         Uint64 CallMask; // MGPCapBit
         // The two halves that are not flat PODs travel as blobs: the format capability

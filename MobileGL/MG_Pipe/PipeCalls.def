@@ -140,9 +140,18 @@
     X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional)
 // clang-format on
 
-// Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"): GetIntegeri_v,
-// GetInteger64i_v, GetProgramiv (only GL_COMPUTE_WORK_GROUP_SIZE is a real backend answer
-// and it lives in MGPCaps), ShaderStorageBlockBinding (folded into MGPProgramDesc's
-// reflection archive), set_pixel_unpack_state (no such state crosses the line - plan 4.6
-// D5), a compressed-format concept, pipe_transfer, and the stage dimension of
-// set_sampler_views (MobileGL's texture unit space is merged, not per stage - plan 4.4.3).
+// Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):
+//   - GetIntegeri_v / GetInteger64i_v. The six backend-owned answers they carry -
+//     GL_MAX_COMPUTE_WORK_GROUP_COUNT and GL_MAX_COMPUTE_WORK_GROUP_SIZE, three axes each,
+//     the only indexed pnames the device rather than the frontend answers - live in MGPCaps
+//     as DynamicBackendParameters::MaxComputeWorkGroupCount / MaxComputeWorkGroupSize, filled
+//     by both backends at capability init (DirectGLES from glGetIntegeri_v, DirectVulkan from
+//     VkPhysicalDeviceLimits) and floored by the frontend. Every other indexed pname names
+//     frontend state and is answered before any table is consulted.
+//   - GetProgramiv. GL_COMPUTE_WORK_GROUP_SIZE is a FRONTEND link artifact
+//     (ProgramObject::GetComputeLocalSize, what GL_Program.cpp has always answered from), not
+//     a backend answer at all; nothing a backend knows about a program crosses this way.
+//   - ShaderStorageBlockBinding (folded into MGPProgramDesc's reflection archive),
+//     set_pixel_unpack_state (no such state crosses the line - plan 4.6 D5), a
+//     compressed-format concept, pipe_transfer, and the stage dimension of set_sampler_views
+//     (MobileGL's texture unit space is merged, not per stage - plan 4.4.3).
