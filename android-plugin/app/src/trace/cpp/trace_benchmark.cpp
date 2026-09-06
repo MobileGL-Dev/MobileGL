@@ -8,8 +8,14 @@
 // CLOCK_THREAD_CPUTIME_ID is POSIX and present on Linux and on every Android API this replays
 // on; the guard exists so the desktop CLI still builds where it is not, and so that "no CPU
 // series" is a compile-time fact rather than a silently-zero column.
+//
+// <time.h>, not <ctime>: clock_gettime, CLOCK_THREAD_CPUTIME_ID and struct timespec are POSIX
+// names, and only <time.h> is required to put them at global scope - <ctime> guarantees the C++
+// subset in namespace std and leaves the rest to the implementation. glibc and bionic both happen
+// to provide them either way; this file is built for both by two different toolchains, so it asks
+// for the header that actually promises what it uses.
 #if defined(__unix__) || defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
-#include <ctime>
+#include <time.h>
 #define MOBILEGL_TRACE_HAVE_THREAD_CPU_CLOCK 1
 #else
 #define MOBILEGL_TRACE_HAVE_THREAD_CPU_CLOCK 0
@@ -78,12 +84,17 @@ void Begin(bool finishEachFrame) {
     gFrameMs.reserve(kFrameReserve);
     gFrameCpuMs.clear();
     gFrameCpuMs.reserve(kFrameReserve);
-    gLastBoundaryCpuMs = ThreadCpuMs();
     gFinishEachFrame = finishEachFrame;
     gResolvedGlFinish = false;
     gGlFinish = nullptr;
+    // Wall baseline FIRST, CPU baseline second - the same order OnFrameBoundary reads them in,
+    // and for the same reason. Frame 0's CPU interval then sits strictly inside its wall interval,
+    // so whatever this function costs between the two readings lands in the wall number where it
+    // can be seen, instead of inflating the CPU number where it cannot. Taken the other way round
+    // (as this was), frame 0 alone reported a CPU delta biased upward against its own wall delta.
     gStart = Clock::now();
     gLastBoundary = gStart;
+    gLastBoundaryCpuMs = ThreadCpuMs();
     gEnabled = true;
 }
 

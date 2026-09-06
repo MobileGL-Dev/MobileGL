@@ -22,6 +22,11 @@
 # Screenshots (pre/post measurement) land in results/<timestamp>-<label>/.
 
 set -u -o pipefail
+# Remembered BEFORE the cd, so a --device path written relative to the caller's directory (the
+# repo root, most of the time) still resolves. Without it, `tools/device_bench/bench.sh --device
+# tools/device_bench/devices/odinlite.env` from the repo root sourced nothing and then blamed the
+# profile for not being verified - a true refusal for a false reason.
+INVOKED_FROM=$PWD
 cd "$(dirname "$0")"
 # Git Bash: stop MSYS from rewriting /sys/... arguments into C:/Program Files/...
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
@@ -55,6 +60,20 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$DEVICE_ENV" ] && [ -n "$BACKEND" ] || { echo "need --device and --backend" >&2; exit 2; }
+case "$DEVICE_ENV" in
+  /*) ;;
+  *) [ -r "$DEVICE_ENV" ] || [ ! -r "$INVOKED_FROM/$DEVICE_ENV" ] || DEVICE_ENV="$INVOKED_FROM/$DEVICE_ENV" ;;
+esac
+[ -r "$DEVICE_ENV" ] || {
+  echo "cannot read the device profile: $DEVICE_ENV" >&2
+  echo "(tried it relative to $(pwd) and to $INVOKED_FROM)" >&2
+  exit 2
+}
+# The profile, and ONLY the profile, gets to say whether it has been verified. This is set to the
+# refusing value BEFORE the source, so a PROFILE_VERIFIED=1 left exported in the operator's shell
+# cannot answer for a profile that says nothing - which would be the same fail-open hole the
+# guard below closes, entered through the environment instead of through the file.
+PROFILE_VERIFIED=0
 # shellcheck disable=SC1090
 . "$DEVICE_ENV"
 
@@ -72,7 +91,8 @@ require_verified_profile() {
   # The default is UNVERIFIED. A profile that simply omits the key is a profile nobody has
   # confirmed against its device, and defaulting it to "verified" would hand exactly the
   # fail-open behaviour this guard exists to prevent to the most likely way a new profile is
-  # written - by copying an existing one and editing the serial.
+  # written - by copying an existing one and editing the serial. The variable is reset to 0
+  # immediately before the profile is sourced, so this test reads the FILE and not the shell.
   if [ "${PROFILE_VERIFIED:-0}" = "1" ]; then return 0; fi
   if [ "$ALLOW_UNVERIFIED_PROFILE" = "1" ]; then
     echo "[warn] $DEVICE_ENV does not carry PROFILE_VERIFIED=1 and --allow-unverified-profile was passed:" >&2

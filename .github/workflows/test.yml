@@ -551,12 +551,15 @@ jobs:
 
       # The push-only unit tests, on the verify runtime.
       #
-      # WHY HERE AND NOT IN `test`. The `test` job builds the PULL library, and G6's chunk-table
-      # walk and G10's residual assertions live in MG_Test/Pipe, compiled only under
-      # MOBILEGL_PIPE_PUSH (MGPipeRenderStateSpans.cpp and PipeApply.cpp are appended to
-      # SOURCE_FILES inside the `if (MOBILEGL_PIPE_PUSH)` block, which is exactly how the pull
-      # build stays symbol-identical). So before P2 those tests ran in no CI job at all: they
-      # existed, they were green locally, and CI never executed one of them.
+      # WHY HERE AND NOT IN `test`. The entries themselves are registered in EVERY build - they
+      # have to be, or `ctest -N` would stop matching name-for-name between the pull and the push
+      # build (gate G2). What is push-only is what they assert about: MGPipeRenderStateSpans.cpp
+      # and PipeApply.cpp are appended to SOURCE_FILES inside the `if (MOBILEGL_PIPE_PUSH)` block,
+      # which is exactly how the pull build stays symbol-identical, so in a pull build each case
+      # opens with `#if !MOBILEGL_PIPE_PUSH GTEST_SKIP() << "push not compiled in"`. The `test`
+      # job therefore runs G6's chunk-table walk and G10's residual assertions as a column of
+      # skips: CI executes the NAMES and never one of the assertions. This job unpacks a build
+      # that compiled them, so it is the first place in CI where they actually run.
       #
       # This artifact already carries them - the packaging step above tars
       # ${BUILD_DIR}/MobileGL/MG_Test whole - so the whole cost is the run, which is ~14 s for

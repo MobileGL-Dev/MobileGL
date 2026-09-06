@@ -37,6 +37,10 @@ frequency-pin integrity.
    `--allow-unverified-profile` is passed, which labels the run unpinned in the warning.
    **A profile that omits the key entirely is refused the same way** - the guard defaults to
    unverified, so copying a verified profile and editing the serial cannot inherit its verdict.
+   Only the file can answer: both scripts reset `PROFILE_VERIFIED=0` immediately before sourcing
+   it, so `PROFILE_VERIFIED=1` exported in your shell does not re-open the hole. Nor does a
+   profile path that cannot be read get mistaken for an unverified one - it is reported as
+   unreadable, and a path relative to the directory you ran the script from is resolved.
    (`profile.sh` pins nothing - it records a simpleperf profile - so it carries no such guard.)
 
    That refusal exists because the pin path is silent when it is wrong: the harness writes
