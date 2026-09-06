@@ -130,7 +130,11 @@ namespace MobileGL::MG_Pipe {
     // clang-format on
 
     // The seven F-class fields, for the arithmetic below and for the sticky table's proof.
+    // The forwarded set IS the sticky set (PipeFields.def marks the same seven rows F and
+    // sticky), so an eighth sticky row without a forwarder is refused here, not by a test.
     inline constexpr SizeT kMGPipeForwardedFieldCount = 7;
+    static_assert(kMGPipeForwardedFieldCount == kMGPipeInputStickyFieldCount,
+                  "the forwarded (F-class) fields and the sticky fields of PipeFields.def are the same seven rows");
 
     // The block the backends read instead of GLContext (ARCHITECTURE.md 9.2 phase A, P1 brief
     // D4). One struct, three storage classes, and every accessor keeps the NAME, PARAMETERS
