@@ -6,28 +6,626 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// G7: the render-state chunk table, its subset hash and the setter-consistency walk (P2 brief D19).
+// G7: the render-state chunk table, its subset hash and the setter-consistency walk
+// (P2 brief D19). Four cases:
 //
-// STUB, and deliberately one. It is created by the P2 CONTRACT commit together with its
-// CMakeLists.txt registration, so that the package which owns its CONTENTS
-// (P2 package A, commit c2 on p2/spans) never has to touch MG_Test/Pipe/CMakeLists.txt - no two P2
-// packages edit the same file, which is what keeps the integrator's rebases clean.
+//   ChunkTablePartitionsTheBlock           - the table is sorted, non-overlapping and
+//                                            complete, and its two halves are exactly the
+//                                            membership generated/PipeSpanTable.inc names.
+//   SetterConsistency                      - THE gate. For every public RenderState setter,
+//                                            the pipeline-subset hash moves IF AND ONLY IF
+//                                            m_pipelineStateVersion moves.
+//   DerivationMatchesTheFrontendGetters    - D5's 29 derived PipeInputs fields against the
+//                                            frontend getters they were transcribed from.
+//   DynamicChunksCoverMagmasDynamicTailKey - every GL-state input of DirectVulkan's
+//                                            DynamicTailKey, against the dynamic half.
 //
-// The placeholder case is not decoration: without it the binary has no test, and
-// gtest_discover_tests on a binary with no test is a silently green lane.
+// The suite needs the push sources (MGPipeRenderStateSpans.cpp and PipeApply.cpp are
+// compiled only under MOBILEGL_PIPE_PUSH), so every case is a visible SKIP in a pull build
+// rather than a vanishing test - and the four names are the SAME four in every build, which
+// is what keeps `ctest -N` name-for-name identical between the pull and the push tree.
 #include <gtest/gtest.h>
+
+#include <cstring>
+#include <set>
+#include <string>
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
+
+#if MOBILEGL_PIPE_PUSH
+#include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/RenderState/RenderState.h>
+#include <MG_Test/ScopedPipeVerb.h>
+#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
 
 namespace {
-    // The one fact this file can already state in EVERY build: the member list the chunk
-    // table was derived from is non-empty and is what generated/PipeSpanTable.inc pins.
-    TEST(RenderStateSpans, PlaceholderUntilTheOwningPackageFillsThisIn) {
-        EXPECT_GT(kMGPipePipelineStateMemberCount, 0u);
-        EXPECT_STREQ(kMGPipePipelineStateMembers[0], "PatchVertices");
+#if MOBILEGL_PIPE_PUSH
+    using MG_State::GLState::RenderState;
+    using GLContext = MG_State::GLState::GLContext;
+
+    // ---------------------------------------------------------------------------------
+    // The member table, built from the SAME list gen_pipe.py checks against the struct
+    // (PipeFields.def's MGP_FIELDS_RenderStateParameters). Using that list rather than a
+    // hand-written one is what makes "every member is accounted for" true: a member added
+    // to RenderStateParameters without a row there already fails pipe-gates, and a member
+    // added WITH a row lands here automatically and has to be classified by the test.
+    // ---------------------------------------------------------------------------------
+    struct Member {
+        const char* Name;
+        SizeT Offset;
+        SizeT Size;
+    };
+
+#define MGP_RS_MEMBER_ROW(name) \
+    Member{#name, offsetof(RenderStateParameters, name), sizeof(RenderStateParameters::name)},
+    constexpr Member kMembers[] = {MGP_FIELDS_RenderStateParameters(MGP_RS_MEMBER_ROW)};
+#undef MGP_RS_MEMBER_ROW
+    constexpr SizeT kMemberCount = sizeof(kMembers) / sizeof(kMembers[0]);
+
+    SizeT OverlapWith(const MGPStateChunk* chunks, SizeT chunkCount, SizeT offset, SizeT size) {
+        SizeT covered = 0;
+        for (SizeT i = 0; i < chunkCount; ++i) {
+            const SizeT chunkBegin = chunks[i].Offset;
+            const SizeT chunkEnd = chunkBegin + chunks[i].Length;
+            const SizeT begin = offset > chunkBegin ? offset : chunkBegin;
+            const SizeT end = (offset + size) < chunkEnd ? (offset + size) : chunkEnd;
+            if (begin < end) covered += end - begin;
+        }
+        return covered;
+    }
+
+    SizeT PipelineBytesOf(SizeT offset, SizeT size) {
+        return OverlapWith(kMGPipePipelineChunks, kMGPipePipelineChunkCount, offset, size);
+    }
+
+    Bool IsWhollyDynamic(SizeT offset, SizeT size) {
+        return OverlapWith(kMGPipeDynamicChunks, kMGPipeDynamicChunkCount, offset, size) == size;
+    }
+
+    Bool IsWhollyPipeline(SizeT offset, SizeT size) { return PipelineBytesOf(offset, size) == size; }
+#endif // MOBILEGL_PIPE_PUSH
+
+    // -------------------------------------------------------------------------------------
+    // 1. The table itself.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, ChunkTablePartitionsTheBlock) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        // Sorted, non-overlapping and complete. That is already a static_assert in
+        // MGPipeRenderStateSpans.h - a gap there is a build break, not a red test - and the
+        // point of re-asserting it at run time is that a reader of the suite sees the
+        // invariant stated rather than having to find the header.
+        SizeT walked = 0;
+        for (SizeT i = 0; i < kMGPipeRenderStateChunkCount; ++i) {
+            const MGPStateChunk chunk = MGPipeRenderStateChunkAt(i);
+            EXPECT_EQ(SizeT{chunk.Offset}, walked) << "chunk " << i << " does not start where its predecessor ended";
+            EXPECT_GT(chunk.Length, 0u) << "chunk " << i << " is empty";
+            walked = SizeT{chunk.Offset} + SizeT{chunk.Length};
+        }
+        EXPECT_EQ(walked, sizeof(RenderStateParameters));
+        EXPECT_EQ(kMGPipePipelineChunkBytes + kMGPipeDynamicChunkBytes, sizeof(RenderStateParameters));
+        EXPECT_EQ(kMGPipePipelineChunkBytes, SizeT{396});
+        EXPECT_EQ(kMGPipeDynamicChunkBytes, SizeT{772});
+
+        // The two exported arrays are the two halves of that same table, ascending.
+        for (SizeT i = 0; i + 1 < kMGPipePipelineChunkCount; ++i) {
+            EXPECT_LT(kMGPipePipelineChunks[i].Offset, kMGPipePipelineChunks[i + 1].Offset);
+        }
+        for (SizeT i = 0; i + 1 < kMGPipeDynamicChunkCount; ++i) {
+            EXPECT_LT(kMGPipeDynamicChunks[i].Offset, kMGPipeDynamicChunks[i + 1].Offset);
+        }
+
+        // Membership. kMGPipePipelineChunks covers every member kMGPipePipelineStateMembers
+        // names and NO byte of any member it does not - which is the half of G7 that the
+        // hash cannot check for itself, because a hash over the wrong bytes is still a hash.
+        std::set<std::string> pipelineNames;
+        for (SizeT i = 0; i < kMGPipePipelineStateMemberCount; ++i) {
+            pipelineNames.insert(kMGPipePipelineStateMembers[i]);
+        }
+        SizeT namedFound = 0;
+        for (SizeT i = 0; i < kMemberCount; ++i) {
+            const Member& member = kMembers[i];
+            const SizeT pipelineBytes = PipelineBytesOf(member.Offset, member.Size);
+            if (pipelineNames.count(member.Name) != 0) {
+                ++namedFound;
+                EXPECT_GT(pipelineBytes, SizeT{0})
+                    << member.Name << " is named as pipeline state but no pipeline chunk covers it";
+            } else {
+                EXPECT_EQ(pipelineBytes, SizeT{0})
+                    << member.Name << " is not named as pipeline state but " << pipelineBytes
+                    << " of its bytes are in the pipeline half";
+                EXPECT_TRUE(IsWhollyDynamic(member.Offset, member.Size))
+                    << member.Name << " is neither wholly pipeline nor wholly dynamic";
+            }
+        }
+        EXPECT_EQ(namedFound, kMGPipePipelineStateMemberCount)
+            << "a name in kMGPipePipelineStateMembers matches no member of RenderStateParameters";
+
+        // StencilStates is the ONE member that straddles, and it straddles at sub-member
+        // granularity by design: Ref/ValueMask/WriteMask are VK_DYNAMIC_STATE_STENCIL_*, so
+        // glStencilFunc changing only the reference must not evict a cached pipeline.
+        // StencilFaceState is deliberately NOT reordered - reordering it would move Espryt's
+        // shadow bytes for no gain - so the split is a hole in the middle of each face.
+        for (SizeT face = 0; face < 2; ++face) {
+            const SizeT base = offsetof(RenderStateParameters, StencilStates) + face * sizeof(StencilFaceState);
+            EXPECT_TRUE(IsWhollyDynamic(base + offsetof(StencilFaceState, Ref),
+                                        offsetof(StencilFaceState, FailOp) - offsetof(StencilFaceState, Ref)))
+                << "stencil face " << face << ": Ref/ValueMask/WriteMask must be dynamic";
+            EXPECT_TRUE(IsWhollyPipeline(base + offsetof(StencilFaceState, Func), sizeof(StencilFaceState::Func)))
+                << "stencil face " << face << ": Func must be pipeline";
+            EXPECT_TRUE(IsWhollyPipeline(base + offsetof(StencilFaceState, FailOp),
+                                         sizeof(StencilFaceState) - offsetof(StencilFaceState, FailOp)))
+                << "stencil face " << face << ": the three ops must be pipeline";
+        }
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 2. G7 itself: the setter walk.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, SetterConsistency) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        RenderState rs;
+
+        // Drives one setter and asserts the G7 invariant on it. The m_version expectation is
+        // the VACUITY GUARD: a setter handed a value equal to the one already stored would
+        // satisfy "neither moved" trivially and prove nothing. The one setter that moves no
+        // counter at all, SetPixelStoreParam, is driven separately at the end.
+        const auto check = [&rs](const char* name, void (*apply)(RenderState&)) {
+            const Uint64 hashBefore = MGPipeComputePipelineSubsetHash(rs.GetAllParameters());
+            const Uint versionBefore = rs.GetVersion();
+            const Uint pipelineBefore = rs.GetPipelineStateVersion();
+            apply(rs);
+            const Uint64 hashAfter = MGPipeComputePipelineSubsetHash(rs.GetAllParameters());
+            EXPECT_NE(versionBefore, rs.GetVersion())
+                << name << " wrote a value equal to the one already stored - the case proves nothing";
+            EXPECT_EQ(hashBefore != hashAfter, pipelineBefore != rs.GetPipelineStateVersion())
+                << name << ": the pipeline-subset hash " << (hashBefore != hashAfter ? "MOVED" : "held")
+                << " but m_pipelineStateVersion "
+                << (pipelineBefore != rs.GetPipelineStateVersion() ? "MOVED" : "held");
+        };
+
+        // ---- Rasterization ----
+        check("SetViewport", [](RenderState& s) { s.SetViewport(IntVec4(1, 2, 30, 40)); });
+        check("SetViewportIndexed", [](RenderState& s) { s.SetViewportIndexed(3, FloatVec4(4.f, 5.f, 60.f, 70.f)); });
+        check("SetLineWidth", [](RenderState& s) { s.SetLineWidth(3.5f); });
+        check("SetPointSize", [](RenderState& s) { s.SetPointSize(7.25f); });
+        check("SetPatchVertices", [](RenderState& s) { s.SetPatchVertices(4); });
+        check("SetPatchDefaultOuterLevel",
+              [](RenderState& s) { s.SetPatchDefaultOuterLevel(FloatVec4(2.f, 3.f, 4.f, 5.f)); });
+        check("SetPatchDefaultInnerLevel", [](RenderState& s) { s.SetPatchDefaultInnerLevel(FloatVec2(6.f, 7.f)); });
+        check("SetPolygonOffset", [](RenderState& s) { s.SetPolygonOffset(1.5f, 2.5f); });
+        check("SetPolygonOffsetClamped", [](RenderState& s) { s.SetPolygonOffsetClamped(3.5f, 4.5f, 0.25f); });
+        check("SetClipControl", [](RenderState& s) { s.SetClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE); });
+        check("SetHint", [](RenderState& s) { s.SetHint(GL_LINE_SMOOTH_HINT, GL_NICEST); });
+        check("SetPointFadeThresholdSize", [](RenderState& s) { s.SetPointFadeThresholdSize(2.5f); });
+        check("SetPointSpriteCoordOrigin", [](RenderState& s) { s.SetPointSpriteCoordOrigin(GL_LOWER_LEFT); });
+        check("SetClampReadColor", [](RenderState& s) { s.SetClampReadColor(GL_TRUE); });
+        check("SetPrimitiveRestartIndex", [](RenderState& s) { s.SetPrimitiveRestartIndex(0xabcdu); });
+
+        // SetPolygonMode with ONLY the back face changing, because PolygonModeBack is one of
+        // the members P2's subset added over the 24 ComputePipelineStateHash used to hash -
+        // if it had stayed out, this is the case that would have caught it.
+        rs.SetPolygonMode(GL_LINE, GL_LINE);
+        check("SetPolygonMode(back only)", [](RenderState& s) { s.SetPolygonMode(GL_LINE, GL_POINT); });
+        check("SetPolygonMode(front only)", [](RenderState& s) { s.SetPolygonMode(GL_FILL, GL_POINT); });
+
+        // ---- Capabilities: every SET_CAPABILITY name, D3's three new ones included ----
+#define MGP_CHECK_CAPABILITY(cap)                                                                                      \
+    check("SetCapability(" #cap ")", [](RenderState& s) {                                                              \
+        s.SetCapability(CapabilityInput::cap, !s.IsCapabilityEnabled(CapabilityInput::cap));                            \
+    });
+        MGP_CHECK_CAPABILITY(ColorLogicOp)
+        MGP_CHECK_CAPABILITY(DebugOutput)
+        MGP_CHECK_CAPABILITY(DebugOutputSynchronous)
+        MGP_CHECK_CAPABILITY(DepthClamp)
+        MGP_CHECK_CAPABILITY(DepthTest)
+        MGP_CHECK_CAPABILITY(CullFace)
+        MGP_CHECK_CAPABILITY(Dither)
+        MGP_CHECK_CAPABILITY(FramebufferSrgb)
+        MGP_CHECK_CAPABILITY(LineSmooth)
+        MGP_CHECK_CAPABILITY(Multisample)
+        MGP_CHECK_CAPABILITY(PolygonOffsetFill)
+        MGP_CHECK_CAPABILITY(PolygonOffsetLine)
+        MGP_CHECK_CAPABILITY(PolygonOffsetPoint)
+        MGP_CHECK_CAPABILITY(PolygonSmooth)
+        MGP_CHECK_CAPABILITY(PrimitiveRestart)
+        MGP_CHECK_CAPABILITY(PrimitiveRestartFixedIndex)
+        MGP_CHECK_CAPABILITY(RasterizerDiscard)
+        MGP_CHECK_CAPABILITY(SampleAlphaToCoverage)
+        MGP_CHECK_CAPABILITY(SampleAlphaToOne)
+        MGP_CHECK_CAPABILITY(SampleCoverage)
+        MGP_CHECK_CAPABILITY(SampleMask)
+        MGP_CHECK_CAPABILITY(SampleShading)
+        MGP_CHECK_CAPABILITY(StencilTest)
+        MGP_CHECK_CAPABILITY(TextureCubeMapSeamless)
+        MGP_CHECK_CAPABILITY(ProgramPointSize)
+        MGP_CHECK_CAPABILITY(Blend)
+        MGP_CHECK_CAPABILITY(ScissorTest)
+#undef MGP_CHECK_CAPABILITY
+
+        // The eight clip distances are the one family that moves m_version and NOT
+        // m_pipelineStateVersion (RenderState.cpp says why: no backend bakes a clip-distance
+        // enable into a pipeline object), so the hash must not move either -
+        // ClipDistanceEnabledMask lives in dynamic chunk D7.
+        for (Uint i = 0; i < 8; ++i) {
+            const CapabilityInput cap =
+                static_cast<CapabilityInput>(static_cast<Uint>(CapabilityInput::ClipDistance0) + i);
+            const Uint64 hashBefore = MGPipeComputePipelineSubsetHash(rs.GetAllParameters());
+            const Uint versionBefore = rs.GetVersion();
+            const Uint pipelineBefore = rs.GetPipelineStateVersion();
+            rs.SetCapability(cap, true);
+            EXPECT_NE(versionBefore, rs.GetVersion()) << "ClipDistance" << i << " did not move m_version";
+            EXPECT_EQ(pipelineBefore, rs.GetPipelineStateVersion())
+                << "ClipDistance" << i << " moved m_pipelineStateVersion";
+            EXPECT_EQ(hashBefore, MGPipeComputePipelineSubsetHash(rs.GetAllParameters()))
+                << "ClipDistance" << i << " moved the pipeline-subset hash";
+        }
+
+        // Both are DISABLES: the non-indexed toggles above have just enabled every draw
+        // buffer's blend and every viewport's scissor test, so re-enabling one index would
+        // write the value already stored and trip the vacuity guard.
+        check("SetCapabilityIndexed(Blend, 3)",
+              [](RenderState& s) { s.SetCapabilityIndexed(CapabilityInput::Blend, 3, false); });
+        check("SetCapabilityIndexed(ScissorTest, 5)",
+              [](RenderState& s) { s.SetCapabilityIndexed(CapabilityInput::ScissorTest, 5, false); });
+
+        // ---- Blending ----
+        check("SetBlendFunc", [](RenderState& s) {
+            s.SetBlendFunc(BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha, BlendFactor::One, BlendFactor::Zero);
+        });
+        check("SetBlendFuncIndexed", [](RenderState& s) {
+            s.SetBlendFuncIndexed(2, BlendFactor::DstColor, BlendFactor::SrcColor, BlendFactor::DstAlpha,
+                                  BlendFactor::SrcAlpha);
+        });
+        check("SetBlendEquation",
+              [](RenderState& s) { s.SetBlendEquation(BlendEquation::Subtract, BlendEquation::Min); });
+        check("SetBlendEquationIndexed",
+              [](RenderState& s) { s.SetBlendEquationIndexed(4, BlendEquation::ReverseSubtract, BlendEquation::Max); });
+        check("SetLogicOp", [](RenderState& s) { s.SetLogicOp(LogicOperation::Xor); });
+
+        // ---- Depth and stencil ----
+        check("SetDepthFunc", [](RenderState& s) { s.SetDepthFunc(DepthTestFunc::GreaterEqual); });
+        check("SetDepthMask", [](RenderState& s) { s.SetDepthMask(false); });
+
+        // SetStencilFunc TWICE, and this pair is why the case exists. Ref and ValueMask are
+        // dynamic (VK_DYNAMIC_STATE_STENCIL_REFERENCE / _COMPARE_MASK) while Func is
+        // pipeline, and RenderState.cpp's ++m_pipelineStateVersion is conditional on Func
+        // moving - so a reference-only change must move the version and NOT the hash.
+        rs.SetStencilFunc(StencilFace::Front, DepthTestFunc::Equal, 1, 0xffu);
+        {
+            const Uint64 hashBefore = MGPipeComputePipelineSubsetHash(rs.GetAllParameters());
+            const Uint versionBefore = rs.GetVersion();
+            const Uint pipelineBefore = rs.GetPipelineStateVersion();
+            rs.SetStencilFunc(StencilFace::Front, DepthTestFunc::Equal, 7, 0xffu);
+            EXPECT_NE(versionBefore, rs.GetVersion()) << "SetStencilFunc(ref only) did not move m_version";
+            EXPECT_EQ(pipelineBefore, rs.GetPipelineStateVersion())
+                << "SetStencilFunc(ref only) moved m_pipelineStateVersion";
+            EXPECT_EQ(hashBefore, MGPipeComputePipelineSubsetHash(rs.GetAllParameters()))
+                << "SetStencilFunc(ref only) moved the pipeline-subset hash - Ref is not in the dynamic half";
+        }
+        check("SetStencilFunc(func)",
+              [](RenderState& s) { s.SetStencilFunc(StencilFace::Front, DepthTestFunc::NotEqual, 7, 0xffu); });
+        check("SetStencilMask", [](RenderState& s) { s.SetStencilMask(StencilFace::Back, 0x0fu); });
+        check("SetStencilOp", [](RenderState& s) {
+            s.SetStencilOp(StencilFace::Back, StencilOperation::Replace, StencilOperation::IncrementClamp,
+                           StencilOperation::DecrementWrap);
+        });
+
+        // ---- Colour mask, clear state, sampling ----
+        check("SetColorMask", [](RenderState& s) { s.SetColorMask(BoolVec4(true, false, true, false)); });
+        check("SetColorMaskIndexed", [](RenderState& s) { s.SetColorMaskIndexed(6, BoolVec4(false, false, true, true)); });
+        check("SetClearColor", [](RenderState& s) { s.SetClearColor(FloatVec4(0.1f, 0.2f, 0.3f, 0.4f)); });
+        check("SetClearDepth", [](RenderState& s) { s.SetClearDepth(0.75f); });
+        check("SetClearStencil", [](RenderState& s) { s.SetClearStencil(9); });
+        check("SetBlendColor", [](RenderState& s) { s.SetBlendColor(FloatVec4(0.5f, 0.6f, 0.7f, 0.8f)); });
+        check("SetDepthRange", [](RenderState& s) { s.SetDepthRange(FloatVec2(0.25f, 0.75f)); });
+        check("SetDepthRangeIndexed", [](RenderState& s) { s.SetDepthRangeIndexed(9, FloatVec2(0.1f, 0.9f)); });
+        // SetSampleCoverage calls BumpVersions(), so under the rule it is PIPELINE state -
+        // which is why MGPipeTypes.h's MGPDynamicState comment no longer claims otherwise.
+        check("SetSampleCoverage", [](RenderState& s) { s.SetSampleCoverage(0.375f, true); });
+        check("SetSampleMaskValue", [](RenderState& s) { s.SetSampleMaskValue(0x5a5au); });
+        check("SetMinSampleShadingValue", [](RenderState& s) { s.SetMinSampleShadingValue(0.625f); });
+
+        // ---- Faces and scissor ----
+        check("SetCullFaceMode", [](RenderState& s) { s.SetCullFaceMode(CullFaceMode::Front); });
+        check("SetFrontFaceMode", [](RenderState& s) { s.SetFrontFaceMode(FrontFaceMode::Clockwise); });
+        check("SetProvokingVertexMode",
+              [](RenderState& s) { s.SetProvokingVertexMode(ProvokingVertexMode::FirstVertex); });
+        // The first glScissor on a context both writes the rectangles and flips the
+        // "never written" bit, so the transition and the steady state are separate cases.
+        check("SetScissorBox(first write)", [](RenderState& s) { s.SetScissorBox(IntVec4(1, 2, 3, 4)); });
+        check("SetScissorBox(again)", [](RenderState& s) { s.SetScissorBox(IntVec4(5, 6, 7, 8)); });
+        check("SetScissorBoxIndexed", [](RenderState& s) { s.SetScissorBoxIndexed(11, IntVec4(9, 10, 11, 12)); });
+
+        // SetPixelStoreParam moves NEITHER counter and touches no byte of
+        // RenderStateParameters: the pixel store lives in its own two structs and travels as
+        // set_pixel_pack_state. Driven here so the claim is tested rather than assumed.
+        {
+            const Uint64 hashBefore = MGPipeComputePipelineSubsetHash(rs.GetAllParameters());
+            const Uint versionBefore = rs.GetVersion();
+            const Uint pipelineBefore = rs.GetPipelineStateVersion();
+            rs.SetPixelStoreParam(PixelStoreParam::PackAlignment, 8);
+            EXPECT_EQ(rs.GetPixelStoreParam(PixelStoreParam::PackAlignment), 8);
+            EXPECT_EQ(versionBefore, rs.GetVersion());
+            EXPECT_EQ(pipelineBefore, rs.GetPipelineStateVersion());
+            EXPECT_EQ(hashBefore, MGPipeComputePipelineSubsetHash(rs.GetAllParameters()));
+        }
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 3. D5's derivations against the getters they were transcribed from.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, DerivationMatchesTheFrontendGetters) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        // A live frontend context for the setters to write and the getters to answer from,
+        // restored on the way out so the case stays independent (SanityTest's idiom).
+        struct ContextGuard {
+            UniquePtr<GLContext> Previous;
+            ContextGuard() : Previous(Move(MG_State::pGLContext)) {
+                MG_State::pGLContext = MakeUnique<GLContext>();
+                MGPipeApplierReset();
+            }
+            ~ContextGuard() {
+                MGPipeApplierReset();
+                MG_State::pGLContext = Move(Previous);
+            }
+        } guard;
+        GLContext& ctx = *MG_State::pGLContext;
+
+        // Assembles the working block the way the tracker will: one brand-new CSO carrying
+        // every pipeline chunk, its bind, then every dynamic chunk. A fresh slot per call,
+        // so a later phase cannot be answered by an earlier phase's record.
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+        const auto applyWholeBlock = [&ctx, &nextSlot]() {
+            const RenderStateParameters& live = ctx.GetRenderStateParameters();
+            const Uint32 allPipeline = static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+            const Uint32 allDynamic = static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+
+            Array<Uint8, kMGPipePipelineChunkBytes> pipelineBytes{};
+            MGPipeGatherPipelineBytes(live, pipelineBytes.data());
+            MGPRenderStateDesc desc{};
+            desc.Cso = MGPipeHandle{nextSlot++, 0};
+            desc.BaseCso = kMGPipeNullHandle;
+            desc.ChunkMask = allPipeline;
+            MGPipeApplyCreateRenderState(desc, pipelineBytes.data());
+
+            MGPBindRenderState bind{};
+            bind.Cso = desc.Cso;
+            bind.Version = static_cast<Uint16>(ctx.GetRenderStateParametersVersion());
+            bind.PipelineVersion = static_cast<Uint16>(ctx.GetPipelineStateVersion());
+            MGPipeApplyBindRenderState(bind);
+
+            Vector<Uint8> dynamicBytes(MGPipeDynamicChunkBlobBytes(allDynamic));
+            MGPipeGatherDynamicChunks(live, allDynamic, dynamicBytes.data());
+            MGPDynamicState dyn{};
+            dyn.ChunkMask = allDynamic;
+            dyn.Version = bind.Version;
+            MGPipeApplySetDynamicState(dyn, dynamicBytes.data());
+        };
+
+        // THREE PHASES, one per verb class, because the poison is right and the fill table is
+        // the only thing that says what a verb may read: 25 of these fields are kDraw's, the
+        // three clear values are kClear's and GetClampReadColor is kReadback's
+        // (MG_Pipe/FillPoints.def). Reading a clear value under DrawArrays would be
+        // Fatal{UnmigratedPipeInput}, and rightly - a draw does not read it.
+        //
+        // Phase 1, kDraw. The fill happens FIRST, against the DEFAULT state; every mutation
+        // below is driven afterwards, so a field that still agrees with the context at the
+        // end can only have got there through the applier's derivation.
+        {
+        MG_Test::ScopedPipeVerb verb(MGPipeVerb::DrawArrays);
+
+        ctx.SetViewportIndexed(0, FloatVec4(1.5f, 2.5f, 63.5f, 32.25f));
+        ctx.SetViewportIndexed(7, FloatVec4(8.f, 9.f, 10.f, 11.f));
+        ctx.SetLineWidth(3.5f);
+        ctx.SetPatchVertices(4);
+        ctx.SetPatchDefaultOuterLevel(FloatVec4(2.f, 3.f, 4.f, 5.f));
+        ctx.SetPatchDefaultInnerLevel(FloatVec2(6.f, 7.f));
+        ctx.SetPolygonOffsetClamped(1.5f, 2.5f, 0.25f);
+        ctx.SetClampReadColor(GL_TRUE);
+        ctx.SetPolygonMode(GL_LINE, GL_POINT);
+        ctx.SetPrimitiveRestartIndex(0xabcdu);
+        ctx.SetBlendFuncIndexed(2, BlendFactor::DstColor, BlendFactor::SrcColor, BlendFactor::DstAlpha,
+                                BlendFactor::SrcAlpha);
+        ctx.SetBlendEquationIndexed(4, BlendEquation::ReverseSubtract, BlendEquation::Max);
+        ctx.SetCapabilityIndexed(CapabilityInput::Blend, 3, true);
+        ctx.SetCapabilityIndexed(CapabilityInput::ScissorTest, 5, true);
+        ctx.SetLogicOp(LogicOperation::Xor);
+        ctx.SetDepthFunc(DepthTestFunc::GreaterEqual);
+        ctx.SetDepthMask(false);
+        ctx.SetStencilFunc(StencilFace::Front, DepthTestFunc::Equal, 7, 0xf0u);
+        ctx.SetStencilOp(StencilFace::Back, StencilOperation::Replace, StencilOperation::IncrementClamp,
+                         StencilOperation::DecrementWrap);
+        ctx.SetStencilMask(StencilFace::Back, 0x0fu);
+        ctx.SetColorMaskIndexed(6, BoolVec4(false, false, true, true));
+        ctx.SetClearColor(FloatVec4(0.1f, 0.2f, 0.3f, 0.4f));
+        ctx.SetClearDepth(0.75f);
+        ctx.SetClearStencil(9);
+        ctx.SetBlendColor(FloatVec4(0.5f, 0.6f, 0.7f, 0.8f));
+        ctx.SetDepthRangeIndexed(9, FloatVec2(0.1f, 0.9f));
+        ctx.SetMinSampleShadingValue(0.625f);
+        ctx.SetCullFaceMode(CullFaceMode::Front);
+        ctx.SetProvokingVertexMode(ProvokingVertexMode::FirstVertex);
+        ctx.SetScissorBox(IntVec4(1, 2, 3, 4));
+        // One capability out of every arm of the 35-way switch: plain bools (the three D3
+        // gave storage to among them), the two indexed ones through their non-indexed entry
+        // point, and a clip distance.
+        ctx.SetCapability(CapabilityInput::DepthTest, true);
+        ctx.SetCapability(CapabilityInput::FramebufferSrgb, true);
+        ctx.SetCapability(CapabilityInput::DepthClamp, true);
+        ctx.SetCapability(CapabilityInput::TextureCubeMapSeamless, true);
+        ctx.SetCapability(CapabilityInput::Blend, true);
+        ctx.SetCapability(CapabilityInput::ClipDistance3, true);
+
+        // The vacuity guard: the block still holds what the fill copied out of the DEFAULT
+        // context, so it must currently DISAGREE with the live one. If this ever passes, the
+        // comparisons below would be checking the filler against itself.
+        ASSERT_NE(gPipeInputs.GetLineWidth(), ctx.GetLineWidth());
+
+        applyWholeBlock();
+
+        // ---- the 25 kDraw fields ----
+        EXPECT_EQ(gPipeInputs.GetBlendColor(), ctx.GetBlendColor());
+        for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+            BlendEquation gotColor{}, gotAlpha{}, wantColor{}, wantAlpha{};
+            gPipeInputs.GetBlendEquationIndexed(i, gotColor, gotAlpha);
+            ctx.GetBlendEquationIndexed(i, wantColor, wantAlpha);
+            EXPECT_EQ(gotColor, wantColor) << "blend equation " << i;
+            EXPECT_EQ(gotAlpha, wantAlpha) << "blend equation " << i;
+
+            BlendFactor gotSrcRGB{}, gotDstRGB{}, gotSrcA{}, gotDstA{};
+            BlendFactor wantSrcRGB{}, wantDstRGB{}, wantSrcA{}, wantDstA{};
+            gPipeInputs.GetBlendFuncIndexed(i, gotSrcRGB, gotDstRGB, gotSrcA, gotDstA);
+            ctx.GetBlendFuncIndexed(i, wantSrcRGB, wantDstRGB, wantSrcA, wantDstA);
+            EXPECT_EQ(gotSrcRGB, wantSrcRGB) << "blend func " << i;
+            EXPECT_EQ(gotDstRGB, wantDstRGB) << "blend func " << i;
+            EXPECT_EQ(gotSrcA, wantSrcA) << "blend func " << i;
+            EXPECT_EQ(gotDstA, wantDstA) << "blend func " << i;
+
+            EXPECT_EQ(gPipeInputs.GetColorMaskIndexed(i), ctx.GetColorMaskIndexed(i)) << "colour mask " << i;
+            EXPECT_EQ(gPipeInputs.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i),
+                      ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i))
+                << "indexed blend enable " << i;
+        }
+        EXPECT_EQ(gPipeInputs.GetCullFaceMode(), ctx.GetCullFaceMode());
+        EXPECT_EQ(gPipeInputs.GetDepthFunc(), ctx.GetDepthFunc());
+        EXPECT_EQ(gPipeInputs.GetDepthMask(), ctx.GetDepthMask());
+        for (Uint i = 0; i < RenderStateParameters::MAX_VIEWPORTS; ++i) {
+            EXPECT_EQ(gPipeInputs.GetDepthRangeIndexed(i), ctx.GetDepthRangeIndexed(i)) << "depth range " << i;
+            EXPECT_EQ(gPipeInputs.GetViewportIndexed(i), ctx.GetViewportIndexed(i)) << "viewport " << i;
+            EXPECT_EQ(gPipeInputs.IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i),
+                      ctx.IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i))
+                << "indexed scissor enable " << i;
+        }
+        EXPECT_EQ(gPipeInputs.GetLineWidth(), ctx.GetLineWidth());
+        EXPECT_EQ(gPipeInputs.GetLogicOp(), ctx.GetLogicOp());
+        EXPECT_EQ(gPipeInputs.GetMinSampleShadingValue(), ctx.GetMinSampleShadingValue());
+        EXPECT_EQ(gPipeInputs.GetPatchDefaultInnerLevel(), ctx.GetPatchDefaultInnerLevel());
+        EXPECT_EQ(gPipeInputs.GetPatchDefaultOuterLevel(), ctx.GetPatchDefaultOuterLevel());
+        EXPECT_EQ(gPipeInputs.GetPatchVertices(), ctx.GetPatchVertices());
+        EXPECT_EQ(gPipeInputs.GetPolygonModeFront(), ctx.GetPolygonModeFront());
+        EXPECT_EQ(gPipeInputs.GetPolygonOffsetFactor(), ctx.GetPolygonOffsetFactor());
+        EXPECT_EQ(gPipeInputs.GetPolygonOffsetUnits(), ctx.GetPolygonOffsetUnits());
+        EXPECT_EQ(gPipeInputs.GetPrimitiveRestartIndex(), ctx.GetPrimitiveRestartIndex());
+        EXPECT_EQ(gPipeInputs.GetProvokingVertexMode(), ctx.GetProvokingVertexMode());
+        EXPECT_EQ(gPipeInputs.GetScissorBox(), ctx.GetScissorBox());
+        for (const StencilFace face : {StencilFace::Front, StencilFace::Back}) {
+            const StencilFaceState& got = gPipeInputs.GetStencilState(face);
+            const StencilFaceState& want = ctx.GetStencilState(face);
+            EXPECT_EQ(std::memcmp(&got, &want, sizeof(StencilFaceState)), 0)
+                << "stencil face " << static_cast<int>(face);
+        }
+        // The rounding half of GetViewport, exercised on purpose: viewport 0 is
+        // (1.5, 2.5, 63.5, 32.25), so a transcription that truncated instead of rounding
+        // would hand the backends a 63-wide rectangle where 64 was asked for. The literal
+        // is std::lround's answer - round half AWAY FROM ZERO, so 1.5 -> 2 and 2.5 -> 3,
+        // not the banker's rounding a nearbyint() transcription would give.
+        EXPECT_EQ(gPipeInputs.GetViewport(), ctx.GetViewport());
+        EXPECT_EQ(gPipeInputs.GetViewport(), IntVec4(2, 3, 64, 32));
+        for (SizeT i = 0; i < static_cast<SizeT>(CapabilityInput::CapabilityInputCount); ++i) {
+            const CapabilityInput cap = static_cast<CapabilityInput>(i);
+            EXPECT_EQ(gPipeInputs.IsCapabilityEnabled(cap), ctx.IsCapabilityEnabled(cap)) << "capability " << i;
+        }
+        } // phase 1, kDraw
+
+        // Phase 2, kClear: the three clear values. The verb's own fill runs FIRST and copies
+        // what phase 1 left in the context, so the values are changed AGAIN afterwards - the
+        // block therefore disagrees before the apply and can only be made to agree by it.
+        {
+            MG_Test::ScopedPipeVerb verb(MGPipeVerb::Clear);
+            ctx.SetClearColor(FloatVec4(0.9f, 0.8f, 0.7f, 0.6f));
+            ctx.SetClearDepth(0.125f);
+            ctx.SetClearStencil(21);
+            ASSERT_NE(gPipeInputs.GetClearDepth(), ctx.GetClearDepth());
+
+            applyWholeBlock();
+
+            EXPECT_EQ(gPipeInputs.GetClearColor(), ctx.GetClearColor());
+            EXPECT_EQ(gPipeInputs.GetClearDepth(), ctx.GetClearDepth());
+            EXPECT_EQ(gPipeInputs.GetClearStencil(), ctx.GetClearStencil());
+        }
+
+        // Phase 3, kReadback: GetClampReadColor, the one derived field no draw and no clear
+        // may read at all (FillPoints.def gives it to kReadback alone). Same shape.
+        {
+            MG_Test::ScopedPipeVerb verb(MGPipeVerb::ReadPixels);
+            ctx.SetClampReadColor(GL_FALSE);
+            ASSERT_NE(gPipeInputs.GetClampReadColor(), ctx.GetClampReadColor());
+
+            applyWholeBlock();
+
+            EXPECT_EQ(gPipeInputs.GetClampReadColor(), ctx.GetClampReadColor());
+            EXPECT_EQ(gPipeInputs.GetClampReadColor(), static_cast<GLenum>(GL_FALSE));
+        }
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 4. Magma's DynamicTailKey against the dynamic half.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, DynamicChunksCoverMagmasDynamicTailKey) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        // The complete GL-state input inventory of ApplyDynamicDrawStateTail, transcribed
+        // from the comment above `struct DynamicTailKey`
+        // (MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp). extentX/extentY/
+        // preTransform/isDefaultFbo are backend facts, not GL state, and are not here.
+        struct Input {
+            const char* Name;
+            SizeT Offset;
+            SizeT Size;
+        };
+        const SizeT stencil0 = offsetof(RenderStateParameters, StencilStates);
+        const SizeT stencil1 = stencil0 + sizeof(StencilFaceState);
+        const Input inputs[] = {
+            {"Viewports[0]", offsetof(RenderStateParameters, Viewports), sizeof(FloatVec4)},
+            {"DepthRanges[0]", offsetof(RenderStateParameters, DepthRanges), sizeof(FloatVec2)},
+            {"BlendColor", offsetof(RenderStateParameters, BlendColor), sizeof(FloatVec4)},
+            {"PolygonOffsetFactor", offsetof(RenderStateParameters, PolygonOffsetFactor), sizeof(Float)},
+            {"PolygonOffsetUnits", offsetof(RenderStateParameters, PolygonOffsetUnits), sizeof(Float)},
+            {"LineWidth", offsetof(RenderStateParameters, LineWidth), sizeof(Float)},
+            {"StencilStates[0].Ref", stencil0 + offsetof(StencilFaceState, Ref), sizeof(Int)},
+            {"StencilStates[0].ValueMask", stencil0 + offsetof(StencilFaceState, ValueMask), sizeof(Uint32)},
+            {"StencilStates[0].WriteMask", stencil0 + offsetof(StencilFaceState, WriteMask), sizeof(Uint32)},
+            {"StencilStates[1].Ref", stencil1 + offsetof(StencilFaceState, Ref), sizeof(Int)},
+            {"StencilStates[1].ValueMask", stencil1 + offsetof(StencilFaceState, ValueMask), sizeof(Uint32)},
+            {"StencilStates[1].WriteMask", stencil1 + offsetof(StencilFaceState, WriteMask), sizeof(Uint32)},
+            {"ScissorBoxes[0]", offsetof(RenderStateParameters, ScissorBoxes), sizeof(IntVec4)},
+        };
+        for (const Input& input : inputs) {
+            EXPECT_TRUE(IsWhollyDynamic(input.Offset, input.Size))
+                << input.Name << " is read by DynamicTailKey but is not inside kMGPipeDynamicChunks";
+        }
+
+        // THE ONE EXCEPTION, and it is a fact about the tree rather than an oversight in it.
+        // DynamicTailKey's `scissorEnabled` reads ScissorTestEnabledMask bit 0, and that
+        // member is PIPELINE state under P2's rule, because SetCapability(ScissorTest) and
+        // SetCapabilityIndexed(ScissorTest, i) both call BumpVersions(). It is harmless:
+        // BumpVersions() moves m_version too, so MGPDynamicState::Version - the value
+        // ApplyDynamicDrawStateTail's own gate reads - still moves on a scissor-enable
+        // change and the tail still re-runs. Asserted the other way round, so a later table
+        // edit that quietly demotes the mask is loud here rather than silent.
+        EXPECT_FALSE(IsWhollyDynamic(offsetof(RenderStateParameters, ScissorTestEnabledMask),
+                                     sizeof(RenderStateParameters::ScissorTestEnabledMask)))
+            << "ScissorTestEnabledMask moved into the dynamic half; ApplyDynamicDrawStateTail's "
+               "scissorEnabled input and this expectation both need re-reading";
+        EXPECT_TRUE(IsWhollyPipeline(offsetof(RenderStateParameters, ScissorTestEnabledMask),
+                                     sizeof(RenderStateParameters::ScissorTestEnabledMask)));
+#endif
     }
 } // namespace
