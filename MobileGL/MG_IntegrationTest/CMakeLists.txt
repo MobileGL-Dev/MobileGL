@@ -375,36 +375,54 @@ endif()
 # So the whole block sits under the same `if (MOBILEGL_PIPE_PUSH)` as MGITEST_PIPE_PUSH_BUILD, and
 # HandleRecycleScenario re-checks that marker before either arm asserts, so a hand-forced
 # environment cannot arm an arm this build does not have either.
-if (MOBILEGL_PIPE_PUSH)
-    file(GLOB MGL_ITEST_ESPRYT_SLOT_TABLES CONFIGURE_DEPENDS
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES/SlotTables.h")
-    if (MGL_ITEST_ESPRYT_SLOT_TABLES)
-        message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (SlotTables.h present)")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
-    else()
-        message(STATUS "Integration tests: DirectGLES has no SlotTables.h - HandleRecycle.Handles will SKIP on it")
-    endif()
-
-    # The CSO counters' EMITTER, probed by content rather than by a filename. The tracker package
-    # owns its own file layout and may implement the tracker and the cache header-only - today it
-    # does (MG_Impl/Pipe/{Tracker,CsoCache}.h, no Tracker.cpp) - so a glob for `Tracker.cpp` is a
-    # probe for a file nobody promised to create, and it would answer "no" forever AFTER the
-    # package landed, leaving the CSO control skipping with a reason that had become false. What
-    # the control actually needs is something that emits the two counters it reads, so that is
-    # what is looked for: any client-side pipe source naming RenderStateCsoMints / Binds. The glob
-    # is CONFIGURE_DEPENDS (a new file re-runs it) and every file it finds is added to
-    # CMAKE_CONFIGURE_DEPENDS (an edit to one re-runs it), so neither half can go stale.
-    file(GLOB MGL_ITEST_PIPE_CLIENT_SOURCES CONFIGURE_DEPENDS
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/*.h"
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/*.cpp")
-    set(MGL_ITEST_CSO_EMITTER "")
-    foreach(mglItestPipeSource IN LISTS MGL_ITEST_PIPE_CLIENT_SOURCES)
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mglItestPipeSource}")
-        file(STRINGS "${mglItestPipeSource}" MGL_ITEST_CSO_HITS REGEX "RenderStateCso(Mints|Binds)")
-        if (MGL_ITEST_CSO_HITS AND NOT MGL_ITEST_CSO_EMITTER)
-            set(MGL_ITEST_CSO_EMITTER "${mglItestPipeSource}")
+#
+# ALL FOUR MARKERS ARE CONTENT PROBES, AND NONE OF THEM NAMES A FILE. A probe for a filename asks
+# the wrong question: the owning package chooses its own file layout, so the moment it moves the
+# code the probe answers "no" forever and the arm skips with a reason that has become false - a
+# test quietly measuring nothing, which is the one outcome this whole scenario exists to prevent.
+# The CSO probe was rewritten for exactly that reason once already; the magma probe still read one
+# hard-coded .cpp, and package D already keeps one of its two Features.PipeHandleAbaControl
+# consumers in a different file of the same directory (Renderer/VulkanRenderer.cpp), so it was one
+# refactor away from a permanent AbaControl skip. So all four now ask "does any source in the
+# directory the owning package owns name this symbol?", which is the thing each arm actually needs.
+#
+# Staleness cannot creep in from either side: the GLOB is CONFIGURE_DEPENDS (a file added or
+# removed re-runs it) and every file it finds is appended to CMAKE_CONFIGURE_DEPENDS (an edit to
+# one re-runs it).
+function(mgl_itest_probe_for_symbol outVar directory symbolRegex)
+    file(GLOB_RECURSE mglItestProbeSources CONFIGURE_DEPENDS
+        "${directory}/*.h" "${directory}/*.hpp" "${directory}/*.cpp" "${directory}/*.c")
+    set(mglItestProbeHit "")
+    foreach(mglItestProbeSource IN LISTS mglItestProbeSources)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mglItestProbeSource}")
+        file(STRINGS "${mglItestProbeSource}" mglItestProbeLines REGEX "${symbolRegex}")
+        if (mglItestProbeLines AND NOT mglItestProbeHit)
+            set(mglItestProbeHit "${mglItestProbeSource}")
         endif()
     endforeach()
+    set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
+endfunction()
+
+if (MOBILEGL_PIPE_PUSH)
+    # DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
+    # SlotTables.h existing: the bit is declared in the contract (MG_Pipe/MGPipe.h:77) and the
+    # backend has to name it to honour MOBILEGL_PIPE_PUSH's default mask, whatever files package C
+    # spreads the slot tables across.
+    mgl_itest_probe_for_symbol(MGL_ITEST_ESPRYT_SLOTS
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES" "kMGPipeSubsystemEsprytSlots")
+    if (MGL_ITEST_ESPRYT_SLOTS)
+        message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (${MGL_ITEST_ESPRYT_SLOTS})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
+    else()
+        message(STATUS "Integration tests: no DirectGLES source names kMGPipeSubsystemEsprytSlots - "
+                       "HandleRecycle.Handles will SKIP on it")
+    endif()
+
+    # The CSO counters' EMITTER. The tracker package may implement the tracker and the cache
+    # header-only - today it does (MG_Impl/Pipe/{Tracker,CsoCache}.h, no Tracker.cpp) - so what is
+    # looked for is what the control actually reads: a source emitting the two counters.
+    mgl_itest_probe_for_symbol(MGL_ITEST_CSO_EMITTER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "RenderStateCso(Mints|Binds)")
     if (MGL_ITEST_CSO_EMITTER)
         message(STATUS "Integration tests: the CSO counters have an emitter (${MGL_ITEST_CSO_EMITTER})")
         list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
@@ -413,28 +431,29 @@ if (MOBILEGL_PIPE_PUSH)
                        "CsoContentAddressing will SKIP")
     endif()
 
-    set(MGL_ITEST_MAGMA_VERTEX_INPUT
-        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp")
-    if (EXISTS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
-        file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_REKEY_HITS
-            REGEX "kMGPipeSubsystemMagmaVertexInput")
-        file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_ABA_HITS
-            REGEX "PipeHandleAbaControl")
-        if (MGL_ITEST_MAGMA_REKEY_HITS)
-            message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen}")
-            list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
-        else()
-            message(STATUS "Integration tests: DirectVulkan's vertex input is not re-keyed yet - "
-                           "HandleRecycle.Handles will SKIP on it")
-        endif()
-        if (MGL_ITEST_MAGMA_ABA_HITS)
-            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer")
-            list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
-        else()
-            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has no consumer - "
-                           "HandleRecycle.AbaControl will SKIP")
-        endif()
+    # DirectVulkan's Track H arm, and the ABA knob's consumer. Both over the whole backend
+    # directory: the re-key is subsystem 4's bit wherever package D reads it, and the knob has a
+    # consumer if ANY DirectVulkan source reverts a guard on it - today two do, in two files.
+    mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_REKEY
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "kMGPipeSubsystemMagmaVertexInput")
+    if (MGL_ITEST_MAGMA_REKEY)
+        message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen} "
+                       "(${MGL_ITEST_MAGMA_REKEY})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
+    else()
+        message(STATUS "Integration tests: no DirectVulkan source names kMGPipeSubsystemMagmaVertexInput - "
+                       "HandleRecycle.Handles will SKIP on it")
+    endif()
+
+    mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
+    if (MGL_ITEST_MAGMA_ABA)
+        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer "
+                       "(${MGL_ITEST_MAGMA_ABA})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
+    else()
+        message(STATUS "Integration tests: no DirectVulkan source names PipeHandleAbaControl - "
+                       "HandleRecycle.AbaControl will SKIP")
     endif()
 else()
     message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl} and "

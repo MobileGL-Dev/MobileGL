@@ -12,7 +12,9 @@
 # green on a table it had stopped looking at: a walk that silently drove no setters, a hash that
 # stopped depending on the chunks, an assertion someone loosened. Green tells you nothing about
 # whether the test can still fail. This script makes it fail, for the one reason it exists to
-# catch, and reports a NON-zero ctest as the pass.
+# catch, and reports a NON-zero ctest THAT NAMES THE DEMOTED MEMBER'S SETTER as the pass. A red
+# for any other reason is reported as inconclusive (rc 1), not as a pass: the script knows the
+# difference, so its exit status has to carry it.
 #
 # THE BREAK. ColorMasks is moved out of pipeline chunk P1 into a dynamic chunk of its own, by
 # inserting two boundaries - at ColorMasks and at FramebufferSrgbEnabled - into the boundary
@@ -39,9 +41,12 @@
 #                          revert - WITHOUT requiring the test to exist. This is the mechanism
 #                          check, not the control; it never reports the control as passed.
 #
-# Exit codes: 0 the control tripped (or, under --verify-patch-only, the patch compiled);
-#             1 the control did NOT trip - the test stayed green on a demoted member, which is
-#               the finding, not an error in this script;
+# Exit codes: 0 the control tripped AND named SetColorMask (or, under --verify-patch-only, the
+#               patch compiled);
+#             1 the control did not answer: either the test stayed green on a demoted member, or
+#               it went red without ever naming SetColorMask, so the red cannot be attributed to
+#               the demotion. Both are findings about the test, not errors in this script - and
+#               both leave the tree restored and rebuilt;
 #             2 the script could not run the control at all (bad arguments, missing test,
 #               a build that was already broken, a failed restore).
 set -u -o pipefail
@@ -216,11 +221,19 @@ if ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error --output-on-fa
   exit 1
 fi
 
+# A red is not yet a pass. The control's claim is "demoting ColorMasks makes the setter-consistency
+# test fail AND the failure names glColorMask's setter"; a SetterConsistency that had started
+# failing for an unrelated reason would satisfy the first half and none of the second, and the
+# caller (the integrator's D.3 reads this script's rc) would record it as "the negative control
+# passed". So the answer is remembered here and decided at the end - AFTER the restore, because
+# leaving a build directory holding the broken table is worse than any exit status.
+TRIPPED_FOR_THE_RIGHT_REASON=1
 if grep -q 'SetColorMask' "$LOG_DIR/ctest-after.log"; then
   say "negative control tripped, naming SetColorMask"
 else
+  TRIPPED_FOR_THE_RIGHT_REASON=0
   say "negative control tripped, but its output does not name SetColorMask - the test failed for"
-  say "some other reason, so read $LOG_DIR/ctest-after.log before trusting it"
+  say "some other reason, so this is NOT a pass. Restoring first, then reporting it."
   grep -m20 -E 'Failure|error|Expected|Actual' "$LOG_DIR/ctest-after.log" >&2
 fi
 
@@ -236,6 +249,14 @@ if ! ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error \
      > "$LOG_DIR/ctest-restored.log" 2>&1; then
   say "the tree did NOT go back to green after the restore - see $LOG_DIR/ctest-restored.log"
   exit 2
+fi
+
+if [ "$TRIPPED_FOR_THE_RIGHT_REASON" = 0 ]; then
+  cp -f "$LOG_DIR/ctest-after.log" ./g7-negative-control-wrong-reason.log
+  say "INCONCLUSIVE: $TEST_NAME went red under the demotion but its output never names"
+  say "SetColorMask, so the red cannot be attributed to the demoted member. The tree is restored"
+  say "and green again; the failing output is kept at ./g7-negative-control-wrong-reason.log."
+  exit 1
 fi
 
 say "negative control tripped and the tree is green again"

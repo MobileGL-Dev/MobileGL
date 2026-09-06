@@ -40,6 +40,19 @@
 // SKIPS with that reason rather than passing - the shape MG_Test/State/ObjectLifetimeIdTest.cpp
 // already uses for exactly this ("inconclusive, not proven").
 //
+// WHAT THAT PROXY COSTS THE CI LANE, WRITTEN DOWN ON PURPOSE. The name is only a proxy: the
+// corruption the AbaControl arm asserts needs the freed HEAP BLOCK to be handed back, and public
+// GL cannot see that. So on a run where the allocator returns the name but not the block, the two
+// arms behave differently - the correctness arms (Handles, Legacy) still expect correct pixels and
+// still pass, but AbaControl expects the corruption and FAILS. It does that inside
+// `ctest -L integration-gpu`, a lane P2 requires green (gate G2), so this scenario can red a
+// required lane for an allocator reason. That is chosen, not overlooked: an arm that skipped
+// whenever it could not prove the ABA would also be green on the day the reproducer stopped
+// reproducing one, and "green because nothing was tested" is precisely what this file exists to
+// prevent. ObjectLifetimeIdTest makes the opposite choice because it is a unit test with no
+// always-on lane behind it. If the arm ever does flake, the fix is a stronger address-reuse proxy
+// - a backend counter for "a recycled slot was handed back out" - and not a looser assertion.
+//
 // THREE ARMS, ALL ALWAYS ON (P2 brief D18). The arm is named by MGITEST_HANDLE_ARM, which is a
 // HARNESS marker - the library never reads it - and the CMake wiring registers one lane per arm:
 //
@@ -472,6 +485,12 @@ void main() { oColor = texture(uTex, vUv); }
             ConfigureQuadVao(greenVao, greenBuffer);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the replacement VAO left a GL error behind";
 
+            // The skip below is the LAST thing that can save a run in which the allocator did not
+            // repeat itself, and it only sees half of what matters: the names. If the names come
+            // back but the heap blocks do not, execution continues into an assertion the
+            // AbaControl arm expects to see corrupted pixels from - and that arm then FAILS
+            // rather than skipping, in an always-on integration-gpu lane. The header says why that
+            // trade is taken deliberately; this is where the consequence lands.
             if (greenVao != redVao || greenBuffer != redBuffer) {
                 GTEST_SKIP() << "inconclusive, not proven: the name allocator did not hand both names back "
                                 "(vao " << redVao << " -> " << greenVao << ", buffer " << redBuffer << " -> "
