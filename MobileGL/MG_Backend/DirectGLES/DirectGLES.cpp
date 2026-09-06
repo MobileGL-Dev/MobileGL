@@ -1451,9 +1451,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // start at 1). This is not the twin table's {slot, gen}: a bound texture that has never
         // been synced has no twin and therefore no handle, so a handle-keyed snapshot would read
         // two never-synced textures as equal. The identity has to exist before the twin does.
+        //
+        // Split by the RUNTIME arm, not by the build, for exactly the reason g_fbSlotCache is:
+        // MOBILEGL_PIPE_PUSH=0 has to reproduce P1's behaviour (ConfigLoader.cpp), and a
+        // legacy-arm run that debounced on lifetime ids would be running P2's mechanism while
+        // the A/B attributed the result to P1. The two answers are equivalent - OwnerEquals on
+        // two empty pointers is true and LifetimeIdOf(nullptr) == 0 == 0; a live-versus-expired
+        // control block and two distinct lifetime ids both compare unequal - so keeping the
+        // legacy fields costs that arm nothing but the words, and gives the control back its
+        // fidelity. A build with no legacy arm compiled carries neither the fields nor the
+        // branch.
         struct UnitBindingsSnapshot {
             Array<Uint64, (SizeT)TextureTarget::TextureTargetCount> slotObjects{};
             Uint64 samplerObject = 0;
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+            // P1's identity, kept verbatim for the legacy arm only.
+            Array<WeakPtr<MG_State::GLState::ITextureObject>, (SizeT)TextureTarget::TextureTargetCount>
+                legacySlotObjects{};
+            WeakPtr<MG_State::GLState::SamplerObject> legacySamplerObject{};
+#endif
         };
 
         static Uint64 LifetimeIdOf(const SharedPtr<MG_State::GLState::ITextureObject>& object) {
@@ -1464,32 +1480,69 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return object ? object->GetLifetimeId() : 0;
         }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+#define MGB_UNIT_BINDINGS_HANDLE_ARM (EsprytSlotTablesEnabled())
+#else
+#define MGB_UNIT_BINDINGS_HANDLE_ARM (true)
+#endif
+
         static void CaptureUnitBindings(Int maxTouchedUnit, Vector<UnitBindingsSnapshot>& out) {
+            const Bool handleArm = MGB_UNIT_BINDINGS_HANDLE_ARM;
             out.resize(static_cast<SizeT>(maxTouchedUnit + 1));
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
                 auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
                 auto& snapshot = out[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
-                    snapshot.slotObjects[i] = LifetimeIdOf(slots[i].GetBoundObject());
+                    if (handleArm) {
+                        snapshot.slotObjects[i] = LifetimeIdOf(slots[i].GetBoundObject());
+                    }
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                    else {
+                        snapshot.legacySlotObjects[i] = slots[i].GetBoundObject();
+                    }
+#endif
                 }
-                snapshot.samplerObject = LifetimeIdOf(textureUnit.GetSamplerObject());
+                if (handleArm) {
+                    snapshot.samplerObject = LifetimeIdOf(textureUnit.GetSamplerObject());
+                }
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                else {
+                    snapshot.legacySamplerObject = textureUnit.GetSamplerObject();
+                }
+#endif
             }
         }
 
         static Bool UnitBindingsUnchanged(Int maxTouchedUnit, const Vector<UnitBindingsSnapshot>& snapshots) {
             if (snapshots.size() != static_cast<SizeT>(maxTouchedUnit + 1)) return false;
+            const Bool handleArm = MGB_UNIT_BINDINGS_HANDLE_ARM;
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
                 auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
                 const auto& snapshot = snapshots[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
-                    if (snapshot.slotObjects[i] != LifetimeIdOf(slots[i].GetBoundObject())) return false;
+                    if (handleArm) {
+                        if (snapshot.slotObjects[i] != LifetimeIdOf(slots[i].GetBoundObject())) return false;
+                    }
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                    else if (!OwnerEquals(snapshot.legacySlotObjects[i], slots[i].GetBoundObject())) {
+                        return false;
+                    }
+#endif
                 }
-                if (snapshot.samplerObject != LifetimeIdOf(textureUnit.GetSamplerObject())) return false;
+                if (handleArm) {
+                    if (snapshot.samplerObject != LifetimeIdOf(textureUnit.GetSamplerObject())) return false;
+                }
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                else if (!OwnerEquals(snapshot.legacySamplerObject, textureUnit.GetSamplerObject())) {
+                    return false;
+                }
+#endif
             }
             return true;
         }
+#undef MGB_UNIT_BINDINGS_HANDLE_ARM
 #else
         struct UnitBindingsSnapshot {
             Array<WeakPtr<MG_State::GLState::ITextureObject>, (SizeT)TextureTarget::TextureTargetCount>

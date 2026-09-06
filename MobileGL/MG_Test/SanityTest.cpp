@@ -3199,10 +3199,18 @@ namespace {
         int marker = 0;
     };
 
-    // Kind Query is unused by every shipping path, so these cases cannot disturb the slot space
-    // any real twin table allocates out of.
+    // Kinds Query and Fence are unused by every shipping path, so these cases cannot disturb
+    // the slot space any real twin table allocates out of.
+    //
+    // TWO of them, because MGPipeSlots() is a process-global singleton and three of the cases
+    // below read its per-kind LiveCount / HighWater. The two-holder case is the one that can
+    // perturb another, so it gets a kind of its own rather than a promise about gtest's
+    // registration order: --gtest_shuffle, --gtest_filter and a future case are all free to
+    // reorder them, and a shared kind would make that a flake.
     using FakeSlotTable = MobileGL::MG_Backend::DirectGLES::
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Query>;
+    using FakeSharedKindSlotTable = MobileGL::MG_Backend::DirectGLES::
+        BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Fence>;
 } // namespace
 
 // The property the whole slice exists for. The pre-P2 registry keyed twins on the frontend heap
@@ -3320,18 +3328,19 @@ TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
 TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
     using namespace MobileGL;
 
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
     auto& slots = MG_Pipe::MGPipeSlots();
-    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
+    const Uint32 liveBefore = slots.LiveCount(kKind);
 
-    FakeSlotTable a;
-    FakeSlotTable b;
+    FakeSharedKindSlotTable a;
+    FakeSharedKindSlotTable b;
     auto object = MakeShared<FakeStateObject>(0xE1u);
     a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
     (*a.Find(object.get()))->marker = 1;
     b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
     (*b.Find(object.get()))->marker = 2;
 
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u)
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u)
         << "the two tables minted a slot each; Magma's table would then resolve a different "
            "handle for the same object than Espryt's";
 
@@ -3343,9 +3352,26 @@ TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin)
     ASSERT_NE(b.FindByHandle(handle), nullptr);
     EXPECT_EQ((*a.FindByHandle(handle))->marker, 1);
     EXPECT_EQ((*b.FindByHandle(handle))->marker, 2);
-    // Deliberately no sweep: two tables of ONE kind both hold this slot, and whichever swept
-    // first would return it to the allocator while the other still names it. The six shipping
-    // registries are one table per kind, so that cannot arise outside this case.
+
+    // TWO HOLDERS OF ONE SLOT is a real configuration, not a test artefact, and this is where
+    // the sharp edge is: whichever holder sweeps (or is told of the death) first returns the
+    // slot to the allocator while the other still names it. The allocator makes that SAFE -
+    // Free is generation-guarded and idempotent, and FindByHandle's Gen compare turns the
+    // other holder's now-stale handle into a miss - but not free: if the object is still alive
+    // the next resolution re-Acquires it onto a NEW slot, orphaning the first table's entry
+    // until its own sweep. Two such configurations exist or are landing: the
+    // ScopedDirectGLESTextureBindings fixture above holds a second live table of kind Texture
+    // for the length of a test, and package D's subsystem 4 re-keys VaoDrawMemo out of this
+    // same per-kind allocator. Flagged for the integrator rather than defended here, because
+    // the fix (a refcounted slot-ownership token) belongs with whoever owns both holders.
+    //
+    // The cleanup below is what keeps that out of the OTHER cases: object first, then both
+    // tables, so the slot is back on the free list and this kind's LiveCount is where it was.
+    object.reset();
+    a.CollectGarbageNow();
+    b.CollectGarbageNow();
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore)
+        << "the shared slot outlived both holders and the object";
 }
 
 // The sweep has TWO drivers and the table must carry both. Nothing below calls
