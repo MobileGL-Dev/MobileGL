@@ -52,15 +52,20 @@ done
 # TYPE off THIS device, ran one pinned window, and checked big_cur/little_cur/gpu_cur_khz in the
 # result JSON against the pins. Nothing else earns it.
 require_verified_profile() {
-  if [ "${PROFILE_VERIFIED:-1}" = "1" ]; then return 0; fi
+  # The default is UNVERIFIED. A profile that simply omits the key is a profile nobody has
+  # confirmed against its device, and defaulting it to "verified" would hand exactly the
+  # fail-open behaviour this guard exists to prevent to the most likely way a new profile is
+  # written - by copying an existing one and editing the serial.
+  if [ "${PROFILE_VERIFIED:-0}" = "1" ]; then return 0; fi
   if [ "$ALLOW_UNVERIFIED_PROFILE" = "1" ]; then
-    echo "[warn] $DEVICE_ENV declares PROFILE_VERIFIED=0 and --allow-unverified-profile was passed:" >&2
+    echo "[warn] $DEVICE_ENV does not carry PROFILE_VERIFIED=1 and --allow-unverified-profile was passed:" >&2
     echo "[warn] the frequency pins and the thermal gate in it are UNCONFIRMED, so any number this" >&2
     echo "[warn] run produces is not comparable with a pinned one." >&2
     return 0
   fi
-  echo "$DEVICE_ENV declares PROFILE_VERIFIED=0: its sysfs nodes and OPPs have not been read off" >&2
-  echo "the device, so pinning would fail silently and the run would look pinned but not be." >&2
+  echo "$DEVICE_ENV does not carry PROFILE_VERIFIED=1 (it says 0, or says nothing at all): its" >&2
+  echo "sysfs nodes and OPPs have not been read off the device, so pinning would fail silently" >&2
+  echo "and the run would look pinned but not be." >&2
   echo "Fill in the TODO_VERIFY_ON_DEVICE fields, confirm one pinned window, set PROFILE_VERIFIED=1 -" >&2
   echo "or pass --allow-unverified-profile to measure anyway and label the result unpinned." >&2
   exit 2

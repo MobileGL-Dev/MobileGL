@@ -226,12 +226,32 @@ def read_benchmark(case, backend, run_index):
     return report
 
 
+def series_median(values):
+    """The median, by the rule SummarizeSeries uses on the device.
+
+    trace_replay_core.cpp's SeriesSummary takes the middle element of an odd window and the
+    AVERAGE of the two middle elements of an even one, so p50 has to be computed the same way or
+    the line would print a p50 next to a medianFrameCpuMs that disagreed with it for a reason
+    nobody could see. (It is the only one of the three that is not a nearest rank: the device's
+    p95 is.)
+    """
+    if not values:
+        return -1.0
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2 == 1:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
 def nearest_rank_percentile(values, fraction):
-    """Nearest-rank percentile, the same rule SummarizeSeries uses on the device.
+    """Nearest-rank percentile, the rule SummarizeSeries uses on the device for p95.
 
     Nearest rank rather than an interpolating percentile so that every number printed here is a
     frame that was actually observed, and so that a p95 computed on this side agrees exactly with
-    the p95 the device reported for the same window.
+    the p95 the device reported for the same window. The device computes no p99 at all - that is
+    the whole reason benchmark.json carries the full series - so p99 is this rule extended, and
+    p50 is NOT computed here (see series_median).
     """
     if not values:
         return -1.0
@@ -245,11 +265,12 @@ def nearest_rank_percentile(values, fraction):
 def cpu_tail(report):
     """The trailing window of the per-frame CPU series, or [] when the run collected none.
 
-    benchmark.json carries the WHOLE frameCpuTimesMs[] array precisely so that percentiles the
-    device does not compute - p50 and p99, which are what the paired A/B publishes - are a
-    host-side reduction over an artefact that already exists. The window is the same trailing
-    tailFrames the device summarised, so the numbers below sit beside the device's own without
-    being about a different set of frames.
+    benchmark.json carries the WHOLE frameCpuTimesMs[] array precisely so that p99 - which the
+    device does not compute, and which the paired A/B publishes beside p50 - is a host-side
+    reduction over an artefact that already exists. The window is the same trailing tailFrames the
+    device summarised, so the numbers below sit beside the device's own without being about a
+    different set of frames; p50 is recomputed here by the device's own median rule, so it agrees
+    with medianFrameCpuMs on the same run rather than merely sitting next to it.
     """
     series = report.get("frameCpuTimesMs") or []
     if not series:
@@ -277,7 +298,7 @@ def format_benchmark(report):
     if window:
         line += (
             f" | cpu mean={report.get('meanFrameCpuMs', -1):.3f}ms"
-            f" p50={nearest_rank_percentile(window, 0.50):.3f}ms"
+            f" p50={series_median(window):.3f}ms"
             f" p95={report.get('p95FrameCpuMs', -1):.3f}ms"
             f" p99={nearest_rank_percentile(window, 0.99):.3f}ms"
         )

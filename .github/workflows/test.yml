@@ -577,11 +577,22 @@ jobs:
       # An arm whose subsystem has not landed on this tree SKIPS with the reason (never absent,
       # never a green that asserted nothing), so this step is green through the P2 landing order
       # and starts asserting as each package arrives.
+      #
+      # The environment is the sibling step's, deliberately and in full: these entries run the
+      # same DirectVulkan binary through the same runner, so the three MOBILEGL_MAGMA_* fixes it
+      # needs apply here too, and a crash here has to leave a core for the same black-box flow.
+      # The step above is the only reason those lines exist in this job; a control that crashed
+      # without one would be the hardest failure in the job to diagnose.
       - name: The handle-ABA and CSO-content-addressing controls (G8, G12)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
+          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
+          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
         run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           ctest --output-on-failure -L integration-gpu \
             -R 'HandleRecycle|CsoContentAddressing' --no-tests=error -j 4
 

@@ -35,6 +35,9 @@ frequency-pin integrity.
    (`big_cur`/`little_cur`/`gpu_cur_khz` in the result JSON must match the pins). Until then
    it says `PROFILE_VERIFIED=0` and `bench.sh` / `session.sh` refuse to run against it unless
    `--allow-unverified-profile` is passed, which labels the run unpinned in the warning.
+   **A profile that omits the key entirely is refused the same way** - the guard defaults to
+   unverified, so copying a verified profile and editing the serial cannot inherit its verdict.
+   (`profile.sh` pins nothing - it records a simpleperf profile - so it carries no such guard.)
 
    That refusal exists because the pin path is silent when it is wrong: the harness writes
    through `/proc/ppm/policy/hard_userlimit_*` and `/proc/gpufreq/gpufreq_opp_freq`, which are
