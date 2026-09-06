@@ -18,8 +18,21 @@
 // mutator has no row here or a row here names a mutator the scan no longer finds. Both
 // directions, so a deleted mutator cannot leave a stale row behind either.
 //
-// ANSWERS. One per row, and where a mutator has more than one true answer the row carries
-// the COARSER one - the one that cannot under-fire:
+// ANSWERS. A row lists EVERY publisher that fires on EVERY path through that mutator,
+// and only those; several are joined with '|'. A publisher that fires on some paths but
+// not all must not appear, because a shutter built from this file would then UNDER-fire,
+// and ARCHITECTURE.md 13.2 names under-firing as the dangerous direction.
+//
+// For the RenderState family that answer is not a matter of taste and it is CHECKED
+// rather than asserted: scripts/gen_pipe_dirty_surface.py reads RenderState.cpp and
+// derives, per setter, which of NEW_RENDER_STATE / NEW_PIPELINE_STATE moves on every
+// path - BumpVersions() moves both, a bare ++m_version moves only NEW_RENDER_STATE, and
+// a setter with both kinds of path therefore always-fires only NEW_RENDER_STATE - and
+// --check fails when a row disagrees, in either direction. That check exists because
+// this file got exactly two rows wrong: SetCapability, whose ClipDistance0..7 arms move
+// only m_version, and SetStencilFunc, whose pipeline bump is conditional on Func moving.
+// Both named NEW_PIPELINE_STATE, which does not fire for glEnable(GL_CLIP_DISTANCE0) or
+// for a reference-only glStencilFunc.
 //
 //   NEW_*            a MGPipeDirty bit (MG_Impl/Pipe/Tracker.h). The tracker's shutter for
 //                    that bit moves when this mutator runs, so the next verb publishes it.
@@ -27,9 +40,19 @@
 //                    mutation is published inline and needs no shutter at all.
 //   kReverseChannel  not state: a write INTO the frontend from the backend's side.
 //   kNoBackendRead   no backend read point observes this state at all.
-//   kExplicitDestroy published by the delete_* call the Track H slice emits when the object's
-//                    last reference drops - an object's DEATH, which no generation shutters
-//                    because there is no longer an object to carry one.
+//   kExplicitDestroy published by the delete_* call the Track H slice emits when the
+//                    object's last reference drops - an object's DEATH, which no
+//                    generation shutters because there is no longer an object to carry
+//                    one. Only the six object kinds P2 brief D13 scopes Espryt 0b's
+//                    explicit destroy to (buffers, framebuffers, renderbuffers,
+//                    samplers, textures, vertex arrays) may use this answer.
+//   kUnpublishedDestroy
+//                    the same event for a kind NO call publishes yet: programs, program
+//                    pipelines and shaders are outside D13's six, so their death reaches
+//                    a backend only through the object's own teardown path. Recorded as
+//                    a hole rather than dressed up as a mechanism that exists - naming
+//                    kExplicitDestroy here would be the same defect the RenderState
+//                    check above exists to stop, one class down in stakes.
 //   kPulledEveryVerb no shutter exists, and none is needed yet: the PipeInputs field this
 //                    writes is in its verb class's may-read mask, so the residual fill copies
 //                    it at EVERY verb of that class. A shutter here is a P3/P4 optimisation,
@@ -48,104 +71,110 @@
 // clang-format off
 
 // X(Mutator, Answer)
-#define MGP_DIRTY_SURFACE_LIST(X)                                              \
-    /* ---- the reverse channel: 836 of the 926 calls, 90% of the surface ---- */ \
-    X(RecordError,                            kReverseChannel)                 \
-    /* ---- immediate publish points: the same body reaches the backend ---- */ \
-    X(SetActiveTextureUnit,                   kImmediate)                      \
-    X(BeginTransformFeedback,                 kImmediate)                      \
-    X(EndTransformFeedback,                   kImmediate)                      \
-    X(SetTransformFeedbackPaused,             kImmediate)                      \
-    X(MarkTransformFeedbackObjectForDeletion, kImmediate)                      \
-    /* ---- the render state: NEW_PIPELINE_STATE when a setter calls           */ \
-    /* BumpVersions (P2 brief D6's only rule), NEW_RENDER_STATE otherwise      */ \
-    X(SetBlendEquation,                       NEW_PIPELINE_STATE)              \
-    X(SetBlendEquationIndexed,                NEW_PIPELINE_STATE)              \
-    X(SetBlendFunc,                           NEW_PIPELINE_STATE)              \
-    X(SetBlendFuncIndexed,                    NEW_PIPELINE_STATE)              \
-    /* SetCapability's ClipDistance0..7 arms move only m_version; every other  */ \
-    /* arm calls BumpVersions, and the coarser answer is the one that holds.   */ \
-    X(SetCapability,                          NEW_PIPELINE_STATE)              \
-    X(SetCapabilityIndexed,                   NEW_PIPELINE_STATE)              \
-    X(SetColorMask,                           NEW_PIPELINE_STATE)              \
-    X(SetColorMaskIndexed,                    NEW_PIPELINE_STATE)              \
-    X(SetCullFaceMode,                        NEW_PIPELINE_STATE)              \
-    X(SetDepthFunc,                           NEW_PIPELINE_STATE)              \
-    X(SetDepthMask,                           NEW_PIPELINE_STATE)              \
-    X(SetFrontFaceMode,                       NEW_PIPELINE_STATE)              \
-    X(SetLogicOp,                             NEW_PIPELINE_STATE)              \
-    X(SetMinSampleShadingValue,               NEW_PIPELINE_STATE)              \
-    X(SetPolygonMode,                         NEW_PIPELINE_STATE)              \
-    X(SetProvokingVertexMode,                 NEW_PIPELINE_STATE)              \
-    X(SetSampleCoverage,                      NEW_PIPELINE_STATE)              \
-    X(SetSampleMaskValue,                     NEW_PIPELINE_STATE)              \
-    /* SetStencilFunc writes Func (pipeline chunk P2/P3) AND Ref/ValueMask     */ \
-    /* (dynamic D3/D4); SetStencilOp is wholly pipeline, SetStencilMask wholly */ \
-    /* dynamic. That split is what keeps a glStencilFunc that moves only the   */ \
-    /* reference from evicting a cached pipeline.                              */ \
-    X(SetStencilFunc,                         NEW_PIPELINE_STATE)              \
-    X(SetStencilOp,                           NEW_PIPELINE_STATE)              \
-    X(SetStencilMask,                         NEW_RENDER_STATE)                \
-    X(SetBlendColor,                          NEW_RENDER_STATE)                \
-    X(SetClampReadColor,                      NEW_RENDER_STATE)                \
-    X(SetClearColor,                          NEW_RENDER_STATE)                \
-    X(SetClearDepth,                          NEW_RENDER_STATE)                \
-    X(SetClearStencil,                        NEW_RENDER_STATE)                \
-    X(SetClipControl,                         NEW_RENDER_STATE)                \
-    X(SetDepthRange,                          NEW_RENDER_STATE)                \
-    X(SetDepthRangeIndexed,                   NEW_RENDER_STATE)                \
-    X(SetHint,                                NEW_RENDER_STATE)                \
-    X(SetLineWidth,                           NEW_RENDER_STATE)                \
-    X(SetPointFadeThresholdSize,              NEW_RENDER_STATE)                \
-    X(SetPointSize,                           NEW_RENDER_STATE)                \
-    X(SetPointSpriteCoordOrigin,              NEW_RENDER_STATE)                \
-    X(SetPolygonOffset,                       NEW_RENDER_STATE)                \
-    X(SetPolygonOffsetClamped,                NEW_RENDER_STATE)                \
-    X(SetPrimitiveRestartIndex,               NEW_RENDER_STATE)                \
-    X(SetScissorBox,                          NEW_RENDER_STATE)                \
-    X(SetScissorBoxIndexed,                   NEW_RENDER_STATE)                \
-    X(SetViewport,                            NEW_RENDER_STATE)                \
-    X(SetViewportIndexed,                     NEW_RENDER_STATE)                \
-    /* ---- the other value-class bits ---- */                                 \
-    X(SetPixelStoreParam,                     NEW_PIXEL_PACK)                  \
-    X(SetPatchDefaultInnerLevel,              NEW_PATCH_STATE)                 \
-    X(SetPatchDefaultOuterLevel,              NEW_PATCH_STATE)                 \
-    /* Also an immediate publish point, but it has a real bit and the bit is   */ \
-    /* the more useful answer: set_patch_state carries it whatever the caller  */ \
-    /* does next.                                                              */ \
-    X(SetPatchVertices,                       NEW_PATCH_STATE)                 \
-    X(SetCurrentVertexAttributeFloat,         NEW_VERTEX_ATTRIB_DEFAULTS)      \
-    X(SetCurrentVertexAttributeInt,           NEW_VERTEX_ATTRIB_DEFAULTS)      \
-    X(SetCurrentVertexAttributeUint,          NEW_VERTEX_ATTRIB_DEFAULTS)      \
-    /* ---- object class ---- */                                               \
-    X(BumpTextureBindGeneration,              NEW_SAMPLER_VIEWS)               \
-    X(SetNamedTransformFeedbackBinding,       NEW_SO_TARGETS)                  \
-    /* ---- an object's death: no generation, because there is no longer an    */ \
-    /* object to carry one. Espryt 0b's delete_* is what publishes these.      */ \
-    X(MarkBufferObjectForDeletion,            kExplicitDestroy)                \
-    X(MarkFramebufferObjectForDeletion,       kExplicitDestroy)                \
-    X(MarkProgramForDeletion,                 kExplicitDestroy)                \
-    X(MarkProgramPipelineForDeletion,         kExplicitDestroy)                \
-    X(MarkRenderbufferObjectForDeletion,      kExplicitDestroy)                \
-    X(MarkSamplerObjectForDeletion,           kExplicitDestroy)                \
-    X(MarkShaderForDeletion,                  kExplicitDestroy)                \
-    X(MarkTextureObjectForDeletion,           kExplicitDestroy)                \
-    X(MarkVertexArrayForDeletion,             kExplicitDestroy)                \
-    /* ---- no backend read point observes these at all ---- */                \
-    /* GL_ANY_SAMPLES_PASSED conditional rendering is resolved wholly in the   */ \
-    /* frontend: IsConditionalRenderActive / GetConditionalRenderQuery have no */ \
-    /* reader under MG_Backend and no Coverage.def row.                        */ \
-    X(BeginConditionalRender,                 kNoBackendRead)                  \
-    X(EndConditionalRender,                   kNoBackendRead)                  \
-    /* ---- pulled at every verb of the class, so the next verb publishes them */ \
-    /* unconditionally. The transform-feedback accounting counters reach the   */ \
-    /* backend through GetTransformFeedbackCapturedVertices and friends, which */ \
-    /* are in the kDraw and kXfbSpan may-read masks.                           */ \
-    X(AddTransformFeedbackAccountedCaptureDraw, kPulledEveryVerb)              \
-    X(AddTransformFeedbackCapturedVertices,     kPulledEveryVerb)              \
-    X(AddTransformFeedbackGeometryCaptureDraw,  kPulledEveryVerb)              \
-    X(AddTransformFeedbackInputPrimitives,      kPulledEveryVerb)              \
-    X(AddTransformFeedbackPausedPrimitives,     kPulledEveryVerb)              \
-    X(AddTransformFeedbackPrimitives,           kPulledEveryVerb)
+#define MGP_DIRTY_SURFACE_LIST(X)                                                               \
+    /* ---- the reverse channel: 836 of the 926 calls, 90% of the surface ---- */               \
+    X(RecordError,                        kReverseChannel)                                      \
+    /* ---- immediate publish points: the same body reaches the backend ---- */                 \
+    X(SetActiveTextureUnit,               kImmediate)                                           \
+    X(BeginTransformFeedback,             kImmediate)                                           \
+    X(EndTransformFeedback,               kImmediate)                                           \
+    X(SetTransformFeedbackPaused,         kImmediate)                                           \
+    X(MarkTransformFeedbackObjectForDeletion, kImmediate)                                       \
+    /* ---- the render state. Derived from RenderState.cpp and gated by --check:  */            \
+    /* a setter that calls BumpVersions() on every path publishes BOTH counters;  */            \
+    /* one that also has a bare ++m_version path publishes only NEW_RENDER_STATE. */            \
+    X(SetBlendEquation,                   NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendEquationIndexed,            NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendFunc,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetBlendFuncIndexed,                NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    /* SetCapability's ClipDistance0..7 arms write ClipDistanceEnabledMask (dynamic */          \
+    /* chunk D7) and deliberately do NOT BumpVersions, so NEW_PIPELINE_STATE does   */          \
+    /* not fire at all for glEnable(GL_CLIP_DISTANCE0): set_dynamic_state publishes  */         \
+    /* it, and NEW_RENDER_STATE is the only answer that holds on every arm.         */          \
+    X(SetCapability,                      NEW_RENDER_STATE)                                     \
+    X(SetCapabilityIndexed,               NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetColorMask,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetColorMaskIndexed,                NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetCullFaceMode,                    NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetDepthFunc,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetDepthMask,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetFrontFaceMode,                   NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetLogicOp,                         NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetMinSampleShadingValue,           NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetPolygonMode,                     NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetProvokingVertexMode,             NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetSampleCoverage,                  NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetSampleMaskValue,                 NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    /* SetStencilFunc writes Func (pipeline chunk P2/P3) AND Ref/ValueMask (dynamic */          \
+    /* D3/D4), and ++m_pipelineStateVersion is CONDITIONAL on Func moving - which is */         \
+    /* what keeps a glStencilFunc that moves only the reference from evicting a     */          \
+    /* cached pipeline, and is why only NEW_RENDER_STATE fires on every call.       */          \
+    /* SetStencilOp is wholly pipeline, SetStencilMask wholly dynamic.              */          \
+    X(SetStencilFunc,                     NEW_RENDER_STATE)                                     \
+    X(SetStencilOp,                       NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetStencilMask,                     NEW_RENDER_STATE)                                     \
+    X(SetBlendColor,                      NEW_RENDER_STATE)                                     \
+    X(SetClampReadColor,                  NEW_RENDER_STATE)                                     \
+    X(SetClearColor,                      NEW_RENDER_STATE)                                     \
+    X(SetClearDepth,                      NEW_RENDER_STATE)                                     \
+    X(SetClearStencil,                    NEW_RENDER_STATE)                                     \
+    X(SetClipControl,                     NEW_RENDER_STATE)                                     \
+    X(SetDepthRange,                      NEW_RENDER_STATE)                                     \
+    X(SetDepthRangeIndexed,               NEW_RENDER_STATE)                                     \
+    X(SetHint,                            NEW_RENDER_STATE)                                     \
+    X(SetLineWidth,                       NEW_RENDER_STATE)                                     \
+    X(SetPointFadeThresholdSize,          NEW_RENDER_STATE)                                     \
+    X(SetPointSize,                       NEW_RENDER_STATE)                                     \
+    X(SetPointSpriteCoordOrigin,          NEW_RENDER_STATE)                                     \
+    X(SetPolygonOffset,                   NEW_RENDER_STATE)                                     \
+    X(SetPolygonOffsetClamped,            NEW_RENDER_STATE)                                     \
+    X(SetPrimitiveRestartIndex,           NEW_RENDER_STATE)                                     \
+    X(SetScissorBox,                      NEW_RENDER_STATE)                                     \
+    X(SetScissorBoxIndexed,               NEW_RENDER_STATE)                                     \
+    X(SetViewport,                        NEW_RENDER_STATE)                                     \
+    X(SetViewportIndexed,                 NEW_RENDER_STATE)                                     \
+    /* ---- the other value-class bits ---- */                                                  \
+    X(SetPixelStoreParam,                 NEW_PIXEL_PACK)                                       \
+    X(SetPatchDefaultInnerLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    X(SetPatchDefaultOuterLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    /* Also an immediate publish point, but it has a real bit and the bit is   */               \
+    /* the more useful answer: set_patch_state carries it whatever the caller  */               \
+    /* does next.                                                              */               \
+    X(SetPatchVertices,                   NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
+    X(SetCurrentVertexAttributeFloat,     NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    X(SetCurrentVertexAttributeInt,       NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    X(SetCurrentVertexAttributeUint,      NEW_VERTEX_ATTRIB_DEFAULTS)                           \
+    /* ---- object class ---- */                                                                \
+    X(BumpTextureBindGeneration,          NEW_SAMPLER_VIEWS)                                    \
+    X(SetNamedTransformFeedbackBinding,   NEW_SO_TARGETS)                                       \
+    /* ---- an object's death: no generation, because there is no longer an object  */          \
+    /* to carry one. Espryt 0b's delete_* publishes the six kinds D13 scopes it to;  */         \
+    /* programs, program pipelines and shaders are NOT among them and nothing else  */          \
+    /* publishes their death, so they answer kUnpublishedDestroy - a recorded hole. */          \
+    X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
+    X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
+    X(MarkProgramForDeletion,             kUnpublishedDestroy)                                  \
+    X(MarkProgramPipelineForDeletion,     kUnpublishedDestroy)                                  \
+    X(MarkRenderbufferObjectForDeletion,  kExplicitDestroy)                                     \
+    X(MarkSamplerObjectForDeletion,       kExplicitDestroy)                                     \
+    X(MarkShaderForDeletion,              kUnpublishedDestroy)                                  \
+    X(MarkTextureObjectForDeletion,       kExplicitDestroy)                                     \
+    X(MarkVertexArrayForDeletion,         kExplicitDestroy)                                     \
+    /* ---- no backend read point observes these at all ---- */                                 \
+    /* GL_ANY_SAMPLES_PASSED conditional rendering is resolved wholly in the   */               \
+    /* frontend: IsConditionalRenderActive / GetConditionalRenderQuery have no */               \
+    /* reader under MG_Backend and no Coverage.def row.                        */               \
+    X(BeginConditionalRender,             kNoBackendRead)                                       \
+    X(EndConditionalRender,               kNoBackendRead)                                       \
+    /* ---- pulled at every verb of the class, so the next verb publishes them */               \
+    /* unconditionally. The transform-feedback accounting counters reach the   */               \
+    /* backend through GetTransformFeedbackCapturedVertices and friends, which */               \
+    /* are in the kDraw and kXfbSpan may-read masks.                           */               \
+    X(AddTransformFeedbackAccountedCaptureDraw, kPulledEveryVerb)                               \
+    X(AddTransformFeedbackCapturedVertices, kPulledEveryVerb)                                   \
+    X(AddTransformFeedbackGeometryCaptureDraw, kPulledEveryVerb)                                \
+    X(AddTransformFeedbackInputPrimitives, kPulledEveryVerb)                                    \
+    X(AddTransformFeedbackPausedPrimitives, kPulledEveryVerb)                                   \
+    X(AddTransformFeedbackPrimitives,     kPulledEveryVerb)
 
 // clang-format on

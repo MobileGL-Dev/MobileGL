@@ -21,6 +21,12 @@ publish points, the ones that must map onto an aggregate generation.
 P0 is the skeleton: it reports. P1 adds the mapping file and CI regenerates it with
 `git diff --exit-code` and zero unmapped mutators, the same shape as gen_pipe.py's G6.
 
+P2 adds the half a completeness gate cannot have: for the RenderState family the ANSWER is
+derived from RenderState.cpp rather than believed, so a row that names a publisher which
+fires on only some paths through the setter (or omits one that always fires) is red. Without
+it a row could be wrong in exactly the direction ARCHITECTURE.md 13.2 calls dangerous while
+--check stayed green, which is how two rows in this mapping were wrong for a whole review.
+
     python3 scripts/gen_pipe_dirty_surface.py             # human-readable report
     python3 scripts/gen_pipe_dirty_surface.py --summary   # counts only
     python3 scripts/gen_pipe_dirty_surface.py --check     # THE GATE: rc 1 on any hole
@@ -139,15 +145,83 @@ def scan_file(path):
 
 DEF_PATH = os.path.join(REPO_ROOT, "MobileGL", "MG_Pipe", "DirtySurface.def")
 TRACKER_PATH = os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "Pipe", "Tracker.h")
+RENDER_STATE_PATH = os.path.join(REPO_ROOT, "MobileGL", "MG_State", "GLState", "RenderState",
+                                 "RenderState.cpp")
 
-ROW_RE = re.compile(r"^[ \t]*X\((\w+),\s*(\w+)\)\s*\\?\s*$", re.M)
+# An answer is one or more publishers joined with "|" - every publisher that fires on EVERY
+# path through the mutator (DirtySurface.def's header states the rule).
+ROW_RE = re.compile(r"^[ \t]*X\((\w+),\s*([\w|]+)\)\s*\\?\s*$", re.M)
 DIRTY_NAME_RE = re.compile(r'^\s*"(NEW_[A-Z0-9_]+)",\s*$', re.M)
 
 # The answers that are not a dirty-bit name. Each one is documented in DirtySurface.def's
 # header; a row that uses anything else is a typo, and a typo that read as "mapped" would be
 # exactly the silent hole this gate exists to close.
 NON_BIT_ANSWERS = ("kImmediate", "kReverseChannel", "kNoBackendRead", "kExplicitDestroy",
-                   "kPulledEveryVerb")
+                   "kUnpublishedDestroy", "kPulledEveryVerb")
+
+# ---- the render-state answers, DERIVED rather than believed -----------------------------
+# The two RenderState counters are the one place in the mapping where "what publishes this"
+# has a mechanical answer, and where getting it wrong is not a documentation slip: P3a builds
+# its narrow shutters from this file, so a row that claims NEW_PIPELINE_STATE for a setter
+# whose pipeline bump is conditional (SetStencilFunc) or absent (SetCapability's
+# ClipDistance0..7 arms) encodes exactly the under-firing ARCHITECTURE.md 13.2 calls the
+# dangerous direction. So the gate derives the answer from RenderState.cpp:
+#
+#   BumpVersions() moves m_version AND m_pipelineStateVersion (RenderState.h);
+#   a bare ++m_version moves only the first;
+#   a setter that has BOTH kinds of path always-fires only NEW_RENDER_STATE.
+#
+# A setter whose body has no bump at all is resolved through the RenderState setter it
+# delegates to (SetPolygonOffset -> SetPolygonOffsetClamped).
+RENDER_STATE_BIT = "NEW_RENDER_STATE"
+PIPELINE_STATE_BIT = "NEW_PIPELINE_STATE"
+BUMP_VERSIONS_RE = re.compile(r"\bBumpVersions\s*\(\s*\)")
+BARE_VERSION_RE = re.compile(r"\+\+\s*m_version\b")
+BARE_PIPELINE_RE = re.compile(r"\+\+\s*m_pipelineStateVersion\b")
+SETTER_CALL_RE = re.compile(r"\b(Set\w+)\s*\(")
+
+
+def render_state_publishers():
+    """{setter: set of always-firing render-state publishers} read out of RenderState.cpp.
+
+    A setter absent from the result is not a RenderState setter at all; a setter mapped to an
+    EMPTY set moves neither counter (SetPixelStoreParam)."""
+    with open(RENDER_STATE_PATH, "r", encoding="utf-8", errors="replace") as handle:
+        masked = mask_comments_and_strings(handle.read())
+
+    bodies = {}
+    for name, start, end in function_bodies(masked):
+        if name.startswith("Set"):
+            bodies.setdefault(name, []).append(masked[start:end])
+
+    def direct(name):
+        publishers = set()
+        for body in bodies[name]:
+            bump = BUMP_VERSIONS_RE.search(body) is not None
+            bare_version = BARE_VERSION_RE.search(body) is not None
+            bare_pipeline = BARE_PIPELINE_RE.search(body) is not None
+            if bump or bare_version:
+                publishers.add(RENDER_STATE_BIT)
+            if bump and not bare_version and not bare_pipeline:
+                publishers.add(PIPELINE_STATE_BIT)
+        return publishers
+
+    def resolve(name, seen):
+        if name in seen:
+            return set()
+        seen.add(name)
+        publishers = direct(name)
+        if publishers:
+            return publishers
+        # No bump of its own: whatever the setter it delegates to publishes.
+        for body in bodies[name]:
+            for match in SETTER_CALL_RE.finditer(body):
+                callee = match.group(1)
+                if callee != name and callee in bodies:
+                    publishers |= resolve(callee, seen)
+        return publishers
+
+    return {name: resolve(name, set()) for name in bodies}
 
 
 def dirty_bit_names():
@@ -160,7 +234,8 @@ def dirty_bit_names():
 
 
 def load_mapping(text=None):
-    """{mutator: answer} from DirtySurface.def, or from `text` for the self-test."""
+    """{mutator: answer} from DirtySurface.def, or from `text` for the self-test. An answer
+    keeps its "|"-joined spelling; answer_set() below is what compares them."""
     if text is None:
         with open(DEF_PATH, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()
@@ -174,10 +249,16 @@ def load_mapping(text=None):
     return rows, duplicates
 
 
-def check_mapping(mapping, duplicates, scanned, bits):
+def answer_set(answer):
+    return {part.strip() for part in answer.split("|") if part.strip()}
+
+
+def check_mapping(mapping, duplicates, scanned, bits, publishers=None):
     """Every problem the gate fails on, as a list of human-readable lines. BOTH directions:
     an unmapped mutator renders stale, and a row naming a mutator the scan no longer finds is
-    a stale row that would keep a real hole looking covered."""
+    a stale row that would keep a real hole looking covered. `publishers` is
+    render_state_publishers()'s table; passing None checks only existence and vocabulary,
+    which is what the mutator-level negative controls want."""
     problems = []
     for mutator in sorted(set(scanned) - set(mapping)):
         problems.append("UNMAPPED mutator %s - add a row to MG_Pipe/DirtySurface.def" % mutator)
@@ -187,13 +268,50 @@ def check_mapping(mapping, duplicates, scanned, bits):
     for mutator in sorted(duplicates):
         problems.append("DUPLICATE row %s" % mutator)
     for mutator in sorted(mapping):
-        answer = mapping[mutator]
-        if answer in NON_BIT_ANSWERS:
+        answers = answer_set(mapping[mutator])
+        if not answers:
+            problems.append("BAD answer for %s - empty" % mutator)
             continue
-        if answer in bits:
+        for answer in sorted(answers):
+            if answer in NON_BIT_ANSWERS or answer in bits:
+                continue
+            problems.append("BAD answer %s for %s - not a MGPipeDirty bit name and not one of %s"
+                            % (answer, mutator, ", ".join(NON_BIT_ANSWERS)))
+        if len(answers) > 1 and answers & set(NON_BIT_ANSWERS):
+            problems.append("BAD answer %s for %s - a non-bit answer stands alone"
+                            % (mapping[mutator], mutator))
+
+    if publishers is None:
+        return problems
+
+    # THE TRUTH HALF, and it is the half a row can be green and wrong without. For every
+    # mutator that is a RenderState setter, the render-state publishers the row claims must
+    # be exactly the ones RenderState.cpp always moves - a claimed publisher that does not
+    # always fire is an under-firing shutter waiting to be built from this file, and a
+    # publisher that always fires but is not claimed hides one.
+    render_bits = {RENDER_STATE_BIT, PIPELINE_STATE_BIT}
+    for mutator in sorted(mapping):
+        claimed = answer_set(mapping[mutator]) & render_bits
+        if mutator not in publishers:
+            if claimed:
+                problems.append(
+                    "UNVERIFIABLE answer %s for %s - it claims a render-state publisher but "
+                    "RenderState.cpp has no such setter to derive it from"
+                    % (mapping[mutator], mutator))
             continue
-        problems.append("BAD answer %s for %s - not a MGPipeDirty bit name and not one of %s"
-                        % (answer, mutator, ", ".join(NON_BIT_ANSWERS)))
+        derived = publishers[mutator] & render_bits
+        if claimed == derived:
+            continue
+        for missing in sorted(derived - claimed):
+            problems.append(
+                "MISSING publisher %s for %s - RenderState.cpp moves it on every path, so the "
+                "row must name it (derived: %s)"
+                % (missing, mutator, "|".join(sorted(derived)) or "none"))
+        for extra in sorted(claimed - derived):
+            problems.append(
+                "UNDER-FIRING answer %s for %s - RenderState.cpp does NOT move it on every "
+                "path, so a shutter built on it would miss a mutation (derived: %s)"
+                % (extra, mutator, "|".join(sorted(derived)) or "none"))
     return problems
 
 
@@ -224,7 +342,7 @@ def scan_all():
     return sources, per_file, distinct_all
 
 
-def self_test(scanned, bits):
+def self_test(scanned, bits, publishers):
     """Canned negative controls. Each MUST trip; trips == 0 is an error, which is the shape
     check_include_closure.py and gen_pipe.py --self-test already use."""
     trips = 0
@@ -257,6 +375,28 @@ def self_test(scanned, bits):
     else:
         failures.append("negative control 3 (a bad answer) did NOT trip")
 
+    # 4. THE CONTROL FOR THE TRUTH HALF, and it is the shape of the defect that was actually
+    #    in this file: a row claiming a publisher that fires on only some paths through the
+    #    setter. SetCapability's ClipDistance0..7 arms move m_version alone, so
+    #    NEW_PIPELINE_STATE here must read as under-firing rather than as a valid answer.
+    with_under_firing = dict(real)
+    with_under_firing["SetCapability"] = PIPELINE_STATE_BIT
+    problems = check_mapping(with_under_firing, real_duplicates, scanned, bits, publishers)
+    if any(p.startswith("UNDER-FIRING") for p in problems):
+        trips += 1
+    else:
+        failures.append("negative control 4 (an under-firing render-state answer) did NOT trip")
+
+    # 5. the other direction: a row that drops a publisher which DOES always fire. Silent
+    #    today, load-bearing the moment P3a builds a shutter from the file.
+    with_missing = dict(real)
+    with_missing["SetBlendEquation"] = RENDER_STATE_BIT
+    problems = check_mapping(with_missing, real_duplicates, scanned, bits, publishers)
+    if any(p.startswith("MISSING publisher") for p in problems):
+        trips += 1
+    else:
+        failures.append("negative control 5 (a dropped render-state publisher) did NOT trip")
+
     for failure in failures:
         print("dirty-surface self-test: %s" % failure)
     if trips == 0:
@@ -283,26 +423,34 @@ def main():
         sys.exit("missing %s" % SCAN_ROOT)
     if not os.path.isfile(DEF_PATH):
         sys.exit("missing %s" % DEF_PATH)
+    if not os.path.isfile(RENDER_STATE_PATH):
+        sys.exit("missing %s" % RENDER_STATE_PATH)
 
     sources, per_file, distinct_all = scan_all()
     bits = dirty_bit_names()
     if not bits:
         sys.exit("could not read the MGPipeDirty bit names out of %s" % TRACKER_PATH)
+    publishers = render_state_publishers()
+    if not publishers:
+        sys.exit("could not derive any RenderState setter out of %s" % RENDER_STATE_PATH)
 
     if args.self_test:
-        return self_test(distinct_all, bits)
+        return self_test(distinct_all, bits, publishers)
 
     mapping, duplicates = load_mapping()
 
     if args.check:
-        problems = check_mapping(mapping, duplicates, distinct_all, bits)
+        problems = check_mapping(mapping, duplicates, distinct_all, bits, publishers)
         for problem in problems:
             print("dirty-surface: %s" % problem)
         if problems:
             print("dirty-surface: %d problem(s); the mapping must cover every mutator the scan "
-                  "finds, in both directions" % len(problems))
+                  "finds, in both directions, and every render-state answer must be the one "
+                  "RenderState.cpp actually publishes" % len(problems))
             return 1
-        print("dirty-surface: %d mutators, all mapped, no stale rows" % len(mapping))
+        derived = sum(1 for m in mapping if m in publishers)
+        print("dirty-surface: %d mutators, all mapped, no stale rows; %d render-state answers "
+              "derived from RenderState.cpp and matching" % (len(mapping), derived))
         return 0
 
     total_functions = 0
