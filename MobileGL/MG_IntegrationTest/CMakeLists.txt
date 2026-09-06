@@ -127,6 +127,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/ClearTexImageUndefinedLevelZeroScenario.cpp
     Scenarios/RenderbufferBlendFormatScenario.cpp
     Scenarios/DualSourceBlendScenario.cpp
+    Scenarios/PipeVerifyArmingScenario.cpp
+    Scenarios/PoisonOmissionScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -631,3 +633,135 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}"
 )
+
+# --- the third CI mode: MOBILEGL_PIPE_VERIFY -----------------------------------
+#
+# ARCHITECTURE.md 13.2-(2) asks for a THIRD build mode next to pull and push: two state models in
+# one address space, compared field by field at every verb boundary and again at every accessor
+# read, 5-10x slower and never shipped. These entries are that mode's lane. They exist only when
+# the library was configured with -DMOBILEGL_PIPE_VERIFY=ON, which is deliberate and is half of
+# what makes the lane falsifiable: `ctest -L integration-verify --no-tests=error` in a build that
+# forgot the option matches NO tests and fails, instead of reporting a green run of nothing.
+#
+# The other half is PipeVerifyArmingScenario.Armed, which asserts the library's own arming line -
+# because MOBILEGL_PIPE_VERIFY=1 in the environment of a library that never compiled the
+# comparator in is a silent no-op that looks exactly like a clean pass.
+#
+# Three things about the ENVIRONMENT properties below, each of which has already gone wrong once
+# in this file:
+#   * every list APPENDS ${MGL_ITEST_COMMON_ENV} / ${MGL_ITEST_VULKAN_ENV}. A ctest ENVIRONMENT
+#     entry overrides the job environment for the names it lists, so an entry that named only its
+#     own knobs would lose the EGL vendor and Vulkan ICD pinning and run against whichever driver
+#     the loader found first.
+#   * the ambient Verify. entries name NEITHER MOBILEGL_PIPE_VERIFY_CORRUPT NOR
+#     MOBILEGL_PIPE_POISON_OMIT. That is what lets CI's two always-on negative-control steps
+#     export those knobs in the JOB environment and have them reach the test processes; a
+#     property entry of the same name would silently win and the controls would prove nothing.
+#   * MOBILEGL_LOG_FILE_PATH is per lane. It is the only channel a test process has for reading
+#     the library's own report (MG_Config is not reachable from this module), and the log is
+#     opened with fopen(path, "w"), so each process truncates it and the cases can trust it.
+if (MOBILEGL_PIPE_VERIFY)
+    # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
+    # boundary and again at every accessor read, which the design budgets at 5-10x.
+    set(MGL_ITEST_VERIFY_TIMEOUT 900)
+
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectGLES.log"
+        ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectVulkan.log"
+        ${MGL_ITEST_VULKAN_ENV})
+
+    # Negative control A (G4). MOBILEGL_PIPE_VERIFY_FATAL=0 so the process SURVIVES its own
+    # divergence and the case can read the report back out of the log; the CI step that exports
+    # the same corruption against the ambient lane, where FATAL keeps its default of 1, asserts
+    # the other half - that a divergence aborts and reds the entry.
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters" "MOBILEGL_PIPE_VERIFY_FATAL=0"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectGLES.log"
+        ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters" "MOBILEGL_PIPE_VERIFY_FATAL=0"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-corrupt-DirectVulkan.log"
+        ${MGL_ITEST_VULKAN_ENV})
+
+    # Negative control B (G5). The omission skips the STAMP of one field for one verb while still
+    # copying its value, which is indistinguishable from a fill row nobody wrote; the scenario
+    # forks, so the resulting std::abort() is a datum in waitpid() rather than a dead lane.
+    mgl_itest_join_environment(MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectGLES.log"
+        ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
+        "MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-DirectVulkan.log"
+        ${MGL_ITEST_VULKAN_ENV})
+
+    # The whole suite again, per backend, with the comparator armed. Same scenarios, same
+    # assertions, but every backend read of frontend state is now checked against a snapshot taken
+    # from the live context at the verb boundary - which is what "the 742 integration entries
+    # prove push equals pull" means. Labelled integration-gpu as well so a verify build's
+    # `ctest -L integration-gpu` still describes the whole registration set.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.Verify."
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.Verify."
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT}"
+    )
+
+    # One case each: the knobs are process-wide, so a corrupted or poisoned process cannot also be
+    # running the ambient assertions. These four entries are the ones that assert the RED - they
+    # pass when the comparator and the poison report, and go red when either stops.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.VerifyCorrupted."
+        TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.VerifyCorrupted."
+        TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.PoisonOmitted."
+        TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.PoisonOmitted."
+        TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT}"
+    )
+endif()
