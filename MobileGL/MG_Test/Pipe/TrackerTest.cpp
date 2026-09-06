@@ -41,9 +41,39 @@ namespace {
     }
 
 #if !MOBILEGL_PIPE_PUSH
-    TEST(Tracker, SkippedInAPullBuild) {
-        GTEST_SKIP() << "the tracker is compiled only under MOBILEGL_PIPE_PUSH";
-    }
+    // G2 REQUIRES THE PULL AND PUSH CTEST NAME SETS TO BE IDENTICAL, name for name. A
+    // push-only case therefore cannot be ABSENT from a pull build; it has to be there and
+    // SKIP, which is the shape PipeInputsTest.cpp established for the same reason. This list
+    // declares exactly the suite.name pairs the push build gets from the real cases below, so
+    // a case added on one side and forgotten on the other shows up as a ctest-name diff
+    // rather than as a test that silently is not there.
+#define MGL_TRACKER_TEST_LIST(X) \
+    X(TrackerAggregates, EveryAggregateStartsAtZero) \
+    X(TrackerAggregates, AVertexArrayAttributeMovesOnlyTheVaoAggregate) \
+    X(TrackerAggregates, AFramebufferObjectWriteMovesOnlyTheFramebufferAggregate) \
+    X(TrackerAggregates, AFramebufferDefaultSetterMovesOnlyTheFramebufferAggregate) \
+    X(TrackerAggregates, ATextureContentWriteMovesOnlyTheContentAggregate) \
+    X(TrackerAggregates, ATextureParameterMovesOnlyTheParamsAggregate) \
+    X(TrackerAggregates, ASamplerParameterMovesOnlyTheParamsAggregate) \
+    X(TrackerAggregates, ABufferRespecifyMovesOnlyTheBufferAggregate) \
+    X(TrackerAggregates, AVertexAttribDefaultMovesOnlyItsOwnAggregate) \
+    X(TrackerAggregates, ANoteWithoutALiveContextIsANoOp) \
+    X(TrackerWalk, EveryBitHasAName) \
+    X(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) \
+    X(TrackerWalk, TheFirstWalkOnAFreshContextPublishesEverything) \
+    X(TrackerWalk, SteadyStateEmitsNothing) \
+    X(TrackerWalk, BlendToggleReusesTwoCsos) \
+    X(TrackerWalk, ViewportDoesNotMintACso) \
+    X(TrackerWalk, WrapAroundRePushesButNeverMisses) \
+    X(TrackerWalk, AggregateGenerationCatchesABoundTextureMoving) \
+    X(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) \
+    X(TrackerWalk, ThePixelPackShutterIsAByteCompareOfThePackHalfOnly) \
+    X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+    MGL_TRACKER_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
 #else
     using GLContext = MG_State::GLState::GLContext;
     
