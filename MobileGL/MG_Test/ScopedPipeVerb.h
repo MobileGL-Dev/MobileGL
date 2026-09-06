@@ -45,7 +45,7 @@ namespace MobileGL::MG_Test {
         explicit ScopedPipeVerb([[maybe_unused]] MG_Pipe::MGPipeVerb verb)
 #if MOBILEGL_PIPE_PUSH
             : m_verb(verb) {
-            MG_Pipe::MGPipeFillForVerb(m_verb);
+            MG_Pipe::MGPipeValidateForVerb(m_verb);
         }
 #else
         {
@@ -60,7 +60,7 @@ namespace MobileGL::MG_Test {
         // entry point's MGP_FILL would.
         void Renew() {
 #if MOBILEGL_PIPE_PUSH
-            MG_Pipe::MGPipeFillForVerb(m_verb);
+            MG_Pipe::MGPipeValidateForVerb(m_verb);
 #endif
         }
 

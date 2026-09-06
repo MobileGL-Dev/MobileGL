@@ -16,6 +16,7 @@
 #include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
 
@@ -595,8 +596,8 @@ namespace MobileGL::MG_Pipe {
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
     }
 
-    // ---- the filler ----
-    void MGPipeFillForVerb(MGPipeVerb verb) {
+    // ---- the validate point (P2 brief D1) ----
+    void MGPipeValidateForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
         ParsePoisonOmissionKnob();
 #if MOBILEGL_PIPE_VERIFY
@@ -620,7 +621,17 @@ namespace MobileGL::MG_Pipe {
         auto* ctx = LiveContext();
         MGPipeFillAccess::SetIdentity(inputs, ctx);
         if (ctx == nullptr) return;
-        const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(verb)])];
+        const MGPipeVerbClass verbClass = kMGPipeVerbClass[static_cast<SizeT>(verb)];
+        const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)];
+
+        // ---- step 2: the dirty walk (P2 brief D1, D4) ----
+        // The mask is computed, latched and counted here and nothing is emitted from it
+        // yet: this commit is the safety net that says the walk is semantically free
+        // before any field stops being pulled. The emission steps land on top of it.
+        const Uint32 dirty = MGPipeTrackerInstance().Update(*ctx, verbClass);
+        (void)dirty;
+
+        // ---- step 4: the residual fill ----
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
             if (!MGPipeFieldMaskHas(mask, field)) continue;

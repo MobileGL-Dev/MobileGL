@@ -190,12 +190,12 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
 #if !MOBILEGL_PIPE_POISON
     GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
 #else
-    MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+    MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
 
     MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit");
-    MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+    MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
     EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     // The value was still copied: only the stamp is withheld.
@@ -212,7 +212,7 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
         }
     }
 
-    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
     EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     EXPECT_TRUE(Fresh(MGPipeInputField::GetBoundVertexArray));
     EXPECT_TRUE(Fresh(MGPipeInputField::GetRenderStateParameters));
@@ -220,7 +220,7 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
     EXPECT_TRUE(Fresh(MGPipeInputField::RecordError));
 
     // And the omission is scoped to its verb: a different verb of the same class keeps it.
-    MGPipeFillForVerb(MGPipeVerb::BindImageTexture);
+    MGPipeValidateForVerb(MGPipeVerb::BindImageTexture);
     EXPECT_TRUE(Fresh(MGPipeInputField::GetActiveTextureUnit));
 #endif
 }
@@ -237,9 +237,9 @@ TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
         MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit");
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetRenderStateParameters(); // a filled field of the preceding draw: must not abort
-        MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
         (void)gPipeInputs.GetTextureUnitObject(0); // the sibling field: filled, must not abort
         (void)gPipeInputs.GetActiveTextureUnit();  // the omitted field: Fatal
         ::_exit(3);                                // reached only if the poison failed
@@ -258,9 +258,9 @@ TEST_F(PipeInputsTest, ReadingAFilledFieldCompletes) {
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetRenderStateParameters();
-        MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
         (void)gPipeInputs.GetTextureUnitObject(0);
         (void)gPipeInputs.GetActiveTextureUnit();
     });
@@ -309,10 +309,10 @@ TEST_F(PipeInputsTest, PoisonOmitKnobArmsTheOmission) {
     GTEST_SKIP() << "no fork() on this platform";
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    MGPipeFillForVerb(MGPipeVerb::DrawArrays); // the parent's parse saw an empty knob
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays); // the parent's parse saw an empty knob
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipePoisonOmit = kOmissionKnob;
-        MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
         (void)gPipeInputs.GetTextureUnitObject(0); // the sibling field: filled, must not abort
         (void)gPipeInputs.GetActiveTextureUnit();  // the omitted field: Fatal
         ::_exit(3);
@@ -334,7 +334,7 @@ TEST_F(PipeInputsTest, BadPoisonOmitKnobIsFatalNamingTheKnob) {
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipePoisonOmit = "NoSuchVerb:GetActiveTextureUnit";
-        MGPipeFillForVerb(MGPipeVerb::GenerateMipmap);
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -354,7 +354,7 @@ TEST_F(PipeInputsTest, CorruptedSnapshotFieldIsNamedWithItsSerial) {
     GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
 #else
     const Uint64 serialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
-    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
     const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial;
     EXPECT_EQ(serial, serialBefore + 1);
     const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(MGPipeVerbClass::kDraw)];
@@ -392,11 +392,11 @@ TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
     GTEST_SKIP() << "no fork() on this platform";
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    MGPipeFillForVerb(MGPipeVerb::Clear); // the parent armed nothing: Features.PipeVerify is false here
+    MGPipeValidateForVerb(MGPipeVerb::Clear); // the parent armed nothing: Features.PipeVerify is false here
     const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1; // the child's DrawArrays fill
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         const Float boundary = gPipeInputs.GetLineWidth(); // boundary == live: completes
         (void)gPipeInputs.GetRenderStateParameters();
         MG_State::pGLContext->SetLineWidth(boundary + 1.0f);
@@ -426,12 +426,12 @@ TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
     GTEST_SKIP() << "no fork() on this platform";
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    MGPipeFillForVerb(MGPipeVerb::Clear);
+    MGPipeValidateForVerb(MGPipeVerb::Clear);
     const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1;
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -455,7 +455,7 @@ TEST_F(PipeInputsTest, BadVerifyCorruptKnobIsFatalNamingTheKnob) {
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyCorrupt = "NoSuchField";
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -479,14 +479,14 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
     GTEST_SKIP() << "no fork() on this platform";
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    MGPipeFillForVerb(MGPipeVerb::Clear);
+    MGPipeValidateForVerb(MGPipeVerb::Clear);
     const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1;
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyFatal = false;
         MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
-        MGPipeFillForVerb(MGPipeVerb::DrawElements);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawElements);
         std::exit(0);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
@@ -511,7 +511,7 @@ TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
 #else
     for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
         const auto verb = static_cast<MGPipeVerb>(v);
-        MGPipeFillForVerb(verb);
+        MGPipeValidateForVerb(verb);
         const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[v])];
         for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
             const auto field = static_cast<MGPipeInputField>(f);
@@ -532,7 +532,7 @@ TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
 // Without the notice the two reads below differ and the pushed value is the stale one.
 TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
     auto& ctx = *MG_State::pGLContext;
-    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
     ASSERT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
     ASSERT_EQ(gPipeInputs.GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
     ASSERT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
@@ -566,7 +566,7 @@ TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
 #else
     auto& ctx = *MG_State::pGLContext;
     MGPipeSetPoisonOmission("DrawArrays", "GetSamplingResolutionGeneration");
-    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
     ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
     ctx.BumpSamplingResolutionGeneration();
     EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
@@ -575,7 +575,7 @@ TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
     // FenceSync is a kQuery verb: its mask holds no texture field at all, so the notice must
     // leave the generation unfilled and a read of it Fatal{UnmigratedPipeInput}.
     MGPipeSetPoisonOmission(nullptr, nullptr);
-    MGPipeFillForVerb(MGPipeVerb::FenceSync);
+    MGPipeValidateForVerb(MGPipeVerb::FenceSync);
     ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
     ctx.BumpSamplingResolutionGeneration();
     EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
@@ -598,7 +598,7 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
-        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
         (void)gPipeInputs.GetSamplingResolutionGeneration(); // boundary == live: completes
         auto& ctx = *MG_State::pGLContext;
         const Uint64 before = ctx.GetSamplingResolutionGeneration();

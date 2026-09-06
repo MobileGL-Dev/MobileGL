@@ -18,11 +18,21 @@
 namespace MobileGL::MG_Pipe {
     struct PipeInputs;
 
-    // PipeFill.cpp. Bumps the per-verb serial, records the verb and the context identity,
-    // and copies every field in the verb class's may-read mask (kMGPipeClassFieldMask) out
-    // of the live GLContext, stamping each with the new serial. In a verify build it then
-    // runs the entry compare against a second snapshot (P1 brief D8).
-    void MGPipeFillForVerb(MGPipeVerb verb);
+    // PipeFill.cpp. THE VALIDATE POINT (ARCHITECTURE.md 5.1, P2 brief D1). In order:
+    //   1. bump the per-verb serial, record the verb and the context identity;
+    //   2. run the tracker's DIRTY WALK for this verb's class (MG_Impl/Pipe/Tracker.h);
+    //   3. EMIT, for each set dirty bit whose subsystem bit is on in the runtime
+    //      MOBILEGL_PIPE_PUSH bitmask, the P2 call that carries it;
+    //   4. run the P1 residual fill for every field an emitted call did NOT supply,
+    //      stamping each with the new serial exactly as before;
+    //   5. in a verify build, the entry compare against a second snapshot (P1 brief D8) -
+    //      which stops being a tautology the moment step 3 supplies a field step 4 skips.
+    //
+    // It was MGPipeFillForVerb through P1, when steps 2 and 3 did not exist. The macro
+    // spelling, the 83 call sites and the verb enum are unchanged: the dispatch is
+    // kMGPipeVerbClass's nine classes, which is the same code as nine named ValidateFor*
+    // entry points with one call site per verb instead of nine.
+    void MGPipeValidateForVerb(MGPipeVerb verb);
 
     // Ends the verb in flight without starting another: bumps the serial, so every field the
     // verb stamped goes stale, and puts the current verb back to "none", so a read made after
@@ -49,7 +59,7 @@ namespace MobileGL::MG_Pipe {
     void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask);
 #endif
 } // namespace MobileGL::MG_Pipe
-#define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeFillForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)
+#define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeValidateForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)
 #else
 #define MGP_FILL(Verb) ((void)0)
 #endif
