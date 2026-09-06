@@ -295,13 +295,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint32 index = static_cast<Uint32>(m_entries.size());
             m_entries.push_back(Entry{});
             m_entries[index].Gen = 1;
-            // The high-water mark, at powers of two from 1024 up. Once per NEW slot, which is
-            // once per object this backend has ever seen - never on a draw. This is the number
-            // D.4.2 should read out of a device log to size anything that ever does need a
-            // capacity (ROADMAP.md:7: no instrumentation on the hot path).
+            // The high-water mark, at powers of two from 1024 up: at most a handful of lines
+            // for a whole session, emitted from the allocate-a-NEW-slot branch, i.e. once per
+            // object this backend has ever seen and never on a draw (ROADMAP.md:7).
+            //
+            // [narrow, declared deviation from D20's "MGLOG_D for anything non-critical"] This
+            // one is I, not D, because D is compiled out of every build that ships and of every
+            // build P2 measures, and this line IS the measurement review v2's MAJOR 1 asks for:
+            // the live-object high-water mark of minecraft-1.21.4-in-world and
+            // ...-sodium-in-world, which nothing on desktop reaches and no gate here can see.
+            // The structure no longer has a capacity to size off it, so the number is evidence
+            // rather than a tuning input - but D.4.2 should still read it out of the device log,
+            // and it cannot read a line that was compiled away.
             const SizeT minted = m_entries.size();
             if (minted >= 1024 && (minted & (minted - 1)) == 0) {
-                MGLOG_D("MagmaPipeIdentityTable(%s): high-water %zu slots minted, %u live",
+                MGLOG_I("MagmaPipeIdentityTable(%s): high-water %zu slots minted, %u live",
                         m_kindName, minted, LiveCount());
             }
             return index;
