@@ -15,6 +15,7 @@
 #include <Config.h>
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State {
     void Init() {
@@ -213,6 +214,7 @@ namespace MobileGL::MG_State {
                 current.intValue[component] = static_cast<Int32>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+        MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeInt(Uint index, const Array<Int32, 4>& value) {
@@ -227,6 +229,7 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+        MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeUint(Uint index, const Array<Uint32, 4>& value) {
@@ -241,6 +244,7 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.intValue[component] = static_cast<Int32>(value[component]);
             }
+        MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         const CurrentVertexAttributeValue& GLContext::GetCurrentVertexAttribute(Uint index) const {

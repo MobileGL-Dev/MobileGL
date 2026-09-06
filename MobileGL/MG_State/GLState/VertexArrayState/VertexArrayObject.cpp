@@ -11,6 +11,7 @@
 #include <MG_State/GLState/StateObjectDeathNotice.h>
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     // Starts at 1 so a zero-initialized memo slot can never carry a live object's id.
@@ -313,18 +314,21 @@ namespace MobileGL::MG_State::GLState {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].FormatVersion;
         ++m_configVersion;
+        MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
     void VertexArrayObject::BumpAttributeBufferVersion(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].BufferVersion;
         ++m_configVersion;
+        MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
     void VertexArrayObject::BumpAttributeSwitchVersion(Uint index) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].SwitchVersion;
         ++m_configVersion;
+        MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
     const VertexAttributeVersion& VertexArrayObject::GetAttributeVersion(Uint index) const {

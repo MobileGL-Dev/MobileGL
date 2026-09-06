@@ -64,7 +64,19 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateName(Uint index) const;
         Bool ValidateBufferObject(Uint index) const;
 
+#if MOBILEGL_PIPE_PUSH
+    // P2 brief D4: "did the contents of ANY buffer object move". One counter for every
+    // BufferObject ++m_changeSerial site, which is what NEW_VERTEX_BUFFERS /
+    // NEW_INDEX_BUFFER / NEW_CONST_BUFFERS / NEW_SHADER_BUFFERS / NEW_SO_TARGETS all
+    // shutter on in P2 - five bits over one aggregate until P3b splits them.
+    void NoteBufferChanged() { ++m_anyBufferChangeGeneration; }
+    Uint64 GetAnyBufferChangeGeneration() const { return m_anyBufferChangeGeneration; }
+#endif
+
     private:
+#if MOBILEGL_PIPE_PUSH
+    Uint64 m_anyBufferChangeGeneration = 0;
+#endif
         UnorderedMap<Uint, SharedPtr<BufferObject>> m_bufferObjects;
         IndexGenerator<Uint> m_indexGenerator;
         Array<BindingSlot<BufferObject>, GlobalBufferTargets.size()> m_bindingSlots;

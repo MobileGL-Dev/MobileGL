@@ -490,6 +490,39 @@ namespace MobileGL::MG_Pipe {
         MGPipeFillAccess::CopyField(inputs, *ctx, field);
     }
 
+    // ---- the aggregate generations (P2 brief D4) ----
+    // MGP_NOTE_AGGREGATE lands here. The bump points are on OBJECTS, which have no
+    // back-pointer to the state container that owns them, so the note finds the live
+    // context - the same shape, and for the same reason, as MGPipeNoteFrontendMutation
+    // above. No verb has to be in flight and no field is stamped: an aggregate generation
+    // is not a PipeInputs field, it is what the tracker's shutter compares against.
+    void MGPipeNoteAggregate(MGPipeAggregate aggregate) {
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        switch (aggregate) {
+        case MGPipeAggregate::VaoAttribute:
+            ctx->NoteVaoAttributeChanged();
+            break;
+        case MGPipeAggregate::FramebufferAttachment:
+            ctx->NoteFramebufferAttachmentChanged();
+            break;
+        case MGPipeAggregate::TextureContent:
+            ctx->NoteTextureContentChanged();
+            break;
+        case MGPipeAggregate::TextureParams:
+            ctx->NoteTextureParamsChanged();
+            break;
+        case MGPipeAggregate::BufferChange:
+            ctx->NoteBufferChanged();
+            break;
+        case MGPipeAggregate::VertexAttribDefault:
+            ctx->NoteVertexAttribDefaultChanged();
+            break;
+        case MGPipeAggregate::Count:
+            break;
+        }
+    }
+
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
         if (verb == nullptr || field == nullptr) {
             g_omission = PoisonOmission{};

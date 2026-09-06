@@ -198,6 +198,43 @@ namespace MobileGL {
                 Uint GetBoundProgramPipelineName() const { return m_boundProgramPipeline; }
                 const SharedPtr<ProgramPipelineObject>& GetBoundProgramPipeline() const;
 
+#if MOBILEGL_PIPE_PUSH
+                // ---- the aggregate generations (P2 brief D4) ----
+                //
+                // The bump points sit on OBJECTS - a VertexArrayObject, a TextureObject, a
+                // BufferObject - which have no back-pointer to the state container that owns
+                // them, so MGP_NOTE_AGGREGATE goes through MGPipeNoteAggregate, which finds
+                // the live context and lands here. This facade is the whole reason the
+                // objects need no back-pointer, and it is push-only so the pull build's
+                // GLContext is byte-identical (G1).
+                void NoteVaoAttributeChanged() { m_vertexArrayState.NoteAttributeChanged(); }
+                Uint64 GetAnyVaoAttributeGeneration() const {
+                    return m_vertexArrayState.GetAnyAttributeGeneration();
+                }
+                void NoteFramebufferAttachmentChanged() { m_framebufferState.NoteAttachmentChanged(); }
+                Uint64 GetAnyFramebufferAttachmentGeneration() const {
+                    return m_framebufferState.GetAnyAttachmentGeneration();
+                }
+                void NoteTextureContentChanged() { m_textureState.NoteTextureContentChanged(); }
+                Uint64 GetAnyTextureContentGeneration() const {
+                    return m_textureState.GetAnyTextureContentGeneration();
+                }
+                void NoteTextureParamsChanged() { m_textureState.NoteTextureParamsChanged(); }
+                Uint64 GetAnyTextureParamsGeneration() const {
+                    return m_textureState.GetAnyTextureParamsGeneration();
+                }
+                void NoteBufferChanged() { m_bufferState.NoteBufferChanged(); }
+                Uint64 GetAnyBufferChangeGeneration() const {
+                    return m_bufferState.GetAnyBufferChangeGeneration();
+                }
+                // The sixth aggregate lives here rather than on a state container because
+                // the values it guards do too (m_currentVertexAttributes).
+                void NoteVertexAttribDefaultChanged() { ++m_anyVertexAttribDefaultGeneration; }
+                Uint64 GetAnyVertexAttribDefaultGeneration() const {
+                    return m_anyVertexAttribDefaultGeneration;
+                }
+#endif
+
                 // RenderState
                 Uint GetRenderStateParametersVersion() const;
                 // Only the pipeline-relevant subset - see RenderState::m_pipelineStateVersion.
@@ -515,6 +552,9 @@ namespace MobileGL {
                 Bool m_transformFeedbackPaused = false;
                 GLenum m_transformFeedbackPrimitiveMode = GL_POINTS;
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
+#if MOBILEGL_PIPE_PUSH
+                Uint64 m_anyVertexAttribDefaultGeneration = 0;
+#endif
                 Uint64 m_transformFeedbackGeneration = 0;
                 // Source of the per-span ids above; never rolls back with an object switch.
                 Uint64 m_transformFeedbackNextGeneration = 0;

@@ -11,6 +11,7 @@
 #include "MG_Util/Types.h"
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     // Starts at 1 so a zero-initialized memo slot can never carry a live object's id.
@@ -205,6 +206,7 @@ namespace MobileGL::MG_State::GLState {
         if (m_readBuffer == buf) return;
         m_readBuffer = buf;
         ++m_objectVersion;
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);
     }
 
     Uint FramebufferObject::GetExternalIndex() const {
@@ -216,6 +218,7 @@ namespace MobileGL::MG_State::GLState {
         if (member == value) return;                                                                                    \
         member = value;                                                                                                 \
         ++m_objectVersion;                                                                                              \
+        MGP_NOTE_AGGREGATE(FramebufferAttachment); \
     }
 
     MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultWidth, m_defaultWidth, Int)
@@ -228,5 +231,6 @@ namespace MobileGL::MG_State::GLState {
     void FramebufferObject::BumpAttachmentVersion(FramebufferAttachmentType type) {
         ++m_attachmentVersions[static_cast<SizeT>(type)];
         ++m_objectVersion;
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);
     }
 } // namespace MobileGL::MG_State::GLState

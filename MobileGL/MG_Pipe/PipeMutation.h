@@ -33,10 +33,55 @@ namespace MobileGL::MG_Pipe {
     // A no-op unless a context is live, a verb has been filled, and `field` is in that verb
     // class's may-read mask; a forwarded (sticky) field has no storage and is never copied.
     void MGPipeNoteFrontendMutation(MGPipeInputField field);
+
+    // ---- the aggregate generations (P2 brief D4, ARCHITECTURE.md 5.2) ----
+    //
+    // MGP_NOTE_MUTATION answers "a backend moved a frontend value INSIDE its own verb".
+    // MGP_NOTE_AGGREGATE answers a different question, which is why it is a second macro
+    // and not an overload: "did ANY object of this class move since the last time the
+    // tracker looked", collapsed onto one monotonic Uint64 per class so a per-verb dirty
+    // walk is a handful of compares rather than a scan over 32 attributes, 16 attachments,
+    // 32 texture units and 84 binding points.
+    //
+    // The counters are members of the owning MG_State container, all guarded by
+    // MOBILEGL_PIPE_PUSH so the pull build's state objects do not change size (G1). The
+    // bump points sit on OBJECTS, which have no back-pointer to their state, so the macro
+    // goes through a free function that finds the live GLContext - the same shape, and for
+    // the same reason, as MGP_NOTE_MUTATION (MG_Impl/Pipe/PipeFill.cpp). It costs a global
+    // load on a path that has just written object state.
+    //
+    // Monotonic and never reset: the tracker widens and compares, it never subtracts.
+    // Over-firing is free (one extra re-push); under-firing renders stale, which is why
+    // every counter here is deliberately COARSER than the state it guards.
+    enum class MGPipeAggregate : Uint32 {
+        // VertexArrayState: any VAO attribute format / buffer / enable moved.
+        VaoAttribute = 0,
+        // FramebufferState: any FBO attachment or default-geometry write, or a bind.
+        FramebufferAttachment,
+        // TextureState: any texture object CONTENT moved (an upload, a dirty region).
+        TextureContent,
+        // TextureState: any texture object or sampler object PARAMETER moved.
+        TextureParams,
+        // BufferState: any buffer object contents moved.
+        BufferChange,
+        // GLContext: a glVertexAttrib* default value moved. Not one of D4 five: the bit it
+        // shutters (NEW_VERTEX_ATTRIB_DEFAULTS) is specified there as a ContentHash over
+        // all 32 CurrentVertexAttributeValues, and hashing 768 bytes on EVERY draw does not
+        // fit inside the T1 ceiling. The hash still decides whether to EMIT (D11 set-hash
+        // suppressor); this decides whether to hash at all.
+        VertexAttribDefault,
+        Count,
+    };
+
+    // MG_Impl/Pipe/PipeFill.cpp. A no-op unless a context is live.
+    void MGPipeNoteAggregate(MGPipeAggregate aggregate);
 } // namespace MobileGL::MG_Pipe
 #define MGP_NOTE_MUTATION(Field)                                                                                       \
     ::MobileGL::MG_Pipe::MGPipeNoteFrontendMutation(::MobileGL::MG_Pipe::MGPipeInputField::Field)
+#define MGP_NOTE_AGGREGATE(Aggregate)                                                                                  \
+    ::MobileGL::MG_Pipe::MGPipeNoteAggregate(::MobileGL::MG_Pipe::MGPipeAggregate::Aggregate)
 #else
 #define MGP_NOTE_MUTATION(Field) ((void)0)
+#define MGP_NOTE_AGGREGATE(Aggregate) ((void)0)
 #endif
 #endif

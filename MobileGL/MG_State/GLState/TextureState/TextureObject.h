@@ -13,6 +13,7 @@
 #include "../SamplerState/SamplerObject.h"
 #include <Includes.h>
 #include <MG_Util/Math/VectorTypes.h>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     // Texture objects are always SharedPtr-owned (TextureState creates every instance via
@@ -188,6 +189,7 @@ namespace MobileGL::MG_State::GLState {
             if (m_depthStencilTextureMode == mode) return;
             m_depthStencilTextureMode = mode;
             ++m_textureParamsVersion;
+            MGP_NOTE_AGGREGATE(TextureParams);
         }
 
     protected:

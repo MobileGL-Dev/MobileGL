@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "TextureObject2DCube.h"
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -49,6 +50,7 @@ namespace MobileGL {
             void TextureObject2DCube::MarkStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, bool dirty) {
                 if (dirty) {
                     ++m_contentVersion;
+                    MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
             }
@@ -60,6 +62,7 @@ namespace MobileGL {
             void TextureObject2DCube::MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                              IntVec3 offset, IntVec3 size) {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
             }

@@ -140,7 +140,22 @@ namespace MobileGL::MG_State::GLState {
         // again (the unit tests do exactly that between cases).
         Uint64 GetContextId() const { return m_contextId; }
 
+#if MOBILEGL_PIPE_PUSH
+        // P2 brief D4, the two texture aggregates. CONTENT is an upload or a dirty region;
+        // PARAMS is a glTexParameter or a glSamplerParameter. They are separate because
+        // NEW_SAMPLER_VIEWS and NEW_SAMPLERS are separate dirty bits and a Minecraft frame
+        // moves them at wildly different rates.
+        void NoteTextureContentChanged() { ++m_anyTextureContentGeneration; }
+        Uint64 GetAnyTextureContentGeneration() const { return m_anyTextureContentGeneration; }
+        void NoteTextureParamsChanged() { ++m_anyTextureParamsGeneration; }
+        Uint64 GetAnyTextureParamsGeneration() const { return m_anyTextureParamsGeneration; }
+#endif
+
     private:
+#if MOBILEGL_PIPE_PUSH
+        Uint64 m_anyTextureContentGeneration = 0;
+        Uint64 m_anyTextureParamsGeneration = 0;
+#endif
         static Uint64 AllocateContextId();
 
         const Uint64 m_contextId;

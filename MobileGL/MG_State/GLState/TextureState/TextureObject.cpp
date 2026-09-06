@@ -11,6 +11,7 @@
 #include "MG_State/GLState/StateObjectDeathNotice.h"
 #include "MG_Util/Types.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -114,6 +115,7 @@ namespace MobileGL {
                 m_internalFormat = format;
                 BumpShapeVersion();
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             Uint TextureObjectBase::GetExternalIndex() const {
@@ -139,6 +141,7 @@ namespace MobileGL {
 
                 m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             const IntVec4& TextureObjectBase::GetBorderColorI() const {
@@ -153,6 +156,7 @@ namespace MobileGL {
 
                 m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             const UintVec4& TextureObjectBase::GetBorderColorUI() const {
@@ -167,6 +171,7 @@ namespace MobileGL {
 
                 m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             BorderColorForm TextureObjectBase::GetBorderColorForm() const {
@@ -216,6 +221,7 @@ namespace MobileGL {
                     break;
                 }
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             void TextureObjectBase::SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) {
@@ -223,6 +229,7 @@ namespace MobileGL {
 
                 m_swizzleParams = values;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             const UintVec2& TextureObjectBase::GetLevelRange() const {
@@ -240,6 +247,7 @@ namespace MobileGL {
                     m_levelRange.y() = m_levelRange.x();
                 }
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
             }
 
@@ -251,6 +259,7 @@ namespace MobileGL {
 
                 m_levelRange.y() = maxLevel;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
             }
 
@@ -271,6 +280,7 @@ namespace MobileGL {
                     m_levelRange.y() = std::min(std::max(m_levelRange.y(), m_levelRange.x()), m_immutableLevels - 1);
                 }
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             Uint16 TextureObjectBase::GetTextureParamsVersion() const {
@@ -298,6 +308,7 @@ namespace MobileGL {
 
             void TextureObjectBase::BumpContentVersion() {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
             }
 
             Int TextureObjectBase::GetSamples() const {
@@ -307,6 +318,7 @@ namespace MobileGL {
             void TextureObjectBase::SetSamples(Int samples) {
                 m_samples = samples;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             Bool TextureObjectBase::HasFixedSampleLocations() const {
@@ -316,6 +328,7 @@ namespace MobileGL {
             void TextureObjectBase::SetFixedSampleLocations(Bool fixedSampleLocations) {
                 m_fixedSampleLocations = fixedSampleLocations;
                 ++m_textureParamsVersion;
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             Uint64 TextureObjectBase::GetLifetimeId() const {
@@ -367,6 +380,7 @@ namespace MobileGL {
                                                               Bool dirty) {
                 if (dirty) {
                     ++m_contentVersion;
+                    MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
             }
@@ -378,6 +392,7 @@ namespace MobileGL {
             void TextureObjectWithOneMipmap::MarkStorageDirtyRegion(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                                     IntVec3 offset, IntVec3 size) {
                 ++m_contentVersion;
+                MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
             }

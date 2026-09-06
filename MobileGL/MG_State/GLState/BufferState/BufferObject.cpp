@@ -11,6 +11,7 @@
 #include <Config.h>
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_State::GLState {
     namespace {
@@ -43,6 +44,7 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::NotifyRespecify() {
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
         if (g_bufferBackendOps && g_bufferBackendOps->Respecify) {
             g_bufferBackendOps->Respecify(*this);
         }
@@ -50,6 +52,7 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::NotifySubData(SizeT offset, SizeT size) {
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
         if (size == 0) return;
         m_hasDefinedContent = true;
         if (g_bufferBackendOps && g_bufferBackendOps->SubData) {
@@ -59,6 +62,7 @@ namespace MobileGL::MG_State::GLState {
 
     void BufferObject::NotifyFlushMappedRange(Range1D range, Flags<BufferMappingAccessBit> appAccess) {
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
         if (range.start >= range.end) return;
         m_hasDefinedContent = true;
         if (g_bufferBackendOps && g_bufferBackendOps->FlushMappedRange) {
@@ -73,6 +77,7 @@ namespace MobileGL::MG_State::GLState {
             // undefined store to "has content" - that would cost the next orphaning
             // respecification a full-size upload of bytes the application never wrote.
             ++m_changeSerial;
+            MGP_NOTE_AGGREGATE(BufferChange);
             return;
         }
         m_hasDefinedContent = true;
@@ -80,6 +85,7 @@ namespace MobileGL::MG_State::GLState {
             // The write already landed in coherent GPU memory; the backend has no separate
             // copy to sync. Only bump the serial so cached transient slices invalidate.
             ++m_changeSerial;
+            MGP_NOTE_AGGREGATE(BufferChange);
             return;
         }
         NotifySubData(offset, size);
@@ -302,6 +308,7 @@ namespace MobileGL::MG_State::GLState {
                         data.size, m_size);
         Memcpy(m_resource.Bytes() + atOffset, data.data, data.size);
         ++m_changeSerial;
+        MGP_NOTE_AGGREGATE(BufferChange);
     }
 
     void BufferObject::MarkGpuWritten() {
@@ -366,6 +373,7 @@ namespace MobileGL::MG_State::GLState {
             g_bufferBackendOps->ResidentSubData(*this, offset, bytes);
             m_hasDefinedContent = true;
             ++m_changeSerial;
+            MGP_NOTE_AGGREGATE(BufferChange);
             m_gpuWritePending = true;
             return;
         }

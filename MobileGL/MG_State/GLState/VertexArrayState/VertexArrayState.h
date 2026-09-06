@@ -28,7 +28,20 @@ namespace MobileGL {
                 const SharedPtr<VertexArrayObject>& GetBoundVertexArray();
                 Vector<SharedPtr<VertexArrayObject>>& GetAllVertexArrays();
 
+#if MOBILEGL_PIPE_PUSH
+                // P2 brief D4: "did the attribute configuration of ANY vertex array move".
+                // Bumped from every VertexArrayObject::BumpAttribute*Version through
+                // MGP_NOTE_AGGREGATE(VaoAttribute), which is coarser than the per-object
+                // m_configVersion on purpose - the tracker wants one compare, and an extra
+                // re-push costs a push while a missed one renders stale.
+                void NoteAttributeChanged() { ++m_anyVaoAttributeGeneration; }
+                Uint64 GetAnyAttributeGeneration() const { return m_anyVaoAttributeGeneration; }
+#endif
+
             private:
+#if MOBILEGL_PIPE_PUSH
+                Uint64 m_anyVaoAttributeGeneration = 0;
+#endif
                 // "Nothing bound" (an out-of-range or never-created name was bound). Distinct from
                 // being bound to a live slot so that a slot filled AFTER such a bind does not
                 // retroactively become the bound VAO.

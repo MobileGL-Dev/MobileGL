@@ -12,6 +12,7 @@
 #include <MG_State/GLState/StateObjectDeathNotice.h>
 
 #include <atomic>
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL {
     namespace MG_State {
@@ -47,6 +48,9 @@ namespace MobileGL {
                 // bindings must never miss an invalidation, and over-invalidating on a wrap-mode
                 // write costs one re-resolve.
                 if (pGLContext) pGLContext->BumpSamplingResolutionGeneration();
+                // Every sampler parameter is a texture PARAMETER as far as the dirty walk is
+                // concerned, and BumpVersion is the one choke point every setter reaches.
+                MGP_NOTE_AGGREGATE(TextureParams);
             }
 
             void SamplerObject::SetWrapS(SamplerWrapMode mode) {

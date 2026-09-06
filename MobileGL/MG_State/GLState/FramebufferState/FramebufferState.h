@@ -25,7 +25,19 @@ namespace MobileGL::MG_State::GLState {
         Bool ValidateName(Uint index) const;
         Bool ValidateFramebufferObject(Uint index) const;
 
+#if MOBILEGL_PIPE_PUSH
+        // P2 brief D4: "did the attachment set or the default geometry of ANY framebuffer
+        // move". It does NOT cover a BIND - a bind writes a BindingSlot, not the object - so
+        // MGPipeTracker pairs this counter with the bound draw framebuffer identity, which
+        // is one extra load and keeps the bump points on the object where they belong.
+        void NoteAttachmentChanged() { ++m_anyAttachmentGeneration; }
+        Uint64 GetAnyAttachmentGeneration() const { return m_anyAttachmentGeneration; }
+#endif
+
     private:
+#if MOBILEGL_PIPE_PUSH
+        Uint64 m_anyAttachmentGeneration = 0;
+#endif
         UnorderedMap<Uint, SharedPtr<FramebufferObject>> m_framebufferObjects;
         IndexGenerator<Uint> m_indexGenerator;
         Array<BindingSlot<FramebufferObject>, static_cast<SizeT>(FramebufferTarget::FramebufferTargetCount)>
