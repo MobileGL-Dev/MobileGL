@@ -30,6 +30,25 @@ frequency-pin integrity.
 5. Root required (frequency pinning, GPU busy sampling).
 6. Write a device profile under `devices/` (see `devices/odinlite.env`).
 
+   A profile carries `PROFILE_VERIFIED=1` only once its sysfs nodes and OPPs have been read
+   off *that* device and one pinned window has been checked against them
+   (`big_cur`/`little_cur`/`gpu_cur_khz` in the result JSON must match the pins). Until then
+   it says `PROFILE_VERIFIED=0` and `bench.sh` / `session.sh` refuse to run against it unless
+   `--allow-unverified-profile` is passed, which labels the run unpinned in the warning.
+
+   That refusal exists because the pin path is silent when it is wrong: the harness writes
+   through `/proc/ppm/policy/hard_userlimit_*` and `/proc/gpufreq/gpufreq_opp_freq`, which are
+   MediaTek nodes, and `su -c 'echo ... > /proc/...'` against a device that has neither fails
+   without a non-zero exit. The run then reports numbers it believes were taken under a pin.
+
+## Devices
+
+| profile | device | verified |
+|---|---|---|
+| `devices/odinlite.env` | AYN Odin Lite, MT6877 / Mali-G68 | yes |
+| `devices/xiaomi-adreno830.env` | Xiaomi, Snapdragon 8 Elite / Adreno 830 (`35d0befa`) | **no** - Qualcomm pin path not yet taught to `bench.sh` |
+| `devices/oppo-mali.env` | Oppo / ColorOS, MediaTek + Mali (`3B159D009VZ00000`) | **no** - OPPs and thermal zone not yet read off the device |
+
 ## Usage
 
 ```

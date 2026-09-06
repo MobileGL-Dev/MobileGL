@@ -14,6 +14,7 @@
 # Usage:
 #   bench.sh --device devices/odinlite.env --backend magma [--samples 30]
 #            [--warmup 180] [--label mylabel] [--no-pin]
+#            [--allow-unverified-profile]
 #   backend: magma | espryt | mobileglues (reference)
 #
 # Output: one JSON line on stdout (also appended to results/results.jsonl) with
@@ -37,6 +38,7 @@ SAMPLES=30
 WARMUP=180
 LABEL=""
 DO_PIN=1
+ALLOW_UNVERIFIED_PROFILE=0
 WORLD_LOAD_TIMEOUT=420
 
 while [ $# -gt 0 ]; do
@@ -47,6 +49,7 @@ while [ $# -gt 0 ]; do
     --warmup) WARMUP=$2; shift 2 ;;
     --label) LABEL=$2; shift 2 ;;
     --no-pin) DO_PIN=0; shift ;;
+    --allow-unverified-profile) ALLOW_UNVERIFIED_PROFILE=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,6 +57,32 @@ done
 [ -n "$DEVICE_ENV" ] && [ -n "$BACKEND" ] || { echo "need --device and --backend" >&2; exit 2; }
 # shellcheck disable=SC1090
 . "$DEVICE_ENV"
+
+# A device profile that has not been read off its device yet is refused here rather than acted
+# on. The failure it prevents is silent and expensive: the pin path below is MediaTek-specific
+# (/proc/ppm, /proc/gpufreq), `su -c 'echo ... > /proc/...'` fails without a non-zero exit, and a
+# run against a profile whose nodes do not exist reports numbers it believes were taken under a
+# frequency pin. The pin-integrity fields sampled at window end are the only clue, and they are
+# read after the run rather than before it.
+#
+# PROFILE_VERIFIED=1 means: somebody read the cpufreq policies, the GPU OPP and the thermal zone
+# TYPE off THIS device, ran one pinned window, and checked big_cur/little_cur/gpu_cur_khz in the
+# result JSON against the pins. Nothing else earns it.
+require_verified_profile() {
+  if [ "${PROFILE_VERIFIED:-1}" = "1" ]; then return 0; fi
+  if [ "$ALLOW_UNVERIFIED_PROFILE" = "1" ]; then
+    echo "[warn] $DEVICE_ENV declares PROFILE_VERIFIED=0 and --allow-unverified-profile was passed:" >&2
+    echo "[warn] the frequency pins and the thermal gate in it are UNCONFIRMED, so any number this" >&2
+    echo "[warn] run produces is not comparable with a pinned one." >&2
+    return 0
+  fi
+  echo "$DEVICE_ENV declares PROFILE_VERIFIED=0: its sysfs nodes and OPPs have not been read off" >&2
+  echo "the device, so pinning would fail silently and the run would look pinned but not be." >&2
+  echo "Fill in the TODO_VERIFY_ON_DEVICE fields, confirm one pinned window, set PROFILE_VERIFIED=1 -" >&2
+  echo "or pass --allow-unverified-profile to measure anyway and label the result unpinned." >&2
+  exit 2
+}
+require_verified_profile
 
 case "$BACKEND" in
   espryt) RENDERER=$RENDERER_ESPRYT ;;
