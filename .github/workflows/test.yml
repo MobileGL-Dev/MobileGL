@@ -6,6 +6,10 @@ on:
       - dev
       - Feat/Backend-Direct-GLES
       - Feat/Backend-Direct-Vulkan
+      # TEMPORARY, remove before merging the MGPipe work into dev: the disaggregation
+      # branch runs the full lane on every push so a phase's landing is not gated on
+      # someone remembering to dispatch the workflow by hand.
+      - feat/disaggregated
   workflow_dispatch:
     inputs:
       baseline_sha:
