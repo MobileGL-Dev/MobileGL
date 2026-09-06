@@ -12,7 +12,6 @@
 #include "ProgramArtifacts.h"
 
 #include <MG_Util/Metrics/BufferMetrics.h>
-#include <MG_Util/ShaderTranspiler/SpvcSession.h>
 
 namespace MobileGL::MG_State::GLState {
     // The link job. Only ever held by SharedPtr here, so a forward declaration is enough -
