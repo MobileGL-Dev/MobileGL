@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -329,4 +330,69 @@ TEST(InProcessTransportTest, DoorbellTimesOutWhenNothingHappens) {
                   .count(),
               20);
     EXPECT_EQ(parked.load(), 0u);
+}
+
+// The design's own steady state: the consumer spun, set consumerParked and blocked
+// with NO deadline. Shutdown has to bring that thread back, and a single Notify
+// cannot - Doorbell::Wait consumes it, re-tests a condition that is still false,
+// and with kWaitForever parks again. Only a bell that reports Dead() ends the
+// loop, which is what InProcessChannel::Close rings now.
+//
+// A regression here is a HANG, so the join is bounded: the waiter owns its state
+// through a shared_ptr and is detached on timeout, and the test fails red after
+// five seconds instead of wedging the CI job.
+TEST(InProcessTransportTest, ShutdownUnparksAWaiterWithNoDeadline) {
+    struct Shared {
+        std::unique_ptr<InProcessTransport> client;
+        std::unique_ptr<InProcessTransport> server;
+        std::atomic<std::uint32_t> parked{0};
+        std::atomic<bool> returned{false};
+        std::atomic<bool> woke{true};
+    };
+    auto shared = std::make_shared<Shared>();
+    InProcessTransport::CreatePair(shared->client, shared->server);
+
+    std::thread waiter([shared] {
+        shared->woke.store(shared->server->SelfDoorbell().Wait(
+            shared->parked, [] { return false; }, kDefaultSpinUs, kWaitForever));
+        shared->returned.store(true, std::memory_order_release);
+    });
+    // Past the spin and announced as parked; a little longer and it is inside
+    // Park. (A Kill that lands before the Park is handled too - Park returns at
+    // once on a dead bell - but the case under test is the parked one.)
+    while (shared->parked.load() == 0) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ASSERT_FALSE(shared->returned.load());
+
+    shared->client->Shutdown();
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!shared->returned.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    if (!shared->returned.load(std::memory_order_acquire)) {
+        waiter.detach();
+        FAIL() << "Shutdown did not unpark a waiter with no deadline within 5 s: the inproc doorbell "
+                  "has no death state, so the waiter consumed the ring and parked again";
+    }
+    waiter.join();
+
+    // No wakeup was consumed - the bell died - and the park flag is clear.
+    EXPECT_FALSE(shared->woke.load());
+    EXPECT_TRUE(shared->server->SelfDoorbell().Dead());
+    EXPECT_TRUE(shared->client->SelfDoorbell().Dead());
+    EXPECT_EQ(shared->parked.load(), 0u);
+
+    // Sticky: a wait with no deadline that ARRIVES after the Shutdown returns at
+    // once rather than parking, so a late thread cannot hang either.
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_FALSE(shared->server->SelfDoorbell().Wait(
+        shared->parked, [] { return false; }, 0, kWaitForever));
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                  .count(),
+              1000);
+    EXPECT_EQ(shared->parked.load(), 0u);
 }

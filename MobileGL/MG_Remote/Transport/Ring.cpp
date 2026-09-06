@@ -87,11 +87,13 @@ namespace MobileGL::MG_Remote::Transport {
         : m_control(control), m_base(static_cast<std::uint8_t*>(base)), m_capacity(capacityBytes),
           m_mask(capacityBytes - 1), m_cursors(cursors) {
         if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < sizeof(RingRecordHeader) || capacityBytes > kMaxRingCapacity) {
+            capacityBytes < kMinRingCapacity || capacityBytes > kMaxRingCapacity) {
             MGLOG_E("MG_Remote ring: producer rejected, capacity %llu must be a power of two "
-                    "between %zu and %llu bytes over a non-null mapping (the record header's size "
-                    "field is 32-bit, so a bigger ring would truncate it)",
-                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader),
+                    "between %llu and %llu bytes over a non-null mapping (a record may be at most "
+                    "half the ring, and the record header's size field is 32-bit, so a bigger ring "
+                    "would truncate it)",
+                    static_cast<unsigned long long>(capacityBytes),
+                    static_cast<unsigned long long>(kMinRingCapacity),
                     static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;
@@ -123,11 +125,23 @@ namespace MobileGL::MG_Remote::Transport {
             return nullptr;
         }
         const std::uint64_t total = Align8(sizeof(RingRecordHeader) + payloadBytes);
-        if (total > m_capacity) {
-            // A single record larger than the whole ring is a caller bug: the
+        if (total > MaxRecordBytes()) {
+            // A single record larger than HALF the ring is a caller bug: the
             // record catalogue has to chunk oversized payloads (large subdata
             // becomes several records) rather than emit one giant record.
-            MGLOG_E("MG_Remote ring: record kind %u of %llu bytes does not fit a %llu byte ring; "
+            //
+            // Half, not the whole ring, because a record has to be placeable at
+            // EVERY head offset of an empty ring. Straddling the wrap boundary
+            // costs a pad of spaceToEnd bytes on top of the record, and with
+            // spaceToEnd < total that is at most 2*total-8, which stays within
+            // the capacity exactly up to capacity/2. Above it the record is
+            // placeable at some offsets and not at others: at head offset 16 of
+            // an empty 256-byte ring a 248-byte record needs 240+248 bytes while
+            // FreeBytes() reports 256, so a producer that waits for FreeBytes()
+            // >= total stalls forever, and nothing is ever logged. Refusing here
+            // makes that impossible - a nullptr with FreeBytes() >= total can no
+            // longer mean "wait".
+            MGLOG_E("MG_Remote ring: record kind %u of %llu bytes exceeds half of a %llu byte ring; "
                     "the emitter must chunk it",
                     static_cast<unsigned>(kind), static_cast<unsigned long long>(total),
                     static_cast<unsigned long long>(m_capacity));
@@ -184,11 +198,13 @@ namespace MobileGL::MG_Remote::Transport {
         : m_control(control), m_base(static_cast<const std::uint8_t*>(base)),
           m_capacity(capacityBytes), m_mask(capacityBytes - 1), m_cursors(cursors) {
         if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < sizeof(RingRecordHeader) || capacityBytes > kMaxRingCapacity) {
+            capacityBytes < kMinRingCapacity || capacityBytes > kMaxRingCapacity) {
             MGLOG_E("MG_Remote ring: consumer rejected, capacity %llu must be a power of two "
-                    "between %zu and %llu bytes over a non-null mapping (the record header's size "
-                    "field is 32-bit, so a bigger ring would truncate it)",
-                    static_cast<unsigned long long>(capacityBytes), sizeof(RingRecordHeader),
+                    "between %llu and %llu bytes over a non-null mapping (a record may be at most "
+                    "half the ring, and the record header's size field is 32-bit, so a bigger ring "
+                    "would truncate it)",
+                    static_cast<unsigned long long>(capacityBytes),
+                    static_cast<unsigned long long>(kMinRingCapacity),
                     static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;

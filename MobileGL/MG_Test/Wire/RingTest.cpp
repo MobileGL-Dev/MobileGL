@@ -231,6 +231,94 @@ TEST(RingTest, RecordLargerThanTheRingIsRefused) {
     EXPECT_TRUE(ring.Invariants());
 }
 
+TEST(RingTest, RecordLargerThanHalfTheRingIsRefused) {
+    // 256-byte ring: the bound is 128 bytes of header + payload.
+    RingFixture ring(256);
+    EXPECT_EQ(ring.Producer().MaxRecordBytes(), 128u);
+    // 8 + 240 = 248: fits the whole ring, does not fit half of it.
+    EXPECT_EQ(ring.Producer().Reserve(1, kRecNone, 240), nullptr);
+    // 8 + 128 = 136: one step over the bound, refused the same way...
+    EXPECT_EQ(ring.Producer().Reserve(1, kRecNone, 128), nullptr);
+    // ...and 8 + 120 = 128, exactly the bound, is accepted.
+    EXPECT_NE(ring.Producer().Reserve(1, kRecNone, 120), nullptr);
+    EXPECT_TRUE(ring.Invariants());
+}
+
+// The scenario that motivated the bound, as the negative control. Whether a record
+// can be placed must not depend on where the head happens to be. With "total <=
+// capacity" as the only rule, a 248-byte record is accepted at head offset 0 of an
+// empty 256-byte ring and refused forever at head offset 16 of the same empty
+// ring - it would need a 240-byte wrap pad plus itself, 488 bytes - while
+// FreeBytes() reports 256 the whole time, so a producer waiting for FreeBytes()
+// >= 248 spins on nullptr with nothing logged. Both answers have to be the same
+// refusal, and it has to be the loud one.
+TEST(RingTest, RecordPlaceabilityDoesNotDependOnTheHeadOffset) {
+    RingFixture atOffsetZero(256);
+    void* atZero = atOffsetZero.Producer().Reserve(1, kRecNone, 240);
+
+    RingFixture atOffsetSixteen(256);
+    ASSERT_TRUE(atOffsetSixteen.WriteRecord(1, 8, 0x01)); // 8 + 8 = 16 bytes
+    RingRecordView view{};
+    ASSERT_TRUE(atOffsetSixteen.Consumer().Pop(view));
+    atOffsetSixteen.Consumer().PublishRetired();
+    ASSERT_EQ(atOffsetSixteen.Producer().LocalHead(), 16u);
+    ASSERT_EQ(atOffsetSixteen.Producer().FreeBytes(), 256u);
+    void* atSixteen = atOffsetSixteen.Producer().Reserve(1, kRecNone, 240);
+
+    EXPECT_EQ(atSixteen, nullptr);
+    EXPECT_EQ(atZero, nullptr)
+        << "a 248-byte record was accepted at head offset 0 but is unplaceable at head offset 16 of "
+           "the same empty ring: the emitter cannot tell a refusal it must chunk from a full ring it "
+           "must wait on";
+    EXPECT_TRUE(atOffsetZero.Invariants());
+    EXPECT_TRUE(atOffsetSixteen.Invariants());
+}
+
+// The positive half of the same argument: a record of exactly half the capacity is
+// placeable at EVERY head offset of an empty ring, because the wrap pad in front of
+// it costs at most total-8 bytes. Walk the head to each 8-byte offset with bare
+// header records and reserve the maximal record there.
+TEST(RingTest, HalfCapacityRecordFitsAtEveryHeadOffset) {
+    RingFixture ring(256);
+    const std::uint64_t mask = ring.Capacity() - 1;
+    const std::uint64_t maximal = ring.Producer().MaxRecordBytes() - sizeof(RingRecordHeader); // 120
+    for (std::uint64_t target = 0; target < ring.Capacity(); target += 8) {
+        // A bare header never straddles the boundary, so no pad appears on the way.
+        while ((ring.Producer().LocalHead() & mask) != target) {
+            ASSERT_TRUE(ring.WriteRecord(1, 0, 0));
+            RingRecordView filler{};
+            ASSERT_TRUE(ring.Consumer().Pop(filler));
+            ring.Consumer().PublishRetired();
+        }
+        ASSERT_EQ(ring.Producer().FreeBytes(), ring.Capacity()) << "head offset " << target;
+        void* payload = ring.Producer().Reserve(2, kRecNone, maximal);
+        ASSERT_NE(payload, nullptr) << "head offset " << target;
+        ring.Producer().Publish();
+        RingRecordView view{};
+        bool corrupt = false;
+        ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt)) << "head offset " << target;
+        ASSERT_FALSE(corrupt);
+        EXPECT_EQ(view.kind, 2u);
+        EXPECT_EQ(view.payloadSize, maximal);
+        ring.Consumer().PublishRetired();
+        ASSERT_TRUE(ring.Invariants()) << "head offset " << target;
+    }
+}
+
+TEST(RingTest, RejectsARingTooSmallForTheSmallestRecord) {
+    alignas(4096) RingControl control{};
+    InitRingControl(control);
+    std::uint8_t bytes[16] = {};
+    // One header's worth of ring can carry nothing once a record may be at most
+    // half the ring; two headers' worth carries a bare header.
+    RingProducer tooSmall(&control, bytes, sizeof(RingRecordHeader), RingCursorSet::Cmd);
+    EXPECT_FALSE(tooSmall.Valid());
+    RingProducer smallest(&control, bytes, kMinRingCapacity, RingCursorSet::Cmd);
+    ASSERT_TRUE(smallest.Valid());
+    EXPECT_EQ(smallest.MaxRecordBytes(), sizeof(RingRecordHeader));
+    EXPECT_NE(smallest.Reserve(1, kRecNone, 0), nullptr);
+}
+
 TEST(RingTest, HardDrainBumpsTheGenerationOnlyWhenQuiesced) {
     RingFixture ring(256);
     ASSERT_TRUE(ring.WriteRecord(1, 32, 0x01));

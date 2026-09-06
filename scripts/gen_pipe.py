@@ -272,6 +272,16 @@ def gen_wire(calls):
 // a record that is shorter than its own type, longer than what is left in the buffer, or
 // not a multiple of 8 is protocol corruption and is fatal. There is no recovery path -
 // silently applying a truncated record is how a corrupt stream becomes a wrong picture.
+//
+// OVERSIZED PAYLOADS ARE CHUNKED, NEVER EMITTED WHOLE (plan section 8.2: G3 has to define
+// the path for a record larger than the segment). The bound is the ring's,
+// RingProducer::MaxRecordBytes() == Capacity()/2, and it is exact rather than
+// conservative: a record has to be placeable at every head offset of an empty ring, the
+// wrap pad in front of it costs up to total-8 bytes, and only a record of at most half the
+// ring survives that at every offset. An emitter holding more than Capacity()/2 bytes of
+// record (a large resource_subdata, a create_shader_state archive) splits it into several
+// records of at most that size; the transport refuses a bigger one outright - nullptr plus
+// an MGLOG_E - rather than let the producer wait on free bytes that can never suffice.
 
 struct MGPWireRecHeader {
     Uint16 Op;    // MGPWireOp

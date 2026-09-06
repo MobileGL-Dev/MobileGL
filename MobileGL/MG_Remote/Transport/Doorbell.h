@@ -104,12 +104,15 @@ namespace MobileGL::MG_Remote::Transport {
         // does not make the next Park return spuriously forever.
         virtual void Reset() = 0;
 
-        // True once the wakeup channel is permanently unusable, e.g. the peer
-        // closed its end of the socket. A dead doorbell can never deliver
-        // another wakeup AND its descriptor is permanently poll-ready, so Wait
-        // must stop re-parking on it: otherwise a waiter with no deadline
-        // burns a big core at full clock, which is the exact pathology the
-        // bidirectional doorbell exists to prevent.
+        // True once the wakeup channel is permanently unusable: the peer closed
+        // its end of the socket, or the inproc channel was shut down. A dead
+        // doorbell can never deliver another wakeup, and Wait must stop
+        // re-parking on it - for the socket because its descriptor is
+        // permanently poll-ready and a waiter with no deadline would burn a
+        // big core at full clock, for the condvar because Park would otherwise
+        // block forever and Shutdown could never join the waiter. Every
+        // implementation has a death state; the base default is only for a
+        // bell that cannot die.
         virtual bool Dead() const { return false; }
 
         // Spin `spinUs`, then park until `ready()` or the deadline.
@@ -204,10 +207,23 @@ namespace MobileGL::MG_Remote::Transport {
         void Notify() override;
         bool Park(std::uint32_t timeoutMs) override;
         void Reset() override;
+        bool Dead() const override { return m_dead.load(std::memory_order_acquire); }
+
+        // Hangs the bell up for good: every parked waiter returns false now and
+        // every later Park returns false at once. The inproc twin of the socket
+        // peer closing its end (SocketDoorbell latches m_dead on EOF), and what
+        // InProcessChannel::Close rings instead of Notify. A Notify is consumed
+        // by ONE Park; Doorbell::Wait then re-tests its condition, finds
+        // nothing published, finds the bell alive, and with kWaitForever parks
+        // again - so a Shutdown that only rang could never join a server thread
+        // sitting in the design's own steady state (spun, set consumerParked,
+        // blocked). Irreversible by design, like the socket's.
+        void Kill();
 
     private:
         struct Impl;
         Impl* m_impl;
+        std::atomic<bool> m_dead{false};
     };
 
 #if !defined(_WIN32)

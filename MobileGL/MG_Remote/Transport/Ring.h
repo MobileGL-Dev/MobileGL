@@ -120,6 +120,11 @@ namespace MobileGL::MG_Remote::Transport {
     // class of construction-time guard as the power-of-two check beside it.
     inline constexpr std::uint64_t kMaxRingCapacity = 0xFFFFFFFFull;
 
+    // Smallest ring: two record headers. A record may be at most HALF the ring
+    // (see RingProducer::Reserve), so a ring of one header could carry nothing
+    // at all - not even the smallest record, a bare header.
+    inline constexpr std::uint64_t kMinRingCapacity = 2 * sizeof(RingRecordHeader);
+
     // Which cursor triple a producer/consumer pair drives.
     enum class RingCursorSet : std::uint32_t {
         Cmd = 0,
@@ -156,8 +161,8 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         RingProducer() = default;
         // `base` is the ring's byte area (NOT the control page) and
-        // `capacityBytes` must be a power of two of at least one record header
-        // and at most kMaxRingCapacity. Anything else leaves Valid() false.
+        // `capacityBytes` must be a power of two between kMinRingCapacity and
+        // kMaxRingCapacity. Anything else leaves Valid() false.
         RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes,
                      RingCursorSet cursors);
 
@@ -167,11 +172,27 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t FreeBytes() const;
 
         // Reserves room for one record and returns a pointer to its payload,
-        // or nullptr when the ring is full (or the record cannot fit at all).
-        // The payload is uninitialized; alignment padding at its tail is NOT
-        // zeroed. Emits a pad record automatically when the record would
-        // straddle the wrap boundary, so every record is contiguous.
+        // or nullptr when the ring is full. The payload is uninitialized;
+        // alignment padding at its tail is NOT zeroed. Emits a pad record
+        // automatically when the record would straddle the wrap boundary, so
+        // every record is contiguous.
+        //
+        // A record whose total (header + payload, rounded up to 8) exceeds
+        // MaxRecordBytes() == Capacity()/2 is refused outright, with an error
+        // log and however empty the ring is: chunking it is the emitter's job
+        // (plan section 8.2, the G3 chunking rule). Half is exact, not
+        // conservative - it is the largest record EVERY head offset can place,
+        // because a wrap pad costs at most total-8 bytes on top of the record
+        // and 2*total-8 <= capacity-8 holds exactly up to capacity/2. Above it
+        // a record is placeable at some offsets and not at others, and a
+        // producer waiting for FreeBytes() >= total stalls forever on an empty
+        // ring. So: nullptr with FreeBytes() >= total never means "wait"; it
+        // can only mean "too big, chunk".
         void* Reserve(std::uint16_t kind, std::uint16_t flags, std::uint64_t payloadBytes);
+
+        // The largest header+payload total Reserve accepts: Capacity()/2. This
+        // is the number the emitter chunks against.
+        std::uint64_t MaxRecordBytes() const { return m_capacity / 2; }
 
         // Makes every reserved record visible to the consumer (release store on
         // the head cursor). Cheap: publishing per record is fine, batching 8-16

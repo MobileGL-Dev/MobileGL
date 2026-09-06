@@ -81,9 +81,13 @@ namespace MobileGL::MG_Remote::Transport {
                 dir.fdCv.notify_all();
             }
             // Anything parked on a ring doorbell has to come back too, or a
-            // shutdown mid-frame hangs the peer forever.
+            // shutdown mid-frame hangs the peer forever. Kill, not Notify: a
+            // ring is consumed by one Park, after which Doorbell::Wait re-tests
+            // a condition nothing published and - the bell still reporting
+            // alive - parks again, with no deadline forever. Only Dead() ends
+            // that loop.
             for (CondVarDoorbell& bell : m_bells) {
-                bell.Notify();
+                bell.Kill();
             }
         }
 
@@ -277,8 +281,9 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     // Whole-connection teardown, as ITransport::Shutdown documents: both
-    // directions are half-closed and both ring doorbells are rung, because a
-    // peer parked on a ring doorbell mid-frame would otherwise never come back.
+    // directions are half-closed and both ring doorbells are KILLED, because a
+    // peer parked on a ring doorbell mid-frame would otherwise never come back
+    // (a mere ring is consumed once and the waiter parks again).
     void InProcessTransport::Shutdown() { m_channel->Close(); }
 
     Doorbell& InProcessTransport::PeerDoorbell() { return m_channel->Bell(1 - m_endpoint); }

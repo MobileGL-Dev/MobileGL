@@ -48,6 +48,12 @@ namespace MobileGL::MG_Remote::Transport {
 
     bool CondVarDoorbell::Park(std::uint32_t timeoutMs) {
         std::unique_lock<std::mutex> lock(m_impl->mutex);
+        // The death latch is tested under the same mutex Kill sets it under, so
+        // a Kill cannot slip between this test and the wait below: it either
+        // returns here or wakes the predicate.
+        if (m_dead.load(std::memory_order_relaxed)) {
+            return false;
+        }
         if (m_impl->signals != 0) {
             --m_impl->signals;
             return true;
@@ -55,14 +61,31 @@ namespace MobileGL::MG_Remote::Transport {
         if (timeoutMs == 0) {
             return false;
         }
+        const auto woken = [this] {
+            return m_impl->signals != 0 || m_dead.load(std::memory_order_relaxed);
+        };
         if (timeoutMs == kWaitForever) {
-            m_impl->cv.wait(lock, [this] { return m_impl->signals != 0; });
-        } else if (!m_impl->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                                        [this] { return m_impl->signals != 0; })) {
+            m_impl->cv.wait(lock, woken);
+        } else if (!m_impl->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), woken)) {
+            return false;
+        }
+        if (m_dead.load(std::memory_order_relaxed)) {
+            // Woken by Kill, not by an event. The caller re-tests its condition
+            // regardless (Doorbell::Wait always does) and then sees Dead().
             return false;
         }
         --m_impl->signals;
         return true;
+    }
+
+    void CondVarDoorbell::Kill() {
+        {
+            std::lock_guard<std::mutex> lock(m_impl->mutex);
+            m_dead.store(true, std::memory_order_release);
+        }
+        // notify_all, not notify_one: both a raw Park and a Doorbell::Wait may
+        // be parked here, and after this nobody will ring again.
+        m_impl->cv.notify_all();
     }
 
     void CondVarDoorbell::Reset() {
