@@ -4818,6 +4818,7 @@ void main() {
         return MGB_CTX->GetRenderStateParameters().SampleMaskValue;
     }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
     Uint64 VulkanRenderer::ComputePipelineStateHash(Uint32 colorAttachmentCount,
                                                     VkSampleCountFlagBits rasterizationSamples) const {
         // One bulk fetch instead of ~17 per-field accessor calls into MG_State: every
@@ -4908,6 +4909,8 @@ void main() {
         }
         return hash;
     }
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
+
 
     // A program that runs a geometry shader AND captures transform feedback. Both halves are
     // link-time properties, so this is safe to fold into a pipeline keyed on the program hash.
@@ -4983,23 +4986,49 @@ void main() {
         // per-draw state flips (GL_BLEND toggles) would otherwise miss entries the memo holds.
         // The version only guards recomputing the hash - unchanged version, unchanged bytes.
         const Uint renderStateVersion = MGB_CTX->GetPipelineStateVersion();
-        if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-            m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
-            m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
-            m_pipelineStateHash =
-                ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
-            m_pipelineStateHashVersion = renderStateVersion;
-            m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
-            m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
-            m_pipelineStateHashValid = true;
+#if MOBILEGL_PIPE_PUSH
+        // P2 D12.1. Non-null means the client's render-state CSO handle is this draw's state
+        // key and the hash below is not computed at all; null means the pre-handle arm. The
+        // two arms' entries can never match each other: the handle arm stores hash 0 and a
+        // real handle, the legacy arm a real hash and the null handle, and the probe compares
+        // both components.
+        const MG_Pipe::MGPipeHandle renderStateCso = ResolveBoundRenderStateCso();
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+#if MOBILEGL_PIPE_PUSH
+        if (MG_Pipe::MGPipeHandleIsNull(renderStateCso))
+#endif
+        {
+            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                m_pipelineStateHashColorCount != renderPassEntry.colorAttachmentCount ||
+                m_pipelineStateHashSampleCount != renderPassEntry.sampleCount) {
+                m_pipelineStateHash =
+                    ComputePipelineStateHash(renderPassEntry.colorAttachmentCount, renderPassEntry.sampleCount);
+                m_pipelineStateHashVersion = renderStateVersion;
+                m_pipelineStateHashColorCount = renderPassEntry.colorAttachmentCount;
+                m_pipelineStateHashSampleCount = renderPassEntry.sampleCount;
+                m_pipelineStateHashValid = true;
+            }
         }
-        const Uint64 pipelineStateHash = m_pipelineStateHash;
+#endif
+        const Uint64 pipelineStateHash =
+#if MOBILEGL_PIPE_PUSH
+            !MG_Pipe::MGPipeHandleIsNull(renderStateCso) ? 0 :
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+            m_pipelineStateHash;
+#else
+            0;
+#endif
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
             if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                 entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
                 entry.renderPassHash == renderPassHash &&
                 entry.pipelineStateHash == pipelineStateHash &&
+#if MOBILEGL_PIPE_PUSH
+                entry.renderStateCso == renderStateCso &&
+#endif
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
                 entry.transformFlags == transformFlags) {
                 if (MG_Util::PipeStats::Enabled()) {
@@ -5668,6 +5697,9 @@ void main() {
             entry.vertexInputHash = vertexLayoutHash;
             entry.renderPassHash = renderPassHash;
             entry.pipelineStateHash = pipelineStateHash;
+#if MOBILEGL_PIPE_PUSH
+            entry.renderStateCso = renderStateCso;
+#endif
             entry.primitiveRestartEnable = primitiveRestartEnable;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
@@ -6332,16 +6364,38 @@ void main() {
             // what lets a per-draw GL_BLEND toggle alternate between two memo entries
             // instead of missing forever on a monotonic version. A miss falls through
             // to the full lookup.
-            if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
-                m_pipelineStateHashColorCount != snap.renderPassColorCount ||
-                m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
-                m_pipelineStateHash =
-                    ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
-                m_pipelineStateHashVersion = renderStateVersion;
-                m_pipelineStateHashColorCount = snap.renderPassColorCount;
-                m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
-                m_pipelineStateHashValid = true;
+#if MOBILEGL_PIPE_PUSH
+            // Same arm selector as GetOrCreatePipeline's probe (P2 D12.1); this site is the
+            // fast path's copy of it, and the two must key identically or the fast path would
+            // hand back a pipeline the full path would not have matched.
+            const MG_Pipe::MGPipeHandle renderStateCso = ResolveBoundRenderStateCso();
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+#if MOBILEGL_PIPE_PUSH
+            if (MG_Pipe::MGPipeHandleIsNull(renderStateCso))
+#endif
+            {
+                if (!m_pipelineStateHashValid || m_pipelineStateHashVersion != renderStateVersion ||
+                    m_pipelineStateHashColorCount != snap.renderPassColorCount ||
+                    m_pipelineStateHashSampleCount != snap.renderPassSampleCount) {
+                    m_pipelineStateHash =
+                        ComputePipelineStateHash(snap.renderPassColorCount, snap.renderPassSampleCount);
+                    m_pipelineStateHashVersion = renderStateVersion;
+                    m_pipelineStateHashColorCount = snap.renderPassColorCount;
+                    m_pipelineStateHashSampleCount = snap.renderPassSampleCount;
+                    m_pipelineStateHashValid = true;
+                }
             }
+#endif
+            const Uint64 pipelineStateHash =
+#if MOBILEGL_PIPE_PUSH
+                !MG_Pipe::MGPipeHandleIsNull(renderStateCso) ? 0 :
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                m_pipelineStateHash;
+#else
+                0;
+#endif
             const auto memoTransformFlags =
                 ProgramFactory::CompileOptionFlags(snap.resolvedTransformFlags);
             for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
@@ -6349,7 +6403,10 @@ void main() {
                 if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
                     entry.programHash == programObj.hash && entry.vertexInputHash == vaoLayoutHash &&
                     entry.renderPassHash == snap.renderPassHash &&
-                    entry.pipelineStateHash == m_pipelineStateHash &&
+                    entry.pipelineStateHash == pipelineStateHash &&
+#if MOBILEGL_PIPE_PUSH
+                    entry.renderStateCso == renderStateCso &&
+#endif
                     entry.primitiveRestartEnable == drawPrimitiveRestartEnable &&
                     entry.transformFlags == memoTransformFlags) {
                     pipeline = entry.pipeline;
