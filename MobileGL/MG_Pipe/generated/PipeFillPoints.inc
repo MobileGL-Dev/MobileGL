@@ -287,8 +287,8 @@ inline constexpr MGPipeFieldMask kMGPipeClassFieldMask[kMGPipeVerbClassCount] = 
     {{0x5f50ffa001344101ull, 0x0000000000000000ull}},
     // kTextureOp: 14 fields (7 own + 7 sticky)
     {{0x5c00f22001200101ull, 0x0000000000000000ull}},
-    // kReadback: 22 fields (15 own + 7 sticky)
-    {{0x5c50f3a041300541ull, 0x0000000000000000ull}},
+    // kReadback: 24 fields (17 own + 7 sticky)
+    {{0x5f50f3a041300541ull, 0x0000000000000000ull}},
     // kXfbSpan: 15 fields (8 own + 7 sticky)
     {{0x7f0b402000000380ull, 0x0000000000000000ull}},
     // kProgramOp: 18 fields (11 own + 7 sticky)

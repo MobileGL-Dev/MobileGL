@@ -237,7 +237,7 @@
     X(kReadback,    GetSamplingResolutionGeneration)                   \
     X(kReadback,    GetTextureBindGeneration)                          \
     X(kReadback,    GetMaxTouchedTextureUnit)                          \
-    X(kReadback,    GetImageTextureBinding)                            \
+    X(kReadback,    GetImageTextureBinding)                                /* The depth/stencil read emulation draws (ScopedEmulationDrawState,          */     /* DirectGLES.cpp:5224) and pauses an active capture around its own draw, so   */     /* a readback reads the transform-feedback state exactly as a draw does.       */     X(kReadback,    IsTransformFeedbackActive)                             X(kReadback,    IsTransformFeedbackPaused)                         \
     /* kXfbSpan */                                                     \
     X(kXfbSpan,     GetTransformFeedbackProgram)                       \
     X(kXfbSpan,     GetBufferBindingPoint)                             \
