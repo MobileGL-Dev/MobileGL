@@ -16,6 +16,7 @@
 
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -45,6 +46,155 @@ namespace MobileGL::MG_Pipe {
             inputs.m_patchVertices = vertices;
             inputs.m_patchDefaultOuterLevel = outer;
             inputs.m_patchDefaultInnerLevel = inner;
+        }
+
+        // ----------------------------------------------------------------------------
+        // D5: the 29 PipeInputs fields that are PURE FUNCTIONS of RenderStateParameters.
+        //
+        // Once bind_render_state / set_dynamic_state have assembled the working block,
+        // copying these out of GLContext a second time would be exactly the per-verb pull
+        // P2 exists to remove - so the applier DERIVES them instead. Each line below is a
+        // transcription of the RenderState getter of the same name (RenderState.cpp);
+        // GLContext's accessors are one-line forwards to those, so this block and the pull
+        // path answer the same question from the same bytes.
+        //
+        // This departs from P1 brief D4's "no derivation logic is re-implemented in
+        // PipeInputs", deliberately and with a guard: MOBILEGL_PIPE_VERIFY's compare-at-read
+        // re-reads every one of these from the live context AT EVERY BACKEND READ and
+        // compares field-wise, so a transcription error is caught on the first draw that
+        // reads it. RenderStateSpansTest.DerivationMatchesTheFrontendGetters walks every
+        // setter and checks all 29 against GLContext on top of that.
+        // ----------------------------------------------------------------------------
+
+        // RenderState::IsCapabilityEnabled, transcribed against the assembled block. One of
+        // the two derivations that is not a field copy, and the reason D3's three storage
+        // holes had to close FIRST: before P2, DepthClamp, FramebufferSrgb and
+        // TextureCubeMapSeamless fell to `default: return false` and this could not have
+        // been written at all.
+        static Bool DeriveCapability(const RenderStateParameters& p, CapabilityInput cap) {
+#define MGP_DERIVE_CAPABILITY(capability)                                                                              \
+    case CapabilityInput::capability:                                                                                  \
+        return p.capability##Enabled;
+            switch (cap) {
+                MGP_DERIVE_CAPABILITY(ColorLogicOp)
+                MGP_DERIVE_CAPABILITY(DebugOutput)
+                MGP_DERIVE_CAPABILITY(DebugOutputSynchronous)
+                MGP_DERIVE_CAPABILITY(DepthClamp)
+                MGP_DERIVE_CAPABILITY(DepthTest)
+                MGP_DERIVE_CAPABILITY(CullFace)
+                MGP_DERIVE_CAPABILITY(Dither)
+                MGP_DERIVE_CAPABILITY(FramebufferSrgb)
+                MGP_DERIVE_CAPABILITY(LineSmooth)
+                MGP_DERIVE_CAPABILITY(Multisample)
+                MGP_DERIVE_CAPABILITY(PolygonOffsetFill)
+                MGP_DERIVE_CAPABILITY(PolygonOffsetLine)
+                MGP_DERIVE_CAPABILITY(PolygonOffsetPoint)
+                MGP_DERIVE_CAPABILITY(PolygonSmooth)
+                MGP_DERIVE_CAPABILITY(PrimitiveRestart)
+                MGP_DERIVE_CAPABILITY(PrimitiveRestartFixedIndex)
+                MGP_DERIVE_CAPABILITY(RasterizerDiscard)
+                MGP_DERIVE_CAPABILITY(SampleAlphaToCoverage)
+                MGP_DERIVE_CAPABILITY(SampleAlphaToOne)
+                MGP_DERIVE_CAPABILITY(SampleCoverage)
+                MGP_DERIVE_CAPABILITY(SampleMask)
+                MGP_DERIVE_CAPABILITY(SampleShading)
+                MGP_DERIVE_CAPABILITY(StencilTest)
+                MGP_DERIVE_CAPABILITY(TextureCubeMapSeamless)
+                MGP_DERIVE_CAPABILITY(ProgramPointSize)
+            // The non-indexed query of an INDEXED capability answers for index 0
+            // (GL 4.6 core 22.1) - RenderState.cpp says it in the same words.
+            case CapabilityInput::Blend:
+                return p.BlendStates[0].Enabled;
+            case CapabilityInput::ScissorTest:
+                return (p.ScissorTestEnabledMask & 1u) != 0;
+            // CapabilityInput lists ClipDistance0..7 contiguously, so the subtraction below
+            // is in range for exactly the eight values that reach here - RenderState.cpp's
+            // file-local ClipDistanceBit is the same expression.
+            case CapabilityInput::ClipDistance0:
+            case CapabilityInput::ClipDistance1:
+            case CapabilityInput::ClipDistance2:
+            case CapabilityInput::ClipDistance3:
+            case CapabilityInput::ClipDistance4:
+            case CapabilityInput::ClipDistance5:
+            case CapabilityInput::ClipDistance6:
+            case CapabilityInput::ClipDistance7:
+                return (p.ClipDistanceEnabledMask &
+                        (1u << (static_cast<Uint>(cap) - static_cast<Uint>(CapabilityInput::ClipDistance0)))) != 0;
+            default:
+                return false;
+            }
+#undef MGP_DERIVE_CAPABILITY
+        }
+
+        static void DeriveRenderStateFields(PipeInputs& inputs) {
+            const RenderStateParameters& p = inputs.m_renderState;
+
+            // Per draw buffer: GetBlendEquationIndexed, GetBlendFuncIndexed,
+            // GetColorMaskIndexed and IsCapabilityEnabledIndexed(Blend).
+            for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                const PerBufferBlendState& blend = p.BlendStates[i];
+                inputs.m_blendEquation[i][0] = blend.ColorEquation;
+                inputs.m_blendEquation[i][1] = blend.AlphaEquation;
+                inputs.m_blendFunc[i][0] = blend.SrcFactorRGB;
+                inputs.m_blendFunc[i][1] = blend.DstFactorRGB;
+                inputs.m_blendFunc[i][2] = blend.SrcFactorAlpha;
+                inputs.m_blendFunc[i][3] = blend.DstFactorAlpha;
+                inputs.m_colorMask[i] = p.ColorMasks[i];
+                inputs.m_capabilityIndexed.Blend[i] = blend.Enabled;
+            }
+
+            // Per viewport: GetViewportIndexed, GetDepthRangeIndexed and
+            // IsCapabilityEnabledIndexed(ScissorTest).
+            for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                inputs.m_viewportIndexed[i] = p.Viewports[i];
+                inputs.m_depthRange[i] = p.DepthRanges[i];
+                inputs.m_capabilityIndexed.ScissorTest[i] = (p.ScissorTestEnabledMask & (1u << i)) != 0;
+            }
+
+            // GetViewport: viewport 0 ROUNDED - the other derivation that is not a field
+            // copy. glGetIntegerv on floating-point state rounds to nearest (GL 4.6 core
+            // 22.2), and truncating a 63.5-wide viewport would also hand the backends a
+            // rectangle one pixel short of what was asked for. std::lround, exactly as
+            // RenderState::GetViewport does it.
+            const FloatVec4& viewport = p.Viewports[0];
+            inputs.m_viewport =
+                IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
+                        static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
+
+            // The scalar copies, in the order MGP_COVERAGE_EMITTED_LIST names them.
+            inputs.m_blendColor = p.BlendColor;
+            inputs.m_clampReadColor = p.ClampReadColor;
+            inputs.m_clearColor = p.ClearColor;
+            inputs.m_clearDepth = p.ClearDepth;
+            inputs.m_clearStencil = p.ClearStencil;
+            inputs.m_cullFaceMode = p.CullFaceModeSetting;
+            inputs.m_depthFunc = p.DepthFunc;
+            inputs.m_depthMask = p.DepthMask;
+            inputs.m_lineWidth = p.LineWidth;
+            inputs.m_logicOp = p.LogicOp;
+            inputs.m_minSampleShadingValue = p.MinSampleShadingValue;
+            inputs.m_patchDefaultInnerLevel = p.PatchDefaultInnerLevel;
+            inputs.m_patchDefaultOuterLevel = p.PatchDefaultOuterLevel;
+            inputs.m_patchVertices = p.PatchVertices;
+            inputs.m_polygonModeFront = p.PolygonModeFront;
+            inputs.m_polygonOffsetFactor = p.PolygonOffsetFactor;
+            inputs.m_polygonOffsetUnits = p.PolygonOffsetUnits;
+            inputs.m_primitiveRestartIndex = p.PrimitiveRestartIndex;
+            inputs.m_provokingVertexMode = p.ProvokingVertexModeSetting;
+            // GetScissorBox answers for rectangle 0, like GetViewport - but WITHOUT any
+            // rounding, because the scissor rectangle is integer state to begin with.
+            inputs.m_scissorBox = p.ScissorBoxes[0];
+
+            // GetStencilState: Front is index 0 and Back is index 1 on both sides
+            // (RenderState.cpp's GetStencilFaceIndex and PipeInputs::GetStencilState agree),
+            // so the two faces copy straight across.
+            for (SizeT face = 0; face < PipeInputs::kStencilFaceCount; ++face) {
+                inputs.m_stencil[face] = p.StencilStates[face];
+            }
+
+            for (SizeT i = 0; i < PipeInputs::kCapabilityCount; ++i) {
+                inputs.m_capability[i] = DeriveCapability(p, static_cast<CapabilityInput>(i));
+            }
         }
     };
 
@@ -257,14 +407,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
-        // STUB (P2 package A commit c1, on p2/spans). The 29 derivations of brief D5 land
-        // here, each transcribed from its RenderState getter; until then the residual fill
-        // loop still copies those fields out of GLContext, which is exactly P1's behaviour,
-        // so an empty body is correct rather than merely harmless. The two transcriptions
-        // that are not one-liners and must be copied exactly are GetViewport() (viewport 0
-        // ROUNDED TO INTEGERS) and IsCapabilityEnabled / IsCapabilityEnabledIndexed (the
-        // 35-way and 2-way switches, including Blend -> BlendStates[0].Enabled and
-        // ScissorTest -> ScissorTestEnabledMask & 1).
-        (void)inputs;
+        // The derivation itself lives in MGPipeApplyAccess above, because that is the one
+        // struct PipeInputs names as a friend - see D5 there for what it recomputes, which
+        // getter each line was transcribed from, and why the verify comparator is its guard.
+        MGPipeApplyAccess::DeriveRenderStateFields(inputs);
     }
 } // namespace MobileGL::MG_Pipe
