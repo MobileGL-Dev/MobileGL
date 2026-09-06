@@ -216,23 +216,38 @@ namespace {
             EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId)));
         }
 
-        if (reuseCount == 0) {
-            GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across "
-                            "64 construct/destroy rounds, so the recycled-address case was never exercised";
-        }
+        // Whether the heap repeats an address is the machine's business, not the allocator's,
+        // so the count is RECORDED and the case does not depend on it: the arm below proves
+        // the same property without waiting for luck, and it proves a STRICTLY STRONGER form
+        // of it. Acquire never sees an address at all (SlotAllocator.h) - it sees a lifetime
+        // id - so the sharpest possible ABA is not "the same address came back" but "the same
+        // LIFETIME ID came back", which is the key the map is actually built on. MG_State
+        // never reissues one, so this can only be built by hand; if even that cannot
+        // reproduce a handle, no recycled address can either.
         RecordProperty("address_reuses_observed", reuseCount);
+
+        MGPipeSlotAllocator sharp;
+        const Uint64 repeatedLifetimeId = 0x5eed'0000'0000'0001ull;
+        const MGPipeHandle first = sharp.Acquire(MGPipeKind::VertexElementsCso, repeatedLifetimeId);
+        EXPECT_FALSE(MGPipeHandleIsNull(first));
+        sharp.Free(MGPipeKind::VertexElementsCso, first);
+        const MGPipeHandle second = sharp.Acquire(MGPipeKind::VertexElementsCso, repeatedLifetimeId);
+        EXPECT_FALSE(second == first)
+            << "re-acquiring the SAME lifetime id after a free reproduced handle {slot=" << first.Slot
+            << ", gen=" << first.Gen << "}; an address-keyed or name-keyed memo would then serve the dead "
+                                        "object's entry to the live one";
+        EXPECT_EQ(second.Slot, first.Slot) << "the freed slot was not the one handed back";
+        EXPECT_EQ(second.Gen, first.Gen + 1) << "a reused slot must carry a new generation";
+        // And the dead handle stays dead, which is what makes the ABA detectable rather than
+        // merely unlikely.
+        EXPECT_FALSE(sharp.IsLive(MGPipeKind::VertexElementsCso, first));
+        EXPECT_TRUE(sharp.IsLive(MGPipeKind::VertexElementsCso, second));
 #endif
     }
 
     TEST(SlotAllocator, CompositeShaderBandIsNeverHandedOut) {
 #if !MOBILEGL_PIPE_PUSH
         GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
-#elif MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-        // Exhausting the ShaderCso slot space below the composite band is what proves the
-        // band is held back, and reaching the band's edge trips the allocator's
-        // "slot space is exhausted" MOBILEGL_ASSERT - which is live, and correctly so, in a
-        // DEBUG build. The claim is checked in the INFO builds the gates run.
-        GTEST_SKIP() << "asserts are live in a DEBUG build and the exhaustion arm trips one on purpose";
 #else
         MGPipeSlotAllocator allocator;
         // Ordinary programs walk the low slots and never enter the band.
@@ -241,6 +256,23 @@ namespace {
             EXPECT_FALSE(MGPipeIsCompositeShaderSlot(handle.Slot));
         }
 
+        // Every other kind is unaffected: the band is a ShaderCso rule, not a global one.
+        {
+            MGPipeSlotAllocator plain;
+            for (Uint32 i = 0; i < 4; ++i) {
+                const MGPipeHandle handle = plain.Allocate(MGPipeKind::Buffer);
+                EXPECT_EQ(handle.Slot, kMGPipeFirstAllocatableSlot + i);
+            }
+        }
+
+        // ONLY THE EXHAUSTION ARM needs the DEBUG skip, and it is placed here so the two arms
+        // above run in every build. Walking the ShaderCso slot space up to the band is what
+        // proves the band is held back, and reaching the band's edge trips the allocator's
+        // own "slot space is exhausted" MOBILEGL_ASSERT - which is live, and correctly so, in
+        // a DEBUG build. The claim is checked in the INFO builds every gate runs.
+#if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
+        GTEST_SKIP() << "asserts are live in a DEBUG build and only the exhaustion arm trips one on purpose";
+#else
         // Walk the whole space up to the band. The last handout below the base must be the
         // slot immediately under it, and the next call must refuse rather than step in - a
         // composite handle minted by the ordinary allocator would collide with one the
@@ -254,13 +286,7 @@ namespace {
         EXPECT_EQ(last.Slot, kMGPipeShaderCsoCompositeSlotBase - 1);
         EXPECT_TRUE(MGPipeHandleIsNull(allocator.Allocate(MGPipeKind::ShaderCso)))
             << "the allocator handed out a composite-band slot instead of refusing";
-
-        // Every other kind is unaffected: the band is a ShaderCso rule, not a global one.
-        MGPipeSlotAllocator plain;
-        for (Uint32 i = 0; i < 4; ++i) {
-            const MGPipeHandle handle = plain.Allocate(MGPipeKind::Buffer);
-            EXPECT_EQ(handle.Slot, kMGPipeFirstAllocatableSlot + i);
-        }
-#endif
+#endif // the DEBUG guard on the exhaustion arm
+#endif // MOBILEGL_PIPE_PUSH
     }
 } // namespace
