@@ -234,6 +234,10 @@ target_link_libraries(glretrace_common PUBLIC retrace_common glhelpers glproc)
 add_library(trace_replay_runner SHARED
         trace_replay_core.cpp
         trace_replay_jni.cpp
+        # P0 spike A. Android-only, and deliberately its own TU: trace_replay_core.cpp is
+        # shared verbatim with the desktop mobilegl_trace_replay runner
+        # (tools/trace_replay/CMakeLists.txt), which cannot see <android/log.h>.
+        spawn_spike.cpp
         "${CMAKE_CURRENT_LIST_DIR}/../../../../../tools/trace_replay/apitrace_fbo_dump.cpp")
 
 target_compile_features(trace_replay_runner PRIVATE cxx_std_17)
@@ -249,4 +253,5 @@ target_link_libraries(trace_replay_runner
         retrace_common
         image
         android
+        log
         dl)

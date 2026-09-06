@@ -54,6 +54,14 @@ public final class TraceReplayActivity extends Activity {
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT
         ));
 
+        // P0 spike A: when asked, exec the packaged server stub out of nativeLibraryDir
+        // instead of replaying anything. This mode needs no trace and no render surface.
+        String spikeLibrary = spawnSpikeLibrary(intent);
+        if (spikeLibrary != null) {
+            runSpawnSpike(spikeLibrary);
+            return;
+        }
+
         SurfaceHolder holder = surfaceView.getHolder();
         if (request.width > 0 && request.height > 0) {
             holder.setFixedSize(request.width, request.height);
@@ -165,6 +173,53 @@ public final class TraceReplayActivity extends Activity {
             boolean benchmarkFinish,
             String benchmarkResultPath
     );
+
+
+    // ---------------------------------------------------------------------------
+    // P0 spike A: prove an APK can ship a second native executable and exec it.
+    //
+    // The exec has to happen here, in the application's own process: an `adb shell
+    // run-as` invocation runs in a different SELinux domain, so it can succeed while
+    // the real app is denied. The child reports the domain it ended up in, and the
+    // parent reports the domain it spawned from, so the log line stands on its own.
+    // ---------------------------------------------------------------------------
+    private static final String EXTRA_SPAWN_SPIKE = "mobilegl_spike_spawn";
+    private static final String DEFAULT_SPAWN_SPIKE_LIBRARY = "libMobileGLServer.so";
+
+    private static String spawnSpikeLibrary(Intent intent) {
+        if (!intent.hasExtra(EXTRA_SPAWN_SPIKE)) {
+            return null;
+        }
+        // Accepts --ez (boolean, arrives as a null string) and --es with either a truthy
+        // marker or the library file name to exec.
+        String value = intent.getStringExtra(EXTRA_SPAWN_SPIKE);
+        if (value == null || value.isEmpty() || "1".equals(value) || "true".equals(value)) {
+            return DEFAULT_SPAWN_SPIKE_LIBRARY;
+        }
+        return value;
+    }
+
+    private void runSpawnSpike(String libraryName) {
+        // The surface callbacks fire regardless; this keeps them from starting a replay
+        // underneath the spike.
+        started = true;
+        File outputDir = new File(request.outputDir);
+        String serverPath = new File(getApplicationInfo().nativeLibraryDir, libraryName)
+                .getAbsolutePath();
+        String markerPath = new File(outputDir, "spike-spawn.txt").getAbsolutePath();
+        statusView.setText("Running spawn spike\n" + serverPath);
+        new Thread(() -> {
+            outputDir.mkdirs();
+            String message = nativeRunSpawnSpike(serverPath, markerPath);
+            Log.i(TAG, message);
+            runOnUiThread(() -> {
+                statusView.setText(message);
+                finish();
+            });
+        }, "MobileGLSpawnSpike").start();
+    }
+
+    private static native String nativeRunSpawnSpike(String serverPath, String markerPath);
 
     private static final class TraceReplayRequest {
         final String tracePath;

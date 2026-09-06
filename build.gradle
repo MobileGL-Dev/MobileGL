@@ -5,6 +5,16 @@ def mobileGlLogActiveLevel = {
 }
 def standalonePluginBuild = rootProject.name == 'MobileGLPlugin'
 
+// P0 spike A opt-in. OFF by default: the spike binary is dead weight in every trace APK
+// that is not running the spike, and a flavour that silently carries an extra executable
+// is exactly the kind of thing nobody notices until it ships. Turn it on for the spike
+// build only, with either
+//   ./gradlew :app:assembleTraceDebug -Pmobilegl.buildServerSpike=ON
+// or MOBILEGL_BUILD_SERVER_SPIKE=ON in the environment.
+def mobileGlBuildServerSpike = {
+    (rootProject.findProperty('mobilegl.buildServerSpike') ?: System.getenv('MOBILEGL_BUILD_SERVER_SPIKE') ?: 'OFF') as String
+}
+
 android {
     namespace 'top.mobilegl.mobilegl'
     compileSdk 34
@@ -53,6 +63,13 @@ android {
                 externalNativeBuild {
                     cmake {
                         arguments '-DMOBILEGL_TRACE_ANGLE_VARIANTS=ON'
+                        // P0 spike A: the second native executable that proves an APK
+                        // can ship one and exec it from nativeLibraryDir. Off unless
+                        // asked for, and only offered here - the shipping plugin
+                        // flavour cannot turn it on at all, so no released artifact can
+                        // grow a binary nothing loads. See mobileGlBuildServerSpike
+                        // above for the two ways to enable it.
+                        arguments "-DMOBILEGL_BUILD_SERVER_SPIKE=${mobileGlBuildServerSpike()}"
                     }
                 }
             }

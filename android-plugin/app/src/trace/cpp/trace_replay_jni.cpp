@@ -1,5 +1,7 @@
 #include "trace_replay_core.hpp"
 
+#include "spawn_spike.hpp"
+
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -195,4 +197,21 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
         mobilegl_trace::WriteResultJson(request, result);
     }
     return MakeResult(env, result);
+}
+
+// P0 spike A: exec the packaged MobileGLServer stub from this app process and report what
+// happened. Deliberately a separate entry point rather than another parameter on the
+// replay call - it shares nothing with a replay, and the trace lane must be able to run
+// it without a trace, a golden or a surface.
+extern "C" JNIEXPORT jstring JNICALL
+Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunSpawnSpike(JNIEnv* env,
+                                                                       jclass,
+                                                                       jstring serverPath,
+                                                                       jstring markerPath) {
+    mobilegl_trace::SpawnSpikeRequest request;
+    request.serverPath = ToString(env, serverPath);
+    request.markerPath = ToString(env, markerPath);
+
+    const mobilegl_trace::SpawnSpikeResult result = mobilegl_trace::RunSpawnSpike(request);
+    return env->NewStringUTF(result.message.c_str());
 }

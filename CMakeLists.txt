@@ -21,6 +21,7 @@ option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when 
 # That emptiness is one of the two byte-level equalities the plan's validation
 # gates keep (section 10.3).
 option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
+option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
@@ -759,4 +760,44 @@ endif()
 # links libMobileGL.so and creates an AImageReader-backed window instead.
 if (ANDROID AND MOBILEGL_BUILD_INTEGRATION_TEST)
     add_subdirectory(MobileGL/MG_IntegrationTest)
+endif()
+
+# ---------------------------------------------------------------------------
+# P0 spike A: the Android delivery chain for a second native executable.
+#
+# The disaggregated design needs a server process on Android (PLAN-B.md §8.1,
+# inheriting PLAN.md §11.1-§11.6). An APK's only exec-able install location is
+# lib/<abi>/, and the packager only puts a file there if it is named lib*.so -
+# so a second executable has to be built with an .so name and exec'd out of
+# getApplicationInfo().nativeLibraryDir. This target is the stub that proves the
+# chain end to end: it is packaged like a library, exec'd from the app's own
+# untrusted_app process, and writes a marker the parent reads back.
+#
+# Off by default and ANDROID-only, so no shipping configuration builds it. The
+# trace flavour of the plugin APK turns it on (android-plugin/build.gradle).
+# ---------------------------------------------------------------------------
+if (ANDROID AND MOBILEGL_BUILD_SERVER_SPIKE)
+    add_executable(MobileGLServer
+        ${CMAKE_CURRENT_SOURCE_DIR}/tools/spikes/server_stub/main.cpp)
+
+    # An executable that is named like a shared library still has to be a real
+    # PIE executable: Android has refused non-PIE executables since API 21, and
+    # the name alone does not change what the loader demands of the file.
+    set_target_properties(MobileGLServer PROPERTIES
+        PREFIX "lib"
+        SUFFIX ".so"
+        OUTPUT_NAME "MobileGLServer"
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(MobileGLServer PRIVATE -fPIE)
+    target_link_options(MobileGLServer PRIVATE -pie)
+
+    # AGP packages what the external native build drops into the per-ABI output
+    # directory, and it selects by the .so extension. CMake puts executables in
+    # CMAKE_RUNTIME_OUTPUT_DIRECTORY, which is not the directory AGP hands to
+    # CMAKE_LIBRARY_OUTPUT_DIRECTORY, so point this target's runtime output at
+    # the library directory when the generator gave us one.
+    if (CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+        set_target_properties(MobileGLServer PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
+    endif()
 endif()
