@@ -335,6 +335,12 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 
         // The sibling control, in the ambient Verify. lanes: the same sequence with the knob UNSET
         // must run to completion and log no Fatal at all.
+        //
+        // It deliberately does NOT skip when MOBILEGL_PIPE_POISON_OMIT is set. This is the entry
+        // CI's always-on negative control B exports the knob at: a green entry that the omission
+        // turns red is the whole proof that the poison is armed, and an entry that politely skipped
+        // itself would report that green either way. Nothing else in the integration suite calls
+        // glGenerateMipmap, so this case is also the only possible target for that control.
         TEST_F(PoisonOmissionScenario, WithoutOmissionCompletes) {
             if (!Ready()) return;
 
@@ -342,22 +348,26 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 GTEST_SKIP() << "the poison is only compiled into the push/verify builds; in an ordinary "
                                 "build there is nothing for this control to be a control OF";
             }
-            if (StringKnobIsSet("MOBILEGL_PIPE_POISON_OMIT")) {
-                GTEST_SKIP() << "MOBILEGL_PIPE_POISON_OMIT is armed for this process, so the abort is the "
-                                "EXPECTED outcome here; OmittedFieldAbortsOnThatVerb owns that half and "
-                                "runs in the PoisonOmitted. lane";
-            }
+            const bool omissionArmed = StringKnobIsSet("MOBILEGL_PIPE_POISON_OMIT");
 
             int status = 0;
             std::string reason;
             ASSERT_TRUE(RunSequenceInAChildProcess(status, reason)) << reason;
 
             const std::string childLog = ReadWholeFile(ChildLogPath());
+            const std::string note =
+                omissionArmed
+                    ? std::string(
+                          " NOTE: MOBILEGL_PIPE_POISON_OMIT is set in this process, so this failure is "
+                          "what CI's negative control B is asking for - the poison IS armed, and this "
+                          "entry going red is the proof.")
+                    : std::string();
             ASSERT_TRUE(WIFEXITED(status))
                 << "with no omission armed, a draw followed by glGenerateMipmap must complete; the child "
                 << DescribeStatus(status)
                 << ". If it aborted, the poison is firing on a field the verb's fill table SHOULD list - "
-                   "add the row to MG_Pipe/FillPoints.def, never mark the field sticky. Child log:\n"
+                   "add the row to MG_Pipe/FillPoints.def, never mark the field sticky."
+                << note << " Child log:\n"
                 << childLog;
             EXPECT_EQ(WEXITSTATUS(status), 0) << "the child " << DescribeStatus(status)
                                               << ". Child log:\n"

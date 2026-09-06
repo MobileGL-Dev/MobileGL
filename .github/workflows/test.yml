@@ -7,6 +7,14 @@ on:
       - Feat/Backend-Direct-GLES
       - Feat/Backend-Direct-Vulkan
   workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: >-
+          The commit monolith-symbol-report compares this tree against. P1's G1 says the pull
+          build is byte-identical to feat/disaggregated@087685d1, and that is what the default
+          names. The trigger set is unchanged: this job runs on workflow_dispatch only.
+        required: false
+        default: "087685d1"
 
 jobs:
   build-linux:
@@ -295,6 +303,293 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
+  # THE THIRD CI MODE (ARCHITECTURE.md 13.2-(2)): the same library, built with the PipeInputs
+  # comparator compiled in, running the integration suite and a trace subset with two state models
+  # in one address space. It is a second build rather than a flag on the first because
+  # MOBILEGL_PIPE_VERIFY is a compile-time option - the snapshot, the entry compare and the
+  # compare-at-read hook do not exist in the shipped library, and are never meant to.
+  build-linux-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: write
+      contents: read
+    env:
+      BUILD_DIR: build-verify
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        working-directory: 3rdparty/glslang
+        run: python update_glslang_sources.py
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+
+      - name: Configure CMake
+        # Release/INFO like the shipped build on purpose. The poison arms in this configuration
+        # through MOBILEGL_PIPE_VERIFY (PipeInputs.h derives MOBILEGL_PIPE_POISON from it), so this
+        # job needs neither a Debug log level nor MOBILEGL_BUILD_DISAGGREGATED - and a Debug build
+        # would compare a different library from the one the other lanes measure.
+        run: |
+          cmake -S . -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 \
+            -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=ON \
+            -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
+            -DMOBILEGL_ITEST_VK_ICD=/usr/share/vulkan/icd.d/lvp_icd.json \
+            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_PIPE_VERIFY=ON \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
+
+      # The lane is worthless if the option silently did not take, and that is a one-character
+      # mistake away at all times (a typo'd -D is not an error in CMake). Two checks, both cheap:
+      # the comparator's entry point must be in the library, and the fill entry point with it.
+      - name: The verify library really carries the comparator
+        run: |
+          test -f "${BUILD_DIR}/libMobileGL.so"
+          nm -D --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q MGPipeVerifyInputs
+          nm -D --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q MGPipeFillForVerb
+          echo "libMobileGL.so exports MGPipeVerifyInputs and MGPipeFillForVerb"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Release superseded ccache entry
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_KEY: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+        run: gh cache delete "${CACHE_KEY}" || true
+
+      - name: Save ccache
+        if: github.ref_name == github.event.repository.default_branch
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+
+      - name: Package Linux verify runtime
+        run: |
+          mkdir -p ci-artifacts
+          mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
+          tar \
+            --exclude='*/CMakeFiles' \
+            --exclude='*.o' \
+            --exclude='*.a' \
+            --exclude='*.ninja*' \
+            --exclude='build.ninja' \
+            --exclude='cmake_install.cmake' \
+            -czf ci-artifacts/mobilegl-linux-runtime-verify.tgz \
+            "${BUILD_DIR}/CTestTestfile.cmake" \
+            "${BUILD_DIR}/MobileGL/MG_Test" \
+            "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
+            "${SHARED_LIBS[@]}"
+
+      - name: Upload Linux verify runtime
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-runtime-verify
+          path: ci-artifacts/mobilegl-linux-runtime-verify.tgz
+          if-no-files-found: error
+
+  # The verify lane itself, plus the two negative controls that keep it falsifiable. The controls
+  # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
+  # remembering to break it on purpose is a gate that has already stopped working.
+  integration-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    needs: build-linux-verify
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Linux verify runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime-verify
+          path: .
+
+      - name: Unpack Linux verify runtime
+        run: |
+          tar -xzf mobilegl-linux-runtime-verify.tgz
+          test -f build-verify/libMobileGL.so
+
+      - name: Normalize CTest command paths
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          for path in Path('build-verify').rglob('CTestTestfile.cmake'):
+              text = path.read_text()
+              text = re.sub(r'"[^"]*/cmake-[^"]*/bin/cmake"', '"cmake"', text)
+              path.write_text(text)
+          PY
+
+      - name: Integration scenarios under MOBILEGL_PIPE_VERIFY
+        working-directory: build-verify
+        # --no-tests=error is half the gate: the verify entries only exist when the library was
+        # configured with -DMOBILEGL_PIPE_VERIFY=ON, so a build that lost the option matches no
+        # tests and reds here instead of reporting a green run of nothing. The other half is
+        # PipeVerifyArmingScenario.Armed, which fails when the library never printed its arming
+        # line - the failure mode a bare `MOBILEGL_PIPE_VERIFY=1` cannot detect by itself.
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
+          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
+          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
+            ctest -V -L integration-verify --no-tests=error
+          else
+            ctest --output-on-failure -L integration-verify --no-tests=error
+          fi
+
+      - name: Every verify process really armed
+        working-directory: build-verify
+        run: |
+          shopt -s nullglob
+          logs=(MobileGL/MG_IntegrationTest/pipe-verify-*.log)
+          if [ ${#logs[@]} -eq 0 ]; then
+            echo "::error::the verify lane wrote no pipe-verify-*.log at all"
+            exit 1
+          fi
+          for log in "${logs[@]}"; do
+            if ! grep -q "MGPipe: verify armed" "${log}"; then
+              echo "::error::${log} carries no arming line: that lane ran without the comparator"
+              exit 1
+            fi
+          done
+          echo "arming line present in ${#logs[@]} lane log(s)"
+
+      # NEGATIVE CONTROL A (gate G4). The knob perturbs one field in the snapshot arm before the
+      # entry compare, so a working comparator must abort the run. This step passes when ctest
+      # FAILS - `if ctest ...; then error` - which is the only shape that can catch a comparator
+      # that silently compares nothing.
+      #
+      # The knob reaches the test process through the JOB environment: no ctest ENVIRONMENT
+      # property on the ambient Verify. entries names it (MG_IntegrationTest/CMakeLists.txt says
+      # so out loud), and a property entry would otherwise override this and the control would
+      # prove nothing. Same precedent as MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH in `integration`.
+      - name: Negative control A - a corrupted snapshot field must turn the lane red
+        working-directory: build-verify
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_PIPE_VERIFY_CORRUPT: GetRenderStateParameters
+        run: |
+          FILTER='DirectGLES\.Verify\..*ClearThenReadPixels'
+          # An empty selection would ALSO make ctest exit non-zero (--no-tests=error), and this
+          # step reads non-zero as "the control worked" - so the selection is counted first. A
+          # control that passes because it ran nothing is worse than no control.
+          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 1 ]; then
+            echo "::error::negative control A selected ${matched} tests; its filter no longer matches anything"
+            exit 1
+          fi
+          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
+            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left ${matched} verify entries GREEN. The comparator is not comparing, so every green entry above is green for no reason."
+            exit 1
+          fi
+          echo "the corrupted field turned ${matched} selected entries red, as it must"
+
+      # NEGATIVE CONTROL B (gate G5). The omission skips the STAMP of one field for one verb while
+      # still copying its value - indistinguishable from a fill row nobody wrote - so the poison
+      # must abort the glGenerateMipmap. Again: this step passes when ctest fails.
+      #
+      # The entry it targets is PoisonOmissionScenario.WithoutOmissionCompletes, which is green in
+      # the ambient lane above and is the ONLY integration entry in the tree that calls
+      # glGenerateMipmap at all. It deliberately does not skip itself when the knob is set, exactly
+      # so that this control has something to turn red.
+      - name: Negative control B - an omitted fill point must turn the lane red on that verb
+        working-directory: build-verify
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+          MOBILEGL_PIPE_POISON_OMIT: GenerateMipmap:GetActiveTextureUnit
+        run: |
+          FILTER='DirectGLES\.Verify\.PoisonOmissionScenario\.WithoutOmissionCompletes'
+          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
+          if [ "${matched}" -lt 1 ]; then
+            echo "::error::negative control B selected ${matched} tests; its filter no longer matches anything"
+            exit 1
+          fi
+          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
+            echo "::error::MOBILEGL_PIPE_POISON_OMIT=GenerateMipmap:GetActiveTextureUnit left the verify lane GREEN. The per-verb poison is not armed, so a forgotten fill row would ship silently."
+            exit 1
+          fi
+          echo "the omitted fill point turned the lane red, as it must"
+
+      - name: Upload verify lane logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-verify-logs
+          path: build-verify/MobileGL/MG_IntegrationTest/pipe-*.log*
+          if-no-files-found: warn
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-verify-core-dumps
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
   # MobileGL/MG_Remote/Protocol/generated/protocol_generated.h is COMMITTED, and
   # flatc is deliberately absent from the default build graph (a codegen step in
   # the graph is how the earlier branch ended up cross-compiling an arm64 flatc
@@ -562,6 +857,7 @@ jobs:
     outputs:
       matrix: ${{ steps.trace-cases.outputs.matrix }}
       names: ${{ steps.trace-cases.outputs.names }}
+      verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -571,6 +867,9 @@ jobs:
         run: |
           echo "matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-test-matrix)" >> "$GITHUB_OUTPUT"
           echo "names=$(python3 tools/trace_replay/trace_cases.py --ci --format names)" >> "$GITHUB_OUTPUT"
+          # The subset the verify build retraces ("verify": true in trace_cases.json). It is a
+          # SUBSET of the matrix above, so retrace-verify needs no fixtures of its own.
+          echo "verify-matrix=$(python3 tools/trace_replay/trace_cases.py --ci --format github-verify-matrix)" >> "$GITHUB_OUTPUT"
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
@@ -784,10 +1083,269 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  # The trace half of the third CI mode. Same replay, same goldens, but the library underneath is
+  # the verify build and MOBILEGL_PIPE_VERIFY=1 is in the environment, so every backend read of
+  # frontend state is checked against a snapshot taken at the verb boundary. Eight cases rather
+  # than the full lane's 40 (tools/trace_replay/trace_cases.json, "verify": true): the comparator
+  # is budgeted at 5-10x, and the full sweep is a phase-exit / workflow_dispatch run.
+  retrace-verify:
+    name: retrace verify (${{ matrix.backend }}, ${{ matrix.case }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs:
+      - build-linux-verify
+      - build-retrace
+      - trace-cases
+      - trace-fixtures
+    if: ${{ always() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.trace-cases.outputs.verify-matrix) }}
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 16
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Download trace fixture
+        uses: actions/download-artifact@v8
+        with:
+          name: trace-fixture-${{ matrix.case }}
+          path: trace-fixture-download
+
+      - name: Install trace fixture
+        run: |
+          mkdir -p tools/trace_replay/fixtures
+          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
+          test -e /usr/lib/x86_64-linux-gnu/libEGL.so
+          test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
+
+      - name: Download Linux verify runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-runtime-verify
+          path: .
+
+      - name: Download trace replay
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-trace-replay
+          path: .
+
+      - name: Unpack the VERIFY runtime as the library under test
+        # build-retrace's CTestTestfile.cmake has the absolute path
+        # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
+        # rather than through a variable: the verify .so is put where that path points. The nm
+        # check is what makes the swap falsifiable - a run against the ordinary library would
+        # export no comparator, ignore MOBILEGL_PIPE_VERIFY entirely, and match its golden.
+        run: |
+          tar -xzf mobilegl-linux-runtime-verify.tgz
+          tar -xzf mobilegl-trace-replay.tgz
+          test -f build-verify/libMobileGL.so
+          test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
+          mkdir -p build-linux
+          cp build-verify/libMobileGL.so build-linux/libMobileGL.so
+          nm -D --defined-only build-linux/libMobileGL.so | grep -q MGPipeVerifyInputs
+          echo "the library at build-linux/libMobileGL.so is the verify build"
+
+      - name: Retrace and validate under MOBILEGL_PIPE_VERIFY
+        working-directory: build-retrace/tools/trace_replay
+        # run_trace_case.cmake turns MOBILEGL_PIPE_VERIFY into three assertions of its own (the
+        # arming line, no Fatal{PipeVerifyDiffer, no Fatal{UnmigratedPipeInput), so a case that
+        # somehow ran the wrong library reds here instead of passing on its golden.
+        # --timeout 10800: the 1800s cases run 5-10x slower with both comparator arms live, which
+        # is well past ctest's 1500s default.
+        run: |
+          ulimit -c unlimited
+          sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
+          export MOBILEGL_PIPE_VERIFY=1
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
+            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
+          fi
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
+             && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
+            export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
+          fi
+          ctest -V --no-tests=error --timeout 10800 \
+            -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+
+      # The retrace lane's own always-on negative control, on one case so it costs one short trace:
+      # with a snapshot field corrupted, the SAME replay must fail. Without it, "40 traces, zero
+      # divergences" would be a statement about a comparator nobody watched.
+      - name: Negative control - a corrupted snapshot field must red this retrace
+        if: ${{ matrix.case == 'OpenRA' && matrix.backend == 'DirectGLES' }}
+        working-directory: build-retrace/tools/trace_replay
+        run: |
+          export MOBILEGL_PIPE_VERIFY=1
+          export MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters
+          if ctest -V --no-tests=error --timeout 10800 \
+               -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$'; then
+            echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left the OpenRA retrace GREEN, so the comparator is not comparing and the whole verify retrace lane proves nothing."
+            exit 1
+          fi
+          echo "the corrupted field turned the retrace red, as it must"
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-verify-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
+      - name: Upload actual image
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-verify-result-${{ matrix.backend }}-${{ matrix.case }}
+          path: |
+            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
+            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+          if-no-files-found: warn
+
+  # G1's own job: the pull build must be the tree before P1, symbol for symbol and byte for byte.
+  # workflow_dispatch only - it builds the library twice from scratch, and its answer is about a
+  # BASELINE rather than about this push, so a per-push run would be measuring the wrong pair.
+  monolith-symbol-report:
+    name: monolith symbol report
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    env:
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 32
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get CMake
+        uses: lukka/get-cmake@v4.3.3
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-test-${{ github.job }}-ccache-v1
+          restore-keys: |
+            ${{ runner.os }}-test-${{ github.job }}-ccache-
+
+      - name: Prepare Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build binutils
+
+      # Both sides with IDENTICAL flags, LTO off, the same compiler and the same standard library:
+      # symbol_report.py's guard rails (scripts/symbol_report.py) say a mismatched pair "adds"
+      # thousands of symbols and the comparison then means nothing. The library alone - no tests,
+      # no benchmark, no integration test, no trace replay - because those targets do not ship.
+      - name: Build the baseline library (${{ inputs.baseline_sha }})
+        run: |
+          git worktree add ../baseline "${{ inputs.baseline_sha }}"
+          cd ../baseline
+          git submodule update --init --recursive
+          (cd 3rdparty/glslang && python update_glslang_sources.py)
+          cmake -S . -B build-sym-base -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_BUILD_DISAGGREGATED=OFF \
+            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
+            -DMOBILEGL_ENABLE_LTO=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-sym-base --parallel "$(nproc)"
+          cp build-sym-base/libMobileGL.so "${GITHUB_WORKSPACE}/libMobileGL-baseline.so"
+
+      - name: Build the head library
+        run: |
+          (cd 3rdparty/glslang && python update_glslang_sources.py)
+          cmake -S . -B build-sym-head -G Ninja \
+            -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
+            -DMOBILEGL_BUILD_TEST=OFF -DMOBILEGL_BUILD_BENCHMARK=OFF \
+            -DMOBILEGL_BUILD_INTEGRATION_TEST=OFF -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
+            -DMOBILEGL_BUILD_DISAGGREGATED=OFF \
+            -DMOBILEGL_PIPE_PUSH=OFF -DMOBILEGL_PIPE_VERIFY=OFF \
+            -DMOBILEGL_ENABLE_LTO=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-sym-head --parallel "$(nproc)"
+
+      # The monolith must not have grown a remote half. ARCHITECTURE.md:506: MG_Remote lives behind
+      # MOBILEGL_BUILD_DISAGGREGATED and nothing of it may reach a shipped pull build.
+      - name: No MG_Remote in the pull build
+        run: |
+          if nm --defined-only build-sym-head/libMobileGL.so | grep -q MG_Remote; then
+            echo "::error::the pull build defines MG_Remote symbols; the disaggregated half leaked into the monolith"
+            nm --defined-only build-sym-head/libMobileGL.so | grep MG_Remote | head -20
+            exit 1
+          fi
+          echo "no MG_Remote symbols in the pull build"
+
+      - name: Symbol report (G1)
+        run: |
+          python3 scripts/symbol_report.py \
+            --before libMobileGL-baseline.so \
+            --after build-sym-head/libMobileGL.so \
+            --threshold 0 \
+            --fail-on-symbol-set-change \
+            --fail-on-added-bytes 0 \
+            --markdown symbol-report.md \
+            --json symbol-report.json
+
+      - name: Upload the symbol report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: monolith-symbol-report
+          path: |
+            symbol-report.md
+            symbol-report.json
+          if-no-files-found: error
+
   remove-artifact-clutter:
     name: remove artifact clutter
     runs-on: ubuntu-latest
-    needs: retrace-summary
+    # (d) retrace-verify too: this job deletes the trace-fixture-* artifacts, and the verify
+    # retraces download the same ones.
+    needs:
+      - retrace-summary
+      - retrace-verify
     if: always()
     permissions:
       actions: write
@@ -855,6 +1413,17 @@ jobs:
           python3 scripts/gen_pipe.py
           git diff --exit-code -- MobileGL/MG_Pipe/generated
 
+      # The generators' own negative controls: canned inputs that MUST trip each structural check
+      # (a field list that does not cover its struct's members, a verb set that is not the function
+      # table's). Regenerating and diffing above cannot see a check that silently stopped
+      # checking - a broken gate and a clean tree produce the same green.
+      - name: The MGPipe generators' checks can still fail
+        run: python3 scripts/gen_pipe.py --self-test
+
+      # The same question for the symbol tool the P1 gate is written in terms of.
+      - name: The symbol report's buckets and gates can still fail
+        run: python3 scripts/symbol_report.py --self-test
+
       # Per-draw fprintf/printf instrumentation has repeatedly been committed by accident,
       # once inside a mutex critical section. Nothing under these two trees prints to a
       # stdio stream today - MGLOG_D compiles out in INFO builds and is the only channel
@@ -872,7 +1441,8 @@ jobs:
           echo "no fprintf(stderr/stdout / printf( / puts( / std::cout|cerr under MobileGL/MG_Backend or MobileGL/MG_State"
 
       # Informational: the frontend mutation surface an MGPipe aggregate generation has to
-      # cover. It becomes a gate in P1, when the mapping file exists to diff against.
+      # cover. It becomes a gate in P2, when the mapping file exists to diff against
+      # (ROADMAP.md:18 puts the first mapping round in P2, not P1).
       - name: MGPipe dirty-surface report
         run: python3 scripts/gen_pipe_dirty_surface.py --summary
 
