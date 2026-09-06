@@ -56,9 +56,13 @@ endif()
 
 # The four P2 suites. Their targets and this registration are the CONTRACT commit's; their
 # CONTENTS belong to the packages named in each file's header, so no package after A has to
-# come back to this file. Each links gtest_main - none of them needs a main() of its own,
-# unlike PipeInputsTest, whose abort cases read a log file back.
-foreach(pipeTest RenderStateSpansTest TrackerTest SlotAllocatorTest CsoCacheTest)
+# come back to this file.
+#
+# RenderStateSpansTest links gtest, not gtest_main, for PipeInputsTest's reason: its applier
+# trip-wire cases read the wire's line back out of a log file, so the suite needs its own
+# main() to point MOBILEGL_LOG_FILE_PATH at one before anything logs. The other three need no
+# main() of their own.
+foreach(pipeTest TrackerTest SlotAllocatorTest CsoCacheTest)
         add_executable(${pipeTest} ${pipeTest}.cpp)
 
         target_include_directories(${pipeTest} PRIVATE
@@ -80,9 +84,33 @@ foreach(pipeTest RenderStateSpansTest TrackerTest SlotAllocatorTest CsoCacheTest
         endif()
 endforeach()
 
+add_executable(
+        RenderStateSpansTest
+        RenderStateSpansTest.cpp
+)
+
+target_include_directories(RenderStateSpansTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(RenderStateSpansTest PRIVATE
+        GTest::gtest
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+        target_compile_options(RenderStateSpansTest PRIVATE /Zc:preprocessor)
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeInputsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
-foreach(pipeTest RenderStateSpansTest TrackerTest SlotAllocatorTest CsoCacheTest)
+gtest_discover_tests(RenderStateSpansTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+foreach(pipeTest TrackerTest SlotAllocatorTest CsoCacheTest)
         gtest_discover_tests(${pipeTest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach()

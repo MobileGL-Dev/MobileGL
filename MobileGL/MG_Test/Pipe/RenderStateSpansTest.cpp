@@ -20,15 +20,41 @@
 //   DynamicChunksCoverMagmasDynamicTailKey - every GL-state input of DirectVulkan's
 //                                            DynamicTailKey, against the dynamic half.
 //
+// Plus the applier's own cases (section 6 at the bottom): the two REDUNDANCY TRIP WIRES of
+// D9 and D10 driven in all three of their states - disarmed, armed and agreeing, armed and
+// diverging - and the apply entry points nothing else in the suite reaches. A gate no
+// command enters cannot go red for the reason it exists (ROADMAP.md), and until those cases
+// existed five of the applier's eight entry points were called by nothing in any build.
+//
+// The suite therefore has its own main(), like PipeInputsTest: the diverging cases read the
+// wire's line back out of a log file this process points MOBILEGL_LOG_FILE_PATH at before
+// anything logs, and in a poison or verify build they fork, because the wire's verdict there
+// is std::abort().
+//
 // The suite needs the push sources (MGPipeRenderStateSpans.cpp and PipeApply.cpp are
 // compiled only under MOBILEGL_PIPE_PUSH), so every case is a visible SKIP in a pull build
 // rather than a vanishing test - and the four names are the SAME four in every build, which
 // is what keeps `ctest -N` name-for-name identical between the pull and the push tree.
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <set>
+#include <sstream>
 #include <string>
+
+#if !defined(_WIN32)
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
+#define MGTEST_HAVE_FORK 1
+#else
+#include <process.h>
+#define MGTEST_HAVE_FORK 0
+#endif
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
@@ -46,6 +72,27 @@ using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
 
 namespace {
+    // The log file main() points MOBILEGL_LOG_FILE_PATH at, and the readers the diverging
+    // cases use. Per PROCESS, because gtest_discover_tests runs every case as its own
+    // process, in parallel under ctest -j, and a shared name would let a sibling's line land
+    // in this process's read (PipeInputsTest's file header says the same).
+    std::string g_logPath;
+
+    std::string ReadLog() {
+        std::ifstream in(g_logPath, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        return ss.str();
+    }
+
+    long ProcessId() {
+#if defined(_WIN32)
+        return static_cast<long>(::_getpid());
+#else
+        return static_cast<long>(::getpid());
+#endif
+    }
+
 #if MOBILEGL_PIPE_PUSH
     using MG_State::GLState::RenderState;
     using GLContext = MG_State::GLState::GLContext;
@@ -318,7 +365,14 @@ namespace {
         check("SetPolygonOffset", [](RenderState& s) { s.SetPolygonOffset(1.5f, 2.5f); });
         check("SetPolygonOffsetClamped", [](RenderState& s) { s.SetPolygonOffsetClamped(3.5f, 4.5f, 0.25f); });
         check("SetClipControl", [](RenderState& s) { s.SetClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE); });
-        check("SetHint", [](RenderState& s) { s.SetHint(GL_LINE_SMOOTH_HINT, GL_NICEST); });
+        // All four hint targets: SetHint dispatches on the target to one of four separate
+        // members, so driving one of them leaves three unwritten by the walk.
+        check("SetHint(line smooth)", [](RenderState& s) { s.SetHint(GL_LINE_SMOOTH_HINT, GL_NICEST); });
+        check("SetHint(polygon smooth)", [](RenderState& s) { s.SetHint(GL_POLYGON_SMOOTH_HINT, GL_NICEST); });
+        check("SetHint(texture compression)",
+              [](RenderState& s) { s.SetHint(GL_TEXTURE_COMPRESSION_HINT, GL_FASTEST); });
+        check("SetHint(fragment shader derivative)",
+              [](RenderState& s) { s.SetHint(GL_FRAGMENT_SHADER_DERIVATIVE_HINT, GL_FASTEST); });
         check("SetPointFadeThresholdSize", [](RenderState& s) { s.SetPointFadeThresholdSize(2.5f); });
         check("SetPointSpriteCoordOrigin", [](RenderState& s) { s.SetPointSpriteCoordOrigin(GL_LOWER_LEFT); });
         check("SetClampReadColor", [](RenderState& s) { s.SetClampReadColor(GL_TRUE); });
@@ -440,10 +494,21 @@ namespace {
         }
         check("SetStencilFunc(func)",
               [](RenderState& s) { s.SetStencilFunc(StencilFace::Front, DepthTestFunc::NotEqual, 7, 0xffu); });
-        check("SetStencilMask", [](RenderState& s) { s.SetStencilMask(StencilFace::Back, 0x0fu); });
-        check("SetStencilOp", [](RenderState& s) {
+        // BOTH FACES of both, because the two faces are four different chunks: face 0's Func
+        // ends chunk P2 and its three ops open P3, which face 1's Func closes. A walk that
+        // drove SetStencilOp on Back only and SetStencilFunc on Front only never writes P3 at
+        // all, and a boundary mistake inside it would be invisible here.
+        check("SetStencilFunc(back, func)",
+              [](RenderState& s) { s.SetStencilFunc(StencilFace::Back, DepthTestFunc::Less, 3, 0x0fu); });
+        check("SetStencilMask(back)", [](RenderState& s) { s.SetStencilMask(StencilFace::Back, 0x0fu); });
+        check("SetStencilMask(front)", [](RenderState& s) { s.SetStencilMask(StencilFace::Front, 0x33u); });
+        check("SetStencilOp(back)", [](RenderState& s) {
             s.SetStencilOp(StencilFace::Back, StencilOperation::Replace, StencilOperation::IncrementClamp,
                            StencilOperation::DecrementWrap);
+        });
+        check("SetStencilOp(front)", [](RenderState& s) {
+            s.SetStencilOp(StencilFace::Front, StencilOperation::Invert, StencilOperation::DecrementClamp,
+                           StencilOperation::IncrementWrap);
         });
 
         // ---- Colour mask, clear state, sampling ----
@@ -864,4 +929,440 @@ namespace {
         }
 #endif
     }
+
+    // =====================================================================================
+    // 6. THE APPLIER'S OWN CASES: the two redundancy trip wires, and the entry points
+    //    nothing else drives.
+    //
+    //    ROADMAP.md: every gate must be able to go red for the reason it exists. Both wires
+    //    are therefore driven in three states - DISARMED (the applier has not scattered the
+    //    bytes the wire compares against), ARMED AND AGREEING, ARMED AND DIVERGING - and the
+    //    diverging state is asserted in whatever form the build gives it: a poison or verify
+    //    build aborts and the parent reads SIGABRT and the Fatal line out of the log; a
+    //    shipped push build counts the divergence and logs it, and that is asserted instead.
+    //    Neither is skipped anywhere, so `ctest -R Residual` reaches the wire and not only
+    //    the static_asserts.
+    // =====================================================================================
+#if MOBILEGL_PIPE_PUSH
+    constexpr SizeT kCapCount = static_cast<SizeT>(CapabilityInput::CapabilityInputCount);
+
+    // A live frontend context and a clean applier, restored on the way out (SanityTest's
+    // idiom, and the same guard cases 3 and 5 declare inline).
+    struct ApplierContextGuard {
+        UniquePtr<GLContext> Previous;
+        ApplierContextGuard() : Previous(Move(MG_State::pGLContext)) {
+            MG_State::pGLContext = MakeUnique<GLContext>();
+            MGPipeApplierReset();
+        }
+        ~ApplierContextGuard() {
+            MGPipeApplierReset();
+            MG_State::pGLContext = Move(Previous);
+        }
+    };
+
+    // The tracker's whole-block emission: one brand-new CSO carrying every pipeline chunk,
+    // its bind, and then every dynamic chunk. `withDynamic` false stops after the bind -
+    // the state in which the applier owns the pipeline half and not the dynamic one, which
+    // is what the residual wire's per-capability arming is about.
+    void ApplyWholeBlockFromContext(GLContext& ctx, Uint32& nextSlot, Bool withDynamic) {
+        const RenderStateParameters& live = ctx.GetRenderStateParameters();
+        const Uint32 allPipeline = static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+        const Uint32 allDynamic = static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+
+        Array<Uint8, kMGPipePipelineChunkBytes> pipelineBytes{};
+        MGPipeGatherPipelineBytes(live, pipelineBytes.data());
+        MGPRenderStateDesc desc{};
+        desc.Cso = MGPipeHandle{nextSlot++, 0};
+        desc.BaseCso = kMGPipeNullHandle;
+        desc.ChunkMask = allPipeline;
+        MGPipeApplyCreateRenderState(desc, pipelineBytes.data());
+
+        MGPBindRenderState bind{};
+        bind.Cso = desc.Cso;
+        bind.Version = static_cast<Uint16>(ctx.GetRenderStateParametersVersion());
+        bind.PipelineVersion = static_cast<Uint16>(ctx.GetPipelineStateVersion());
+        MGPipeApplyBindRenderState(bind);
+        if (!withDynamic) return;
+
+        Vector<Uint8> dynamicBytes(MGPipeDynamicChunkBlobBytes(allDynamic));
+        MGPipeGatherDynamicChunks(live, allDynamic, dynamicBytes.data());
+        MGPDynamicState dyn{};
+        dyn.ChunkMask = allDynamic;
+        dyn.Version = bind.Version;
+        MGPipeApplySetDynamicState(dyn, dynamicBytes.data());
+    }
+
+    // The residual block the tracker would emit for this context: the 35 capability answers
+    // the FRONTEND gives, packed in enum order. The wire's job is to disagree with the
+    // assembled block when the two have parted, so the carried side has to come from the
+    // frontend and not from the block.
+    ResidualValueBlock CarriedBitsOf(GLContext& ctx) {
+        ResidualValueBlock block{};
+        for (SizeT i = 0; i < kCapCount; ++i) {
+            if (ctx.IsCapabilityEnabled(static_cast<CapabilityInput>(i))) {
+                block.CapabilityBits |= Uint64{1} << i;
+            }
+        }
+        return block;
+    }
+
+    MGPPatchState PatchStateOf(Uint32 vertices, const FloatVec4& outer, const FloatVec2& inner) {
+        MGPPatchState patch{};
+        patch.Vertices = vertices;
+        patch.Outer[0] = outer.x();
+        patch.Outer[1] = outer.y();
+        patch.Outer[2] = outer.z();
+        patch.Outer[3] = outer.w();
+        patch.Inner[0] = inner.x();
+        patch.Inner[1] = inner.y();
+        return patch;
+    }
+
+#if MGTEST_HAVE_FORK
+    struct ChildResult {
+        int Status = -1;
+        std::string Log;
+    };
+
+    // Runs `body` in a forked child and returns its wait status and log delta. The child
+    // must not use gtest assertions; it _exit(0)s when `body` returns, so a body expected to
+    // die must be asserted dead by the parent (PipeInputsTest's shape, and its reason:
+    // gtest's own death tests are not used in this repository).
+    template <class Body>
+    ChildResult RunInChild(Body body) {
+        ChildResult result;
+        // The log file is opened by the CHILD - nothing in the parent has logged at this
+        // point - and a process opens it FRESH, so two children in one process would each
+        // start writing at byte 0 and a delta taken against "what was there before" would be
+        // a substring of the second child's own line. Under ctest every case is its own
+        // process and the question never arises; running the binary by hand it does. So the
+        // file is removed first and the whole of what the child left is what comes back.
+        std::error_code ec;
+        std::filesystem::remove(g_logPath, ec);
+        std::fflush(nullptr);
+        const pid_t pid = ::fork();
+        if (pid < 0) return result;
+        if (pid == 0) {
+            body();
+            ::_exit(0);
+        }
+        int status = 0;
+        if (::waitpid(pid, &status, 0) != pid) return result;
+        result.Status = status;
+        result.Log = ReadLog();
+        return result;
+    }
+
+    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    std::string DescribeStatus(const ChildResult& r) {
+        if (r.Status < 0) return "fork/waitpid failed";
+        if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
+        if (WIFSIGNALED(r.Status)) return "signal " + std::to_string(WTERMSIG(r.Status));
+        return "status " + std::to_string(r.Status);
+    }
+#endif // MGTEST_HAVE_FORK
+#endif // MOBILEGL_PIPE_PUSH
+
+    // -------------------------------------------------------------------------------------
+    // 6a. The residual trip wire is SILENT until the applier owns the bytes it would compare.
+    //
+    //     This is the shape MOBILEGL_PIPE_PUSH=0x10 has - the residual subsystem on and the
+    //     render-state subsystem off, which D14 makes a legal per-subsystem A/B. The working
+    //     block is then the per-verb fill loop's, published per verb CLASS, and disagreeing
+    //     with it means nothing. An earlier form of this wire aborted here.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, ResidualTripWireIsSilentUntilTheApplierOwnsTheBytes) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+
+        // Nothing scattered: a block that disagrees on EVERY capability must pass in silence.
+        ResidualValueBlock everything{};
+        everything.CapabilityBits = ~Uint64{0};
+        MGPipeApplySetResidualValueState(everything);
+        EXPECT_EQ(MGPipeApplier().ScatteredChunkBits, 0u);
+        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, 0u);
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+
+        // A bind owns the PIPELINE half, which answers 27 of the 35; the eight ClipDistances
+        // are answered from a dynamic chunk and stay unarmed. That grain is why the arming is
+        // per capability and not per applier.
+        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/false);
+        MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
+        const Uint32 armedByThePipelineHalf = MGPipeApplier().ResidualCapabilitiesCompared;
+        // SOME, and not all. The exact number is 27 under the shipped table, but it is a
+        // consequence of the table rather than of the wire, so the case asserts the property
+        // and lets the two directions below say which capabilities are on which side - a
+        // hard-coded 27 would turn any legitimate boundary move into a failure here as well
+        // as in the two cases that exist to catch it.
+        EXPECT_GT(armedByThePipelineHalf, 0u);
+        EXPECT_LT(armedByThePipelineHalf, static_cast<Uint32>(kCapCount))
+            << "a bind alone cannot answer a capability whose mask is in the dynamic half";
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+
+        // ... and a block that disagrees on a CLIP DISTANCE still says nothing, because the
+        // chunk its answer is read out of has not been scattered.
+        ResidualValueBlock clipOnly = CarriedBitsOf(ctx);
+        clipOnly.CapabilityBits ^= Uint64{1} << static_cast<SizeT>(CapabilityInput::ClipDistance3);
+        MGPipeApplySetResidualValueState(clipOnly);
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+
+        // The dynamic half arms the remaining eight.
+        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+        MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
+        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 6b. The armed wire HOLDS at a verb class that does not publish the working block.
+    //
+    //     A draw, a capability change, then a DISPATCH. kDispatch publishes
+    //     IsCapabilityEnabled and NOT GetRenderStateParameters (MG_Pipe/FillPoints.def), so
+    //     PipeInputs::m_capability is refilled from the live context here and the working
+    //     block is not - which is exactly why the block has to be the APPLIER'S to be an
+    //     oracle. It is: the applier scattered it, and the emission for this verb keeps it
+    //     current. This is the case that pins the class contract shut.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, ResidualTripWireHoldsAcrossAVerbClassThatDoesNotPublishTheBlock) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+        {
+            MG_Test::ScopedPipeVerb draw(MGPipeVerb::DrawArrays);
+            ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+            MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
+        }
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+
+        ctx.SetCapability(CapabilityInput::Dither, !ctx.IsCapabilityEnabled(CapabilityInput::Dither));
+        {
+            MG_Test::ScopedPipeVerb dispatch(MGPipeVerb::DispatchCompute);
+            ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+            MGPipeApplySetResidualValueState(CarriedBitsOf(ctx));
+        }
+        EXPECT_EQ(MGPipeApplier().ResidualCapabilitiesCompared, static_cast<Uint32>(kCapCount));
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 0u);
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 6c. The armed wire FIRES, naming the capability. The red half of 6a/6b.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, ResidualTripWireFiresNamingTheCapability) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+
+        ResidualValueBlock diverging = CarriedBitsOf(ctx);
+        diverging.CapabilityBits ^= Uint64{1} << static_cast<SizeT>(CapabilityInput::Dither);
+
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+#if MGTEST_HAVE_FORK
+        const ChildResult child = RunInChild([&diverging]() { MGPipeApplySetResidualValueState(diverging); });
+        EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "; log: " << child.Log;
+        EXPECT_NE(child.Log.find("Fatal{PipeResidualDiverged, \"Dither\"}"), std::string::npos)
+            << "the wire fired without naming the capability; log: " << child.Log;
+#else
+        GTEST_SKIP() << "no fork on this platform; the wire's verdict here is std::abort()";
+#endif
+#else
+        // A shipped push build counts and logs rather than aborting, so the wire is asserted
+        // in the form this build gives it.
+        const std::string before = ReadLog();
+        MGPipeApplySetResidualValueState(diverging);
+        EXPECT_EQ(MGPipeApplier().ResidualDivergences, 1u);
+        EXPECT_NE(ReadLog().substr(before.size()).find("PipeResidualDiverged, \"Dither\""), std::string::npos)
+            << "the wire counted a divergence without logging which capability";
+#endif
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 6d. The patch-carrier trip wire, in all three states - including a NaN outer level,
+    //     which is a legal glPatchParameterfv value that must compare EQUAL to itself and
+    //     which a `==` comparison would call a divergence.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, PatchCarrierTripWireFiresOnlyWhenTheApplierOwnsChunkP0) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+
+        // Disarmed: nothing has scattered chunk P0, so a set_patch_state that disagrees with
+        // whatever the working block happens to hold says nothing.
+        MGPipeApplySetPatchState(PatchStateOf(7, FloatVec4(11.f, 12.f, 13.f, 14.f), FloatVec2(15.f, 16.f)));
+        EXPECT_EQ(MGPipeApplier().PatchCarrierComparisons, 0u);
+        EXPECT_EQ(MGPipeApplier().PatchCarrierDivergences, 0u);
+
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const FloatVec4 outer(nan, 3.f, 4.f, 5.f);
+        const FloatVec2 inner(6.f, 7.f);
+        ctx.SetPatchVertices(4);
+        ctx.SetPatchDefaultOuterLevel(outer);
+        ctx.SetPatchDefaultInnerLevel(inner);
+        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+
+        // Armed and agreeing, NaN included.
+        MGPipeApplySetPatchState(PatchStateOf(4, outer, inner));
+        EXPECT_EQ(MGPipeApplier().PatchCarrierComparisons, 1u);
+        EXPECT_EQ(MGPipeApplier().PatchCarrierDivergences, 0u);
+
+        // Armed and diverging: the two carriers have parted on the vertex count.
+        const MGPPatchState diverging = PatchStateOf(3, outer, inner);
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+#if MGTEST_HAVE_FORK
+        const ChildResult child = RunInChild([&diverging]() { MGPipeApplySetPatchState(diverging); });
+        EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "; log: " << child.Log;
+        EXPECT_NE(child.Log.find("Fatal{PipePatchCarriersDiffer}"), std::string::npos)
+            << "the wire fired without saying so; log: " << child.Log;
+#else
+        GTEST_SKIP() << "no fork on this platform; the wire's verdict here is std::abort()";
+#endif
+#else
+        const std::string before = ReadLog();
+        MGPipeApplySetPatchState(diverging);
+        EXPECT_EQ(MGPipeApplier().PatchCarrierDivergences, 1u);
+        EXPECT_NE(ReadLog().substr(before.size()).find("PipePatchCarriersDiffer"), std::string::npos);
+#endif
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 6e. D-7's kept WHOLE-BLOCK derivation entry point. Under split a scatter can arrive
+    //     without a chunk mask, so MGPipeDeriveRenderStateFields stays; nothing in production
+    //     calls it, and this is what says it still answers what the scoped form answers.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, WholeBlockDerivationAgreesWithTheChunkScopedOne) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+        MG_Test::ScopedPipeVerb verb(MGPipeVerb::DrawArrays);
+
+        ctx.SetViewportIndexed(0, FloatVec4(1.5f, 2.5f, 63.5f, 32.25f));
+        ctx.SetBlendFuncIndexed(0, BlendFactor::DstColor, BlendFactor::SrcColor, BlendFactor::DstAlpha,
+                                BlendFactor::SrcAlpha);
+        ctx.SetCapability(CapabilityInput::Dither, !ctx.IsCapabilityEnabled(CapabilityInput::Dither));
+        ctx.SetCapability(CapabilityInput::ClipDistance5, true);
+        ctx.SetStencilFunc(StencilFace::Back, DepthTestFunc::Equal, 7, 0xf0u);
+
+        Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+        ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+        ExpectDerivedDrawFieldsMatch(ctx, "the chunk-scoped derivation");
+
+        MGPipeDeriveRenderStateFields(gPipeInputs);
+        ExpectDerivedDrawFieldsMatch(ctx, "the whole-block derivation");
+#endif
+    }
+
+    // -------------------------------------------------------------------------------------
+    // 6f. The three remaining apply entry points, each driven and each read back through the
+    //     accessor a backend would use - under the verb class that publishes it, because the
+    //     fill table is still the only thing that says what a verb may read.
+    // -------------------------------------------------------------------------------------
+    TEST(RenderStateSpans, TheRemainingApplyEntryPointsReachPipeInputs) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+#else
+        ApplierContextGuard guard;
+        GLContext& ctx = *MG_State::pGLContext;
+
+        // set_pixel_pack_state. PACK only, deliberately - the unpack half has no carrier and
+        // keeps going through the residual fill loop, which is why Coverage.def no longer
+        // names GetPixelStoreParameters as emitted. Applied AFTER the verb's fill, or the
+        // fill would answer this comparison with its own copy.
+        {
+            MG_Test::ScopedPipeVerb readback(MGPipeVerb::ReadPixels);
+            MGPPixelPackState pack{};
+            pack.Pack.Alignment = 8;
+            pack.Pack.RowLength = 37;
+            pack.Pack.SkipRows = 5;
+            pack.Pack.SwapBytes = true;
+            MGPipeApplySetPixelPackState(pack);
+            const PixelStoreParameters got = gPipeInputs.GetPixelStoreParameters(false);
+            EXPECT_EQ(got.Alignment, 8);
+            EXPECT_EQ(got.RowLength, 37);
+            EXPECT_EQ(got.SkipRows, 5);
+            EXPECT_TRUE(got.SwapBytes);
+        }
+
+        // set_vertex_attrib_defaults: a var-tail call, and the one consumer of the set-hash
+        // suppressor. The tail is in ascending location order and Count matches Mask, which
+        // is the contract the applier now enforces in every build rather than in a debug one.
+        {
+            MG_Test::ScopedPipeVerb draw(MGPipeVerb::DrawArrays);
+            MGPVertexAttribDefaults hdr{};
+            hdr.Mask = (1u << 2) | (1u << 9);
+            hdr.Count = 2;
+            MGPAttribValue tail[2]{};
+            tail[0].Location = 2;
+            const float first[4] = {1.5f, 2.5f, 3.5f, 4.5f};
+            std::memcpy(tail[0].Data, first, sizeof(first));
+            tail[1].Location = 9;
+            const float second[4] = {-1.f, 0.f, 0.5f, 1.f};
+            std::memcpy(tail[1].Data, second, sizeof(second));
+            MGPipeApplySetVertexAttribDefaults(hdr, tail);
+
+            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[0], 1.5f);
+            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[3], 4.5f);
+            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(9).floatValue[2], 0.5f);
+        }
+
+        // delete_render_state: the record stops being live and a bound handle stops being
+        // bound. The client allocator owns the Gen bump on REUSE, so the record's Gen does
+        // not move here - a server-side bump would put the two identities out of step.
+        {
+            Uint32 nextSlot = kMGPipeFirstAllocatableSlot;
+            const Uint32 slot = nextSlot;
+            ApplyWholeBlockFromContext(ctx, nextSlot, /*withDynamic=*/true);
+            ASSERT_LT(slot, MGPipeApplier().RenderStateCsos.size());
+            EXPECT_TRUE(MGPipeApplier().RenderStateCsos[slot].Live);
+            EXPECT_FALSE(MGPipeHandleIsNull(MGPipeApplier().BoundRenderStateCso));
+
+            MGPHandleOnly handle{};
+            handle.Handle = MGPipeHandle{slot, 0};
+            handle.Kind = static_cast<Uint32>(MGPipeKind::RenderStateCso);
+            MGPipeApplyDeleteRenderState(handle);
+            EXPECT_FALSE(MGPipeApplier().RenderStateCsos[slot].Live);
+            EXPECT_EQ(MGPipeApplier().RenderStateCsos[slot].Gen, 0u);
+            EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundRenderStateCso));
+        }
+#endif
+    }
 } // namespace
+
+int main(int argc, char** argv) {
+    // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first
+    // write, and caches the FILE*. The name carries this process's pid, and the file is
+    // removed on the way out; a forked child that aborts leaves it to us.
+    namespace fs = std::filesystem;
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-renderstatespans-test-" + std::to_string(ProcessId()) + ".log");
+    std::error_code ec;
+    fs::remove(path, ec);
+    g_logPath = path.string();
+#if defined(_WIN32)
+    _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
+#else
+    setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+    ::testing::InitGoogleTest(&argc, argv);
+    const int rc = RUN_ALL_TESTS();
+    fs::remove(path, ec);
+    return rc;
+}
