@@ -3625,6 +3625,43 @@ void main() {
         if (m_vaoDrawMemoTable.empty()) {
             m_vaoDrawMemoTable.resize(kVaoDrawMemoSlotCount);
         }
+#if MOBILEGL_PIPE_PUSH
+        // ---- P2 D12.4, the handle arm ----
+        //
+        // The slot IS the index. No Fibonacci mix of an address, no two-way probe, no
+        // frame-serial recycling choice: slots are dense by construction (the allocator has a
+        // free list plus a high-water mark), so consecutive VAOs land in consecutive entries
+        // and the collision the address hash existed to spread does not arise below the table
+        // size. The whole validation is one handle compare, and a handle cannot alias - Gen
+        // moves on slot REUSE, so a deleted VAO's successor never matches its predecessor's
+        // entry even at the same address and with a byte-identical configuration.
+        if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+            const MG_Pipe::MGPipeHandle handle = ResolveVaoHandle(*vao);
+            // Fixed table, so the index wraps rather than growing: nothing in P2 frees a
+            // VertexElementsCso slot yet (the frontend death notification is Espryt 0b's e2,
+            // and buffers are the only kind with one today), so a grow-on-demand vector would
+            // hold one ~1 KB VaoDrawMemo per VAO EVER created. Above the table size this
+            // degrades to a direct-mapped cache validated by the full {slot, gen}, which is
+            // strictly better than the address hash it replaces - never wrong, only colder.
+            const Uint32 index = handle.Slot & (kVaoDrawMemoSlotCount - 1);
+            VaoDrawMemo& entry = m_vaoDrawMemoTable[index];
+            if (entry.vaoHandle == handle) {
+                return &entry;
+            }
+            entry.vaoHandle = handle;
+            entry.vaoKey = vao;
+            entry.vaoLifetimeId = vao->GetLifetimeId();
+            entry.contentHash = 0;
+            entry.layoutFactsValid = false;
+            // Unmatchable until a resolve completes (same rule as the legacy arm: a bailed-out
+            // resolve must never leave stale contents matchable).
+            entry.bindings.frameSerial = 0;
+            entry.bindings.indexFrameSerial = 0;
+            entry.bindings.indexBuffer = nullptr;
+            return &entry;
+        }
+        MagmaPipeRequireLegacyArm("LookupVaoDrawMemo");
+#endif
         // Multiplicative mix of the (16-byte-aligned) address; take high bits, they
         // carry the most entropy of a multiply.
         const Uint64 mixed = static_cast<Uint64>(reinterpret_cast<SizeT>(vao) >> 4) * 0x9E3779B97F4A7C15ull;
@@ -3634,12 +3671,22 @@ void main() {
         // its own is recycled, and a slot matched on a recycled address hands the new VAO
         // the dead one's resolved bindings.
         const Uint64 lifetimeId = vao->GetLifetimeId();
+#if MOBILEGL_PIPE_PUSH
+        // Negative control C (P2 brief D18): with MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1 the
+        // lifetime-id half of the compare is defeated, leaving the recycled address as the
+        // whole key - exactly the state this table was in before the ABA fix. That is what
+        // lets HandleRecycleScenario.AbaControl assert the WRONG pixels and so prove that its
+        // reproducer still reproduces.
+        const Bool compareLifetimeId = !MG_Config::Features.PipeHandleAbaControl;
+#else
+        constexpr Bool compareLifetimeId = true;
+#endif
         VaoDrawMemo& first = m_vaoDrawMemoTable[index];
-        if (first.vaoKey == vao && first.vaoLifetimeId == lifetimeId) {
+        if (first.vaoKey == vao && (!compareLifetimeId || first.vaoLifetimeId == lifetimeId)) {
             return &first;
         }
         VaoDrawMemo& second = m_vaoDrawMemoTable[index ^ 1u];
-        if (second.vaoKey == vao && second.vaoLifetimeId == lifetimeId) {
+        if (second.vaoKey == vao && (!compareLifetimeId || second.vaoLifetimeId == lifetimeId)) {
             return &second;
         }
         // Miss: recycle a slot. Prefer an empty one; otherwise evict the entry whose
@@ -6234,9 +6281,23 @@ void main() {
         // draw of a VAO-cycling stream (Minecraft chunk rendering) through the full
         // path, re-resolving descriptors and texture layouts nothing invalidated.
         const auto& vao = *MGB_CTX->GetBoundVertexArray();
+#if MOBILEGL_PIPE_PUSH
+        // P2 D12.4: the handle replaces the (address, lifetime id) pair here too - one
+        // compare instead of two, and the same identity the VAO draw memo is keyed on, so
+        // the two cannot disagree about whether "the VAO moved". The config version stays:
+        // it answers a different question (did this same object's layout change).
+        const Bool vaoMoved =
+            MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)
+                ? (!(ResolveVaoHandle(vao) == snap.vaoHandle) ||
+                   vao.GetConfigVersion() != snap.vaoConfigVersion)
+                : (static_cast<const void*>(&vao) != snap.vao ||
+                   vao.GetLifetimeId() != snap.vaoLifetimeId ||
+                   vao.GetConfigVersion() != snap.vaoConfigVersion);
+#else
         const Bool vaoMoved =
             static_cast<const void*>(&vao) != snap.vao || vao.GetLifetimeId() != snap.vaoLifetimeId ||
             vao.GetConfigVersion() != snap.vaoConfigVersion;
+#endif
         const auto& drawFbo =
             MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
         if (static_cast<const void*>(drawFbo.get()) != snap.drawFbo ||
@@ -6538,6 +6599,9 @@ void main() {
         snap.bindGeneration = bindGeneration;
         snap.vao = static_cast<const void*>(&vao);
         snap.vaoLifetimeId = vao.GetLifetimeId();
+#if MOBILEGL_PIPE_PUSH
+        snap.vaoHandle = ResolveVaoHandle(vao);
+#endif
         snap.vaoConfigVersion = vao.GetConfigVersion();
         snap.vaoLayoutHash = vaoLayoutHash;
         snap.pipeline = pipeline;
@@ -7119,6 +7183,9 @@ void main() {
                 snap.programVersion = program.GetBackendStateVersion();
                 snap.vao = &vao;
                 snap.vaoLifetimeId = vao.GetLifetimeId();
+#if MOBILEGL_PIPE_PUSH
+                snap.vaoHandle = ResolveVaoHandle(vao);
+#endif
                 snap.vaoConfigVersion = vao.GetConfigVersion();
                 snap.drawFbo = drawFbo.get();
                 snap.drawFboLifetimeId = drawFbo->GetLifetimeId();

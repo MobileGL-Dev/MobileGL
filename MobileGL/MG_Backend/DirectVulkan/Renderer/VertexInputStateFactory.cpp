@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "VertexInputStateFactory.h"
+#include "MagmaPipeArms.h"
 #include "MG_Util/Converters/MGToStr/DataTypeConverter.h"
 #include <MG_Backend/BackendObjects.h>
 #include <utility>
@@ -45,7 +46,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // capture came back holding a dead VAO's vertex data (0,0,0,1 - the previous
             // test's positions) instead of its own.
             // Zero for client memory (no buffer), which is a distinct identity of its own.
-            const Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
+            //
+            // P2 D12.4 / ARCHITECTURE.md 9.5: under the handle arm the identity is the
+            // buffer's {slot, gen} rather than its lifetime id - "lifetimeId -> gen mixed
+            // into every server-side content hash". The two are equally ABA-proof (the
+            // allocator maps one onto the other and bumps Gen only on slot REUSE); what
+            // changes is that the key is now the identity the SERVER will be handed once
+            // buffers travel as handles, instead of a number only the client can mint.
+            Uint64 bufferKey = attr.Buffer ? attr.Buffer->GetLifetimeId() : 0;
+#if MOBILEGL_PIPE_PUSH
+            if (attr.Buffer) {
+                if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
+                    const MG_Pipe::MGPipeHandle handle =
+                        MagmaPipeHandleOf(MG_Pipe::MGPipeKind::Buffer, attr.Buffer->GetLifetimeId());
+                    bufferKey = static_cast<Uint64>(handle.Slot) | (static_cast<Uint64>(handle.Gen) << 32);
+                } else if (MG_Config::Features.PipeHandleAbaControl) {
+                    // Negative control C (P2 brief D18), and it applies to the PRE-HANDLE arm
+                    // on purpose: hash the raw BufferObject* the way this did before the
+                    // lifetime-id fix, so HandleRecycleScenario.AbaControl can reproduce the
+                    // ABA and assert the WRONG pixels. That arm is what proves the reproducer
+                    // still reproduces; if the allocator stops handing the address back, it
+                    // fails instead of passing for the wrong reason.
+                    bufferKey = static_cast<Uint64>(reinterpret_cast<SizeT>(attr.Buffer.get()));
+                }
+            }
+#endif
             XXHASH_VERIFY(XXH64_update(m_hashState, &bufferKey, sizeof(bufferKey)));
         }
 

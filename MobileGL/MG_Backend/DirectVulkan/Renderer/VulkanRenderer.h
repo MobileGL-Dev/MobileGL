@@ -1045,6 +1045,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // common shape), and "the VAO did not move" would then skip the layout
             // re-resolve for a different VAO.
             Uint64 vaoLifetimeId = 0;
+#if MOBILEGL_PIPE_PUSH
+            // P2 D12.4: the handle arm's answer to the same question, and one compare rather
+            // than the pair above. Kept BESIDE them rather than replacing them because the
+            // pre-handle arm is still compiled (MOBILEGL_PIPE_LEGACY_MEMOS) and this snapshot
+            // is a value struct, not a wire type.
+            MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
             Uint32 vaoConfigVersion = 0;
             const void* drawFbo = nullptr;
             // Never-reused lifetime id beside the raw pointer + Uint16 version: a
@@ -1319,6 +1326,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //  - bindings revalidates per draw exactly as before (frame serial, content
         //    hash, per-binding live buffer pointers and slice epochs).
         struct alignas(64) VaoDrawMemo {
+#if MOBILEGL_PIPE_PUSH
+            // P2 D12.4: the handle arm's key, and the ONLY key it needs. {slot, gen} is an
+            // identity, so the pointer-plus-lifetime-id pair below stops being a key here;
+            // the slot also picks the table entry, so the address hash and the two-way probe
+            // go with it. Null in an entry that has never been claimed.
+            MG_Pipe::MGPipeHandle vaoHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
             const MG_State::GLState::VertexArrayObject* vaoKey = nullptr;
             // The VAO's never-reused lifetime id, checked alongside vaoKey. The pointer
             // ALONE is not an identity: a deleted VAO's heap address is handed straight
@@ -1347,6 +1361,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (m_currentDrawResolvedEntry) relies on.
         static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
         Vector<VaoDrawMemo> m_vaoDrawMemoTable;
+#if MOBILEGL_PIPE_PUSH
+        // One-entry memo in front of the slot allocator's lifetimeId -> handle map (P2
+        // D12.4). Acquiring a handle is a hash probe, and LookupVaoDrawMemo runs per draw, so
+        // the arm would otherwise have swapped one probe (the address hash it deletes) for
+        // another. A run of draws over one VAO - the common intra-batch shape - pays a single
+        // Uint64 compare instead.
+        //
+        // A lifetime id is never reused, so a hit can only ever be this same object; the
+        // valid flag exists rather than a zero sentinel because nothing promises the frontend
+        // counter starts above zero.
+        Uint64 m_lastVaoHandleLifetimeId = 0;
+        MG_Pipe::MGPipeHandle m_lastVaoHandle = MG_Pipe::kMGPipeNullHandle;
+        Bool m_lastVaoHandleValid = false;
+        MG_Pipe::MGPipeHandle ResolveVaoHandle(const MG_State::GLState::VertexArrayObject& vao) {
+            const Uint64 lifetimeId = vao.GetLifetimeId();
+            if (m_lastVaoHandleValid && m_lastVaoHandleLifetimeId == lifetimeId) {
+                return m_lastVaoHandle;
+            }
+            const MG_Pipe::MGPipeHandle handle =
+                MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, lifetimeId);
+            m_lastVaoHandleLifetimeId = lifetimeId;
+            m_lastVaoHandle = handle;
+            m_lastVaoHandleValid = true;
+            return handle;
+        }
+#endif
         // Finds the slot holding `vao`, or recycles the older of its two candidate
         // slots into an empty memo keyed on `vao`. Never returns null.
         VaoDrawMemo* LookupVaoDrawMemo(const MG_State::GLState::VertexArrayObject* vao);

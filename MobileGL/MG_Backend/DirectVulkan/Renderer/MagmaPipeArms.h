@@ -11,8 +11,9 @@
 
 #include <Config.h>
 #if MOBILEGL_PIPE_PUSH
-// kMGPipeSubsystem* - the runtime bitmask's named bits. Push-only, so the pull build's
-// include graph is unchanged.
+// kMGPipeSubsystem* - the runtime bitmask's named bits - and the client slot allocator that
+// mints every MGPipeHandle. Push-only, so the pull build's include graph is unchanged.
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #endif
 
@@ -58,6 +59,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 site);
 #endif
         std::abort();
+    }
+
+    // The {slot, gen} of a frontend object, minted on first sight and stable for that
+    // object's whole life (ARCHITECTURE.md 4.2). `lifetimeId` is the client's own identity
+    // for the object - never a GL name, never a heap address - so a deleted-and-recreated
+    // object at the same address cannot reproduce a handle, which is precisely the ABA
+    // HandleRecycleScenario reproduces.
+    //
+    // A VAO is kind VertexElementsCso: that is the gallium-shaped CSO a vertex array
+    // resolves to, and it is the only kind in MGPipeKind that names vertex-input state.
+    // Magma acquires the handle itself in P2 because the tracker does not emit object-class
+    // state yet (P2 emits for dirty bits 0-4 only); when it does, this becomes a read of what
+    // the client already sent.
+    inline MG_Pipe::MGPipeHandle MagmaPipeHandleOf(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        return MG_Pipe::MGPipeSlots().Acquire(kind, lifetimeId);
     }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectVulkan
