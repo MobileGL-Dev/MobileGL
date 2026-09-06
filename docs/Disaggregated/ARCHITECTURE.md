@@ -341,7 +341,7 @@ struct PipeInputs {
 
 | 阶段 | 改什么 | 证明 |
 |---|---|---|
-| A 别名 | 机械 `sed`：`MG_State::pGLContext->` → `MGB_CTX->`（293 处）+ 手工转换 58 行非箭头用法（~34 处 `MOBILEGL_ASSERT` 删除、7 处空守卫、3 处三元、`.get()` 裸指针捕获与 `decltype` 别名、14 处 `!= nullptr`、1 处注释）；逐 verb 类填充点填 `gPipeInputs` | `nm --defined-only` 不变；`.text` 差异可逐行归因（空守卫/三元的重写推迟到 P2） |
+| A 别名 | 机械 `sed`：`MG_State::pGLContext->` → `MGB_CTX->`（**实测 277 处**，293 出自过期的 vendored 清单）+ 手工转换 58 行非箭头用法（~34 处 `MOBILEGL_ASSERT` 删除、7 处空守卫、3 处三元、`.get()` 裸指针捕获与 `decltype` 别名、14 处 `!= nullptr`、1 处注释）；逐 verb 类填充点填 `gPipeInputs` | `nm --defined-only` 不变；`.text` 差异可逐行归因（空守卫/三元的重写推迟到 P2） |
 | B 推送 | tracker 填 `gPipeInputs`，填充器按 `MOBILEGL_PIPE_PUSH` 位图逐字段让位 | `MOBILEGL_PIPE_VERIFY=1`：tracker 再填一份快照版，G4 比对器逐字段每 draw 比一次 |
 | C 句柄化 | `SharedPtr<前端对象>` 字段 → `MGPipeHandle` + POD 描述符；memo 重键；写回变回调 | 全套门（§13） |
 

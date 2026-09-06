@@ -1,4 +1,4 @@
-# P0 实测
+# 实测记录（P0、P1）
 
 > 每张表都写明设备、提交与命令，以便复现。设备：`35d0befa` = Xiaomi 24129PN74C，Adreno 830，Android 16；`3B159D009VZ00000` = Oppo PLG110，Mali，Android 16（ColorOS）。设备运行日期 2026-09-05。设备锁协议照旧。
 
@@ -94,3 +94,50 @@ python3 tools/trace_replay/run_android_retrace_local.py \
 3. `--env` 值里嵌入的 `/data/...` 会被 runner 的 bash.exe 做 MSYS 路径转换（`MSYS2_ARG_CONV_EXCL="/data/*"` 只覆盖开头匹配）——用 `MSYS_NO_PATHCONV=1` 跑。
 4. `coherent_as_flush` 管线完好：`--ez coherent_as_flush true` → `trace_replay_core.cpp` 的 `setenv`，独立于 `--env` 透传。
 5. **`minecraft-1.21.1-neoforge-create-indirect-in-world` 在两台设备上都失败**（Adreno 830：Espryt ~4.5 分钟后黑帧，Magma 纹理上传提交时 `VK_ERROR_DEVICE_LOST`；Mali：SSIM 0.85 / 0.45）。Adreno 830 上用 `dev@81b17c0b` 基线 APK 复现，**是基线就有的问题，不是本分支造成**；它是 P3a/P8 验收清单里的用例，需先在 `dev` 修。
+
+---
+
+# P1 实测（`feat/disaggregated`，lavapipe / llvmpipe）
+
+## 6. 规模：站点、访问器、填充点
+
+| 量 | 值 | 出处 |
+|---|---|---|
+| 后端 `pGLContext->` 箭头站点 | 277（Espryt 113、Magma 164） | 计划写 293，出自过期的 vendored 清单 |
+| 非箭头行 | 58（Espryt 9、Magma 49，其中 43 条是 Magma 的逐 verb `MOBILEGL_ASSERT`） | 与计划一致 |
+| `PipeInputs` 字段 | 63 | 计划写 61；`GetBoundTransformFeedbackLifetimeId`、`HasOpenTransformFeedbackSpan` 是 D21 之后新增的读点 |
+| 后端调用的不同访问器 | 62（Espryt 32、Magma 56） | `GetBoundTransformFeedbackName` 已无人读，留作已标注的死行 |
+| 填充点 | 83 条 `MGP_FILL`，覆盖 69 个 verb、9 个类 | `MG_Pipe/FillPoints.def` |
+| `SyncPersistentMappedRange` / `SyncGpuWrites` | 20 / 6 | 与计划一致 |
+
+## 7. verify 通道发现的两类真问题
+
+**缺填充行（9 处）。** 逐 verb poison 在 79 例 retrace 与 818 条 integration-verify 上抓出三组：`kReadback` 缺 `IsTransformFeedbackActive`/`IsTransformFeedbackPaused`（深度/模板回读仿真的 `ScopedEmulationDrawState` 会暂停在飞的捕获）、`kTextureOp` 与 `kDispatch` 缺 `IsCapabilityEnabled`、`kBlitOrCopy`/`kTextureOp` 缺着色器 blit 用到的 viewport 与顶点/缓冲绑定。其中 8 行是静态过近似（代码路径可达但通道未跑到），过近似会让那对 (类, 字段) 的 poison 永久失效，**P2 收紧填充表时先复查这 8 行**。
+
+**verb 内后端改前端（3 个字段）。** Magma 在自己的 draw 里写前端对象（为未绑定采样器合成回退纹理、材质化排队清除、覆写采样器 filter），把边界已经拷走的值挪了位，8 条 DirectVulkan 用例与 2 条 trace 因此报 `Fatal{PipeVerifyDiffer, "GetSamplingResolutionGeneration@Draw*", where=read}`。**选定的解法是 push-on-mutation**：前端计数器移动时用 `MGP_NOTE_MUTATION(Field)`（`MG_Pipe/PipeMutation.h`）刷新推送块里的那一个字段（只刷值不刷戳记），"推送块在每次读取时都等于活上下文"这条不变式因此字面成立，也正是 P2 tracker 需要的形状。
+
+三个被这样处理的字段与它们的钩子：
+
+| 字段 | 钩子 |
+|---|---|
+| `GetSamplingResolutionGeneration` | `TextureState::BumpSamplingResolutionGeneration()` |
+| `GetTextureBindGeneration` | `TextureState::BumpTextureBindGeneration()` 与 `NoteUnitTouched()` 的 `bindingChanged` 分支 |
+| `GetMaxTouchedTextureUnit` | `NoteUnitTouched()` 的高水位分支 |
+
+钩子挂在**计数器**上而不是四十个写入点上：后端写前端的全部路径（`SamplerObject` 的 8 个 setter、`ITextureObject` 的 6 个、纹理单元绑定路径）都经由这三个计数器，`BufferObject`/`ProgramObject`/`VertexArrayObject` 的后端写入不移动任何推送字段（它们是句柄类读点）。
+
+## 8. P1 验收（合入后在 `~/w7/pipe` 实测）
+
+| 门 | 结果 |
+|---|---|
+| pull 构建符号与 `.text` | 0 增 / 0 删 / 0 改尺寸 / 0 重命名，`.text` 字节不变 |
+| `MG_Backend` 里的 `pGLContext` | 0（唯一保留处是开关头文件的 pull 分支） |
+| 单元（pull / push / verify） | 1485 全绿 × 3 |
+| `integration-gpu`（pull） | 878 全绿 |
+| `integration-verify` | 818 全绿，零 `Fatal{` |
+| 79 例 retrace（`MOBILEGL_PIPE_VERIFY=1`） | 79/79 通过，79/79 带 armed 摘要，零 `Fatal{` |
+| 两个阴性对照 | 4 条专用条目全绿（篡改字段变红、抽掉一个填充戳记在那条 verb 上变红） |
+| 测试名 | 0 删除，+29 |
+
+**verify 构建的代价**：`integration-verify` 818 条在 4 路并行下约与 `integration-gpu` 同量级；79 例 retrace 在 4 路下约 20 分钟。
+

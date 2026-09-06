@@ -1,6 +1,6 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0、P0.5 已落地**（`feat/disaggregated@5d99ee43`，基线 `dev@50fb1343`）。下一步 P1 → P2，第 43 天 GO/NO-GO。见 `ROADMAP.md`。
+> 状态：**P0、P0.5、P1 已落地**（`feat/disaggregated`，基线 `dev@50fb1343`）。下一步 P2，第 43 天 GO/NO-GO。见 `ROADMAP.md`。
 
 ## 是什么
 
