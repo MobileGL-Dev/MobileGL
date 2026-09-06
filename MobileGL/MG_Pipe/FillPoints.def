@@ -173,6 +173,10 @@
     X(kDispatch,    GetSamplingResolutionGeneration)                   \
     X(kDispatch,    GetImageTextureBinding)                            \
     X(kDispatch,    GetFramebufferBindingSlot)                         \
+    /* Magma's PrepareStorageImageTextures materialises a queued clear for every  */ \
+    /* storage image the dispatch writes, and the clear pre-compensates its colour */ \
+    /* against GL_FRAMEBUFFER_SRGB (VkClearManager::PreCompensateSrgbClearColor).  */ \
+    X(kDispatch,    IsCapabilityEnabled)                               \
     X(kDispatch,    GetPatchVertices)                                  \
     X(kDispatch,    GetPatchDefaultOuterLevel)                         \
     X(kDispatch,    GetPatchDefaultInnerLevel)                         \
@@ -214,6 +218,17 @@
     X(kBlitOrCopy,  GetColorMaskIndexed)                               \
     X(kBlitOrCopy,  GetDepthMask)                                      \
     X(kBlitOrCopy,  GetStencilState)                                   \
+    /* Magma's shader blit to the default framebuffer                            */ \
+    /* (TryBlitToDefaultFramebufferWithShader) is a real draw of a backend-owned  */ \
+    /* helper program: it sets the dynamic viewport through ApplyGLViewportState  */ \
+    /* -> ComputeGLViewport (viewport 0 and its depth range), picks the pipeline's */ \
+    /* provoking vertex through GetOrCreateBlitPipeline -> SelectProvokingVertexMode, */ \
+    /* and binds the helper's descriptors through BindProgramUniformBuffers, whose  */ \
+    /* buffer-block resolvers read the frontend binding points.                    */ \
+    X(kBlitOrCopy,  GetViewportIndexed)                                \
+    X(kBlitOrCopy,  GetDepthRangeIndexed)                              \
+    X(kBlitOrCopy,  GetProvokingVertexMode)                            \
+    X(kBlitOrCopy,  GetBufferBindingPoint)                             \
     /* kTextureOp */                                                   \
     X(kTextureOp,   GetActiveTextureUnit)                              \
     X(kTextureOp,   GetTextureUnitObject)                              \
@@ -222,6 +237,15 @@
     X(kTextureOp,   GetSamplingResolutionGeneration)                   \
     X(kTextureOp,   GetTextureBindGeneration)                          \
     X(kTextureOp,   GetMaxTouchedTextureUnit)                          \
+    /* Magma's GenerateMipmap materialises the texture's queued clear before it    */ \
+    /* blits (MaterializePendingClearForTexture -> PreCompensateSrgbClearColor,    */ \
+    /* which reads GL_FRAMEBUFFER_SRGB), and a depth texture takes the shader path */ \
+    /* (GenerateDepthMipmapWithShader -> BindProgramUniformBuffers), whose sampler */ \
+    /* resolver reads the draw framebuffer for the feedback-loop check and whose   */ \
+    /* buffer-block resolvers read the frontend binding points.                    */ \
+    X(kTextureOp,   IsCapabilityEnabled)                               \
+    X(kTextureOp,   GetFramebufferBindingSlot)                         \
+    X(kTextureOp,   GetBufferBindingPoint)                             \
     /* kReadback */                                                    \
     X(kReadback,    GetPixelStoreParameters)                           \
     X(kReadback,    GetBufferBindingSlot)                              \
@@ -237,7 +261,12 @@
     X(kReadback,    GetSamplingResolutionGeneration)                   \
     X(kReadback,    GetTextureBindGeneration)                          \
     X(kReadback,    GetMaxTouchedTextureUnit)                          \
-    X(kReadback,    GetImageTextureBinding)                                /* The depth/stencil read emulation draws (ScopedEmulationDrawState,          */     /* DirectGLES.cpp:5224) and pauses an active capture around its own draw, so   */     /* a readback reads the transform-feedback state exactly as a draw does.       */     X(kReadback,    IsTransformFeedbackActive)                             X(kReadback,    IsTransformFeedbackPaused)                         \
+    X(kReadback,    GetImageTextureBinding)                            \
+    /* The depth/stencil read emulation draws (ScopedEmulationDrawState,          */ \
+    /* DirectGLES.cpp) and pauses an active capture around its own draw, so a      */ \
+    /* readback reads the transform-feedback state exactly as a draw does.         */ \
+    X(kReadback,    IsTransformFeedbackActive)                         \
+    X(kReadback,    IsTransformFeedbackPaused)                         \
     /* kXfbSpan */                                                     \
     X(kXfbSpan,     GetTransformFeedbackProgram)                       \
     X(kXfbSpan,     GetBufferBindingPoint)                             \

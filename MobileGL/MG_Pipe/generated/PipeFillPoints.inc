@@ -279,14 +279,14 @@ inline constexpr Bool MGPipeFieldMaskHas(const MGPipeFieldMask& mask, MGPipeInpu
 inline constexpr MGPipeFieldMask kMGPipeClassFieldMask[kMGPipeVerbClassCount] = {
     // kDraw: 54 fields (47 own + 7 sticky)
     {{0x7ffbfff7bfffc3eeull, 0x0000000000000000ull}},
-    // kDispatch: 21 fields (14 own + 7 sticky)
-    {{0x5c00f2281d3003c0ull, 0x0000000000000000ull}},
+    // kDispatch: 22 fields (15 own + 7 sticky)
+    {{0x5c40f2281d3003c0ull, 0x0000000000000000ull}},
     // kClear: 25 fields (18 own + 7 sticky)
     {{0x5c50ffa001347900ull, 0x0000000000000000ull}},
-    // kBlitOrCopy: 25 fields (18 own + 7 sticky)
-    {{0x5f50ffa001344101ull, 0x0000000000000000ull}},
-    // kTextureOp: 14 fields (7 own + 7 sticky)
-    {{0x5c00f22001200101ull, 0x0000000000000000ull}},
+    // kBlitOrCopy: 29 fields (22 own + 7 sticky)
+    {{0x5f70ffe0013c4181ull, 0x0000000000000000ull}},
+    // kTextureOp: 17 fields (10 own + 7 sticky)
+    {{0x5c40f22001300181ull, 0x0000000000000000ull}},
     // kReadback: 24 fields (17 own + 7 sticky)
     {{0x5f50f3a041300541ull, 0x0000000000000000ull}},
     // kXfbSpan: 15 fields (8 own + 7 sticky)
