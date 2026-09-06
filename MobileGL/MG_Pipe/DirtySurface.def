@@ -23,6 +23,27 @@
 // not all must not appear, because a shutter built from this file would then UNDER-fire,
 // and ARCHITECTURE.md 13.2 names under-firing as the dangerous direction.
 //
+// "EVERY PATH" MEANS EVERY PATH THAT MUTATES. A setter that returns early because the value
+// did not change publishes nothing and needs to publish nothing - there is no mutation to
+// carry - so a redundant-write guard (SetColorMask's `if (changed) BumpVersions();`, the
+// BitwiseEqual guards on the patch levels) does not make its publisher conditional in the
+// sense this rule cares about. A publisher reached on only SOME of the paths that DO mutate
+// - SetCapability's ClipDistance arms, SetStencilFunc's reference-only call - is the thing
+// that must not be named.
+//
+// EVERY BIT ANSWER IN THIS FILE IS DERIVED AND CHECKED, in two families and one
+// direction. The RenderState family (45 rows) is checked both ways against RenderState.cpp,
+// below. Every other NEW_* answer is checked against the shutter Tracker.h builds for that
+// bit: gen_pipe_dirty_surface.py resolves what the shutter READS to the members behind it,
+// computes what each mutator transitively WRITES (through MGP_NOTE_AGGREGATE too, whose hop
+// it reads out of MGPipeNoteAggregate's own switch), and fails a row that names a bit whose
+// shutter its mutator moves on no path at all. That half is one-directional on purpose -
+// "it does write something the shutter reads" cannot prove it does so on EVERY path - so it
+// catches under-firing and not over-claiming. The prose answers (kImmediate, kExplicitDestroy,
+// kUnpublishedDestroy, kNoBackendRead, kPulledEveryVerb, kReverseChannel) are statements no
+// derivation checks; --check prints how many rows carry one, and prints every row it had to
+// decline, so "all mapped" can never be read as "all verified".
+//
 // For the RenderState family that answer is not a matter of taste and it is CHECKED
 // rather than asserted: scripts/gen_pipe_dirty_surface.py reads RenderState.cpp and
 // derives, per setter, which of NEW_RENDER_STATE / NEW_PIPELINE_STATE moves on every
@@ -139,7 +160,16 @@
     X(SetViewport,                        NEW_RENDER_STATE)                                     \
     X(SetViewportIndexed,                 NEW_RENDER_STATE)                                     \
     /* ---- the other value-class bits ---- */                                                  \
-    X(SetPixelStoreParam,                 NEW_PIXEL_PACK)                                       \
+    /* NOT NEW_PIXEL_PACK, though half of it does move that bit: RenderState::SetPixelStore */  \
+    /* Param writes BOTH halves - eight Pack arms and eight Unpack arms - while the         */  \
+    /* tracker's bit 2 is a byte compare of the PACK half alone (Tracker.h), because        */  \
+    /* set_pixel_pack_state deliberately has no unpack counterpart (ARCHITECTURE.md 4.6).   */  \
+    /* So glPixelStorei(GL_UNPACK_ALIGNMENT, 8) and its seven siblings move NOTHING that     */ \
+    /* bit reads, and naming it here would be an under-firing shutter for eight of the       */ \
+    /* sixteen arms. What is true on every path is the pull: GetPixelStoreParameters is one  */ \
+    /* of the two Coverage.def rows an emitted call does not supply completely (PipeFill.    */ \
+    /* cpp), so the residual fill copies both halves at every verb of the class.            */  \
+    X(SetPixelStoreParam,                 kPulledEveryVerb)                                     \
     X(SetPatchDefaultInnerLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
     X(SetPatchDefaultOuterLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
     /* Also an immediate publish point, but it has a real bit and the bit is   */               \
@@ -151,7 +181,16 @@
     X(SetCurrentVertexAttributeUint,      NEW_VERTEX_ATTRIB_DEFAULTS)                           \
     /* ---- object class ---- */                                                                \
     X(BumpTextureBindGeneration,          NEW_SAMPLER_VIEWS)                                    \
-    X(SetNamedTransformFeedbackBinding,   NEW_SO_TARGETS)                                       \
+    /* NOT NEW_SO_TARGETS, and this one was false on EVERY path: GLContext::SetNamed        */  \
+    /* TransformFeedbackBinding either binds a BufferState binding point (index == the      */  \
+    /* bound XFB object) or writes a saved-bindings entry, and NEW_SO_TARGETS mixes the     */  \
+    /* buffer-CONTENT aggregate with the transform-feedback generation - the first moves    */  \
+    /* only at BufferObject.cpp's content sites, the second only in BeginTransformFeedback. */  \
+    /* A binding moves neither. It reaches the backend the same way every other buffer      */  \
+    /* binding point does, through GetBufferBindingPoint in the verb class's may-read mask, */  \
+    /* so the honest answer is the pull. Narrowing it is P3b's, when it takes the subsystem */  \
+    /* over and the binding points get a generation of their own.                           */ \
+    X(SetNamedTransformFeedbackBinding,   kPulledEveryVerb)                                     \
     /* ---- an object's death: no generation, because there is no longer an object  */          \
     /* to carry one. Espryt 0b's delete_* / resource_destroy publishes the kinds     */         \
     /* that have a handle on the wire; programs, program pipelines and shaders have  */         \
