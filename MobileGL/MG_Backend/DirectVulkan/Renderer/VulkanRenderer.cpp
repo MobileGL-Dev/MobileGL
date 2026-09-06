@@ -397,6 +397,89 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
     static DynamicStateShadow g_dynamicStateShadow;
 
+#if MOBILEGL_PIPE_PUSH
+    // ---- D12.3: DynamicTailKey's inputs against the P2 chunk table ----
+    //
+    // DynamicTailKey's inventory (declared above, one line per reader) is an exact,
+    // hand-maintained enumeration of what the six Apply* in the tail read. The P2 chunk table
+    // (MG_Pipe/MGPipeRenderStateSpans.h) is an independent, offsetof-derived statement of
+    // which bytes of RenderStateParameters are dynamic state. The two were written for
+    // different reasons, so making them check each other is free evidence: if a later chunk
+    // edit demotes or promotes one of these members, the mismatch is a BUILD BREAK here rather
+    // than a tail that silently stops being re-run when its input moves.
+    //
+    // The brief (P2 D12.3) expects every input to be dynamic; the tree says otherwise for
+    // exactly one, and the tree is right - see the ScissorTestEnabledMask note below.
+    namespace {
+        // Is [begin, begin + size) covered entirely by DYNAMIC chunks?
+        constexpr Bool MagmaRenderStateRangeIsDynamic(SizeT begin, SizeT size) {
+            const SizeT end = begin + size;
+            for (SizeT i = 0; i < MG_Pipe::kMGPipeRenderStateChunkCount; ++i) {
+                const SizeT chunkBegin = MG_Pipe::kMGPipeRenderStateChunkBoundaries[i];
+                const SizeT chunkEnd = MG_Pipe::kMGPipeRenderStateChunkBoundaries[i + 1];
+                if (end <= chunkBegin || begin >= chunkEnd) continue; // disjoint
+                if (MG_Pipe::MGPipeRenderStateChunkIsPipeline(i)) return false;
+            }
+            return true;
+        }
+        using MagmaTailRsp = RenderStateParameters;
+
+#define MAGMA_TAIL_INPUT_IS_DYNAMIC(Member)                                                                            \
+    static_assert(MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, Member),                                       \
+                                                 sizeof(MagmaTailRsp::Member)),                                        \
+                  "ApplyDynamicDrawStateTail reads " #Member                                                           \
+                  ", which the P2 chunk table no longer calls dynamic state: a change to it would "                    \
+                  "move the pipeline version, not the parameters version, and the tail would stop "                    \
+                  "being re-run for it")
+
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(Viewports);        // ApplyGLViewportState: Viewports[0]
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(DepthRanges);      // ApplyGLViewportState: DepthRanges[0]
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(BlendColor);       // ApplyBlendConstants
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetFactor); // ApplyPolygonOffsetState
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetUnits);  // ApplyPolygonOffsetState
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(LineWidth);        // ApplyLineWidthState
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(ScissorBoxes);     // the scissor rect: ScissorBoxes[0]
+#undef MAGMA_TAIL_INPUT_IS_DYNAMIC
+
+        // ApplyStencilState reads three of the seven members of each face, and D6 splits
+        // StencilFaceState at sub-member granularity for exactly this reason: Ref, ValueMask
+        // and WriteMask are VK_DYNAMIC_STATE_STENCIL_{REFERENCE,COMPARE_MASK,WRITE_MASK}, while
+        // Func and the three ops are baked into the pipeline. Asserted per member, per face,
+        // because the split runs THROUGH the struct rather than around it.
+        constexpr SizeT kMagmaStencilFace1 = offsetof(MagmaTailRsp, StencilStates) + sizeof(StencilFaceState);
+#define MAGMA_TAIL_STENCIL_IS_DYNAMIC(Member)                                                                          \
+    static_assert(MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, StencilStates) +                               \
+                                                     offsetof(StencilFaceState, Member),                               \
+                                                 sizeof(StencilFaceState::Member)),                                    \
+                  "ApplyStencilState reads the FRONT face's " #Member " as dynamic state");                            \
+    static_assert(MagmaRenderStateRangeIsDynamic(kMagmaStencilFace1 + offsetof(StencilFaceState, Member),               \
+                                                 sizeof(StencilFaceState::Member)),                                    \
+                  "ApplyStencilState reads the BACK face's " #Member " as dynamic state")
+
+        MAGMA_TAIL_STENCIL_IS_DYNAMIC(Ref);
+        MAGMA_TAIL_STENCIL_IS_DYNAMIC(ValueMask);
+        MAGMA_TAIL_STENCIL_IS_DYNAMIC(WriteMask);
+#undef MAGMA_TAIL_STENCIL_IS_DYNAMIC
+
+        // THE ONE INPUT THAT IS NOT DYNAMIC, and the brief's D12.3 says it should be.
+        // The tree wins, and it is right: the split's only rule is "a byte is pipeline state
+        // iff a public setter that calls BumpVersions() writes it", and ScissorTestEnabledMask
+        // is written by SetCapability(ScissorTest), which does. It sits in pipeline chunk P6
+        // with the other capability bools. The tail reads it only to decide between the
+        // scissor box and a full-extent rect, and it is HARMLESS there for a reason worth
+        // stating: a pipeline-half write moves the pipeline version, and the pipeline version
+        // moves only together with the parameters version (BumpVersions bumps both), so the
+        // tail's version gate is invalidated by it just the same. A DYNAMIC member promoted
+        // into the pipeline half would break that direction, which is what the asserts above
+        // are for; this one is pinned in the opposite direction so that DEMOTING it - which
+        // would be a real G7 violation - is also a build break.
+        static_assert(!MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, ScissorTestEnabledMask),
+                                                      sizeof(MagmaTailRsp::ScissorTestEnabledMask)),
+                      "ScissorTestEnabledMask is written by SetCapability(ScissorTest), which calls "
+                      "BumpVersions(), so the chunk table must keep it in the pipeline half");
+    } // namespace
+#endif // MOBILEGL_PIPE_PUSH
+
     static void ResetDynamicStateShadow() {
         g_dynamicStateShadow = {};
     }
@@ -5949,6 +6032,21 @@ void main() {
         // One compare for the whole tail: see the gate's declaration in
         // DynamicStateShadow for why (version, extent, default-FBO flag) pins every
         // input the six Apply* below read.
+        //
+        // P2 D12.3: this read is RE-SOURCED, not re-shaped. Under MOBILEGL_PIPE_PUSH the
+        // accessor no longer walks into GLContext's RenderState - it returns
+        // PipeInputs::m_renderStateParametersVersion, which the applier publishes from
+        // MGPDynamicState::Version (set_dynamic_state) and MGPBindRenderState::Version
+        // (bind_render_state). So the gate now reads what the client PUSHED.
+        //
+        // What it does NOT do, and the P2 brief expects it to, is stop moving on a
+        // pipeline-only change. The tree settles that against the brief: bind_render_state
+        // carries m_version too and the applier publishes it, and it has to - Espryt's
+        // SyncRenderState uses the very same counter as its all-state change detector and G5
+        // forbids touching it, so a bind that rewrote the pipeline half while leaving the
+        // counter still would make Espryt skip re-syncing the blend state it just changed.
+        // The second-level DynamicTailKey compare below is therefore what actually absorbs a
+        // pipeline-only change, exactly as it did before P2: one key build, no vkCmd*.
         const Uint paramsVersion = MGB_CTX->GetRenderStateParametersVersion();
         if (shadow.dynamicTailValid && shadow.dynamicTailParamsVersion == paramsVersion &&
             shadow.dynamicTailExtentX == extent.x() && shadow.dynamicTailExtentY == extent.y() &&
