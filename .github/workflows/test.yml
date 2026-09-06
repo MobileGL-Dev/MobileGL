@@ -346,7 +346,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-20
 
       - name: Include-closure assertions and negative control
-        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test
+        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test --require-all
 
   benchmark:
     runs-on: ubuntu-latest

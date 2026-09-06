@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.14)
 find_package(Python3 COMPONENTS Interpreter)
 if (Python3_Interpreter_FOUND)
     add_test(NAME MobileGLPurity.IncludeClosure
-             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/check_include_closure.py --mode text --self-test)
+             COMMAND ${Python3_EXECUTABLE} ${MGL_ROOT}/scripts/check_include_closure.py --mode text --self-test --require-all)
     # ctest -L unit (test.yml:198-203). NO ENVIRONMENT property: it replaces the job env (ARCHITECTURE.md:567).
     set_tests_properties(MobileGLPurity.IncludeClosure PROPERTIES LABELS unit)
 else()
