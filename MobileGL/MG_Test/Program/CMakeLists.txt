@@ -275,3 +275,24 @@ gtest_discover_tests(OptimisticStatusTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 # Same reason again: several cases leave A links outstanding while B compiles and links.
 gtest_discover_tests(XfbFrontendOrderInvarianceTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+
+# P0.5: the ProgramArtifacts.h header on its own - the alias identity proofs, the POD trip
+# wire and the archive field tables. Its first include is the artifacts header, so this
+# binary is also the compile-time proof that the header is self-contained.
+add_executable(
+        ProgramArtifactsTest
+        ProgramArtifactsTest.cpp
+)
+
+target_include_directories(ProgramArtifactsTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ProgramArtifactsTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(ProgramArtifactsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
