@@ -420,13 +420,20 @@ jobs:
             echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the two checks below could not have failed honestly"
             exit 1
           fi
-          for entry in MGPipeVerifyInputs MGPipeFillForVerb; do
-            if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "${entry}"; then
-              echo "::error::libMobileGL.so defines no ${entry}: -DMOBILEGL_PIPE_VERIFY=ON did not take, and every lane that consumes this artifact would run the comparator-free library and pass having compared nothing"
-              exit 1
-            fi
-          done
-          echo "libMobileGL.so defines MGPipeVerifyInputs and MGPipeFillForVerb (${defined} defined symbols)"
+          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "MGPipeVerifyInputs"; then
+            echo "::error::libMobileGL.so defines no MGPipeVerifyInputs: -DMOBILEGL_PIPE_VERIFY=ON did not take, and every lane that consumes this artifact would run the comparator-free library and pass having compared nothing"
+            exit 1
+          fi
+          # The per-verb entry point, under EITHER of its two names. P2 renames
+          # MGPipeFillForVerb to MGPipeValidateForVerb (the body becomes the tracker's walk and
+          # the fill is one of its five steps), so this check has to accept both or it goes red on
+          # the rename for a reason that has nothing to do with what it tests. What it tests is
+          # unchanged: that the library HAS a per-verb entry point compiled in.
+          if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -qE "MGPipeValidateForVerb|MGPipeFillForVerb"; then
+            echo "::error::libMobileGL.so defines neither MGPipeValidateForVerb nor MGPipeFillForVerb: there is no per-verb entry point in this artifact, so nothing fills the block the comparator compares"
+            exit 1
+          fi
+          echo "libMobileGL.so defines MGPipeVerifyInputs and a per-verb entry point (${defined} defined symbols)"
 
       - name: Show ccache stats
         if: always()
@@ -541,6 +548,42 @@ jobs:
           else
             ctest --output-on-failure -L integration-verify --no-tests=error
           fi
+
+      # The push-only unit tests, on the verify runtime.
+      #
+      # WHY HERE AND NOT IN `test`. The `test` job builds the PULL library, and G6's chunk-table
+      # walk and G10's residual assertions live in MG_Test/Pipe, compiled only under
+      # MOBILEGL_PIPE_PUSH (MGPipeRenderStateSpans.cpp and PipeApply.cpp are appended to
+      # SOURCE_FILES inside the `if (MOBILEGL_PIPE_PUSH)` block, which is exactly how the pull
+      # build stays symbol-identical). So before P2 those tests ran in no CI job at all: they
+      # existed, they were green locally, and CI never executed one of them.
+      #
+      # This artifact already carries them - the packaging step above tars
+      # ${BUILD_DIR}/MobileGL/MG_Test whole - so the whole cost is the run, which is ~14 s for
+      # ~1490 entries. --no-tests=error, because a packaging change that stopped shipping the
+      # unit binaries would otherwise report a green run of nothing.
+      - name: Unit tests on the verify runtime (G6, G10)
+        working-directory: build-verify
+        run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
+
+      # The two always-on P2 negative controls (G8, G12), which are labelled integration-gpu and
+      # not integration-verify - they are about the handle key and the CSO switch, not about the
+      # comparator - so the lane above does not reach them. They are run HERE because this is the
+      # only CI job that unpacks a MOBILEGL_PIPE_PUSH build: CsoContentAddressingScenario reads
+      # the two CSO counters out of the library's summary line and both the counters and the
+      # cso[] bracket are #if MOBILEGL_PIPE_PUSH, so in the pull `integration` job the entries do
+      # not exist at all.
+      #
+      # An arm whose subsystem has not landed on this tree SKIPS with the reason (never absent,
+      # never a green that asserted nothing), so this step is green through the P2 landing order
+      # and starts asserting as each package arrives.
+      - name: The handle-ABA and CSO-content-addressing controls (G8, G12)
+        working-directory: build-verify
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          ctest --output-on-failure -L integration-gpu \
+            -R 'HandleRecycle|CsoContentAddressing' --no-tests=error -j 4
 
       # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
       # library opens it fopen(path, "w"), so after an ambient lane of 400-odd processes the file
@@ -1525,11 +1568,26 @@ jobs:
           fi
           echo "no fprintf(stderr/stdout / printf( / puts( / std::cout|cerr under MobileGL/MG_Backend or MobileGL/MG_State"
 
-      # Informational: the frontend mutation surface an MGPipe aggregate generation has to
-      # cover. It becomes a gate in P2, when the mapping file exists to diff against
-      # (ROADMAP.md:18 puts the first mapping round in P2, not P1).
-      - name: MGPipe dirty-surface report
-        run: python3 scripts/gen_pipe_dirty_surface.py --summary
+      # A GATE as of P2, which is when MG_Pipe/DirtySurface.def exists to diff the scan against
+      # (ROADMAP.md:18 puts the first mapping round in P2). --check fails BOTH directions: a
+      # mutator the scanner finds with no row in the def, and a row naming a mutator the scan no
+      # longer finds - so a deleted mutator cannot leave a stale row behind claiming coverage.
+      #
+      # --self-test is the half that keeps --check honest, and it is not optional. A completeness
+      # check that silently stopped checking produces exactly the same green as a complete
+      # mapping; the self-test feeds it two canned negative controls (a mutator withheld from the
+      # def, a row naming a function that does not exist) and fails if either fails to trip. Same
+      # shape as gen_pipe.py --self-test and check_include_closure.py above.
+      #
+      # What this gate does NOT cover is written into DirtySurface.def's header rather than left
+      # implicit: the scanner attributes a mutation inside a lambda to the enclosing function,
+      # reads a mutation published through a helper as deferred, and scans only MG_Impl/GLImpl -
+      # so the four MGP_NOTE_MUTATION sites in MG_State are outside it entirely. This is a
+      # completeness gate over what the scanner can see; the semantic proof is the verify lane.
+      - name: MGPipe dirty-surface mapping is complete (G9)
+        run: |
+          python3 scripts/gen_pipe_dirty_surface.py --check
+          python3 scripts/gen_pipe_dirty_surface.py --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
