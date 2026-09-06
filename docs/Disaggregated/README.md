@@ -54,11 +54,4 @@ MGPipe 是 MobileGL 前端（`MG_State` + `MG_Impl`）与后端（`MG_Backend`�
 
 ## 历史
 
-本目录此前是一份 328 KB 的实施计划（`PLAN.md`）加 135 KB 的设计竞赛与三视角对抗性评审记录（`REVIEW.md`）。设计已定稿，本次改写只保留设计与架构本身；评审记录、被否决的替代方案与 v1→v2 的修订史留在 git 历史里：
-
-- `8b31de2f`：方案 A（replica GLContext + mutator 回放）与首轮评审；
-- `1794ac94`：方案 B（MGPipe）、A/B 逐项对比、第二轮竞赛与对抗性评审；
-- `8349babe`：合并为单一 MGPipe 计划，废弃方案 A；
-- `87ee17c6`：折入 P0 实测修正。
-
-`git show 87ee17c6:docs/Disaggregated/REVIEW.md` 可取回评审记录全文。此外还有一条已放弃的早期分支 `Feat/CS-Delta-IPC`，其可复用/改造/放弃的逐文件判定见 `8349babe` 版 `PLAN.md` §17。
+本目录此前是一份 328 KB 的实施计划（`PLAN.md`）加 135 KB 的设计竞赛与三视角对抗性评审记录（`REVIEW.md`）。设计已定稿，本次改写只保留设计与架构本身；评审记录、早期草案与修订史留在 git 历史里（`8b31de2f`、`1794ac94`、`8349babe`、`87ee17c6`；`git show 87ee17c6:docs/Disaggregated/REVIEW.md` 可取回评审记录全文）。更早的一条已放弃分支 `Feat/CS-Delta-IPC` 的逐文件可复用判定见 `8349babe` 版 `PLAN.md` §17。
