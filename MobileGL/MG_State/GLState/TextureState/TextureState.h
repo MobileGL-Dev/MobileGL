@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "MG_State/GLState/TextureState/TextureObject.h"
 #include "MG_Util/Types.h"
@@ -75,7 +76,14 @@ namespace MobileGL::MG_State::GLState {
         // Units above it have provably-empty binding slots, so per-draw backend scans
         // can stop there instead of walking all MAX_TEXTURE_IMAGE_UNITS units.
         void NoteUnitTouched(Int unit, Bool bindingChanged = true) {
-            if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) m_maxTouchedUnit = unit;
+            if (unit > m_maxTouchedUnit && unit < MAX_TEXTURE_IMAGE_UNITS) {
+                m_maxTouchedUnit = unit;
+                // Push-on-mutation (MG_Pipe/PipeMutation.h): the high-water mark is a pushed
+                // PipeInputs field, and a bind reached from inside a verb - a backend binding
+                // its own synthesised fallback texture - would otherwise leave the block
+                // describing a smaller scan range than the live context has.
+                MGP_NOTE_MUTATION(GetMaxTouchedTextureUnit);
+            }
             // Every texture/sampler bind entry point (glBindTexture / glBindTextureUnit /
             // glBindTextures / glBindSampler) routes through here, so bumping the generation here
             // - plus in MarkTextureObjectForDeletion for delete-unbind - covers every change to
@@ -85,11 +93,23 @@ namespace MobileGL::MG_State::GLState {
             // Re-binding the object a slot already holds changes nothing that the generation
             // guards; such callers pass bindingChanged=false so only the high-water mark advances
             // and the backend fast path survives the redundant re-binds apps issue every frame.
-            if (bindingChanged) ++m_textureBindGeneration;
+            if (bindingChanged) {
+                ++m_textureBindGeneration;
+                MGP_NOTE_MUTATION(GetTextureBindGeneration);
+            }
         }
         Int GetMaxTouchedUnit() const { return m_maxTouchedUnit; }
         Uint64 GetTextureBindGeneration() const { return m_textureBindGeneration; }
-        void BumpTextureBindGeneration() { ++m_textureBindGeneration; }
+        // Both counters below are pushed PipeInputs fields AND are moved by writes the
+        // backends make into frontend objects during their own verb - a synthesised fallback
+        // texture's AllocateStorage/SetInternalFormat, a sampler override's SetMinFilter, a
+        // default texture becoming defined. Every such path funnels through these two
+        // methods (and the bind branch above), so noticing here covers the whole family
+        // rather than each writer (P1 lane finding F2; MG_Pipe/PipeMutation.h).
+        void BumpTextureBindGeneration() {
+            ++m_textureBindGeneration;
+            MGP_NOTE_MUTATION(GetTextureBindGeneration);
+        }
 
         // Sibling of the bind generation for everything that changes WHICH native texture a
         // backend ends up putting on a unit WITHOUT any binding moving. Two families feed it:
@@ -108,7 +128,10 @@ namespace MobileGL::MG_State::GLState {
         // its sampled-set memo carries THIS generation alongside the bind one. Any memo of a
         // resolved per-unit binding - or of which textures a draw samples at all - needs both.
         Uint64 GetSamplingResolutionGeneration() const { return m_samplingResolutionGeneration; }
-        void BumpSamplingResolutionGeneration() { ++m_samplingResolutionGeneration; }
+        void BumpSamplingResolutionGeneration() {
+            ++m_samplingResolutionGeneration;
+            MGP_NOTE_MUTATION(GetSamplingResolutionGeneration);
+        }
 
         // Globally-unique, never-reused id of THIS texture state, i.e. of the context that owns
         // it. Both generations above restart at 0 with a new context, so a backend memo keyed on

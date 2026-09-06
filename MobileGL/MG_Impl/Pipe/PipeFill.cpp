@@ -16,6 +16,7 @@
 #include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
 
 #include <atomic>
@@ -461,6 +462,33 @@ namespace MobileGL::MG_Pipe {
         ReportDivergence(field, "read");
     }
 #endif // MOBILEGL_PIPE_VERIFY
+
+    // ---- push on mutation (P1 lane finding F2) ----
+    // A backend that writes a frontend object inside its own verb moves a value the verb
+    // boundary already copied: Magma's ResolveSamplerDescriptor synthesises a fallback
+    // texture for an unbound sampler and its AllocateStorage/SetInternalFormat bump the
+    // context's sampling-resolution generation, so every read of that field after the
+    // fallback differs from the live context (the two SampledSetStaleness / six
+    // UnboundImageDescriptor entries the verify lane aborted on). The frontend mutator
+    // spells MGP_NOTE_MUTATION(Field) at the point of the move and lands here.
+    //
+    // Only the value is refreshed. The stamp is deliberately left alone: a field whose stamp
+    // this verb withheld (negative control B) must stay stale, and a field the verb never
+    // filled must stay Fatal{UnmigratedPipeInput} on the next read rather than be healed by
+    // an unrelated frontend write.
+    void MGPipeNoteFrontendMutation(MGPipeInputField field) {
+        PipeInputs& inputs = gPipeInputs;
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        const auto verb = inputs.CurrentVerb();
+        if (verb == MGPipeVerb::kVerbCount) return; // nothing has filled the block yet
+        const auto index = static_cast<SizeT>(field);
+        if (kMGPipeInputFieldSticky[index]) return; // forwarded: no storage to refresh
+        const MGPipeFieldMask& mask =
+            kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(verb)])];
+        if (!MGPipeFieldMaskHas(mask, field)) return; // this verb never pushed it
+        MGPipeFillAccess::CopyField(inputs, *ctx, field);
+    }
 
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
         if (verb == nullptr || field == nullptr) {
