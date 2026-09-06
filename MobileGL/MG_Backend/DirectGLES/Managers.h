@@ -16,6 +16,7 @@
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
+#include "SlotTables.h"
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -267,7 +268,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         EndViewportRoutingPasses(passCount);
     }
 
-    template <typename StateObject, typename BackendObject>
+    // The backend twin table. Two arms live behind this one interface (ARCHITECTURE.md 9.6 -
+    // after Track H the MOBILEGL_PIPE_PUSH bitmap alone is not a valid A/B, because with a bit
+    // clear the backend would still be running the re-keyed code):
+    //
+    //   legacy  (MOBILEGL_PIPE_LEGACY_MEMOS): UnorderedMap<StateObject*, Entry> keyed on the
+    //           frontend heap ADDRESS, with a weak_ptr per entry as the ABA defence, an erase
+    //           inside Find, and a garbage sweep as the only death signal. Pre-P2 code verbatim.
+    //   handles (MOBILEGL_PIPE_PUSH and kMGPipeSubsystemEsprytSlots): BackendSlotTable, keyed
+    //           on MGPipeHandle{Slot, Gen}. See SlotTables.h for what that buys.
+    //
+    // Which arm runs is fixed once per process (EsprytSlotTablesEnabled()): the two arms hold
+    // their twins in different containers, so a mid-run flip would strand every twin already
+    // built. Every call site below this class is arm-agnostic and unchanged.
+    //
+    // The kind is a template parameter ONLY in the push build. G1 requires the pull build's
+    // symbol set to be byte-for-byte the pre-P2 one, and a third template argument changes
+    // every instantiation's mangled name - so in the pull build the parameter, like the arm it
+    // selects, does not exist. MGB_TWIN_KIND_ARG spells the same thing at the six declarations
+    // and six definitions.
+#if MOBILEGL_PIPE_PUSH
+#define MGB_TWIN_KIND_PARAM , MG_Pipe::MGPipeKind kKind
+#define MGB_TWIN_KIND_ARG(kind) , kind
+#else
+#define MGB_TWIN_KIND_PARAM
+#define MGB_TWIN_KIND_ARG(kind)
+#endif
+
+    template <typename StateObject, typename BackendObject MGB_TWIN_KIND_PARAM>
     class StateBackendObjectRegistry {
     public:
 
@@ -291,8 +319,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
 
             // Twin creation is the moment a driver-owned id starts needing a guarded
-            // destructor; cold path, so the once-guard costs nothing per draw.
+            // destructor; cold path, so the once-guard costs nothing per draw. It is armed
+            // here, at the first insertion, on BOTH arms - a destructor hook on the table
+            // itself is wrong for the reason spelled out above InProcessTeardown().
             EnsureProcessTeardownSentinel();
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.GetOrCreate(stateObj);
+            }
+#endif
             // Sweep BEFORE the entry reference below exists: the map is open-addressed and an
             // erase relocates the rest of the probe cluster, so collecting once that reference
             // is taken would invalidate it. The sweep is therefore owed from an earlier call
@@ -324,14 +359,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry.backend;
         }
 
-        // Null when no live state object owns this key. The result points into the map, so
-        // it stays valid only until the next GetOrCreate/Find/CollectGarbage on this registry.
-        // Take that literally, including for Find: the map is open-addressed and erases by
-        // shifting the rest of the probe cluster into the hole, so an erase relocates entries
-        // OTHER than the erased one - and Find erases, whenever it lands on a key whose state
-        // object has expired. Callers that need the twin across another registry call must copy
-        // the BackendPtr out (or keep only the pointee, which is heap-allocated and never moves).
+        // Null when no live state object owns this key.
+        //
+        // On the HANDLE arm the result is a stable array element: only a GetOrCreate that grows
+        // the table can move it, and nothing else on the table invalidates it.
+        //
+        // On the LEGACY arm the result points into the map, so it stays valid only until the
+        // next GetOrCreate/Find/CollectGarbage on this registry. Take that literally, including
+        // for Find: the map is open-addressed and erases by shifting the rest of the probe
+        // cluster into the hole, so an erase relocates entries OTHER than the erased one - and
+        // Find erases, whenever it lands on a key whose state object has expired. Callers that
+        // need the twin across another registry call must copy the BackendPtr out (or keep only
+        // the pointee, which is heap-allocated and never moves).
         BackendPtr* Find(StateObject* stateObj) {
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.Find(stateObj);
+            }
+#endif
             const auto entryIt = m_entries.find(stateObj);
             if (entryIt == m_entries.end()) {
                 return nullptr;
@@ -352,7 +397,44 @@ namespace MobileGL::MG_Backend::DirectGLES {
         iterator end() { return m_entries.end(); }
         const_iterator end() const { return m_entries.end(); }
 
+#if MOBILEGL_PIPE_PUSH
+        // The {slot, gen} this object's twin is keyed on, or the null handle. This is what a
+        // backend memo stores instead of a raw pointer, a GL name or a bare lifetime id.
+        MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.HandleOf(stateObj);
+            }
+            return MG_Pipe::kMGPipeNullHandle;
+        }
+
+        // fn(const StatePtr& state, const BackendPtr& twin) over every live entry. The legacy
+        // begin()/end() handed out the map key, i.e. the raw frontend address - exactly the
+        // identity the backend must stop reading - and handed it out for entries whose state
+        // object had already died, so the one caller had to test stateRef.expired() itself
+        // before dereferencing it. Here the state object arrives as a strong reference.
+        template <typename Fn>
+        void ForEachLive(Fn&& fn) const {
+            if (EsprytSlotTablesEnabled()) {
+                m_slotTable.ForEachLive(fn);
+                return;
+            }
+            for (const auto& [stateKey, entry] : m_entries) {
+                (void)stateKey;
+                if (!entry.backend) continue;
+                const StatePtr state = entry.stateRef.lock();
+                if (!state) continue;
+                fn(state, entry.backend);
+            }
+        }
+#endif
+
         void CollectGarbageIfNeeded() {
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                m_slotTable.CollectGarbageIfNeeded();
+                return;
+            }
+#endif
             ++m_gcTick;
             if (m_gcTick < kGCInterval) {
                 return;
@@ -361,7 +443,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_gcTick = 0;
         }
 
-        void CollectGarbageNow() { CollectGarbage(); }
+        void CollectGarbageNow() {
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                m_slotTable.CollectGarbageNow();
+                return;
+            }
+#endif
+            CollectGarbage();
+        }
 
     private:
         void CollectGarbage() {
@@ -395,6 +485,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 m_gcTick = 0;
         Uint32 m_creationTick = 0;
         Bool m_isCollecting = false;
+#if MOBILEGL_PIPE_PUSH
+        BackendSlotTable<StateObject, BackendObject, kKind> m_slotTable;
+#endif
     };
 
     namespace BufferImpl {
@@ -800,7 +893,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedBufferIdGeneration = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject>
+        extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::VertexElementsCso)>
             g_backendVertexArrayObjects;
 
         // Shadowed glBindVertexArray: every backend VAO bind goes through here so a
@@ -1121,7 +1214,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void ActivateTextureUnit(Uint unit);
         void UnbindTexture(Uint unit, GLenum target);
-        extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject>
+        extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Texture)>
             g_backendTextureObjects;
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -1212,7 +1305,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedBackendIdGeneration = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject>
+        extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Framebuffer)>
             g_backendFramebufferObjects;
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
@@ -1730,7 +1823,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
         // ES context is recreated.
         extern Uint g_lastUsedBackendProgramId;
-        extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl>
+        extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::ShaderCso)>
             g_backendProgramObjects;
 
         // Points one shader storage block of an ALREADY-LINKED backend program at
@@ -1830,7 +1923,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         extern Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundSamplersCache;
-        extern StateBackendObjectRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject>
+        extern StateBackendObjectRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::SamplerCso)>
             g_backendSamplerObjects;
     } // namespace SamplerImpl
 
@@ -1857,7 +1950,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_cacheSamples = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject>
+        extern StateBackendObjectRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Renderbuffer)>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 } // namespace MobileGL::MG_Backend::DirectGLES
