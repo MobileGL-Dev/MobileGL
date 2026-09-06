@@ -204,6 +204,14 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                                     "entries, and the ambient log is shared, so a read here would race.";
                     return;
                 }
+                if (!BuildMarkerIsSet("MGITEST_PIPE_PUSH_BUILD")) {
+                    GTEST_SKIP() << "this library was built without MOBILEGL_PIPE_PUSH, so there is no "
+                                    "render-state CSO to mint, no cso[] bracket in the summary line and "
+                                    "nothing for the content-addressing bit to steer. The entry is "
+                                    "registered here anyway so that `ctest -L integration-gpu` names the "
+                                    "same tests in the pull build and the push build (gate G2).";
+                    return;
+                }
                 if (!BuildMarkerIsSet("MGITEST_PIPE_TRACKER_PRESENT")) {
                     GTEST_SKIP() << "the CSO counters have no emitter in this build: MG_Impl/Pipe/Tracker.cpp "
                                     "does not exist, so nothing mints or binds a render-state CSO and "
@@ -256,9 +264,11 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             const CsoWindow window = LastCsoWindow(ReadWholeFile(LibraryLogPath()));
             ASSERT_TRUE(window.found)
                 << "no 'MGPipe stats:' line carrying cso[csom= csob=] in " << LibraryLogPath()
-                << ". Either MOBILEGL_PIPE_STATS/MOBILEGL_PIPE_STATS_PERIOD did not reach the process, or "
-                   "this library was not built with MOBILEGL_PIPE_PUSH - the two counters and the cso[] "
-                   "bracket are both #if MOBILEGL_PIPE_PUSH (PipeStats.h, PipeStats.cpp FormatWindowLine).";
+                << ". This IS a push build (the lane checked MGITEST_PIPE_PUSH_BUILD before getting "
+                   "here) and the cso[] bracket is unconditional inside that #if, so the bracket cannot "
+                   "be missing for a build reason: either MOBILEGL_PIPE_STATS / "
+                   "MOBILEGL_PIPE_STATS_PERIOD did not reach the process, or no summary line was "
+                   "emitted at all because nothing reached PipeStats::OnPresent.";
             EXPECT_GE(window.binds, 0) << window.line;
             EXPECT_GE(window.mints, 0) << window.line;
             RecordProperty("cso_line", window.line.c_str());

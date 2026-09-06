@@ -347,6 +347,20 @@ endfunction()
 # that does implement the thing would turn a real gate into a permanent skip.
 set(MGL_ITEST_CAPABILITY_ENV "")
 
+# Whether the library under test compiled the push arm. Passed in rather than inferred, because
+# the two CSO counters and the cso[] bracket of the stats line are #if MOBILEGL_PIPE_PUSH: in a
+# pull build there is no CSO to mint and no channel to read, so the control has nothing to say -
+# and "nothing to say" must be a SKIP that names the reason, not an assertion failure about a
+# missing bracket.
+#
+# The lanes themselves are registered in BOTH builds even so. `ctest -L integration-gpu` has to
+# be name-for-name identical between the pull build and the push build (P2 gate G2), and a lane
+# that exists in only one of them breaks that comparison for every future package - a much worse
+# outcome than four entries that skip.
+if (MOBILEGL_PIPE_PUSH)
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_PUSH_BUILD=1")
+endif()
+
 file(GLOB MGL_ITEST_ESPRYT_SLOT_TABLES CONFIGURE_DEPENDS
     "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES/SlotTables.h")
 if (MGL_ITEST_ESPRYT_SLOT_TABLES)
@@ -832,65 +846,67 @@ gtest_discover_tests(MobileGLIntegrationTest
 #
 # MOBILEGL_PIPE_STATS_PERIOD=1 makes one summary line per eglSwapBuffers, which is what lets the
 # workload be bracketed by two swaps and read back as a window covering exactly itself.
-if (MOBILEGL_PIPE_PUSH)
-    mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
-        "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectGLES.log"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=no-content-addressing"
-        "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectGLES.log"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=content-addressed"
-        "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectVulkan.log"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
-    mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
-        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=no-content-addressing"
-        "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
-        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
-        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+#
+# Registered in EVERY build, including the pull build where there is no CSO at all, so that
+# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
+# pull build MGITEST_PIPE_PUSH_BUILD is absent and both cases skip saying so.
+mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
+    "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=no-content-addressing"
+    "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=content-addressed"
+    "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectVulkan.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=no-content-addressing"
+    "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.CsoContentAddressing.On."
-        TEST_FILTER "CsoContentAddressingScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS integration-gpu
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_CSO_ON_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.CsoContentAddressing.Off."
-        TEST_FILTER "CsoContentAddressingScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS integration-gpu
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.CsoContentAddressing.On."
-        TEST_FILTER "CsoContentAddressingScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS integration-gpu
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.CsoContentAddressing.Off."
-        TEST_FILTER "CsoContentAddressingScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS integration-gpu
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}"
-    )
-endif()
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.CsoContentAddressing.On."
+    TEST_FILTER "CsoContentAddressingScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_CSO_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.CsoContentAddressing.Off."
+    TEST_FILTER "CsoContentAddressingScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.CsoContentAddressing.On."
+    TEST_FILTER "CsoContentAddressingScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.CsoContentAddressing.Off."
+    TEST_FILTER "CsoContentAddressingScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}"
+)
 
 if (MOBILEGL_PIPE_VERIFY)
     # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
