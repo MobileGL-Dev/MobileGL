@@ -812,7 +812,14 @@ namespace MobileGL::MG_Pipe {
         // stops happening, with no edit here.
         Uint64 g_attribDefaultRepairs = 0;
 
-        Uint64 EmitVertexAttribDefaults(GLContext& ctx) {
+        // The header of the last set_vertex_attrib_defaults that actually went out. Count == 0
+        // means none ever did, because a call that names no attribute is not emitted at all.
+        // It is the observable for the two things about this call that cannot be read back
+        // without a poisoned read of m_currentVertexAttribute: that a fresh context republishes
+        // the COMPLETE set, and that a single moved attribute publishes exactly that one.
+        MGPVertexAttribDefaults g_attribDefaultLastHeader{};
+
+        Uint64 EmitVertexAttribDefaults(GLContext& ctx, Bool freshlyPrimed) {
             MGPipeTracker& tracker = MGPipeTrackerInstance();
             auto& staged = tracker.StagedAttribDefaults();
             constexpr SizeT kAttribs = MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS;
@@ -827,10 +834,25 @@ namespace MobileGL::MG_Pipe {
                 return 0;
             }
 
+            // A FRESH CONTEXT PUBLISHES ALL 32, not the difference against a mirror that
+            // describes a context that is gone. Tracker::Reset() sets the staging mirror to
+            // AttribDefaults{}, whose NSDMIs are the GL defaults {0,0,0,1} - and a fresh
+            // GLContext's m_currentVertexAttributes hold exactly those, so the diff below is
+            // EMPTY on the one walk that must publish everything. The server's mirror is not
+            // default: MGPipeApplierReset() clears the CSO store and the residual block and
+            // leaves gPipeInputs.m_currentVertexAttribute holding the PREVIOUS context's
+            // defaults. So the InvalidateAll() a fresh context does to the set-hash
+            // suppressor would have been cancelled two lines later by this diff, and the one
+            // call P2 fully owns would publish nothing across a context change - exactly the
+            // "memo that serves a stale answer" the tracker's own COMPLETE-state rule
+            // (Tracker.h) exists to forbid. EmitRenderState has the same arm
+            // (freshlyPrimed ? kAllDynamicChunks) and the other two calls send whole values.
             Array<MGPAttribValue, kAttribs> tail{};
             MGPVertexAttribDefaults header{};
             for (SizeT i = 0; i < kAttribs; ++i) {
-                if (std::memcmp(&resolved[i], &staged[i], sizeof(resolved[i])) == 0) continue;
+                if (!freshlyPrimed && std::memcmp(&resolved[i], &staged[i], sizeof(resolved[i])) == 0) {
+                    continue;
+                }
                 // The class the frontend WROTE, and that class's own bytes. Not a literal 0
                 // and not ClassifyVertexAttribType's answer: that one is the SHADER's question
                 // ("which view does this input consume"), asked at the backend read sites, and
@@ -844,6 +866,7 @@ namespace MobileGL::MG_Pipe {
                 staged[i] = resolved[i];
             }
             if (header.Count == 0) return 0;
+            g_attribDefaultLastHeader = header;
             MGPipeApplySetVertexAttribDefaults(header, tail.data());
 
             // Did the applier reproduce it? Byte for byte, over the attributes this call
@@ -889,9 +912,21 @@ namespace MobileGL::MG_Pipe {
         // emitted, sized and suppressed - the resid= byte class and the one divergence it
         // caught during development (GL_DITHER) are that evidence.
         //
-        // Emitted once per context and again whenever the capability set may have moved,
-        // which is whenever the pipeline version moved: every SET_CAPABILITY arm calls
-        // BumpVersions, so that shutter cannot miss one.
+        // Emitted once per context and again whenever the capability set may have moved
+        // (D9). THE SHUTTER FOR THAT IS NEW_RENDER_STATE, NOT NEW_PIPELINE_STATE, and the
+        // difference is a hole rather than a nicety: SetCapability's ClipDistance0..7 arms
+        // are deliberately NOT BumpVersions() (RenderState.cpp says so in as many words), so
+        // glEnable(GL_CLIP_DISTANCE0) moves m_version alone - and ClipDistance0..7 are 8 of
+        // the 35 CapabilityInputs this block carries. Arming on the pipeline version would
+        // leave the trip wire disarmed for those eight for an unbounded window, which is the
+        // under-firing direction ARCHITECTURE.md 13.2 names as the dangerous one, and no gate
+        // could see it: a block that is never emitted cannot diverge.
+        //
+        // So the arming is the coarsest always-true shutter - either render-state counter
+        // moved - which is the same answer DirtySurface.def's derivation gives SetCapability.
+        // It over-fires (a glViewport re-sends 8 bytes and re-runs the compare) and that is
+        // the intended trade: over-firing costs one 35-bit loop on a verb that already moved
+        // render state, under-firing renders stale.
         Uint64 EmitResidualValueState(GLContext& ctx) {
             ResidualValueBlock block{};
             constexpr SizeT kCapabilityCount = static_cast<SizeT>(CapabilityInput::CapabilityInputCount);
@@ -913,8 +948,29 @@ namespace MobileGL::MG_Pipe {
 
         // Set when the capability set may have moved, cleared when the block goes out. It is
         // not part of the tracker because it is emission state, not a shutter: the shutter
-        // (the pipeline version) has already been consumed by the time this is read.
+        // (the render-state counter) has already been consumed by the time this is read.
         Bool g_residualDue = true;
+
+        // The residual block is the ONE emission whose gate names a subsystem constant
+        // directly instead of going through MGPipeSubsystemForDirty, and the reason is that
+        // it has no dirty bit: it carries what has no shutter of its own, which is what makes
+        // it the residue. That exception is safe only while no dirty bit claims the same
+        // subsystem - if one ever did, the block would be gated twice and that bit's own
+        // emission would silently inherit the residual A/B switch. Asserted rather than
+        // assumed, the same discipline SubsystemForEmitter's five static_asserts use.
+        constexpr Bool NoDirtyBitOwnsTheResidualSubsystem() {
+            for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) ==
+                    kMGPipeSubsystemResidualValues) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoDirtyBitOwnsTheResidualSubsystem(),
+                      "a MGPipeDirty bit now owns kMGPipeSubsystemResidualValues: route the "
+                      "residual block's gate through MGPipeSubsystemForDirty like every other "
+                      "emission, or the two gates will disagree");
 
         constexpr Uint32 kAllDynamicChunks =
             static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
@@ -927,14 +983,6 @@ namespace MobileGL::MG_Pipe {
             const auto version = static_cast<Uint16>(ctx.GetRenderStateParametersVersion());
             const auto pipelineVersion = static_cast<Uint16>(ctx.GetPipelineStateVersion());
             Uint64 payloadBytes = 0;
-
-            if (freshlyPrimed) {
-                // A fresh context is a fresh server: the cache's handles name slots this
-                // client's allocator is about to hand out again, so both sides start over
-                // together rather than one of them remembering the other's objects.
-                MGPipeCsoCacheInstance().Reset();
-                MGPipeApplierReset();
-            }
 
             if (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) {
                 const MGPipeHandle cso = MGPipeCsoCacheInstance().Acquire(live, payloadBytes);
@@ -978,6 +1026,13 @@ namespace MobileGL::MG_Pipe {
             // (RenderState.h), but that is an invariant of ANOTHER package's file. So it is
             // asserted here rather than assumed, and the assignment is narrowed to the one
             // bit that owns the mirror.
+            //
+            // MOBILEGL_ASSERT compiles out in Release/INFO, which is the G1/G3
+            // configuration, so the assert itself is a debug/verify-only alarm. THE
+            // BEHAVIOUR IS SAFE IN EVERY BUILD REGARDLESS, and it is the narrowing below
+            // rather than the assert that makes it so: if the invariant ever broke in a
+            // shipping build the mirror would simply not advance, which costs a re-send of
+            // chunks the server already has and never claims it holds chunks it does not.
             MOBILEGL_ASSERT((dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) == 0 ||
                                 (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) != 0,
                             "NEW_PIPELINE_STATE fired without NEW_RENDER_STATE: RenderState's "
@@ -990,6 +1045,7 @@ namespace MobileGL::MG_Pipe {
     } // namespace
 
     Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
+    MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader() { return g_attribDefaultLastHeader; }
 
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
@@ -1038,12 +1094,26 @@ namespace MobileGL::MG_Pipe {
                    (dirty & MGPipeDirtyBit(bit)) != 0;
         };
         Uint64 payloadBytes = 0;
+
+        // A fresh context is a fresh server, and that is true of EVERY subsystem, so it is
+        // handled BEFORE the per-subsystem gates rather than inside one of them. It used to
+        // live inside EmitRenderState, which runs only when bit 0 of MOBILEGL_PIPE_PUSH is
+        // set - so the per-subsystem A/B D14 invites (clear bit 0, keep bits 1..3) gave a
+        // fresh context a never-reset applier while every other slot WAS invalidated.
+        //   - the CSO cache's handles name slots this client's allocator is about to hand
+        //     out again, so both sides start over together rather than one of them
+        //     remembering the other's objects;
+        //   - what the server has is no longer what any suppressor slot last emitted;
+        //   - and the residual block owes a fresh publication whatever else moved.
+        if (tracker.FreshlyPrimed()) {
+            MGPipeCsoCacheInstance().Reset();
+            MGPipeApplierReset();
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+            g_residualDue = true;
+        }
+
         if (wants(MGPipeDirty::NewPipelineState) || wants(MGPipeDirty::NewRenderState)) {
             payloadBytes += EmitRenderState(*ctx, dirty, tracker.FreshlyPrimed());
-        }
-        if (tracker.FreshlyPrimed()) {
-            // A fresh context: what the server has is no longer what any slot last emitted.
-            MGPipeSetHashSuppressorInstance().InvalidateAll();
         }
         if (wants(MGPipeDirty::NewPixelPack)) {
             payloadBytes += EmitPixelPackState(*ctx);
@@ -1052,7 +1122,7 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitPatchState(*ctx);
         }
         if (wants(MGPipeDirty::NewVertexAttribDefaults)) {
-            payloadBytes += EmitVertexAttribDefaults(*ctx);
+            payloadBytes += EmitVertexAttribDefaults(*ctx, tracker.FreshlyPrimed());
         }
 
         // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
@@ -1088,14 +1158,19 @@ namespace MobileGL::MG_Pipe {
 #endif
         }
         // ---- step 4b: the residual value block, and it goes out HERE ----
+        // ARMED OUTSIDE THE SUBSYSTEM GATE: whether the capability set may have moved is a
+        // fact about the frontend, not about which subsystems this build pushes, and a
+        // per-subsystem A/B that turns the block off must not also lose the record that one
+        // is owed.
+        if ((dirty & (MGPipeDirtyBit(MGPipeDirty::NewRenderState) |
+                      MGPipeDirtyBit(MGPipeDirty::NewPipelineState))) != 0) {
+            g_residualDue = true;
+        }
         // Its trip wire compares the carried bits against the ASSEMBLED capability mirror,
         // and that mirror is written either by the applier's derivation or by the fill loop
         // above - so the block is only meaningful once step 4 has run. Emitting it with the
         // other calls would compare against the previous verb's answer.
         if ((pushMask & kMGPipeSubsystemResidualValues) != 0) {
-            if (tracker.FreshlyPrimed() || (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) != 0) {
-                g_residualDue = true;
-            }
             // The trip wire compares against the ASSEMBLED capability mirror, so it can only
             // run at a verb whose class actually carries that mirror - IsCapabilityEnabled is
             // in seven of the nine class masks and kQuery and kXfbSpan do not read it, so at

@@ -64,6 +64,15 @@ namespace MobileGL::MG_Pipe {
     // moved.
     Uint64 MGPipeVertexAttribDefaultRepairCount();
 
+    // PipeFill.cpp. The header of the last set_vertex_attrib_defaults that actually went out
+    // - Mask, and Count == 0 for "none ever did", since a call naming no attribute is not
+    // emitted. Two properties of this call have no other observable, because reading
+    // m_currentVertexAttribute back at a verb whose class does not carry it is the poison
+    // violation the fill table exists to forbid: that a FRESH CONTEXT republishes all 32
+    // (the server's mirror still holds the previous context's defaults), and that one moved
+    // attribute publishes exactly one. Eight bytes, written only when a call goes out.
+    MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader();
+
 #if MOBILEGL_PIPE_VERIFY
     // PipeFill.cpp. The second arm of the comparator (P1 brief D8, ARCHITECTURE.md 13.2-2):
     // fills `snapshot` from the live GLContext the old way, for every field in `mask`. This

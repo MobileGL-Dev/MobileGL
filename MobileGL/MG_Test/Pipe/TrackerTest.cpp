@@ -79,7 +79,10 @@ namespace {
     X(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) \
     X(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) \
     X(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) \
-    X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso)
+    X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) \
+    X(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) \
+    X(TrackerShippedEmitter, AFreshContextRepublishesEveryVertexAttributeDefault) \
+    X(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -597,12 +600,19 @@ namespace {
         EXPECT_EQ(Cso().Binds, 0u) << "a steady-state draw bound a render-state CSO";
     }
 
-    // The window MAJOR-2's repair covers: a glVertexAttrib* write followed by a verb whose
-    // class does NOT read m_currentVertexAttribute. The call still goes out (the dirty bit
-    // and the subsystem bit are all step 3 looks at), the applier writes four words into all
-    // three views because it ignores ValueClass, and nothing in step 4 puts the value back -
-    // so the client checks and repairs. Reading the storage here to prove it would be the
-    // poison violation the fill table forbids, so the repair counter is the observable.
+    // The window the repair covers: a glVertexAttrib* write followed by a verb whose class
+    // does NOT read m_currentVertexAttribute. The call still goes out (the dirty bit and the
+    // subsystem bit are all step 3 looks at), and today's applier writes four words into all
+    // three views because it ignores ValueClass, so nothing in step 4 puts the converted
+    // value back and the client repairs the mirror itself.
+    //
+    // THE ASSERTION IS THE INVARIANT, NOT THE DEFECT. "repairs == before + 1" would pin
+    // today's applier and go red the day package A teaches
+    // MGPipeApplySetVertexAttribDefaults to switch on MGPAttribValue::ValueClass - which is
+    // the hand-off this package declares as blocking, and which is supposed to need no edit
+    // here. What must hold either way is that the call went out naming exactly the attribute
+    // that moved, and that the mirror ends up right by at most one repair: zero repairs once
+    // the applier reproduces the value, one until then.
     TEST_F(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) {
         Draw();
         const Uint64 before = MGPipeVertexAttribDefaultRepairCount();
@@ -610,8 +620,87 @@ namespace {
         // cannot be the same four words whichever view the carrier picks.
         Ctx().SetCurrentVertexAttributeFloat(0, Array<Float, 4>{1.5f, 2.5f, 3.5f, 4.5f});
         MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        EXPECT_EQ(MGPipeVertexAttribDefaultRepairCount(), before + 1)
-            << "the emitter accepted an applier write that cannot reproduce a converted value";
+        const MGPVertexAttribDefaults header = MGPipeVertexAttribDefaultsLastHeader();
+        ASSERT_EQ(header.Count, 1u) << "the moved attribute default did not go out at all";
+        EXPECT_EQ(header.Mask, 1u) << "the call named an attribute that did not move";
+        const Uint64 repairs = MGPipeVertexAttribDefaultRepairCount() - before;
+        EXPECT_LE(repairs, 1u) << "one call cannot need two repairs";
+        // and the repair is not free-running: a second identical walk moves nothing, so it
+        // neither re-emits nor re-repairs.
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        EXPECT_EQ(MGPipeVertexAttribDefaultRepairCount() - before, repairs);
+    }
+
+    // MAJOR 1 of round 2's review, pinned. glEnable(GL_CLIP_DISTANCE0) is one of the 35
+    // capabilities the residual block carries AND one of the eight whose SetCapability arm
+    // deliberately does not BumpVersions(), so it moves m_version alone. An arming condition
+    // that reads the PIPELINE version - which is what this emitter used - never re-arms for
+    // those eight, and nothing can see it downstream: a block that is not emitted cannot
+    // diverge, so the trip wire is simply disarmed.
+    TEST_F(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) {
+        Draw();
+        ASSERT_TRUE(MGPipeApplier().HasResidual) << "the priming draw sent no residual block";
+        // Poison the server's copy so a re-emission is the only thing that can restore it.
+        MGPipeApplier().Residual = ResidualValueBlock{};
+        MGPipeApplier().HasResidual = false;
+
+        Ctx().SetCapability(CapabilityInput::ClipDistance0, true);
+        // The premise: this moved the render-state counter and NOT the pipeline one.
+        const Uint16 pipelineBefore = static_cast<Uint16>(Ctx().GetPipelineStateVersion());
+        Draw();
+        ASSERT_EQ(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewPipelineState), 0u)
+            << "the premise is gone: a clip-distance enable now moves the pipeline version";
+        EXPECT_EQ(static_cast<Uint16>(Ctx().GetPipelineStateVersion()), pipelineBefore);
+
+        ASSERT_TRUE(MGPipeApplier().HasResidual)
+            << "a capability change that moves only m_version never re-armed the residual block";
+        const Uint64 bit = Uint64{1} << static_cast<SizeT>(CapabilityInput::ClipDistance0);
+        EXPECT_NE(MGPipeApplier().Residual.CapabilityBits & bit, 0ull)
+            << "the re-emitted block does not carry the capability that moved";
+    }
+
+    // MAJOR 3 of round 2's review, pinned. A fresh context resets the tracker's staging
+    // mirror to the GL defaults, which are exactly what a fresh GLContext holds - so the
+    // per-attribute diff is empty on the one walk that must publish everything, while the
+    // applier's mirror still holds the PREVIOUS context's defaults.
+    TEST_F(TrackerShippedEmitter, AFreshContextRepublishesEveryVertexAttributeDefault) {
+        // The fixture's context is itself fresh, so the priming draw is the first half of the
+        // same statement: a fresh context publishes the COMPLETE set, not a difference.
+        Draw();
+        ASSERT_EQ(MGPipeVertexAttribDefaultsLastHeader().Count, 32u)
+            << "the first walk on a fresh context published an increment, not a complete state";
+        Ctx().SetCurrentVertexAttributeFloat(3, Array<Float, 4>{9.f, 8.f, 7.f, 6.f});
+        Draw();
+        ASSERT_EQ(MGPipeVertexAttribDefaultsLastHeader().Count, 1u)
+            << "a steady context published more than the one attribute that moved";
+
+        // A different context, whose 32 defaults are the value-initialised {0,0,0,1} the
+        // tracker's own reset produces - so a diff against the staging mirror finds nothing.
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        Draw();
+        const MGPVertexAttribDefaults header = MGPipeVertexAttribDefaultsLastHeader();
+        EXPECT_EQ(header.Count, 32u)
+            << "a fresh context published " << header.Count
+            << " attribute defaults; the server's mirror still holds the previous context's";
+        EXPECT_EQ(header.Mask, 0xFFFFFFFFu);
+    }
+
+    // Minor 4 of round 2's review. The fresh-context reset of the applier and the CSO cache
+    // used to sit inside EmitRenderState, i.e. behind bit 0 of MOBILEGL_PIPE_PUSH, so the
+    // per-subsystem A/B D14 invites gave a fresh context a never-reset applier holding the
+    // previous context's CSO records while every suppressor slot WAS invalidated.
+    TEST_F(TrackerShippedEmitter, AFreshContextResetsTheApplierWithTheRenderStateSubsystemOff) {
+        Draw();
+        ASSERT_FALSE(MGPipeApplier().RenderStateCsos.empty())
+            << "the priming draw created no CSO record to leak into the next context";
+
+        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 & ~kMGPipeSubsystemRenderState;
+        MG_State::pGLContext = MakeUnique<GLContext>();
+        Draw();
+        EXPECT_TRUE(MGPipeApplier().RenderStateCsos.empty())
+            << "a fresh context kept the previous context's CSO records because the reset was "
+               "behind the render-state subsystem bit";
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundRenderStateCso));
     }
 
     TEST_F(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) {
