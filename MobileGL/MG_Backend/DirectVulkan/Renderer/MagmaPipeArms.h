@@ -149,6 +149,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 Count() const { return m_entryCount; }
 
         MG_Pipe::MGPipeHandle Acquire(Uint64 lifetimeId) {
+            // Unreachable: MG_State hands out lifetime ids from 1 precisely so that a
+            // zero-initialised memo slot cannot carry a live object's id. Guarded anyway so
+            // that a zero can never be minted into a slot and then indexed with.
             if (lifetimeId == 0) return MG_Pipe::kMGPipeNullHandle;
             if (m_entries.empty()) m_entries.resize(m_entryCount);
 
@@ -202,8 +205,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // The table entry a handle names. Every per-slot table Magma keeps is sized Count() and
     // indexed by this, so the index is exact and in range by construction.
+    //
+    // A null handle has no slot, and it is unreachable here: both lifetime-id sources start at
+    // 1 (VertexArrayObject.cpp, BufferObject.cpp), so Acquire's zero guard never fires.
+    // Asserted rather than assumed, because being wrong about it would be an out-of-range
+    // index rather than a wrong answer.
     inline Uint32 MagmaPipeSlotIndex(const MG_Pipe::MGPipeHandle& handle) {
-        return handle.Slot - MG_Pipe::kMGPipeFirstAllocatableSlot;
+        MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
+                        "a null MGPipeHandle has no slot to index a per-slot table with");
+        return MG_Pipe::MGPipeHandleIsNull(handle)
+                   ? 0u
+                   : handle.Slot - MG_Pipe::kMGPipeFirstAllocatableSlot;
     }
 
     // A VAO is kind VertexElementsCso: that is the gallium-shaped CSO a vertex array resolves
