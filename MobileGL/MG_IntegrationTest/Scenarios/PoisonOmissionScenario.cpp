@@ -182,6 +182,15 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 glFinish();
                 std::fprintf(stderr, "[itest] poison worker: glGenerateMipmap returned\n");
 
+                // The sequence is the WHOLE datum this child reports, so a GL error in it must be
+                // part of the answer rather than something only a human reading stderr would see.
+                // WithoutOmissionCompletes reads the child's exit status, and the status is built
+                // from HasFailure() below - so this EXPECT is what turns "the mipmap was rejected"
+                // into a red parent instead of a vacuous "it exited 0, the poison did not fire".
+                EXPECT_EQ(FirstGLError(), 0u)
+                    << "the draw + glGenerateMipmap sequence the poison controls are about raised a "
+                       "GL error, so neither control is measuring what it claims to measure";
+
                 glBindVertexArray(0);
                 glDeleteBuffers(1, &vbo);
                 glDeleteVertexArrays(1, &vao);
@@ -277,8 +286,14 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             // _exit, and not a return into gtest's teardown: this process exists to reach the verb
             // above and its exit status is the datum the parent reads. A normal teardown of a live
             // context could add signals of its own to that answer.
+            //
+            // HasFailure(), not 0: RunSequence() is full of ASSERT_/EXPECT_ macros, and a fatal one
+            // (the shader failing to compile, say) RETURNS from RunSequence before the draw and the
+            // glGenerateMipmap ever happen. Exiting 0 there would have WithoutOmissionCompletes pass
+            // on a child that ran none of the sequence it is the control for - green because nothing
+            // happened. The child's assertion text is on its stderr, which ctest captures.
             std::fflush(nullptr);
-            _exit(0);
+            _exit(::testing::Test::HasFailure() ? 1 : 0);
 #endif
         }
 
@@ -369,9 +384,12 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "add the row to MG_Pipe/FillPoints.def, never mark the field sticky."
                 << note << " Child log:\n"
                 << childLog;
-            EXPECT_EQ(WEXITSTATUS(status), 0) << "the child " << DescribeStatus(status)
-                                              << ". Child log:\n"
-                                              << childLog;
+            EXPECT_EQ(WEXITSTATUS(status), 0)
+                << "the child " << DescribeStatus(status)
+                << ". Status 1 is the child's OWN assertion failing inside the sequence (it exits "
+                   "HasFailure() ? 1 : 0), so its gtest output on this job's stderr names the line; "
+                   "anything else came from the harness. Child log:\n"
+                << childLog;
             EXPECT_EQ(childLog.find("Fatal{"), std::string::npos)
                 << "an unpoisoned run logged a Fatal:\n"
                 << childLog;

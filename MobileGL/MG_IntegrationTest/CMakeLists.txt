@@ -657,9 +657,14 @@ gtest_discover_tests(MobileGLIntegrationTest
 #     MOBILEGL_PIPE_POISON_OMIT. That is what lets CI's two always-on negative-control steps
 #     export those knobs in the JOB environment and have them reach the test processes; a
 #     property entry of the same name would silently win and the controls would prove nothing.
-#   * MOBILEGL_LOG_FILE_PATH is per lane. It is the only channel a test process has for reading
-#     the library's own report (MG_Config is not reachable from this module), and the log is
-#     opened with fopen(path, "w"), so each process truncates it and the cases can trust it.
+#   * MOBILEGL_LOG_FILE_PATH is per lane, and "per lane" is the exact limit of what it proves. It
+#     is the only channel a test process has for reading the library's own report (MG_Config is not
+#     reachable from this module), but the log is opened fopen(path, "w"), so every process in a
+#     lane TRUNCATES it: after an ambient lane of 400-odd entries the file holds the LAST process
+#     and nothing else. Reading it is therefore only sound in a filtered, one-entry lane - which is
+#     why the arming case has a lane and a log of its own below, and why neither this file nor CI
+#     may read the ambient logs as evidence about the entries that ran before the last one. The
+#     ambient path is kept for post-mortems (and to keep library chatter out of ctest's capture).
 if (MOBILEGL_PIPE_VERIFY)
     # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
     # boundary and again at every accessor read, which the design budgets at 5-10x.
@@ -672,6 +677,24 @@ if (MOBILEGL_PIPE_VERIFY)
     mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1"
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-DirectVulkan.log"
+        ${MGL_ITEST_VULKAN_ENV})
+
+    # The arming assertion's own lane, one case per backend, with a log path nothing else writes to.
+    #
+    # PipeVerifyArmingScenario.Armed reads the library's log, and the log is a per-LANE resource: it
+    # is opened fopen(path, "w"), so every process in a lane truncates it. In the ambient Verify.
+    # lane that is 400-odd processes on one path, run `-j 4` in CI, and a whole-file read there
+    # races a neighbour's bring-up. Every other log-reading scenario in this file (UnlocatedIoBlocks,
+    # the primgen reroute, the point-size demotion) is registered exactly like this for the same
+    # reason. MGITEST_PIPE_ARMING_LANE is a harness marker - the library never reads it - and it is
+    # what makes the case skip in the ambient lane instead of racing there.
+    mgl_itest_join_environment(MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_VERIFY=1" "MGITEST_PIPE_ARMING_LANE=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectGLES.log"
+        ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_PIPE_VERIFY=1" "MGITEST_PIPE_ARMING_LANE=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-arming-DirectVulkan.log"
         ${MGL_ITEST_VULKAN_ENV})
 
     # Negative control A (G4). MOBILEGL_PIPE_VERIFY_FATAL=0 so the process SURVIVES its own
@@ -723,6 +746,29 @@ if (MOBILEGL_PIPE_VERIFY)
             LABELS "integration-gpu\;integration-verify"
             TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
             ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_ENVIRONMENT}"
+    )
+
+    # The arming assertion, one entry per backend. This is the entry that fails a lane whose library
+    # never armed: it runs the same library and the same MOBILEGL_PIPE_VERIFY=1 as the ambient
+    # entries above, but unlike them it cannot be green against a library with no comparator
+    # compiled in. Its log is its own, so `-j 4` cannot make it flake.
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.VerifyArming."
+        TEST_FILTER "PipeVerifyArmingScenario.Armed"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.VerifyArming."
+        TEST_FILTER "PipeVerifyArmingScenario.Armed"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS "integration-gpu\;integration-verify"
+            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT}"
     )
 
     # One case each: the knobs are process-wide, so a corrupted or poisoned process cannot also be

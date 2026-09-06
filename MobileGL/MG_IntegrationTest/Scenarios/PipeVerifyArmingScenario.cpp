@@ -30,12 +30,25 @@
 // (on Android it links the SHIPPING libMobileGL.so, built -fvisibility=hidden) and the arming
 // signal is a latched MGLOG_I. The ctest entry sets MOBILEGL_LOG_FILE_PATH; this only reads it.
 //
-// Note on scope: the log file is opened with fopen(path, "w") at the first log write of a process
-// (MG_Util/Debug/Log.cpp, InitFile), so the file holds THIS process's lines and nothing else - a
-// whole-file search cannot be satisfied by a sibling ctest entry of the same lane. The arming line
-// is latched at the FIRST fill of the process, which may be the harness bring-up rather than this
-// test's draw, so the arming search is whole-file on purpose; the divergence search is restricted
-// to the bytes this case appended, which is where a differ belongs.
+// Note on scope, and why Armed runs in a lane of its own. The log file is opened with
+// fopen(path, "w") at the first log write of a process (MG_Util/Debug/Log.cpp, InitFile), so each
+// process TRUNCATES it. That is fine for one process and false for many: in the ambient Verify.
+// lane, 400-odd sibling entries share the one MOBILEGL_LOG_FILE_PATH, and CI runs that lane with
+// `ctest -j 4`, so a neighbour's bring-up can truncate the file between this case's draw and its
+// read. Every existing scenario in this suite that reads the library log (UnlocatedIoBlockScenario,
+// the primgen reroute, the point-size demotion) is registered in a FILTERED lane with a log path of
+// its own for exactly that reason, and this case now follows them: it runs in the VerifyArming.
+// entries, which set MGITEST_PIPE_ARMING_LANE=1 and their own log, and skips everywhere else.
+//
+// What that proves, stated honestly: the arming line is a property of (this library, this
+// environment), not of an individual test body, and the VerifyArming. entry runs the same library
+// with the same MOBILEGL_PIPE_VERIFY=1 as its ~400 ambient siblings. One process per backend is
+// therefore the whole of the evidence available for "the lane armed" - the per-process claim the
+// shared log CANNOT support, because it only ever holds the last writer.
+//
+// Within the process: the arming line is latched at the FIRST fill, which may be the harness
+// bring-up rather than this test's draw, so the arming search is whole-file on purpose; the
+// divergence search is restricted to the bytes this case appended, which is where a differ belongs.
 
 #include <cstdint>
 #include <cstdlib>
@@ -63,6 +76,12 @@ namespace MGITest {
         constexpr const char* kArmedLine = "MGPipe: verify armed";
         constexpr const char* kDifferPrefix = "Fatal{PipeVerifyDiffer";
         constexpr const char* kUnmigratedPrefix = "Fatal{UnmigratedPipeInput";
+
+        // Set by the VerifyArming. ctest entries and by nothing else. It is a HARNESS variable, not
+        // a library knob (hence the MGITEST_ prefix): the library never reads it. It exists because
+        // this case reads a log file, and a log file is a per-LANE resource - see the note at the
+        // top of the file.
+        constexpr const char* kArmingLaneMarker = "MGITEST_PIPE_ARMING_LANE";
 
         constexpr const char* kVS = R"(#version 330 core
 in vec2 aPos;
@@ -158,6 +177,13 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         TEST_F(PipeVerifyArmingScenario, Armed) {
             if (!Ready()) return;
 
+            if (!StringKnobIsSet(kArmingLaneMarker)) {
+                GTEST_SKIP() << "this case reads the library's log file, so it runs in the VerifyArming. "
+                                "lane, which owns a log path no other entry writes to. In the ambient "
+                                "Verify. lane 400-odd entries share one path and each truncates it "
+                                "(Log.cpp opens it \"w\"), so a whole-file read here would race a "
+                                "neighbour under ctest -j 4. Set by the ctest entry, never by hand.";
+            }
             if (AmbientQuirkFromEnvironment("MOBILEGL_PIPE_VERIFY") != AmbientQuirk::On) {
                 GTEST_SKIP() << "this case needs MOBILEGL_PIPE_VERIFY=1 for the whole process, which is "
                                 "what the Verify. ctest entries set; with the variable unset the "
