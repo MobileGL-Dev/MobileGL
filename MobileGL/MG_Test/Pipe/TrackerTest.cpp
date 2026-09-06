@@ -20,6 +20,8 @@
 #if MOBILEGL_PIPE_PUSH
 #include <Config.h>
 #include <MG_Impl/Pipe/CsoCache.h>
+#include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
@@ -27,6 +29,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
+#include <cstring>
 #include <limits>
 #include <string>
 #endif
@@ -68,7 +71,15 @@ namespace {
     X(TrackerWalk, AggregateGenerationCatchesABoundTextureMoving) \
     X(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) \
     X(TrackerWalk, ThePixelPackShutterIsAByteCompareOfThePackHalfOnly) \
-    X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn)
+    X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn) \
+    X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
+    X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
+    X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
+    X(TrackerAttribPayload, TheSameNumbersWrittenThroughADifferentClassAreADifferentValue) \
+    X(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) \
+    X(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) \
+    X(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) \
+    X(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -218,17 +229,29 @@ namespace {
     // one process-wide tracker, and a unit test that asserts on a shared singleton is a test
     // that fails when ctest runs the suite in parallel. The emission logic these reproduce is
     // three lines long and is the same three lines the validate point runs.
+    // Resetting the applier without resetting the process-wide cache and tracker would leave
+    // the next bind_render_state naming a CSO the applier no longer has - it asserts and
+    // returns, leaving m_renderState unwritten. The three are one state, so they are reset
+    // together, here and in TrackerShippedEmitter.
+    void ResetTheServerSideSingletons() {
+        MGPipeApplierReset();
+        MGPipeCsoCacheInstance().Reset();
+        MGPipeCsoCacheInstance().ResetCounters();
+        MGPipeTrackerInstance().Reset();
+        MGPipeSetHashSuppressorInstance().InvalidateAll();
+    }
+
     class TrackerWalk : public ::testing::Test {
     protected:
         void SetUp() override {
             m_previous = Move(MG_State::pGLContext);
             MG_State::pGLContext = MakeUnique<GLContext>();
             m_savedPush = MG_Config::Features.PipePush;
-            MGPipeApplierReset();
+            ResetTheServerSideSingletons();
         }
         void TearDown() override {
             MG_Config::Features.PipePush = m_savedPush;
-            MGPipeApplierReset();
+            ResetTheServerSideSingletons();
             MG_State::pGLContext = Move(m_previous);
         }
 
@@ -423,6 +446,186 @@ namespace {
         EXPECT_EQ(m_tracker.WalkCount(), 0u);
         EXPECT_EQ(m_tracker.FireCount(MGPipeDirty::NewRenderState), 0u);
         m_cache.Reset();
+    }
+
+    // ===================================================================================
+    // set_vertex_attrib_defaults' payload (P2 brief D10)
+    // ===================================================================================
+    //
+    // A CurrentVertexAttributeValue is ONE value in three views and GLContext converts
+    // numerically between them, so four words on the wire are not the value unless the class
+    // travels with them. These pin exactly that, because nothing else can: the emission
+    // happens at step 3 and the residual fill re-pulls the field at step 4, so at a kDraw
+    // verb a wrong payload is overwritten before any comparator or backend read sees it -
+    // which is how a hard-coded ValueClass of 0 survived a green verify lane.
+    class TrackerAttribPayload : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = Move(MG_State::pGLContext);
+            MG_State::pGLContext = MakeUnique<GLContext>();
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+
+        static MGPAttribValue PayloadFor(Uint location) {
+            MGPAttribValue value{};
+            MGPipeFillAttribValue(static_cast<Uint32>(location), Ctx().GetCurrentVertexAttribute(location),
+                                  Ctx().GetCurrentVertexAttributeClass(location), value);
+            return value;
+        }
+
+        static Uint32 Word(Float value) {
+            Uint32 bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            return bits;
+        }
+
+        UniquePtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeFloat(3, Array<Float, 4>{1.5f, -2.5f, 3.0f, 4.0f});
+        const MGPAttribValue value = PayloadFor(3);
+        EXPECT_EQ(value.Location, 3u);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        EXPECT_EQ(value.Data[0], Word(1.5f));
+        EXPECT_EQ(value.Data[1], Word(-2.5f));
+        // The defect this exists to stop: 1.5f's int VIEW is 1, and a carrier that sent the
+        // float bits while calling them class 0 for every attribute would be sending
+        // 0x3FC00000 where the frontend holds 1.
+        EXPECT_NE(value.Data[0], static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
+    }
+
+    TEST_F(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeInt(5, Array<Int32, 4>{7, -9, 11, 13});
+        const MGPAttribValue value = PayloadFor(5);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+        EXPECT_EQ(static_cast<Int32>(value.Data[0]), 7);
+        EXPECT_EQ(static_cast<Int32>(value.Data[1]), -9);
+        // and NOT the float view the frontend converted it into
+        EXPECT_NE(value.Data[0], Word(7.0f));
+    }
+
+    TEST_F(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) {
+        Ctx().SetCurrentVertexAttributeUint(6, Array<Uint32, 4>{4000000000u, 2u, 3u, 4u});
+        const MGPAttribValue value = PayloadFor(6);
+        EXPECT_EQ(value.ValueClass, MG_State::GLState::kVertexAttribValueClassUint);
+        EXPECT_EQ(value.Data[0], 4000000000u);
+        EXPECT_NE(value.Data[0], Word(4000000000.0f));
+    }
+
+    // The class is PER ATTRIBUTE and it is the last writer's, not the context's - a payload
+    // that took one attribute's class for all 32 would be the same defect as a hard-coded 0.
+    TEST_F(TrackerAttribPayload, TheSameNumbersWrittenThroughADifferentClassAreADifferentValue) {
+        Ctx().SetCurrentVertexAttributeFloat(1, Array<Float, 4>{1.0f, 2.0f, 3.0f, 4.0f});
+        Ctx().SetCurrentVertexAttributeInt(2, Array<Int32, 4>{1, 2, 3, 4});
+        EXPECT_EQ(PayloadFor(1).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        EXPECT_EQ(PayloadFor(2).ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+        // Same numbers, different classes, so the same four words mean different things:
+        // 1.0f is 0x3F800000 and the integer 1 is 0x00000001.
+        EXPECT_NE(PayloadFor(1).Data[0], PayloadFor(2).Data[0]);
+        // An attribute nobody wrote answers Float, which is what the GL default (0,0,0,1) is.
+        EXPECT_EQ(PayloadFor(7).ValueClass, MG_State::GLState::kVertexAttribValueClassFloat);
+        // and a later write of the other class moves the class of THAT attribute only
+        Ctx().SetCurrentVertexAttributeUint(1, Array<Uint32, 4>{1u, 2u, 3u, 4u});
+        EXPECT_EQ(PayloadFor(1).ValueClass, MG_State::GLState::kVertexAttribValueClassUint);
+        EXPECT_EQ(PayloadFor(2).ValueClass, MG_State::GLState::kVertexAttribValueClassInt);
+    }
+
+    // ===================================================================================
+    // The SHIPPED emitter, driven through MGPipeValidateForVerb itself
+    // ===================================================================================
+    //
+    // TrackerWalk above reproduces step 3 against a local tracker and cache, which cannot
+    // fail on a defect in the validate point itself (a bit gated on the wrong subsystem, an
+    // emission dropped). These drive the real entry point and read the real singletons back.
+    // Safe because ctest runs one gtest case per process and the fixture resets all three
+    // pieces of server-side state on both sides of every case.
+    class TrackerShippedEmitter : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = Move(MG_State::pGLContext);
+            MG_State::pGLContext = MakeUnique<GLContext>();
+            m_savedPush = MG_Config::Features.PipePush;
+            MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2;
+            ResetTheServerSideSingletons();
+        }
+        void TearDown() override {
+            MGPipeLeaveVerb();
+            MG_Config::Features.PipePush = m_savedPush;
+            ResetTheServerSideSingletons();
+            MG_State::pGLContext = Move(m_previous);
+        }
+
+        static GLContext& Ctx() { return *MG_State::pGLContext; }
+        static void Draw() { MGPipeValidateForVerb(MGPipeVerb::DrawArrays); }
+        static const MGPipeCsoCache::Counters& Cso() { return MGPipeCsoCacheInstance().GetCounters(); }
+
+        Uint64 m_savedPush = 0;
+        UniquePtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerShippedEmitter, ABlendToggleThroughTheValidatePointMintsTwoCsos) {
+        constexpr int kToggles = 16;
+        Draw(); // prime: a fresh context resets the cache inside the emitter and mints once
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (int i = 0; i < kToggles; ++i) {
+            Ctx().SetCapability(CapabilityInput::Blend, true);
+            Draw();
+            Ctx().SetCapability(CapabilityInput::Blend, false);
+            Draw();
+        }
+        EXPECT_EQ(Cso().Mints, 1u) << "the blend-disabled state was already cached by the priming draw";
+        EXPECT_EQ(Cso().Binds, static_cast<Uint64>(2 * kToggles));
+        EXPECT_EQ(Cso().Hits, static_cast<Uint64>(2 * kToggles - 1));
+        EXPECT_EQ(MGPipeCsoCacheInstance().Size(), 2u);
+    }
+
+    TEST_F(TrackerShippedEmitter, TheSteadyStateThroughTheValidatePointEmitsNothing) {
+        Draw();
+        // The positive half, so "nothing was emitted" cannot pass because nothing is wired:
+        // the first draw on a fresh context mints and binds exactly one CSO.
+        ASSERT_EQ(Cso().Mints, 1u) << "the priming draw emitted no create_render_state at all";
+        ASSERT_EQ(Cso().Binds, 1u);
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (int i = 0; i < 8; ++i) {
+            Draw();
+            EXPECT_EQ(MGPipeTrackerInstance().LastDirty(), 0u) << "walk " << i << " fired with nothing moved";
+        }
+        EXPECT_EQ(Cso().Mints, 0u);
+        EXPECT_EQ(Cso().Binds, 0u) << "a steady-state draw bound a render-state CSO";
+    }
+
+    // The window MAJOR-2's repair covers: a glVertexAttrib* write followed by a verb whose
+    // class does NOT read m_currentVertexAttribute. The call still goes out (the dirty bit
+    // and the subsystem bit are all step 3 looks at), the applier writes four words into all
+    // three views because it ignores ValueClass, and nothing in step 4 puts the value back -
+    // so the client checks and repairs. Reading the storage here to prove it would be the
+    // poison violation the fill table forbids, so the repair counter is the observable.
+    TEST_F(TrackerShippedEmitter, APushedAttributeDefaultTheApplierCannotReproduceIsRepaired) {
+        Draw();
+        const Uint64 before = MGPipeVertexAttribDefaultRepairCount();
+        // 1.5f is the point: its int view is 1 and its bit pattern is 0x3FC00000, so the two
+        // cannot be the same four words whichever view the carrier picks.
+        Ctx().SetCurrentVertexAttributeFloat(0, Array<Float, 4>{1.5f, 2.5f, 3.5f, 4.5f});
+        MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
+        EXPECT_EQ(MGPipeVertexAttribDefaultRepairCount(), before + 1)
+            << "the emitter accepted an applier write that cannot reproduce a converted value";
+    }
+
+    TEST_F(TrackerShippedEmitter, AViewportThroughTheValidatePointMintsNoCso) {
+        Draw();
+        ASSERT_EQ(Cso().Mints, 1u) << "the priming draw emitted no create_render_state at all";
+        MGPipeCsoCacheInstance().ResetCounters();
+        for (Int i = 1; i <= 8; ++i) {
+            Ctx().SetViewport(IntVec4(0, 0, 64 + i, 48 + i));
+            Draw();
+            EXPECT_NE(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewRenderState), 0u);
+            EXPECT_EQ(MGPipeTrackerInstance().LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewPipelineState), 0u);
+        }
+        EXPECT_EQ(Cso().Mints, 0u);
+        EXPECT_EQ(Cso().Binds, 0u) << "glViewport reached the CSO cache";
     }
 
 #endif // MOBILEGL_PIPE_PUSH

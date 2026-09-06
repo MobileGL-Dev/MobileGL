@@ -214,6 +214,11 @@ namespace MobileGL::MG_State {
                 current.intValue[component] = static_cast<Int32>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+#if MOBILEGL_PIPE_PUSH
+            // The two views above are CONVERSIONS, not bit copies, so which one was written
+            // is part of the value; set_vertex_attrib_defaults carries it.
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassFloat;
+#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
@@ -229,6 +234,9 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
+#if MOBILEGL_PIPE_PUSH
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassInt;
+#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
@@ -244,6 +252,9 @@ namespace MobileGL::MG_State {
                 current.floatValue[component] = static_cast<Float>(value[component]);
                 current.intValue[component] = static_cast<Int32>(value[component]);
             }
+#if MOBILEGL_PIPE_PUSH
+            m_currentVertexAttributeClasses[index] = kVertexAttribValueClassUint;
+#endif
         MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 

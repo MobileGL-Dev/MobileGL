@@ -51,6 +51,19 @@ namespace MobileGL::MG_Pipe {
     // Fatal{PipeVerifyBadKnob}.
     void MGPipeSetPoisonOmission(const char* verb, const char* field);
 
+    // PipeFill.cpp. How many times set_vertex_attrib_defaults' applier failed to reproduce
+    // the value the call carried, so the client wrote the mirror itself
+    // (EmitVertexAttribDefaults). It is the ONE observable of that repair: the window it
+    // covers is a verb whose class does not read m_currentVertexAttribute, where reading the
+    // storage to check it would be the poison violation the fill table exists to forbid. So
+    // TrackerShippedEmitter asserts on this counter instead, and the day package A's applier
+    // switches on MGPAttribValue::ValueClass the counter stops moving.
+    //
+    // Not hot-path instrumentation: it is incremented only inside the repair branch, which
+    // runs only when the call actually went out, which is only when an attribute default
+    // moved.
+    Uint64 MGPipeVertexAttribDefaultRepairCount();
+
 #if MOBILEGL_PIPE_VERIFY
     // PipeFill.cpp. The second arm of the comparator (P1 brief D8, ARCHITECTURE.md 13.2-2):
     // fills `snapshot` from the live GLContext the old way, for every field in `mask`. This

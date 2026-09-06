@@ -149,6 +149,13 @@ namespace MobileGL::MG_Pipe {
     // (ARCHITECTURE.md 5.2: MG_State is not changed for this). A decrease is a wrap and adds
     // 65536. A wrap is harmless locally - one extra re-push, never a missed one - which is
     // exactly what TrackerTest.WrapAroundRePushesButNeverMisses pins.
+    //
+    // THE ONE CASE IT CANNOT SEE, stated because "never a missed push" is otherwise stronger
+    // than what is true: the wrap test is `now < m_last`, so a counter that advances by
+    // EXACTLY 65536 (or a multiple) between two walks reads as unchanged. That needs 65536
+    // render-state mutations inside one verb boundary, and it is pre-existing in class -
+    // both backends already compare raw Uint16 versions the same way - so P2 records it
+    // rather than widening MG_State's counters, which ARCHITECTURE.md 5.2 rules out.
     class MGPipeWidenedCounter {
     public:
         Uint64 Observe(Uint16 now) {
@@ -391,6 +398,33 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_fires[kMGPipeDirtyCount][kMGPipeVerbClassCount]{};
         Uint64 m_walks[kMGPipeVerbClassCount]{};
     };
+
+    // ONE attribute default, flattened onto the wire (P2 brief D10). A named function rather
+    // than four lines inside the emitter because this flattening is the whole correctness
+    // question of set_vertex_attrib_defaults: a CurrentVertexAttributeValue is one value in
+    // three views and GLContext converts NUMERICALLY between them, so four words alone are
+    // not the value - glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in
+    // floatValue. MGPAttribValue::ValueClass is what makes the four words readable again, and
+    // TrackerAttribPayload pins that here instead of leaving it to the emitter's shape.
+    inline void MGPipeFillAttribValue(Uint32 location,
+                                      const MG_State::GLState::CurrentVertexAttributeValue& value,
+                                      Uint32 writtenClass, MGPAttribValue& out) {
+        out = MGPAttribValue{};
+        out.Location = location;
+        out.ValueClass = static_cast<Uint8>(writtenClass);
+        static_assert(sizeof(out.Data) == sizeof(value.floatValue), "MGPAttribValue::Data is four words");
+        switch (writtenClass) {
+        case MG_State::GLState::kVertexAttribValueClassInt:
+            std::memcpy(out.Data, value.intValue.data(), sizeof(out.Data));
+            break;
+        case MG_State::GLState::kVertexAttribValueClassUint:
+            std::memcpy(out.Data, value.uintValue.data(), sizeof(out.Data));
+            break;
+        default:
+            std::memcpy(out.Data, value.floatValue.data(), sizeof(out.Data));
+            break;
+        }
+    }
 
     // The monolith's one tracker. Under split there is one per client context; the context
     // identity check inside Update is what makes the single instance safe today.

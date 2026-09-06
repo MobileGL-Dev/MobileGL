@@ -43,6 +43,14 @@ namespace MobileGL::MG_Pipe {
         // path writes through them.
         static RenderStateParameters& RenderStateOf(PipeInputs& inputs) { return inputs.m_renderState; }
         static Uint32& ClearStencilOf(PipeInputs& inputs) { return inputs.m_clearStencil; }
+        // Read-only, and it exists for one thing: after set_vertex_attrib_defaults goes out,
+        // the emitter compares what the applier left here against what the frontend holds
+        // (EmitVertexAttribDefaults). Reading it through this door rather than through the
+        // accessor is deliberate - the accessor is poison-checked and this is a fill-time
+        // read, not a backend read.
+        static const PipeInputs::CurrentVertexAttributeValue* VertexAttribDefaultsOf(const PipeInputs& inputs) {
+            return inputs.m_currentVertexAttribute;
+        }
 
         static void CopyField(PipeInputs& dst, GLContext& ctx, MGPipeInputField field) {
             using F = MGPipeInputField;
@@ -631,6 +639,27 @@ namespace MobileGL::MG_Pipe {
             return 0;
         }
 
+        // The two maps answer different questions - this one takes a field's EMITTER, the
+        // tracker's MGPipeSubsystemForDirty takes a dirty BIT - and they must agree, because
+        // the emission is gated on one and the residual-fill skip on the other. A divergence
+        // would push a call whose field is still pulled, or (worse) skip a field whose call
+        // was never emitted. Cheap to state, impossible to drift:
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindRenderState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewPipelineState),
+                      "bind_render_state and NEW_PIPELINE_STATE must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDynamicState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState),
+                      "set_dynamic_state and NEW_RENDER_STATE must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetPixelPackState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack),
+                      "set_pixel_pack_state and NEW_PIXEL_PACK must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetPatchState) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState),
+                      "set_patch_state and NEW_PATCH_STATE must name one subsystem");
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetVertexAttribDefaults) ==
+                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
+                      "set_vertex_attrib_defaults and NEW_VERTEX_ATTRIB_DEFAULTS must name one subsystem");
+
         // Which of those subsystems THIS BUILD actually emits for. It grows one commit at a
         // time, and a field whose emitter is not wired here keeps being pulled - so adding a
         // row to Coverage.def can never silently drop a field on the floor before the call
@@ -651,13 +680,14 @@ namespace MobileGL::MG_Pipe {
         //
         //   GetCurrentVertexAttribute's three views are NOT bit-identical: GLContext
         //     CONVERTS between them (SetCurrentVertexAttributeFloat writes (Int32)value into
-        //     intValue), while MGPipeApplySetVertexAttribDefaults memcpys one Data[4] into
-        //     all three and ignores MGPAttribValue::ValueClass, which the wire type carries
-        //     precisely so it does not have to. Until that applier reads ValueClass the
-        //     carrier cannot reproduce the frontend value, so the field keeps being pulled.
-        //     The call is still emitted: the wire shape, the payload bytes and the set-hash
-        //     suppressor are all real, and the residual fill runs AFTER emission, so the
-        //     mirror ends up with the frontend's value either way.
+        //     intValue), while MGPipeApplySetVertexAttribDefaults (package A's) memcpys one
+        //     Data[4] into all three views and ignores MGPAttribValue::ValueClass. The CLIENT
+        //     half of that is fixed - the call now carries the class the frontend actually
+        //     wrote and that class's own bytes - but the APPLIER still cannot reproduce the
+        //     conversion, so this row stays SHAPE-ONLY: the field keeps being pulled, and
+        //     retiring that pull is blocked on A teaching the applier to switch on
+        //     ValueClass. EmitVertexAttribDefaults checks rather than trusts, and repairs the
+        //     mirror when the applier's write does not reproduce the value.
         constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
             switch (field) {
             case MGPipeInputField::GetPixelStoreParameters:
@@ -704,6 +734,13 @@ namespace MobileGL::MG_Pipe {
         // filler degrades to PULLING those fields instead of rendering a default, which is
         // the safe direction. The verify lane and RenderStateSpansTest are what say the
         // derivation is CORRECT; this only says it is THERE.
+        //
+        // AND IT IS A ONE-FIELD SAMPLE, deliberately: it probes m_clearStencil and nothing
+        // else, so a PARTIAL derivation - one that recomputes m_clearStencil and forgets, say,
+        // GetViewport's rounding - flips this latch to true and lets the other mirrors go
+        // unwritten. That is a real risk of a half-landed package A and the backstop for it is
+        // the verify lane (which re-reads every field at every backend read), not this probe.
+        // Widening the probe to all 29 would re-implement the derivation to check it.
         Bool ApplierDerivesRenderStateFields() {
             static const Bool answer = [] {
                 static PipeInputs probe;
@@ -749,6 +786,32 @@ namespace MobileGL::MG_Pipe {
         // 32 values, all three views - is hashed on the client and the call does not go out
         // when the hash has not moved. That is coalescing rule 4, and this is its one wired
         // consumer in P2.
+        //
+        // THE PAYLOAD AND ITS ONE MISSING HALF. A CurrentVertexAttributeValue is one value in
+        // three views, and GLContext CONVERTS between them numerically, so "the bytes of one
+        // view" is not the value: glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and
+        // 0x3FC00000 in floatValue, and every glVertexAttribI4i/ui is a different pair again.
+        // MGPAttribValue carries ValueClass for exactly this reason, so the client sends the
+        // class the frontend actually wrote (GLContext::GetCurrentVertexAttributeClass) and
+        // THAT class's own four words. What is still missing is the other half:
+        // MGPipeApplySetVertexAttribDefaults (package A's file) memcpys the four words into
+        // all three views regardless of ValueClass, which cannot reproduce the conversion.
+        //
+        // The suppressing memcmp below is over the three VIEWS only, and that is not an
+        // oversight: the class decides how the views are REBUILT, so two writes that leave
+        // the three views identical rebuild identically whichever class they carried, and a
+        // class that moved without moving any view has nothing to publish.
+        //
+        // So the emitter CHECKS rather than assumes, the same self-healing shape as
+        // ApplierDerivesRenderStateFields: after the call it compares the mirror the applier
+        // wrote against the frontend's value, and when they differ it copies the field itself
+        // and says so once. That is what keeps the block correct in the window this call used
+        // to corrupt - a glVertexAttrib4f followed by a non-kDraw verb, where the residual
+        // fill does not run for this field and nothing else would have put the value back.
+        // The day the applier honours ValueClass the compare stops failing and the repair
+        // stops happening, with no edit here.
+        Uint64 g_attribDefaultRepairs = 0;
+
         Uint64 EmitVertexAttribDefaults(GLContext& ctx) {
             MGPipeTracker& tracker = MGPipeTrackerInstance();
             auto& staged = tracker.StagedAttribDefaults();
@@ -768,19 +831,37 @@ namespace MobileGL::MG_Pipe {
             MGPVertexAttribDefaults header{};
             for (SizeT i = 0; i < kAttribs; ++i) {
                 if (std::memcmp(&resolved[i], &staged[i], sizeof(resolved[i])) == 0) continue;
-                MGPAttribValue& value = tail[header.Count];
-                value.Location = static_cast<Uint32>(i);
-                // ClassifyVertexAttribType resolves the float/int/uint view on the CLIENT
-                // (MGPipeTypes.h); the frontend keeps all three populated, so the class the
-                // shader input consumes is what decides which one is authoritative.
-                value.ValueClass = 0;
-                std::memcpy(value.Data, resolved[i].floatValue.data(), sizeof(value.Data));
+                // The class the frontend WROTE, and that class's own bytes. Not a literal 0
+                // and not ClassifyVertexAttribType's answer: that one is the SHADER's question
+                // ("which view does this input consume"), asked at the backend read sites, and
+                // it says nothing about which view holds the value the other two were
+                // converted from.
+                MGPipeFillAttribValue(static_cast<Uint32>(i), resolved[i],
+                                      ctx.GetCurrentVertexAttributeClass(static_cast<Uint>(i)),
+                                      tail[header.Count]);
                 header.Mask |= Uint32{1} << static_cast<Uint32>(i);
                 ++header.Count;
                 staged[i] = resolved[i];
             }
             if (header.Count == 0) return 0;
             MGPipeApplySetVertexAttribDefaults(header, tail.data());
+
+            // Did the applier reproduce it? Byte for byte, over the attributes this call
+            // named - anything less would be a mirror that disagrees with the frontend in a
+            // window no gate looks at.
+            const auto* mirror = MGPipeFillAccess::VertexAttribDefaultsOf(gPipeInputs);
+            Bool reproduced = true;
+            for (SizeT i = 0; i < kAttribs && reproduced; ++i) {
+                if ((header.Mask & (Uint32{1} << static_cast<Uint32>(i))) == 0) continue;
+                reproduced = std::memcmp(&mirror[i], &resolved[i], sizeof(resolved[i])) == 0;
+            }
+            if (!reproduced) {
+                ++g_attribDefaultRepairs;
+                MGLOG_W_ONCE("MGPipe: MGPipeApplySetVertexAttribDefaults does not reproduce the "
+                             "carried value on this build (it ignores MGPAttribValue::ValueClass) "
+                             "- the client is keeping m_currentVertexAttribute authoritative");
+                MGPipeFillAccess::CopyField(gPipeInputs, ctx, MGPipeInputField::GetCurrentVertexAttribute);
+            }
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
 
@@ -798,6 +879,15 @@ namespace MobileGL::MG_Pipe {
         // Building the carried bits from the ASSEMBLED block instead would make the trip
         // wire a tautology, which is exactly the failure P1's entry compare had and P2 is
         // paying to remove.
+        //
+        // ON THIS BRANCH IT IS STILL HALF A TAUTOLOGY, and saying so is part of the honesty
+        // the trip wire is for: the applier compares these bits against gPipeInputs'
+        // capability mirror, and while MGPipeDeriveRenderStateFields is a stub that mirror is
+        // filled by the residual fill from the SAME IsCapabilityEnabled accessor a few lines
+        // below. It becomes an independent oracle the moment package A's c1 lands and the
+        // fill stops copying those fields. What it proves already is that the block is
+        // emitted, sized and suppressed - the resid= byte class and the one divergence it
+        // caught during development (GL_DITHER) are that evidence.
         //
         // Emitted once per context and again whenever the capability set may have moved,
         // which is whenever the pipeline version moved: every SET_CAPABILITY arm calls
@@ -878,13 +968,28 @@ namespace MobileGL::MG_Pipe {
                 payloadBytes += sizeof(MGPDynamicState) + blobBytes;
             }
 
-            if (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
-                         MGPipeDirtyBit(MGPipeDirty::NewRenderState))) {
+            // The staging mirror is what set_dynamic_state diffs against, so it may only be
+            // advanced by the branch that actually SENT dynamic bytes. Latching it whenever
+            // either bit fired would, if NEW_PIPELINE_STATE could ever fire alone, claim the
+            // server holds chunks it never received - and the chunk-level suppressor would
+            // then never resend them, which is a permanently stale answer with no gate on it.
+            //
+            // It cannot fire alone today because BumpVersions() moves both counters
+            // (RenderState.h), but that is an invariant of ANOTHER package's file. So it is
+            // asserted here rather than assumed, and the assignment is narrowed to the one
+            // bit that owns the mirror.
+            MOBILEGL_ASSERT((dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) == 0 ||
+                                (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) != 0,
+                            "NEW_PIPELINE_STATE fired without NEW_RENDER_STATE: RenderState's "
+                            "BumpVersions no longer moves both counters");
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
                 tracker.Staged() = live;
             }
             return payloadBytes;
         }
     } // namespace
+
+    Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
 
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
@@ -922,27 +1027,31 @@ namespace MobileGL::MG_Pipe {
         const Uint32 dirty = tracker.Update(*ctx, verbClass);
 
         // ---- step 3: emission ----
+        // Every gate below goes through MGPipeSubsystemForDirty, the ONE map from a dirty bit
+        // to the runtime subsystem that owns it. Naming the subsystem constants here instead
+        // would be a second copy of that map in the only path that runs, and mis-gating a bit
+        // in it would pass every test the map has.
         const Uint64 pushMask = MG_Config::Features.PipePush;
+        const auto wants = [&](MGPipeDirty bit) {
+            const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
+            return subsystem != 0 && (pushMask & subsystem) != 0 &&
+                   (dirty & MGPipeDirtyBit(bit)) != 0;
+        };
         Uint64 payloadBytes = 0;
-        if ((pushMask & kMGPipeSubsystemRenderState) != 0 &&
-            (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
-                      MGPipeDirtyBit(MGPipeDirty::NewRenderState))) != 0) {
+        if (wants(MGPipeDirty::NewPipelineState) || wants(MGPipeDirty::NewRenderState)) {
             payloadBytes += EmitRenderState(*ctx, dirty, tracker.FreshlyPrimed());
         }
         if (tracker.FreshlyPrimed()) {
             // A fresh context: what the server has is no longer what any slot last emitted.
             MGPipeSetHashSuppressorInstance().InvalidateAll();
         }
-        if ((pushMask & kMGPipeSubsystemPixelPack) != 0 &&
-            (dirty & MGPipeDirtyBit(MGPipeDirty::NewPixelPack)) != 0) {
+        if (wants(MGPipeDirty::NewPixelPack)) {
             payloadBytes += EmitPixelPackState(*ctx);
         }
-        if ((pushMask & kMGPipeSubsystemPatchState) != 0 &&
-            (dirty & MGPipeDirtyBit(MGPipeDirty::NewPatchState)) != 0) {
+        if (wants(MGPipeDirty::NewPatchState)) {
             payloadBytes += EmitPatchState(*ctx);
         }
-        if ((pushMask & kMGPipeSubsystemVertexAttribDefaults) != 0 &&
-            (dirty & MGPipeDirtyBit(MGPipeDirty::NewVertexAttribDefaults)) != 0) {
+        if (wants(MGPipeDirty::NewVertexAttribDefaults)) {
             payloadBytes += EmitVertexAttribDefaults(*ctx);
         }
 

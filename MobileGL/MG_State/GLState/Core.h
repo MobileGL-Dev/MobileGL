@@ -30,10 +30,26 @@ namespace MobileGL {
         void Init();
 
         namespace GLState {
+#if MOBILEGL_PIPE_PUSH
+            // MGPAttribValue::ValueClass' encoding (MG_Pipe/MGPipeTypes.h documents the order
+            // "Float | Int | Uint | Double"). It lives here rather than in MG_Pipe because the
+            // FRONTEND is the only thing that knows which of the three views below a value was
+            // written through - the other two are numeric conversions of it - and MG_Pipe has
+            // no enum for the field yet. If package A introduces one, this becomes its alias.
+            inline constexpr Uint32 kVertexAttribValueClassFloat = 0;
+            inline constexpr Uint32 kVertexAttribValueClassInt = 1;
+            inline constexpr Uint32 kVertexAttribValueClassUint = 2;
+#endif
+
             struct CurrentVertexAttributeValue {
                 Array<Float, 4> floatValue{0.f, 0.f, 0.f, 1.f};
                 Array<Int32, 4> intValue{0, 0, 0, 1};
                 Array<Uint32, 4> uintValue{0u, 0u, 0u, 1u};
+                // Three scalar arrays and NOTHING ELSE. MG_Backend/MGPipe/PipeInputs.cpp
+                // compares this storage with one memcmp and asserts that size, so a fourth
+                // member here is a build break in a file P2 package B does not own. The
+                // written-class discriminator set_vertex_attrib_defaults needs therefore
+                // lives beside the array on GLContext, not inside the value.
             };
 
             // Which of the three views above a shader input of a given GLSL type consumes.
@@ -232,6 +248,27 @@ namespace MobileGL {
                 void NoteVertexAttribDefaultChanged() { ++m_anyVertexAttribDefaultGeneration; }
                 Uint64 GetAnyVertexAttribDefaultGeneration() const {
                     return m_anyVertexAttribDefaultGeneration;
+                }
+
+                // Which of the three views of m_currentVertexAttributes[index] the last
+                // glVertexAttrib* write filled DIRECTLY. The other two are NUMERIC
+                // conversions of it (SetCurrentVertexAttribute* below), not bit copies, so
+                // four words on a wire are not the value unless the class travels with them:
+                // glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in intValue and 0x3FC00000 in
+                // floatValue. set_vertex_attrib_defaults carries this as MGPAttribValue's
+                // ValueClass so the applier can redo the conversion instead of memcpying one
+                // view into all three.
+                //
+                // It is kept BESIDE the array rather than inside CurrentVertexAttributeValue
+                // because that struct is mirrored into PipeInputs and compared there by a
+                // memcmp whose size assertion (MG_Backend/MGPipe/PipeInputs.cpp) is a file
+                // this package does not own - and because it need not be mirrored: the class
+                // only decides how to REBUILD the three views, so two writes that leave the
+                // three views identical rebuild identically whichever class they carried.
+                Uint32 GetCurrentVertexAttributeClass(Uint index) const {
+                    return index < m_currentVertexAttributeClasses.size()
+                               ? m_currentVertexAttributeClasses[index]
+                               : kVertexAttribValueClassFloat;
                 }
 #endif
 
@@ -554,6 +591,8 @@ namespace MobileGL {
                 SharedPtr<ProgramObject> m_transformFeedbackProgram;
 #if MOBILEGL_PIPE_PUSH
                 Uint64 m_anyVertexAttribDefaultGeneration = 0;
+                // Parallel to m_currentVertexAttributes; see GetCurrentVertexAttributeClass.
+                Array<Uint32, VertexArrayObject::MAX_VERTEX_ATTRIBS> m_currentVertexAttributeClasses{};
 #endif
                 Uint64 m_transformFeedbackGeneration = 0;
                 // Source of the per-span ids above; never rolls back with an object switch.
