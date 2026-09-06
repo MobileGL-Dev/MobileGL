@@ -9,6 +9,7 @@
 #include "MultiDraw.h"
 #include "Managers.h"
 #include <MG_State/GLState/Core.h>
+#include <MG_Pipe/PipeInputsSwitch.h>
 #include <MG_Util/Metrics/PipeStats.h>
 #include <cstring>
 #include <limits>
@@ -42,14 +43,14 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // verbatim is already "this batch restarts nowhere".
         Uint32 RestartSentinelFor(GLenum type) {
             if (ResolveRestartSubstitution(type) != RestartSubstitutionKind::None) {
-                return MG_State::pGLContext->GetPrimitiveRestartIndex();
+                return MGB_CTX->GetPrimitiveRestartIndex();
             }
             return MG_Util::FixedRestartIndexForGLType(type);
         }
 
         Bool RestartActive() {
-            return MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-                   MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            return MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+                   MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
         }
 
         // Vertices per primitive for the modes whose sub-draws may be concatenated into a
@@ -84,7 +85,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
         Uint BoundDrawIndirectBufferId() {
             const auto& indirect =
-                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+                MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
             if (!indirect) return 0;
             const auto* resource = BufferImpl::EnsureBufferResource(indirect);
             return resource ? resource->id : 0;
@@ -92,7 +93,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
         const SharedPtr<MG_State::GLState::BufferObject>& BoundIndexBuffer() {
             static const SharedPtr<MG_State::GLState::BufferObject> none;
-            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            const auto& vao = MGB_CTX->GetBoundVertexArray();
             if (!vao) return none;
             return vao->GetIndexBufferBindingSlot().GetBoundObject();
         }

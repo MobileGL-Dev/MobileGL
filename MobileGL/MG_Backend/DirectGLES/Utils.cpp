@@ -17,6 +17,7 @@
 #include <Config.h>
 
 #include <MG_State/GLState/Core.h>
+#include <MG_Pipe/PipeInputsSwitch.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
@@ -2294,11 +2295,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
             const auto& pixelPackBufferObject =
-                MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+                MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
 
             // Destination layout is computed from the client-side PACK parameters; only the actual pixel
             // rows are written so skip regions of the destination stay untouched.
-            const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+            const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
             const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
             const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
             const SizeT imageRows =

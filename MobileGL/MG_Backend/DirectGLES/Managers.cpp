@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Managers.h"
+#include <MG_Pipe/PipeInputsSwitch.h>
 #include "Utils.h"
 #include "DirectGLES.h"
 #include "BackendObject_DirectGLES.h"
@@ -3641,9 +3642,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // that needs no work costs the same nothing per draw that any other synced texture does.
         void BackendTextureObject::StampViewSyncKeys(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
-            if (MG_State::pGLContext) {
-                m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
-                m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+            if (MGB_CTX_LIVE) {
+                m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
+                m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
                 m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
             }
             m_syncedContentVersion = stateTextureObject->GetContentVersion();
@@ -3770,9 +3771,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // version - and backend-side storage resets clear m_isInitialized. Restricted to
             // Mipmap storage like the probe fast path: a buffer texture's backing store can move
             // without any of these keys noticing.
-            if (m_isInitialized && m_syncedShapeContextId != 0 && MG_State::pGLContext &&
-                m_syncedShapeContextId == MG_State::pGLContext->GetTextureContextId() &&
-                m_syncedShapeGeneration == MG_State::pGLContext->GetSamplingResolutionGeneration() &&
+            if (m_isInitialized && m_syncedShapeContextId != 0 && MGB_CTX_LIVE &&
+                m_syncedShapeContextId == MGB_CTX->GetTextureContextId() &&
+                m_syncedShapeGeneration == MGB_CTX->GetSamplingResolutionGeneration() &&
                 m_syncedContentVersion == stateTextureObject->GetContentVersion() &&
                 m_syncedShapeParamsVersion == stateTextureObject->GetTextureParamsVersion() &&
                 stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
@@ -3841,9 +3842,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // The probe just proved "fully synced" from the real state, so the cheap
                     // gate may be (re)stamped here: the coarse generation only ever goes stale
                     // from OTHER textures' churn, and this draw re-validated this one.
-                    if (MG_State::pGLContext) {
-                        m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
-                        m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+                    if (MGB_CTX_LIVE) {
+                        m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
+                        m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
                         m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
                     }
                     return;
@@ -4732,9 +4733,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Same instant, so the cheap gate's keys describe exactly this synced state.
             // Only Mipmap storage may arm it - the gate refuses other storage types anyway,
             // but a stale trio must not linger on an object that later switches type.
-            if (MG_State::pGLContext && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
-                m_syncedShapeContextId = MG_State::pGLContext->GetTextureContextId();
-                m_syncedShapeGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+            if (MGB_CTX_LIVE && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                m_syncedShapeContextId = MGB_CTX->GetTextureContextId();
+                m_syncedShapeGeneration = MGB_CTX->GetSamplingResolutionGeneration();
                 m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
             } else {
                 m_syncedShapeContextId = 0;
@@ -5352,7 +5353,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // read buffer names no colour attachment at all.
         static const MG_State::GLState::FramebufferAttachmentObject* GetReadColorAttachment() {
             const auto& readFBO =
-                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
                 return nullptr;
             }
@@ -5457,7 +5458,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Bool IsFixedPointFallbackReadAttachment() {
             const auto& readFBO =
-                MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+                MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
                 return false;
             }
@@ -6227,7 +6228,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // outside the frontend's array, which cannot be addressed at all.
             Uint BoundImageUnitFormat(Int unit) {
                 if (unit < 0 || unit >= MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS) return 0;
-                return static_cast<Uint>(MG_State::pGLContext->GetImageTextureBinding(unit).Format);
+                return static_cast<Uint>(MGB_CTX->GetImageTextureBinding(unit).Format);
             }
 
             // Combines one (unit, format) pair into a running digest. Commutative, so the order
@@ -7189,19 +7190,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // patch size - so a program built for one value is stale for another. Recorded here
             // and compared on the draw path (SyncCurrentProgram), the same shape as the
             // storage-block and image-format signatures next to it.
-            const Uint patchVertices = MG_State::pGLContext != nullptr
-                                           ? MG_State::pGLContext->GetPatchVertices()
+            const Uint patchVertices = MGB_CTX_LIVE
+                                           ? MGB_CTX->GetPatchVertices()
                                            : 3u;
             m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
             // PATCH_DEFAULT_{OUTER,INNER}_LEVEL are the same kind of dynamic state and are baked
             // into the same stage (ES has no such state and no entry point to forward them to), so
             // they are recorded and compared alongside the patch size - the two move together, as
             // BuildPassthroughTessControlEssl's contract says.
-            m_passthroughTessControlOuterLevel = MG_State::pGLContext != nullptr
-                                                     ? MG_State::pGLContext->GetPatchDefaultOuterLevel()
+            m_passthroughTessControlOuterLevel = MGB_CTX_LIVE
+                                                     ? MGB_CTX->GetPatchDefaultOuterLevel()
                                                      : FloatVec4(1.0f, 1.0f, 1.0f, 1.0f);
-            m_passthroughTessControlInnerLevel = MG_State::pGLContext != nullptr
-                                                     ? MG_State::pGLContext->GetPatchDefaultInnerLevel()
+            m_passthroughTessControlInnerLevel = MGB_CTX_LIVE
+                                                     ? MGB_CTX->GetPatchDefaultInnerLevel()
                                                      : FloatVec2(1.0f, 1.0f);
 
             if (tessEvalShaderIndex < 0 ||
@@ -8747,8 +8748,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("Renderbuffer %u storage allocation ran out of memory: %dx%d, samples=%d, format=%s",
                              stateRBOObject->GetExternalIndex(), width, height, samples,
                              MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
-                if (MG_State::pGLContext) {
-                    MG_State::pGLContext->RecordError(
+                if (MGB_CTX_LIVE) {
+                    MGB_CTX->RecordError(
                         ErrorCode::OutOfMemory,
                         MakeUnique<GenericErrorInfo>("DirectGLES", "BackendRenderbufferObject::SyncToBackend",
                                                      "The ES driver could not allocate the renderbuffer storage."));

@@ -16,6 +16,7 @@
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Pipe/PipeInputsSwitch.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -140,14 +141,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // addresses again - the cached pointers cannot go stale. Invalidation is
     // exactly the pointer compare below.
     using FbBindingSlot =
-        std::remove_reference_t<decltype(MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
-    static const MG_State::GLState::GLContext* g_fbSlotCacheContext = nullptr;
+        std::remove_reference_t<decltype(MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
+    static const void* g_fbSlotCacheContext = nullptr;
     static Array<FbBindingSlot*, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fbSlotCache = {};
     static inline FbBindingSlot& GetFramebufferBindingSlotFast(FramebufferTarget target) {
-        MG_State::GLState::GLContext* ctx = MG_State::pGLContext.get();
+        const void* ctx = MGB_CTX_IDENTITY;
         if (ctx != g_fbSlotCacheContext) {
+            auto& live = *MGB_CTX;
             for (SizeT i = 0; i < g_fbSlotCache.size(); ++i) {
-                g_fbSlotCache[i] = &ctx->GetFramebufferBindingSlot(static_cast<FramebufferTarget>(i));
+                g_fbSlotCache[i] = &live.GetFramebufferBindingSlot(static_cast<FramebufferTarget>(i));
             }
             g_fbSlotCacheContext = ctx;
         }
@@ -258,7 +260,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     const Uint8* ResolveIndirectCommandBytes(const void* indirect, SizeT requiredBytes, const char* label) {
-        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         if (drawBuffer) {
             drawBuffer->SyncPersistentMappedRange();
             const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
@@ -354,7 +356,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             // Only sync up to the high-water mark of app-touched points; the fixed array is 84
             // deep but apps bind a handful, so the never-touched tail is already at GL default 0.
-            auto bindingPointCnt = MG_State::pGLContext->GetTouchedBufferBindingPointCount(target);
+            auto bindingPointCnt = MGB_CTX->GetTouchedBufferBindingPointCount(target);
             // ...and never past what the ES driver itself can hold. MobileGL advertises the GL 4.5
             // minimum of 84 uniform binding points while the ES 3.2 minimum is 72, so a frontend
             // index in that gap would reach glBindBufferBase as GL_INVALID_VALUE. Nothing is lost
@@ -367,7 +369,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                            static_cast<SizeT>(g_GLESCapabilities.MaxUniformBufferBindings));
             }
             for (SizeT i = 0; i < bindingPointCnt; ++i) {
-                auto& point = MG_State::pGLContext->GetBufferBindingPoint(target, i);
+                auto& point = MGB_CTX->GetBufferBindingPoint(target, i);
                 auto& obj = point.GetBoundObject();
                 if (!obj) {
                     BindBufferBaseCached(glTarget, static_cast<GLuint>(i), 0);
@@ -426,7 +428,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const SizeT pointCount = std::min<SizeT>(
                 bufferCount, MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS);
             for (SizeT i = 0; i < pointCount; ++i) {
-                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, i);
+                auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::TransformFeedback, i);
                 const auto& obj = point.GetBoundObject();
                 // A stride-0 slot (two consecutive gl_NextBuffer entries) captures nothing and
                 // needs no binding; anything else with no buffer never got past the frontend.
@@ -459,10 +461,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // pull the real contents back (BufferObject::SyncGpuWrites).
         void MarkShaderStorageBuffersGpuWritten() {
             const SizeT bindingPointCnt =
-                MG_State::pGLContext->GetTouchedBufferBindingPointCount(BufferTarget::ShaderStorage);
+                MGB_CTX->GetTouchedBufferBindingPointCount(BufferTarget::ShaderStorage);
             for (SizeT i = 0; i < bindingPointCnt; ++i) {
                 const auto& obj =
-                    MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, i).GetBoundObject();
+                    MGB_CTX->GetBufferBindingPoint(BufferTarget::ShaderStorage, i).GetBoundObject();
                 if (obj) obj->MarkGpuWritten();
             }
         }
@@ -471,14 +473,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const SizeT pointCount = MG_State::pGLContext->GetBufferBindingPointCount(BufferTarget::AtomicCounter);
+            const SizeT pointCount = MGB_CTX->GetBufferBindingPointCount(BufferTarget::AtomicCounter);
             for (const Int glBinding : glBindings) {
                 if (glBinding < 0 || static_cast<SizeT>(glBinding) >= pointCount) continue;
                 const Int esslBinding = esslBindingTop - glBinding;
                 // Already diagnosed once when the block was transpiled; nothing was bound to it
                 // there either, so there is nothing to unbind here.
                 if (esslBinding < 0) continue;
-                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::AtomicCounter,
+                auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::AtomicCounter,
                                                                           static_cast<Uint>(glBinding));
                 auto& obj = point.GetBoundObject();
                 if (!obj) {
@@ -515,7 +517,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            auto& bufferObject = MG_State::pGLContext->GetBufferBindingSlot(target).GetBoundObject();
+            auto& bufferObject = MGB_CTX->GetBufferBindingSlot(target).GetBoundObject();
             if (!bufferObject) {
                 g_GLESFuncs.glBindBuffer(glTarget, 0);
                 return;
@@ -659,7 +661,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // context since indirect draws now execute natively on the GPU.
             if (includeIndirectBuffer) {
                 auto& possibleIndirectBuffer =
-                    MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+                    MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
                 if (possibleIndirectBuffer) {
                     SyncBoundBuffer(BufferTarget::DrawIndirect, GL_DRAW_INDIRECT_BUFFER);
                 }
@@ -889,7 +891,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 const SizeT packedStride = program->GetTransformFeedbackPackedStride();
                 const SizeT modelledVertices =
-                    static_cast<SizeT>(MG_State::pGLContext->GetTransformFeedbackCapturedVertices());
+                    static_cast<SizeT>(MGB_CTX->GetTransformFeedbackCapturedVertices());
                 const SizeT vertices = std::min<SizeT>(modelledVertices, xfb.scatterCapacityVertices);
                 if (packedStride == 0 || vertices == 0) {
                     // The scatter path redirected the DRIVER's capture into the scratch buffer,
@@ -984,7 +986,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // not captured, and opening the span would also subject it to the capture
             // primitive-mode rule the paused draw is exempt from.
             if (!xfb.pending || xfb.paused) return;
-            const auto& program = MG_State::pGLContext->GetTransformFeedbackProgram();
+            const auto& program = MGB_CTX->GetTransformFeedbackProgram();
             if (!program) {
                 // The pending flag is deliberately NOT consumed here. It used to be cleared
                 // before this check, so a single draw that could not see the capture program
@@ -1004,7 +1006,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // recording it here keeps End independent of the frontend capture state.
             const SizeT bufferCount = program->GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
-                auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::TransformFeedback,
                                                                           static_cast<Uint>(i));
                 const auto& bufferObject = point.GetBoundObject();
                 if (!bufferObject) continue;
@@ -1241,7 +1243,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             if (!program) return;
 
-            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            const auto& vao = MGB_CTX->GetBoundVertexArray();
             if (!vao || !vaoTwin) return;
 
             const Uint32 activeAttribMask = program->GetActiveAttributeLocationMask();
@@ -1272,7 +1274,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
                 const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
-                const auto& currentValue = MG_State::pGLContext->GetCurrentVertexAttribute(location);
+                const auto& currentValue = MGB_CTX->GetCurrentVertexAttribute(location);
                 const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(program->GetAttribType(location));
                 switch (typeInfo.baseType) {
                 case MG_State::GLState::VertexAttribBaseType::Float:
@@ -1370,7 +1372,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static void CaptureUnitBindings(Int maxTouchedUnit, Vector<UnitBindingsSnapshot>& out) {
             out.resize(static_cast<SizeT>(maxTouchedUnit + 1));
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-                auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
                 auto& snapshot = out[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
@@ -1383,7 +1385,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool UnitBindingsUnchanged(Int maxTouchedUnit, const Vector<UnitBindingsSnapshot>& snapshots) {
             if (snapshots.size() != static_cast<SizeT>(maxTouchedUnit + 1)) return false;
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-                auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
                 const auto& snapshot = snapshots[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
@@ -1411,8 +1413,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // bump - so epoch equality alone proves the bindings a consumer resolved against
         // are the bindings on the units now.
         static Uint64 CurrentUnitBindingsEpoch(Int maxTouchedUnit) {
-            const Uint64 contextId = MG_State::pGLContext->GetTextureContextId();
-            const Uint64 bindGeneration = MG_State::pGLContext->GetTextureBindGeneration();
+            const Uint64 contextId = MGB_CTX->GetTextureContextId();
+            const Uint64 bindGeneration = MGB_CTX->GetTextureBindGeneration();
             if (MG_Util::PipeStats::Enabled()) {
                 // Two accessor calls whichever way the shutter goes; only the unit WALK is
                 // gated, and that walk reads no GLContext accessor of its own.
@@ -1512,10 +1514,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         DrawTextureSyncKeys CaptureDrawTextureSyncKeys() {
             DrawTextureSyncKeys keys;
-            keys.contextId = MG_State::pGLContext->GetTextureContextId();
+            keys.contextId = MGB_CTX->GetTextureContextId();
             // Units past the frontend's high-water mark have provably-empty slots.
-            keys.maxTouchedUnit = MG_State::pGLContext->GetMaxTouchedTextureUnit();
-            keys.samplingGeneration = MG_State::pGLContext->GetSamplingResolutionGeneration();
+            keys.maxTouchedUnit = MGB_CTX->GetMaxTouchedTextureUnit();
+            keys.samplingGeneration = MGB_CTX->GetSamplingResolutionGeneration();
             keys.unitBindingsEpoch = CurrentUnitBindingsEpoch(keys.maxTouchedUnit);
             if (MG_Util::PipeStats::Enabled()) {
                 // The three reads above; CurrentUnitBindingsEpoch counts its own two.
@@ -1577,7 +1579,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_unitTextureSyncListValid = false;
                 g_unitTextureSyncList.clear();
                 for (Int index = 0; index <= maxTouchedUnit; ++index) {
-                    auto& unit = MG_State::pGLContext->GetTextureUnitObject(index);
+                    auto& unit = MGB_CTX->GetTextureUnitObject(index);
                     for (const auto& bindingSlot : unit.GetAllBindingSlots()) {
                         auto& textureObject = bindingSlot.GetBoundObject();
                         // An image-less default texture (name 0) is the slot's initial / "unbound"
@@ -1725,7 +1727,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
+            auto& imageBinding = MGB_CTX->GetImageTextureBinding(static_cast<Int>(unit));
             TrackWritableImageBufferUnit(unit, IsWritableImageBufferTexture(imageBinding));
             if (imageBinding.Texture && unit + 1 > g_imageUnitHighWaterMark) {
                 g_imageUnitHighWaterMark = unit + 1;
@@ -1817,7 +1819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (g_writableImageBufferUnitCount == 0) return;
             for (Uint unit = 0; unit < g_writableImageBufferUnits.size(); ++unit) {
                 if (!g_writableImageBufferUnits[unit]) continue;
-                const auto& imageBinding = MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit));
+                const auto& imageBinding = MGB_CTX->GetImageTextureBinding(static_cast<Int>(unit));
                 if (!IsWritableImageBufferTexture(imageBinding)) {
                     TrackWritableImageBufferUnit(unit, false);
                     continue;
@@ -2023,7 +2025,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            Uint16 currentRenderStateVersion = MG_State::pGLContext->GetRenderStateParametersVersion();
+            Uint16 currentRenderStateVersion = MGB_CTX->GetRenderStateParametersVersion();
             const Bool forceFullPush = g_forceFullRenderStateResync;
             g_forceFullRenderStateResync = false;
             // The alpha discipline for widened colour attachments (see the header comment on
@@ -2051,7 +2053,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
             }
 
-            const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
+            const auto& parameters = MGB_CTX->GetRenderStateParameters();
 
             // The frontend has ONE version for the whole parameter block, so a per-draw blend
             // toggle used to re-diff all ~40 pieces of state field by field on every draw
@@ -2080,7 +2082,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 !g_hasSyncedRenderState || std::memcmp(currentBytes + kBlendSpanEnd, syncedBytes + kBlendSpanEnd,
                                                        sizeof(RenderStateParameters) - kBlendSpanEnd) != 0;
 
-            IntVec4 backendViewport = MG_State::pGLContext->GetViewport();
+            IntVec4 backendViewport = MGB_CTX->GetViewport();
             if (backendViewport.z() <= 0 || backendViewport.w() <= 0) {
                 Int surfaceWidth = 0;
                 Int surfaceHeight = 0;
@@ -2163,7 +2165,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
               // never turns it on, so the driver has to be told to write raw. Without this a render
               // into an sRGB colour buffer comes back encoded once too often (the shader's own
               // decode on the next fetch then leaves the value one conversion short).
-                const Bool srgbWrites = MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+                const Bool srgbWrites = MGB_CTX->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
                 if (g_GLESCapabilities.SupportsSrgbWriteControl &&
                     (forceFullPush || srgbWrites != g_syncedSrgbFramebufferWrites)) {
                     srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB)
@@ -2839,11 +2841,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // member set it has to be told.
                 (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
                  (twin->GetPassthroughTessControlPatchVertices() !=
-                      static_cast<Int>(MG_State::pGLContext->GetPatchVertices()) ||
+                      static_cast<Int>(MGB_CTX->GetPatchVertices()) ||
                   !BitwiseEqual(twin->GetPassthroughTessControlOuterLevel(),
-                                MG_State::pGLContext->GetPatchDefaultOuterLevel()) ||
+                                MGB_CTX->GetPatchDefaultOuterLevel()) ||
                   !BitwiseEqual(twin->GetPassthroughTessControlInnerLevel(),
-                                MG_State::pGLContext->GetPatchDefaultInnerLevel())))) {
+                                MGB_CTX->GetPatchDefaultInnerLevel())))) {
                 twin->SyncToBackend(currentProgram);
             }
             g_currentDrawFrontendProgram = currentProgram.get();
@@ -2954,7 +2956,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resolved-buffers memo on the twin), the VAO sync and the draw-time bind
         // below. Nothing in between can invalidate it — the bound VAO is pinned by
         // the context, and no step here erases or replaces a live VAO's twin.
-        const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
+        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
         VertexArrayImpl::BackendVertexArrayObject* vaoTwin =
             currentVAO ? VertexArrayImpl::ResolveVaoTwin(currentVAO) : nullptr;
         // Early config-version read: see the note on SyncNeccessaryBuffers - issuing
@@ -2965,7 +2967,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // either, and none can run inside this preparation. GetProgramForDraw is a
         // cross-TU call with a guarded static inside - repeating it per stage showed
         // up in draw-loop profiles.
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
         if (MG_Util::PipeStats::Enabled()) {
             // THE per-draw denominator for Espryt, plus this function's own two accessor
             // calls (the VAO and the draw program). Everything the callees below read is
@@ -3045,7 +3047,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
 
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+            auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
             Array<Bool, (SizeT)TextureTarget::TextureTargetCount> boundBackendTargets{};
             Array<TextureTarget, (SizeT)TextureTarget::TextureTargetCount> claimedByFrontendTarget{};
             claimedByFrontendTarget.fill(TextureTarget::Unknown);
@@ -3209,7 +3211,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         g_unitSamplerWalkValid = false;
         for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-            const auto& samplerObject = MG_State::pGLContext->GetTextureUnitObject(unit).GetSamplerObject();
+            const auto& samplerObject = MGB_CTX->GetTextureUnitObject(unit).GetSamplerObject();
             if (samplerObject) {
                 if (auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject)) {
                     backendSampler->Bind(unit);
@@ -3359,7 +3361,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void BindCurrentTextures() {
-        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(), MG_State::pGLContext->GetProgramForDraw());
+        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(), MGB_CTX->GetProgramForDraw());
     }
 
     // Binds the current program's backend object and re-establishes its per-program
@@ -3479,7 +3481,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                         // Connect buffer to backend binding point
                         auto binding = currentProgram->GetUniformBlockBinding(i);
-                        auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::Uniform, binding);
+                        auto& point = MGB_CTX->GetBufferBindingPoint(BufferTarget::Uniform, binding);
                         auto& bufferObj = point.GetBoundObject();
                         auto range = point.GetRange();
 
@@ -3577,7 +3579,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 samplerBinding.lastAssignedUnit = unit;
                             }
 
-                            auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+                            auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
                             auto& samplerObject = textureUnit.GetSamplerObject();
                             const auto& texture2D =
                                 textureUnit.GetBindingSlot(TextureTarget::Texture2D).GetBoundObject();
@@ -3659,7 +3661,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // PrepareForCompute, where the current program (and therefore its registry twin)
     // is pinned for the duration. Prefers the per-draw stash those preparations wrote.
     static PrgramImpl::BackendProgramObjectImpl* GetCurrentBackendProgram() {
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
         if (!currentProgram || !currentProgram->GetLinkStatus() || !currentProgram->GetSpirvStatus()) {
             return nullptr;
         }
@@ -3709,7 +3711,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // flattening a batch that turns out to need per-sub-draw values is unrecoverable -
     // so an unanswerable program counts as needing them.
     Bool CurrentProgramMayNeedPerSubDrawBuiltins(Bool batchCarriesBaseVertices) {
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
+        const auto& currentProgram = MGB_CTX->GetProgramForDraw();
         const auto program = GetCurrentBackendProgram();
         if (!currentProgram || program == nullptr ||
             program->GetSyncedLinkVersion() != currentProgram->GetLinkVersion()) {
@@ -3818,12 +3820,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // times; rasterizer discard means there are no fragments to gate at all, so replaying
         // would be pure cost with nothing to show for it. Both fall back to a single pass with an
         // open gate, i.e. to the pre-emulation behaviour, rather than to wrong data.
-        if (MG_State::pGLContext->IsTransformFeedbackActive() ||
-            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+        if (MGB_CTX->IsTransformFeedbackActive() ||
+            MGB_CTX->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
             return 1;
         }
 
-        const auto& parameters = MG_State::pGLContext->GetRenderStateParameters();
+        const auto& parameters = MGB_CTX->GetRenderStateParameters();
         Int surfaceWidth = 0;
         Int surfaceHeight = 0;
         if (!QueryCurrentSurfaceSize(surfaceWidth, surfaceHeight)) {
@@ -4059,7 +4061,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // PrepareForDraw (nothing below can move either). The DISPATCH accessor: with a
         // pipeline bound this is its compute stage program, which is a whole program on its
         // own - the graphics composite a draw builds carries no compute stage.
-        const auto& currentProgram = MG_State::pGLContext->GetProgramForDispatch();
+        const auto& currentProgram = MGB_CTX->GetProgramForDispatch();
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
         BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
@@ -4085,12 +4087,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     GLuint GetBackendProgramId(GLuint program) {
-        if (!MG_State::pGLContext->ValidateProgramName(program)) {
+        if (!MGB_CTX->ValidateProgramName(program)) {
             MGLOG_E_ONCE("Invalid frontend program object: %u", program);
             return 0;
         }
 
-        auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+        auto& programObject = MGB_CTX->GetProgramObject(program);
         if (!programObject) {
             MGLOG_E_ONCE("Program object %u is null.", program);
             return 0;
@@ -4153,7 +4155,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // color must go through glClearBufferfv, which GLES does not clamp.
         GLbitfield remainingMask = mask;
         if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
-            const FloatVec4& cc = MG_State::pGLContext->GetRenderStateParameters().ClearColor;
+            const FloatVec4& cc = MGB_CTX->GetRenderStateParameters().ClearColor;
             const Bool outOfRange = cc.x() < 0.f || cc.x() > 1.f || cc.y() < 0.f || cc.y() > 1.f || cc.z() < 0.f ||
                                     cc.z() > 1.f || cc.w() < 0.f || cc.w() > 1.f;
             // A widened attachment's stored alpha has to end up 1.0, and glClear applies ONE
@@ -4212,7 +4214,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glReadPixels(100, 100, 1, 1, GL_RGBA, GL_FLOAT, rb);
                         const GLenum rbErr = g_GLESFuncs.glGetError();
                         const auto& feFbo =
-                            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+                            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
                         int feDb0 = -1, feDb1 = -1;
                         Uint feIdx = 0, feVer = 0;
                         if (feFbo) {
@@ -4377,7 +4379,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         const SharedPtr<MG_State::GLState::BufferObject>& BoundElementArrayBuffer() {
             static const SharedPtr<MG_State::GLState::BufferObject> none;
-            const auto& vao = MG_State::pGLContext->GetBoundVertexArray();
+            const auto& vao = MGB_CTX->GetBoundVertexArray();
             if (!vao) return none;
             return vao->GetIndexBufferBindingSlot().GetBoundObject();
         }
@@ -4393,13 +4395,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     RestartSubstitutionKind ResolveRestartSubstitution(GLenum indexType) {
-        if (!MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-            MG_State::pGLContext->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
+        if (!MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MGB_CTX->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
             return RestartSubstitutionKind::None;
         }
         const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
         if (fixedMax == 0) return RestartSubstitutionKind::None;
-        const Uint32 restartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+        const Uint32 restartIndex = MGB_CTX->GetPrimitiveRestartIndex();
         if (restartIndex == fixedMax) return RestartSubstitutionKind::None;
         // Strictly greater, never truncated. GL 4.6 core 10.3.6 compares the fetched index
         // zero-extended against the full 32-bit state, so an index this type cannot hold matches
@@ -4439,7 +4441,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         const SizeT sourceIndexSize = MG_Util::GetGLTypeSize(indexType);
         const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
-        const Uint32 applicationRestartIndex = MG_State::pGLContext->GetPrimitiveRestartIndex();
+        const Uint32 applicationRestartIndex = MGB_CTX->GetPrimitiveRestartIndex();
         const auto& indexBuffer = BoundElementArrayBuffer();
 
         const Uint8* source = nullptr;
@@ -4567,7 +4569,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
-        const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
+        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
         if (currentVAO) {
             auto* backendVAOSlot = VertexArrayImpl::g_backendVertexArrayObjects.Find(currentVAO.get());
             if (backendVAOSlot && *backendVAOSlot) {
@@ -4606,7 +4608,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ladder and the indirect executors do. Without it every sub-draw of a
         // glMultiDrawArrays read draw index 0.
         const Bool feedDrawID = CurrentProgramReadsDrawID();
-        const auto& currentVAO = MG_State::pGLContext->GetBoundVertexArray();
+        const auto& currentVAO = MGB_CTX->GetBoundVertexArray();
         for (GLsizei i = 0; i < drawcount; ++i) {
             // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
             if (currentVAO) {
@@ -4677,7 +4679,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
                                        drawIndirectBuffer, drawcount, stride, "MultiDrawElementsIndirect");
     }
@@ -4708,8 +4710,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-        auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto parameterBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!drawBuffer) {
             MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
             return;
@@ -4779,7 +4781,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), drawIndirectBuffer,
                                       drawcount, stride, "MultiDrawArraysIndirect");
     }
@@ -4810,8 +4812,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::IndirectBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
 
-        auto drawBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
-        auto parameterBuffer = MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
+        auto drawBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+        auto parameterBuffer = MGB_CTX->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
         if (!drawBuffer) {
             MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: no GL_DRAW_INDIRECT_BUFFER is bound");
             return;
@@ -4970,7 +4972,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteIndexedIndirectCommands(mode, type, indexSize, commandBytes, reinterpret_cast<SizeT>(indirect),
                                        drawIndirectBuffer, 1, sizeof(DrawElementsIndirectCommand),
                                        "DrawElementsIndirect");
@@ -5011,7 +5013,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         const auto& drawIndirectBuffer =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         ExecuteArraysIndirectCommands(mode, commandBytes, reinterpret_cast<SizeT>(indirect), drawIndirectBuffer, 1,
                                       sizeof(DrawArraysIndirectCommand), "DrawArraysIndirect");
     }
@@ -5256,8 +5258,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // restore. Drop the flag so it is not misattributed to the emulation's own work.
             DrainBlitErrors();
 
-            if (MG_State::pGLContext->IsTransformFeedbackActive() &&
-                !MG_State::pGLContext->IsTransformFeedbackPaused() && g_GLESFuncs.glPauseTransformFeedback) {
+            if (MGB_CTX->IsTransformFeedbackActive() &&
+                !MGB_CTX->IsTransformFeedbackPaused() && g_GLESFuncs.glPauseTransformFeedback) {
                 g_GLESFuncs.glPauseTransformFeedback();
                 m_pausedTransformFeedback = true;
                 DrainBlitErrors();
@@ -6041,8 +6043,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // A no-op on every driver that honours a non-zero destination array layer, which is all
         // of them but the probed one. Whatever it performs itself is taken out of the mask.
         mask &= ~BlitLayeredDestinationAspects(
-            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject(),
-            MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject(), srcX0, srcY0,
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject(),
+            MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject(), srcX0, srcY0,
             srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask);
         if (mask != 0) {
             IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -6104,8 +6106,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedNC(__func__, TRACY_ZONECOLOR_BACKEND);
 #endif
-        auto unit = MG_State::pGLContext->GetActiveTextureUnit();
-        auto& textureUnit = MG_State::pGLContext->GetTextureUnitObject(unit);
+        auto unit = MGB_CTX->GetActiveTextureUnit();
+        auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
 
         auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (!TextureImpl::IsSupportedTextureTarget(textureTarget)) {
@@ -6182,7 +6184,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The frontend's current PACK parameters, for readbacks the ES driver serves
     // directly with the client's layout.
     static PixelStoreImpl::PackState PackStateFromContext() {
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
         return {static_cast<GLint>(packParams.Alignment), static_cast<GLint>(packParams.RowLength),
                 static_cast<GLint>(packParams.SkipRows), static_cast<GLint>(packParams.SkipPixels)};
     }
@@ -6372,7 +6374,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::ConvertGLEnumToString(err).c_str(),
                 MG_Util::ConvertGLEnumToString(target).c_str(),
                 MG_Util::ConvertTextureInternalFormatToString(format).c_str());
-        MG_State::pGLContext->RecordError(
+        MGB_CTX->RecordError(
             ConvertGLESErrorToErrorCode(err),
             MakeUnique<GenericErrorInfo>("DirectGLES", operation,
                                          MG_Util::ConvertGLEnumToString(err)));
@@ -6696,8 +6698,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Bind necessary FBO and texture
         BindCurrentFBO(FramebufferTarget::Read);
-        Uint activeTextureUnit = MG_State::pGLContext->GetActiveTextureUnit();
-        const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject((Int)activeTextureUnit)
+        Uint activeTextureUnit = MGB_CTX->GetActiveTextureUnit();
+        const auto& textureObject = MGB_CTX->GetTextureUnitObject((Int)activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
@@ -6791,8 +6793,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Bind necessary FBO and texture
         BindCurrentFBO(FramebufferTarget::Read);
-        auto activeTextureUnit = MG_State::pGLContext->GetActiveTextureUnit();
-        const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(activeTextureUnit)
+        auto activeTextureUnit = MGB_CTX->GetActiveTextureUnit();
+        const auto& textureObject = MGB_CTX->GetTextureUnitObject(activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
         auto* backendTextureSlot = TextureImpl::g_backendTextureObjects.Find(textureObject.get());
@@ -6929,8 +6931,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
         DebugImpl::OpenGLScopeMarker marker(__func__);
 #endif
-        auto unitIndex = MG_State::pGLContext->GetActiveTextureUnit();
-        auto& unit = MG_State::pGLContext->GetTextureUnitObject(unitIndex);
+        auto unitIndex = MGB_CTX->GetActiveTextureUnit();
+        auto& unit = MGB_CTX->GetTextureUnitObject(unitIndex);
         auto& slot = unit.GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target));
         auto& texture = slot.GetBoundObject();
         MOBILEGL_ASSERT(texture != nullptr, "GenerateMipmap requires a bound texture.");
@@ -7354,8 +7356,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // effect by the block's next use.
     void ShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
         if (!storageBlockName) return;
-        if (!MG_State::pGLContext->ValidateProgramName(program)) return;
-        auto& programObject = MG_State::pGLContext->GetProgramObject(program);
+        if (!MGB_CTX->ValidateProgramName(program)) return;
+        auto& programObject = MGB_CTX->GetProgramObject(program);
         if (!programObject) return;
 
         auto* backendProgramSlot = PrgramImpl::g_backendProgramObjects.Find(programObject.get());
@@ -7551,7 +7553,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     template <typename FillRow>
     static Bool StoreReadbackRowsToClient(GLsizei width, GLsizei height, SizeT dstPixelBytes, void* pixels,
                                           const char* what, FillRow&& fillRow) {
-        const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+        const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
         const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
@@ -7559,7 +7561,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
         const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
         if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
             MGLOG_E_ONCE("ReadPixels: %s readback PBO is too small", what);
@@ -8541,7 +8543,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         if (!pixelPackBufferObject && pixels == nullptr) {
             return true;
         }
@@ -8771,7 +8773,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         const auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         if (!pixelPackBufferObject && pixels == nullptr) {
             return true;
         }
@@ -9038,7 +9040,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and legacy GL_RED reads) goes through the wide-format conversion, which picks a wide type
         // the driver accepts for the current attachment. GL_PACK_SWAP_BYTES has no ES equivalent, so
         // it always takes the conversion path (which swaps on the CPU).
-        const Bool packSwapBytes = MG_State::pGLContext->GetPixelStoreParameters(false).SwapBytes;
+        const Bool packSwapBytes = MGB_CTX->GetPixelStoreParameters(false).SwapBytes;
         // The read buffer is what glReadPixels reads, so the frontend's READ binding is exactly
         // the right thing to ask here.
         const Bool forceOpaqueAlpha = FramebufferImpl::IsAlphaWidenedFallbackReadAttachment();
@@ -9081,7 +9083,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (the driver-level binding used to stay on the user PBO after this call,
         // capturing subsequent client-memory readbacks into it).
         auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         Bool usePBO = false;
         GLuint packBufferId = 0;
         if (pixelPackBufferObject) {
@@ -9191,10 +9193,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_D("GetTexImage: SyncCurrentFBO()");
         FramebufferImpl::SyncCurrentFBO();
 
-        auto activeTextureUnit = MG_State::pGLContext->GetActiveTextureUnit();
+        auto activeTextureUnit = MGB_CTX->GetActiveTextureUnit();
         MGLOG_D("GetTexImage: active texture unit = %u", activeTextureUnit);
 
-        const auto& textureObject = MG_State::pGLContext->GetTextureUnitObject(activeTextureUnit)
+        const auto& textureObject = MGB_CTX->GetTextureUnitObject(activeTextureUnit)
                                         .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                                         .GetBoundObject();
 
@@ -9417,7 +9419,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Each slice is packed as its own 2D image, so the per-slice call must not apply
                 // GL_PACK_SKIP_IMAGES / GL_PACK_IMAGE_HEIGHT itself - this walks the destination
                 // over them, using the same layout StoreWideRowsToClient computes.
-                const auto packParams = MG_State::pGLContext->GetPixelStoreParameters(false);
+                const auto packParams = MGB_CTX->GetPixelStoreParameters(false);
                 const SizeT dstPixelBytes = GetReadbackDstPixelSize(conversionMapping, type);
                 const SizeT rowPixels =
                     static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : size.x());
@@ -9507,7 +9509,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handle PBO. The pack binding is scoped: it returns to the resting 0 state
         // on every exit path, so a later readback can never land in a stale PBO.
         auto& pixelPackBufferObject =
-            MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
+            MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         Bool usePBO = false;
         GLuint packBufferId = 0;
         if (pixelPackBufferObject) {
