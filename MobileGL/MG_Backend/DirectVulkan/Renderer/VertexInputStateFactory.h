@@ -130,7 +130,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // stale memo.
         //
         // Drawn from a process-wide source, never a per-instance counter: the VAO
-        // memos outlive this factory (they live on pGLContext's VAOs, the renderer
+        // memos outlive this factory (they live on the frontend context's VAOs, the renderer
         // is destroyed and recreated on EGL surface release/re-create), so a fresh
         // factory restarting at a dead factory's epoch value would honor its
         // dangling entry pointers. The constructor takes a value strictly greater

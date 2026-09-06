@@ -11,6 +11,7 @@
 #include "ProgramFactory.h"
 
 #include "MG_State/GLState/Core.h"
+#include <MG_Pipe/PipeInputsSwitch.h>
 #include "MG_Util/Converters/MGToStr/TextureEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/PipeStats.h"
@@ -806,7 +807,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // sampled-texture sync scan the entire alive-texture map per draw.
             if (aliveIt == m_aliveObjects.end()) {
                 WeakPtr<MG_State::GLState::ITextureObject> aliveTexture;
-                const auto& liveTexture = MG_State::pGLContext->GetTextureObject(texture.GetExternalIndex());
+                const auto& liveTexture = MGB_CTX->GetTextureObject(texture.GetExternalIndex());
                 if (liveTexture && liveTexture.get() == &texture) {
                     aliveTexture = liveTexture;
                 } else {
@@ -949,7 +950,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const Bool framebufferSrgbEnabled =
-            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+            MGB_CTX->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
         const VkFormat baseAttachmentFormat =
             viewFormatOverride != VK_FORMAT_UNDEFINED ? viewFormatOverride : resource->format;
         const VkFormat attachmentFormat =

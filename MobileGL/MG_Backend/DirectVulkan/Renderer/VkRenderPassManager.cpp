@@ -13,6 +13,7 @@
 #include "MG_Util/Converters/MGToStr/FramebufferEnumConverter.h"
 #include "MG_Util/Converters/MGToVk/TextureEnumConverter.h"
 #include "MG_Util/Metrics/TextureMetrics.h"
+#include <MG_Pipe/PipeInputsSwitch.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool TryResolveSampleCountFlagBits(Int requestedSamples, VkSampleCountFlagBits& outSampleCount) {
@@ -610,7 +611,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // sRGB attachments switch between their sRGB and UNORM-twin views with this
         // capability (ResolveSrgbAttachmentWriteFormat), changing the render pass formats.
         const Bool framebufferSrgbEnabled =
-            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+            MGB_CTX->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
         XXHASH_VERIFY(XXH64_update(m_hashState, &framebufferSrgbEnabled, sizeof(framebufferSrgbEnabled)));
         auto& drawBuffers = fbo.GetDrawBuffers();
         XXHASH_VERIFY(XXH64_update(m_hashState, drawBuffers.data(), drawBuffers.size() * sizeof(drawBuffers[0])));
@@ -962,7 +963,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                     const VkImageLayout trackedRbLayout = rbResource->layout;
                     const Bool rbFramebufferSrgb =
-                        MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
+                        MGB_CTX->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb);
                     const VkFormat rbAttachmentFormat =
                         ResolveSrgbAttachmentWriteFormat(rbResource->format, rbFramebufferSrgb);
                     rbDesc.flags = 0;
@@ -1108,7 +1109,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         textureResources.emplace_back(textureResource);
                         desc.format = ResolveSrgbAttachmentWriteFormat(
                             textureResource->format,
-                            MG_State::pGLContext->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb));
+                            MGB_CTX->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb));
                         attachmentSampleCount = textureResource->sampleCount;
                         trackedColorLayout = textureResource->layout;
                         trackedAttachmentLayouts.emplace_back(TrackedAttachmentLayoutInfo {
