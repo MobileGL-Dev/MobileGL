@@ -251,30 +251,15 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             GLuint m_vbo = 0;
         };
 
-        // The plumbing, asserted on its own so that a counter-ratio failure below can never be
-        // confused with "the lane never turned the stats channel on".
-        TEST_F(CsoContentAddressingScenario, TheLibrarysSummaryLineCarriesTheCsoCounters) {
-            if (!Ready()) return;
-            SkipUnlessTheLaneIsAssertableHere();
-            if (IsSkipped()) return;
-
-            Gl().EndFrame(); // close the setup window
-            RunBlendToggleFrame();
-
-            const CsoWindow window = LastCsoWindow(ReadWholeFile(LibraryLogPath()));
-            ASSERT_TRUE(window.found)
-                << "no 'MGPipe stats:' line carrying cso[csom= csob=] in " << LibraryLogPath()
-                << ". This IS a push build (the lane checked MGITEST_PIPE_PUSH_BUILD before getting "
-                   "here) and the cso[] bracket is unconditional inside that #if, so the bracket cannot "
-                   "be missing for a build reason: either MOBILEGL_PIPE_STATS / "
-                   "MOBILEGL_PIPE_STATS_PERIOD did not reach the process, or no summary line was "
-                   "emitted at all because nothing reached PipeStats::OnPresent.";
-            EXPECT_GE(window.binds, 0) << window.line;
-            EXPECT_GE(window.mints, 0) << window.line;
-            RecordProperty("cso_line", window.line.c_str());
-        }
-
-        // The control itself.
+        // ONE case per lane, and that is a hard constraint rather than a style choice.
+        //
+        // This case READS the library log, and the log is a per-LANE resource: the library opens it
+        // fopen(path, "w"), so every process in a lane truncates it. A second case in this lane would
+        // therefore race this one under `ctest -j`, and the shape of the failure is a silent, empty
+        // read that looks exactly like "the counters were never emitted". Splitting the plumbing
+        // assertion into its own case would have bought a clearer failure message and paid for it
+        // with a flake in the thing the message is about. The plumbing is asserted first, with its
+        // own message, inside this one process instead.
         TEST_F(CsoContentAddressingScenario, TheBlendToggleMintsBoundedlyWithContentAddressingAndPerBindWithout) {
             if (!Ready()) return;
             SkipUnlessTheLaneIsAssertableHere();
@@ -283,8 +268,15 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             Gl().EndFrame(); // close the setup window
             const Image first = RunBlendToggleFrame();
             const CsoWindow window = LastCsoWindow(ReadWholeFile(LibraryLogPath()));
-            ASSERT_TRUE(window.found) << "no CSO counters in " << LibraryLogPath()
-                                      << " - see TheLibrarysSummaryLineCarriesTheCsoCounters";
+            // The plumbing first, with its own message, so a counter-ratio failure below can never
+            // be confused with "the lane never turned the stats channel on".
+            ASSERT_TRUE(window.found)
+                << "no 'MGPipe stats:' line carrying cso[csom= csob=] in " << LibraryLogPath()
+                << ". This IS a push build (the lane checked MGITEST_PIPE_PUSH_BUILD before getting "
+                   "here) and the cso[] bracket is unconditional inside that #if, so it cannot be "
+                   "missing for a build reason: either MOBILEGL_PIPE_STATS / "
+                   "MOBILEGL_PIPE_STATS_PERIOD did not reach the process, or no summary line was "
+                   "emitted at all because nothing reached PipeStats::OnPresent.";
             RecordProperty("cso_line", window.line.c_str());
 
             // Every draw in the frame changed the pipeline subset, so every draw is a bind. This
