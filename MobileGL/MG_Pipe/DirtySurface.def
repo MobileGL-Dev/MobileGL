@@ -40,19 +40,24 @@
 //                    mutation is published inline and needs no shutter at all.
 //   kReverseChannel  not state: a write INTO the frontend from the backend's side.
 //   kNoBackendRead   no backend read point observes this state at all.
-//   kExplicitDestroy published by the delete_* call the Track H slice emits when the
-//                    object's last reference drops - an object's DEATH, which no
-//                    generation shutters because there is no longer an object to carry
-//                    one. Only the six object kinds P2 brief D13 scopes Espryt 0b's
-//                    explicit destroy to (buffers, framebuffers, renderbuffers,
-//                    samplers, textures, vertex arrays) may use this answer.
+//   kExplicitDestroy published by the delete_* / resource_destroy call the Track H slice
+//                    emits when the object's last reference drops - an object's DEATH,
+//                    which no generation shutters because there is no longer an object
+//                    to carry one. Only for a kind that HAS an identity on the wire to
+//                    destroy: the resources and CSOs of PipeCalls.def, which is what P2
+//                    brief D13 scopes Espryt 0b's explicit destroy to.
 //   kUnpublishedDestroy
-//                    the same event for a kind NO call publishes yet: programs, program
-//                    pipelines and shaders are outside D13's six, so their death reaches
-//                    a backend only through the object's own teardown path. Recorded as
-//                    a hole rather than dressed up as a mechanism that exists - naming
-//                    kExplicitDestroy here would be the same defect the RenderState
-//                    check above exists to stop, one class down in stakes.
+//                    the same event for a kind NOTHING publishes: a program, a program
+//                    pipeline and a shader have no per-object handle on the wire at all
+//                    in P2 - resource_destroy and the delete_* family name resources and
+//                    CSOs - so their DirectGLES twins are still reclaimed by the
+//                    backend's own registry teardown and no frontend call says they
+//                    died. Recorded as a hole rather than dressed up as a mechanism that
+//                    exists; naming kExplicitDestroy here would be the same defect the
+//                    RenderState derivation above exists to stop, one class down in
+//                    stakes. (D13's prose says 'six kinds' while the Core.cpp ranges it
+//                    cites also cover MarkProgram/MarkShaderForDeletion; the tree
+//                    decides, and the tree has no wire object for those three.)
 //   kPulledEveryVerb no shutter exists, and none is needed yet: the PipeInputs field this
 //                    writes is in its verb class's may-read mask, so the residual fill copies
 //                    it at EVERY verb of that class. A shutter here is a P3/P4 optimisation,
@@ -148,9 +153,9 @@
     X(BumpTextureBindGeneration,          NEW_SAMPLER_VIEWS)                                    \
     X(SetNamedTransformFeedbackBinding,   NEW_SO_TARGETS)                                       \
     /* ---- an object's death: no generation, because there is no longer an object  */          \
-    /* to carry one. Espryt 0b's delete_* publishes the six kinds D13 scopes it to;  */         \
-    /* programs, program pipelines and shaders are NOT among them and nothing else  */          \
-    /* publishes their death, so they answer kUnpublishedDestroy - a recorded hole. */          \
+    /* to carry one. Espryt 0b's delete_* / resource_destroy publishes the kinds     */         \
+    /* that have a handle on the wire; programs, program pipelines and shaders have  */         \
+    /* none in P2, so nothing publishes theirs - kUnpublishedDestroy, a known hole.  */         \
     X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
     X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
     X(MarkProgramForDeletion,             kUnpublishedDestroy)                                  \
