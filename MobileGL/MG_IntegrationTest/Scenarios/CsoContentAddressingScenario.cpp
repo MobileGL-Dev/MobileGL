@@ -53,11 +53,15 @@
 // file is written against the P2 contract commit, before that package lands. Until the tracker
 // exists there is no CSO to mint, csom is structurally 0 and an assertion about its ratio to csob
 // would be a statement about nothing. The build answers the question rather than a hand-maintained
-// list: MG_IntegrationTest/CMakeLists.txt looks for MG_Impl/Pipe/Tracker.cpp and passes the answer
-// in as MGITEST_PIPE_TRACKER_PRESENT, with a CONFIGURE_DEPENDS on that directory so the answer
-// cannot go stale. When the tracker lands the arms arm themselves; until then the entries are
-// registered, visible and SKIPPED with the reason - never absent, and never green for having
-// asserted nothing.
+// list: MG_IntegrationTest/CMakeLists.txt greps every source under MG_Impl/Pipe/ for the two
+// counters' names and passes the answer in as MGITEST_PIPE_TRACKER_PRESENT, with a
+// CONFIGURE_DEPENDS on that directory and on each file it finds so the answer cannot go stale.
+// It is a CONTENT probe, not a filename probe, precisely so that the owning package keeps control
+// of its own file layout - it implements the tracker and the cache header-only today, and a glob
+// for `Tracker.cpp` would have kept this control skipping forever after that package landed, with
+// a reason that had become false. When an emitter lands the arms arm themselves; until then the
+// entries are registered, visible and SKIPPED with the reason - never absent, and never green for
+// having asserted nothing.
 
 #include <cstdlib>
 #include <cstring>
@@ -213,10 +217,12 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                     return;
                 }
                 if (!BuildMarkerIsSet("MGITEST_PIPE_TRACKER_PRESENT")) {
-                    GTEST_SKIP() << "the CSO counters have no emitter in this build: MG_Impl/Pipe/Tracker.cpp "
-                                    "does not exist, so nothing mints or binds a render-state CSO and "
-                                    "csom / csob are structurally zero. P2 package B owns the tracker; this "
-                                    "entry arms itself when it lands.";
+                    GTEST_SKIP() << "the CSO counters have no emitter in this build: no source under "
+                                    "MobileGL/MG_Impl/Pipe/ names RenderStateCsoMints or "
+                                    "RenderStateCsoBinds, so nothing mints or binds a render-state CSO "
+                                    "and csom / csob are structurally zero. P2 package B owns the tracker "
+                                    "and the CSO cache; this entry arms itself when they land, whatever "
+                                    "files that package chooses to put them in.";
                     return;
                 }
                 if (LibraryLogPath().empty()) {

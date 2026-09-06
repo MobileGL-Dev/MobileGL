@@ -69,6 +69,14 @@
 // answer in as MGITEST_HANDLE_REKEY_<backend> / MGITEST_HANDLE_ABA_IMPLEMENTED, with a
 // CMAKE_CONFIGURE_DEPENDS on those files so the answer cannot go stale. When C and D land, the
 // arms arm themselves.
+//
+// Those two markers are a statement about the SOURCE TREE, and they are set only in a push build,
+// because that is the only build in which the thing they name is compiled: the {slot, gen} re-key
+// and Features.PipeHandleAbaControl are both `#if MOBILEGL_PIPE_PUSH`. In a pull build the two
+// push arms therefore skip on MGITEST_PIPE_PUSH_BUILD before they ever look at a per-arm marker -
+// otherwise, once C and D landed, the pull build would run AbaControl against guards that are
+// still in force (a hard red on `ctest -L integration-gpu`, which G2 requires green in BOTH
+// builds) and Handles against a library with no re-key in it (a green that asserts nothing).
 
 #include <cstddef>
 #include <cstdint>
@@ -114,6 +122,17 @@ namespace MGITest {
             if (std::strcmp(name, "handles") == 0) return Arm::Handles;
             if (std::strcmp(name, "aba") == 0) return Arm::AbaControl;
             return Arm::Legacy;
+        }
+
+        // Whether the lane named an arm this file knows. A value that is set but unrecognised is a
+        // FAILURE (SetUp below), never a quiet fall-through to Legacy: a typo in a lane's
+        // MGITEST_HANDLE_ARM would otherwise downgrade that lane's Handles or AbaControl assertion
+        // to the Legacy one, which passes - a lane reporting green for an arm it never ran. Same
+        // shape as CsoContentAddressingScenario's FAIL() on an unknown MGITEST_CSO_LANE.
+        bool ArmNameIsRecognised() {
+            const char* name = std::getenv(kArmMarker);
+            return name == nullptr || std::strcmp(name, "handles") == 0 ||
+                   std::strcmp(name, "legacy") == 0 || std::strcmp(name, "aba") == 0;
         }
 
         bool RunningInAHandleRecycleLane() { return std::getenv(kArmMarker) != nullptr; }
@@ -222,6 +241,13 @@ void main() { oColor = texture(uTex, vUv); }
             void SetUp() override {
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
+                if (!ArmNameIsRecognised()) {
+                    const char* raw = std::getenv(kArmMarker);
+                    FAIL() << "unknown " << kArmMarker << " value '" << (raw != nullptr ? raw : "")
+                           << "': the arms are handles / legacy / aba. Reading an unrecognised name "
+                              "as Legacy would make this lane assert the pre-re-key guards while "
+                              "claiming to test something else, and it would pass.";
+                }
                 m_arm = CurrentArm();
                 std::string error;
                 m_colorProgram = CompileProgram(kColorVS, kColorFS, &error);
@@ -249,15 +275,37 @@ void main() { oColor = texture(uTex, vUv); }
                                     "The ambient entries configure none of that, so there is nothing here to "
                                     "assert.";
                 }
+                // Both push arms are compiled only under MOBILEGL_PIPE_PUSH, so in a pull build
+                // neither has anything to say whatever the source tree contains. This check comes
+                // BEFORE the per-arm markers deliberately: those answer "does the source tree
+                // implement it", which stops being a statement about this library the moment the
+                // library is the pull one. Without it, a pull build would run the Handles arm
+                // against a library with no {slot, gen} key (a green asserting nothing) and the
+                // AbaControl arm against one whose guards are still in force (a hard red on
+                // `ctest -L integration-gpu`, which G2 requires green in BOTH builds).
+                // MG_IntegrationTest/CMakeLists.txt already withholds the markers in a pull build;
+                // this is the second lock, so a hand-forced environment cannot arm them either.
+                if (m_arm != Arm::Legacy && !BuildMarkerIsSet("MGITEST_PIPE_PUSH_BUILD")) {
+                    GTEST_SKIP() << "the " << ArmName(m_arm)
+                                 << " arm needs a library built with MOBILEGL_PIPE_PUSH, and this one "
+                                    "was not: the {slot, gen} re-key and Features.PipeHandleAbaControl "
+                                    "are both #if MOBILEGL_PIPE_PUSH (Config.h, ConfigLoader.cpp), so "
+                                    "there is nothing here for either arm to assert against. The lane "
+                                    "stays registered so that `ctest -L integration-gpu` names the same "
+                                    "tests in the pull build and the push build (gate G2); the Legacy "
+                                    "arm is the one that is meaningful here, and it runs.";
+                }
                 switch (m_arm) {
                     case Arm::Handles:
                         if (!ThisBackendsRekeyHasLanded()) {
                             GTEST_SKIP() << "the Handles arm needs the backend's {slot, gen} re-key, and this "
-                                            "build does not have it: no source under MobileGL/MG_Backend/"
+                                            "build does not have it: the build's capability probe found no "
+                                            "slot table and no Track H subsystem constant under "
+                                            "MobileGL/MG_Backend/"
                                          << Gl().BackendName()
-                                         << " mentions the Track H subsystem constant (P2 package C for "
-                                            "DirectGLES, package D for DirectVulkan). The arm is registered "
-                                            "and visible, and arms itself when that package lands.";
+                                         << " (P2 package C for DirectGLES, package D for DirectVulkan). The "
+                                            "arm is registered and visible, and arms itself when that "
+                                            "package lands in a push build.";
                         }
                         return;
                     case Arm::AbaControl:

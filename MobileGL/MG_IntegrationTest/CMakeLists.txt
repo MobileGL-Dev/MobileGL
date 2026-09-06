@@ -361,46 +361,85 @@ if (MOBILEGL_PIPE_PUSH)
     list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_PUSH_BUILD=1")
 endif()
 
-file(GLOB MGL_ITEST_ESPRYT_SLOT_TABLES CONFIGURE_DEPENDS
-    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES/SlotTables.h")
-if (MGL_ITEST_ESPRYT_SLOT_TABLES)
-    message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (SlotTables.h present)")
-    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
-else()
-    message(STATUS "Integration tests: DirectGLES has no SlotTables.h - HandleRecycle.Handles will SKIP on it")
-endif()
-
-file(GLOB MGL_ITEST_TRACKER_SOURCE CONFIGURE_DEPENDS
-    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/Tracker.cpp")
-if (MGL_ITEST_TRACKER_SOURCE)
-    message(STATUS "Integration tests: the MGPipe tracker is present, so CSOs are minted")
-    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
-else()
-    message(STATUS "Integration tests: no MG_Impl/Pipe/Tracker.cpp - CsoContentAddressing will SKIP")
-endif()
-
-set(MGL_ITEST_MAGMA_VERTEX_INPUT
-    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp")
-if (EXISTS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
-    file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_REKEY_HITS
-        REGEX "kMGPipeSubsystemMagmaVertexInput")
-    file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_ABA_HITS
-        REGEX "PipeHandleAbaControl")
-    if (MGL_ITEST_MAGMA_REKEY_HITS)
-        message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen}")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
+# THE THREE MARKERS BELOW ANSWER A QUESTION ABOUT THE SOURCE TREE, so each is only a true
+# statement about THIS LIBRARY while this build compiles the arm the source implements - and all
+# three arms are `#if MOBILEGL_PIPE_PUSH`. A pull build has no {slot, gen} key (the slot tables
+# and the re-keyed memos are push-only) and no Features.PipeHandleAbaControl at all (Config.h
+# declares the field inside `#if MOBILEGL_PIPE_PUSH` and ConfigLoader parses it in the same arm).
+# A source-only probe would therefore arm the PULL build's lanes the moment packages C and D
+# land: the AbaControl lane would go hard red on a gate G2 requires green (the guards it means to
+# defeat are still in force, so the scenario's "expect the stale pixels" assertion fails), and the
+# Handles lane would report green against a library that contains no re-key at all - the
+# "test that cannot fail" this scenario exists to avoid.
+#
+# So the whole block sits under the same `if (MOBILEGL_PIPE_PUSH)` as MGITEST_PIPE_PUSH_BUILD, and
+# HandleRecycleScenario re-checks that marker before either arm asserts, so a hand-forced
+# environment cannot arm an arm this build does not have either.
+if (MOBILEGL_PIPE_PUSH)
+    file(GLOB MGL_ITEST_ESPRYT_SLOT_TABLES CONFIGURE_DEPENDS
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES/SlotTables.h")
+    if (MGL_ITEST_ESPRYT_SLOT_TABLES)
+        message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (SlotTables.h present)")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
     else()
-        message(STATUS "Integration tests: DirectVulkan's vertex input is not re-keyed yet - "
-                       "HandleRecycle.Handles will SKIP on it")
+        message(STATUS "Integration tests: DirectGLES has no SlotTables.h - HandleRecycle.Handles will SKIP on it")
     endif()
-    if (MGL_ITEST_MAGMA_ABA_HITS)
-        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer")
-        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
+
+    # The CSO counters' EMITTER, probed by content rather than by a filename. The tracker package
+    # owns its own file layout and may implement the tracker and the cache header-only - today it
+    # does (MG_Impl/Pipe/{Tracker,CsoCache}.h, no Tracker.cpp) - so a glob for `Tracker.cpp` is a
+    # probe for a file nobody promised to create, and it would answer "no" forever AFTER the
+    # package landed, leaving the CSO control skipping with a reason that had become false. What
+    # the control actually needs is something that emits the two counters it reads, so that is
+    # what is looked for: any client-side pipe source naming RenderStateCsoMints / Binds. The glob
+    # is CONFIGURE_DEPENDS (a new file re-runs it) and every file it finds is added to
+    # CMAKE_CONFIGURE_DEPENDS (an edit to one re-runs it), so neither half can go stale.
+    file(GLOB MGL_ITEST_PIPE_CLIENT_SOURCES CONFIGURE_DEPENDS
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/*.h"
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/*.cpp")
+    set(MGL_ITEST_CSO_EMITTER "")
+    foreach(mglItestPipeSource IN LISTS MGL_ITEST_PIPE_CLIENT_SOURCES)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mglItestPipeSource}")
+        file(STRINGS "${mglItestPipeSource}" MGL_ITEST_CSO_HITS REGEX "RenderStateCso(Mints|Binds)")
+        if (MGL_ITEST_CSO_HITS AND NOT MGL_ITEST_CSO_EMITTER)
+            set(MGL_ITEST_CSO_EMITTER "${mglItestPipeSource}")
+        endif()
+    endforeach()
+    if (MGL_ITEST_CSO_EMITTER)
+        message(STATUS "Integration tests: the CSO counters have an emitter (${MGL_ITEST_CSO_EMITTER})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
     else()
-        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has no consumer - "
-                       "HandleRecycle.AbaControl will SKIP")
+        message(STATUS "Integration tests: no MG_Impl/Pipe source emits RenderStateCsoMints/Binds - "
+                       "CsoContentAddressing will SKIP")
     endif()
+
+    set(MGL_ITEST_MAGMA_VERTEX_INPUT
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp")
+    if (EXISTS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
+        file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_REKEY_HITS
+            REGEX "kMGPipeSubsystemMagmaVertexInput")
+        file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_ABA_HITS
+            REGEX "PipeHandleAbaControl")
+        if (MGL_ITEST_MAGMA_REKEY_HITS)
+            message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen}")
+            list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
+        else()
+            message(STATUS "Integration tests: DirectVulkan's vertex input is not re-keyed yet - "
+                           "HandleRecycle.Handles will SKIP on it")
+        endif()
+        if (MGL_ITEST_MAGMA_ABA_HITS)
+            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer")
+            list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
+        else()
+            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has no consumer - "
+                           "HandleRecycle.AbaControl will SKIP")
+        endif()
+    endif()
+else()
+    message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl} and "
+                   "CsoContentAddressing stay registered (G2) and SKIP: every arm they assert is "
+                   "compiled only under MOBILEGL_PIPE_PUSH")
 endif()
 
 mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
@@ -770,11 +809,27 @@ gtest_discover_tests(MobileGLIntegrationTest
 # (VertexInputStateFactory::ComputeHash's key and LookupVaoDrawMemo's lifetimeId compare); it
 # steers nothing on DirectGLES, and a lane that configured it there would be a permanent skip
 # claiming to be a control.
+#
+# The two PUSH-ONLY knobs of those arms are set only in a push build, and the lane NAMES are
+# unaffected by that (an ENVIRONMENT property is not part of a test's name, so G2 still sees the
+# same list in both builds). MOBILEGL_PIPE_LEGACY_MEMOS=0 says "never enter the legacy arm"; in a
+# pull build the legacy arm is the ONLY arm and every Track-H subsystem bit is clear, which is
+# precisely D14's startup Fatal{PipeLegacyMemosDisabled} condition - so a lane that set it there
+# would abort the process before the scenario could report its skip. MOBILEGL_PIPE_HANDLE_ABA_CONTROL
+# has no field to parse into in a pull build at all (Config.h declares it under #if MOBILEGL_PIPE_PUSH).
+if (MOBILEGL_PIPE_PUSH)
+    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0")
+    set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
+else()
+    set(MGL_ITEST_HANDLES_ARM_KNOBS "")
+    set(MGL_ITEST_ABA_ARM_KNOBS "")
+endif()
+
 mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=handles" "MOBILEGL_PIPE_LEGACY_MEMOS=0"
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=handles" ${MGL_ITEST_HANDLES_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" "MOBILEGL_PIPE_LEGACY_MEMOS=0"
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" ${MGL_ITEST_HANDLES_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_LEGACY_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=legacy" "MOBILEGL_PIPE_PUSH=0"
@@ -784,7 +839,7 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba" "MOBILEGL_PIPE_PUSH=0"
-    "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1"
+    ${MGL_ITEST_ABA_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
 gtest_discover_tests(MobileGLIntegrationTest
