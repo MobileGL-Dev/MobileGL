@@ -129,6 +129,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/DualSourceBlendScenario.cpp
     Scenarios/PipeVerifyArmingScenario.cpp
     Scenarios/PoisonOmissionScenario.cpp
+    Scenarios/HandleRecycleScenario.cpp
+    Scenarios/CsoContentAddressingScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -317,6 +319,75 @@ function(mgl_itest_join_environment outVar)
     endforeach()
     set(${outVar} "${joined}" PARENT_SCOPE)
 endfunction()
+
+# --- what THIS TREE implements, answered by the build rather than by a person ----------
+#
+# Two P2 entries assert something that only EXISTS once another P2 package has landed:
+# HandleRecycleScenario's Handles arm needs a backend keyed on {slot, gen} (packages C and D),
+# its AbaControl arm needs a consumer for MOBILEGL_PIPE_HANDLE_ABA_CONTROL (package D), and
+# CsoContentAddressingScenario needs the client-side tracker that mints CSOs at all (package B).
+# The gates package is written and merged FIRST, against the P2 contract commit, precisely so
+# that the AbaControl red is on the record before either backend is touched - so for a while
+# those entries have nothing to assert.
+#
+# The honest report for that is a SKIP naming what is missing, never a deleted registration and
+# never a green that means "the thing I test does not exist yet". What decides the skip is
+# THIS block, so that nobody has to remember to remove a hand-written guard:
+#
+#   * two of the three answers are pure EXISTENCE checks, through file(GLOB CONFIGURE_DEPENDS).
+#     Ninja re-evaluates such a glob before every build and reconfigures only when the RESULT
+#     changes, so these cost nothing until the file appears - and then they arm themselves.
+#   * the third has to read a file's CONTENTS, because package D re-keys inside an existing
+#     source rather than adding one. VertexInputStateFactory.cpp is the one file both of D's
+#     answers live in (ComputeHash's buffer key is what the re-key changes AND what the ABA
+#     knob reverts), it is small, and it is watched by name - so an edit to it reconfigures and
+#     an edit anywhere else in the backend does not.
+#
+# Every verdict is printed at configure time: a marker that silently answered "no" for a tree
+# that does implement the thing would turn a real gate into a permanent skip.
+set(MGL_ITEST_CAPABILITY_ENV "")
+
+file(GLOB MGL_ITEST_ESPRYT_SLOT_TABLES CONFIGURE_DEPENDS
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectGLES/SlotTables.h")
+if (MGL_ITEST_ESPRYT_SLOT_TABLES)
+    message(STATUS "Integration tests: DirectGLES is keyed on {slot, gen} (SlotTables.h present)")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectGLES=1")
+else()
+    message(STATUS "Integration tests: DirectGLES has no SlotTables.h - HandleRecycle.Handles will SKIP on it")
+endif()
+
+file(GLOB MGL_ITEST_TRACKER_SOURCE CONFIGURE_DEPENDS
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe/Tracker.cpp")
+if (MGL_ITEST_TRACKER_SOURCE)
+    message(STATUS "Integration tests: the MGPipe tracker is present, so CSOs are minted")
+    list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_TRACKER_PRESENT=1")
+else()
+    message(STATUS "Integration tests: no MG_Impl/Pipe/Tracker.cpp - CsoContentAddressing will SKIP")
+endif()
+
+set(MGL_ITEST_MAGMA_VERTEX_INPUT
+    "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan/Renderer/VertexInputStateFactory.cpp")
+if (EXISTS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MGL_ITEST_MAGMA_VERTEX_INPUT}")
+    file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_REKEY_HITS
+        REGEX "kMGPipeSubsystemMagmaVertexInput")
+    file(STRINGS "${MGL_ITEST_MAGMA_VERTEX_INPUT}" MGL_ITEST_MAGMA_ABA_HITS
+        REGEX "PipeHandleAbaControl")
+    if (MGL_ITEST_MAGMA_REKEY_HITS)
+        message(STATUS "Integration tests: DirectVulkan's vertex input is keyed on {slot, gen}")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_REKEY_DirectVulkan=1")
+    else()
+        message(STATUS "Integration tests: DirectVulkan's vertex input is not re-keyed yet - "
+                       "HandleRecycle.Handles will SKIP on it")
+    endif()
+    if (MGL_ITEST_MAGMA_ABA_HITS)
+        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has a consumer")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_HANDLE_ABA_IMPLEMENTED=1")
+    else()
+        message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL has no consumer - "
+                       "HandleRecycle.AbaControl will SKIP")
+    endif()
+endif()
 
 mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" ${MGL_ITEST_COMMON_ENV})
@@ -665,6 +736,162 @@ gtest_discover_tests(MobileGLIntegrationTest
 #     why the arming case has a lane and a log of its own below, and why neither this file nor CI
 #     may read the ambient logs as evidence about the entries that ran before the last one. The
 #     ambient path is kept for post-mortems (and to keep library chatter out of ctest's capture).
+# --- G8: the handle ABA, three always-on arms -----------------------------------------
+#
+# ALWAYS ON, in every build mode, which is deliberate: the Legacy arm asserts today's
+# lifetimeId + weak_ptr guards and is meaningful in a pull build, and `ctest -R HandleRecycle`
+# has to name the same entries whichever build directory it is pointed at (P2 brief G8 runs it
+# against build-verify; D.3 part 1 runs it again as part of the interface-purity gate).
+#
+# One lane per arm, and each lane names MGITEST_HANDLE_ARM: the arm is not a property of the
+# test body, it is the (MOBILEGL_PIPE_PUSH, MOBILEGL_PIPE_LEGACY_MEMOS, MOBILEGL_PIPE_HANDLE_ABA_CONTROL)
+# triple the process was launched with, and the scenario skips in the ambient entries because
+# none of that is configured there.
+#
+# Every list APPENDS the common/Vulkan environment for the reason spelled out above the verify
+# block: a ctest ENVIRONMENT property REPLACES the job environment for the names it lists, so an
+# entry naming only its own knobs would lose the EGL vendor and Vulkan ICD pinning.
+#
+# The AbaControl arm is DirectVulkan only. The knob reverts two DirectVulkan guards
+# (VertexInputStateFactory::ComputeHash's key and LookupVaoDrawMemo's lifetimeId compare); it
+# steers nothing on DirectGLES, and a lane that configured it there would be a permanent skip
+# claiming to be a control.
+mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=handles" "MOBILEGL_PIPE_LEGACY_MEMOS=0"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=handles" "MOBILEGL_PIPE_LEGACY_MEMOS=0"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_LEGACY_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_HANDLE_ARM=legacy" "MOBILEGL_PIPE_PUSH=0"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=legacy" "MOBILEGL_PIPE_PUSH=0"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba" "MOBILEGL_PIPE_PUSH=0"
+    "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.HandleRecycle.Handles."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.HandleRecycle.Handles."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.HandleRecycle.Legacy."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_HANDLE_LEGACY_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.HandleRecycle.Legacy."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.HandleRecycle.AbaControl."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT}"
+)
+
+# --- G12: the CSO content-addressing negative control ---------------------------------
+#
+# PUSH BUILDS ONLY, and that is the honest scope rather than a convenience: the two counters the
+# control reads (CallClass::RenderStateCsoMints / RenderStateCsoBinds) and the `cso[...]` bracket
+# of the summary line are both `#if MOBILEGL_PIPE_PUSH` (PipeStats.h, PipeStats.cpp), so in a pull
+# build there is no channel to read and an entry here would be a permanent skip.
+#
+# Each arm gets a LOG PATH OF ITS OWN. The library opens its log fopen(path, "w") - every process
+# in a lane truncates it - and these two cases READ that log, so a shared path would have them
+# reading a neighbour's bring-up under `ctest -j 4`. Same rule as the arming lane below.
+#
+# MOBILEGL_PIPE_STATS_PERIOD=1 makes one summary line per eglSwapBuffers, which is what lets the
+# workload be bracketed by two swaps and read back as a window covering exactly itself.
+if (MOBILEGL_PIPE_PUSH)
+    mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
+        "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectGLES.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=no-content-addressing"
+        "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectGLES.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=content-addressed"
+        "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectVulkan.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+    mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
+        "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=no-content-addressing"
+        "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+        "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
+        ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.CsoContentAddressing.On."
+        TEST_FILTER "CsoContentAddressingScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS integration-gpu
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_CSO_ON_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectGLES.CsoContentAddressing.Off."
+        TEST_FILTER "CsoContentAddressingScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS integration-gpu
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.CsoContentAddressing.On."
+        TEST_FILTER "CsoContentAddressingScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS integration-gpu
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT}"
+    )
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.CsoContentAddressing.Off."
+        TEST_FILTER "CsoContentAddressingScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES
+            LABELS integration-gpu
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}"
+    )
+endif()
+
 if (MOBILEGL_PIPE_VERIFY)
     # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
     # boundary and again at every accessor read, which the design budgets at 5-10x.
