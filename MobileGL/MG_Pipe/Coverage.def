@@ -141,6 +141,16 @@
 // The one row whose call differs from the accessor list's is GetPrimitiveRestartIndex:
 // coverage maps it onto draw_vbo because that is where a backend reads it, but the VALUE
 // travels in dynamic chunk D6, so set_dynamic_state is what supplies it.
+//
+// GetPixelStoreParameters is DELIBERATELY ABSENT, and the reason is the shape of the field
+// rather than of the call. The field is PipeInputs::m_pixelStore[2] - pack AND unpack - and
+// set_pixel_pack_state carries the PACK half only, deliberately and permanently (D10,
+// ARCHITECTURE.md 4.6 D5: nothing on the far side of the boundary reads unpack state). A row
+// here says "this field is supplied, the fill loop may skip it", which would be a half-truth:
+// the moment the render-state bitmask has its bit set, the unpack half would be written by
+// nothing while its poison stamp said it was published, so neither the poison nor the verify
+// comparator could see it. Until the field is split, the whole of it keeps going through the
+// fill loop and the pack half is simply written twice.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
     X(GetBlendColor,                            SetDynamicState)         \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
@@ -162,7 +172,6 @@
     X(GetPatchDefaultOuterLevel,                SetPatchState)           \
     X(GetPatchVertices,                         SetPatchState)           \
     X(GetPipelineStateVersion,                  BindRenderState)         \
-    X(GetPixelStoreParameters,                  SetPixelPackState)       \
     X(GetPolygonModeFront,                      CreateRenderState)       \
     X(GetPolygonOffsetFactor,                   SetDynamicState)         \
     X(GetPolygonOffsetUnits,                    SetDynamicState)         \

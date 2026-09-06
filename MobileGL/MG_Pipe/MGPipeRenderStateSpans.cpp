@@ -182,7 +182,7 @@ namespace MobileGL::MG_Pipe {
 
     Uint64 MGPipeHashPipelineBytes(const void* bytes) {
         return static_cast<Uint64>(
-            XXH64(bytes, kMGPipePipelineChunkBytes, kMGPipeRenderStateChunkTableVersion));
+            XXH64(bytes, kMGPipePipelineChunkBytes, kMGPipeRenderStateChunkTableSeed));
     }
 
     Uint64 MGPipeComputePipelineSubsetHash(const RenderStateParameters& params) {

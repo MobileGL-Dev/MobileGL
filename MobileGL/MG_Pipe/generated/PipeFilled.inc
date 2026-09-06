@@ -309,7 +309,6 @@ enum class MGPipeFieldEmitter : Uint8 {
     CreateRenderState,
     SetDynamicState,
     SetPatchState,
-    SetPixelPackState,
     SetVertexAttribDefaults,
 };
 
@@ -319,7 +318,6 @@ inline constexpr const char* kMGPipeFieldEmitterNames[] = {
     "CreateRenderState",
     "SetDynamicState",
     "SetPatchState",
-    "SetPixelPackState",
     "SetVertexAttribDefaults",
 };
 
@@ -354,7 +352,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultOuterLevel
     MGPipeFieldEmitter::SetPatchState, // GetPatchVertices
     MGPipeFieldEmitter::BindRenderState, // GetPipelineStateVersion
-    MGPipeFieldEmitter::SetPixelPackState, // GetPixelStoreParameters
+    MGPipeFieldEmitter::kNone, // GetPixelStoreParameters
     MGPipeFieldEmitter::CreateRenderState, // GetPolygonModeFront
     MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetFactor
     MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetUnits
@@ -388,7 +386,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
 };
-inline constexpr SizeT kMGPipeEmittedFieldCount = 34;
+inline constexpr SizeT kMGPipeEmittedFieldCount = 33;
 
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;

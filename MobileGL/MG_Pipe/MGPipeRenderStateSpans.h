@@ -135,10 +135,27 @@ namespace MobileGL::MG_Pipe {
     inline constexpr SizeT kMGPipePipelineChunkBytes = MGPipeRenderStateChunkDetail::BytesOfHalf(true);
     inline constexpr SizeT kMGPipeDynamicChunkBytes = MGPipeRenderStateChunkDetail::BytesOfHalf(false);
 
-    // Seeds MGPipeComputePipelineSubsetHash, so a chunk-table change invalidates every
-    // persisted key rather than silently aliasing an old one. BUMP IT whenever a boundary,
-    // an ordering or the halves' membership moves.
+    // Bumped by hand when something about the table changes that its BYTES do not show -
+    // the halves' membership, the meaning of a chunk, the gather order.
     inline constexpr Uint64 kMGPipeRenderStateChunkTableVersion = 1;
+
+    // What actually seeds MGPipeComputePipelineSubsetHash. The version above is a promise a
+    // reader has to keep; this is the part that keeps itself. Folding the boundary table into
+    // the seed means a moved boundary invalidates every persisted key whether or not anyone
+    // remembered to bump the version - and it does so WITHOUT a static_assert on the
+    // boundaries, which would turn G7's negative control (which moves a boundary on purpose
+    // and must still compile) into a build break.
+    namespace MGPipeRenderStateChunkDetail {
+        constexpr Uint64 BoundaryChecksum() {
+            Uint64 hash = 0xcbf29ce484222325ull; // FNV-1a, 64-bit
+            for (SizeT i = 0; i <= kMGPipeRenderStateChunkCount; ++i) {
+                hash = (hash ^ static_cast<Uint64>(kMGPipeRenderStateChunkBoundaries[i])) * 0x100000001b3ull;
+            }
+            return hash;
+        }
+    } // namespace MGPipeRenderStateChunkDetail
+    inline constexpr Uint64 kMGPipeRenderStateChunkTableSeed =
+        kMGPipeRenderStateChunkTableVersion ^ MGPipeRenderStateChunkDetail::BoundaryChecksum();
 
     // ---- the trip wires. A mistake in the table is a build break, here. ----
     static_assert(kMGPipeRenderStateChunkBoundaries[0] == 0,
