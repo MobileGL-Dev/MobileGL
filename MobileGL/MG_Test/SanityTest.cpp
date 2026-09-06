@@ -3132,3 +3132,169 @@ TEST(GetterSanity, CombinedUniformComponentsSaturateInsteadOfOverflowing) {
 
     MG_State::pGLContext.reset();
 }
+
+
+#if MOBILEGL_PIPE_PUSH
+namespace {
+    // A stand-in frontend object for the twin table. It carries the one thing the table asks of a
+    // state object - GetLifetimeId() - so these cases can pin the identity contract without a
+    // GLContext, a driver or a backend twin that would want ES entry points.
+    struct FakeStateObject {
+        explicit FakeStateObject(MobileGL::Uint64 lifetimeId): m_lifetimeId(lifetimeId) {}
+        MobileGL::Uint64 GetLifetimeId() const { return m_lifetimeId; }
+
+    private:
+        MobileGL::Uint64 m_lifetimeId;
+    };
+
+    struct FakeBackendObject {
+        int marker = 0;
+    };
+
+    // Kind Query is unused by every shipping path, so these cases cannot disturb the slot space
+    // any real twin table allocates out of.
+    using FakeSlotTable = MobileGL::MG_Backend::DirectGLES::
+        BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Query>;
+} // namespace
+
+// The property the whole slice exists for. The pre-P2 registry keyed twins on the frontend heap
+// ADDRESS and defended the recycle with a weak_ptr; here the key is {slot, gen}, so a successor
+// object landing on a slot its predecessor owned is a DIFFERENT handle, and the predecessor's
+// handle resolves to nothing rather than to the successor's twin.
+TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothing) {
+    using namespace MobileGL;
+
+    FakeSlotTable table;
+    auto first = MakeShared<FakeStateObject>(0xA1u);
+    table.GetOrCreate(first) = MakeShared<FakeBackendObject>();
+    (*table.Find(first.get()))->marker = 1;
+
+    const MG_Pipe::MGPipeHandle firstHandle = table.HandleOf(first.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle));
+    EXPECT_EQ(table.LiveCount(), 1u);
+
+    // The frontend object dies and the slot is reclaimed - which is the only moment Gen moves.
+    first.reset();
+    table.CollectGarbageNow();
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(table.FindByHandle(firstHandle), nullptr)
+        << "a handle whose object is gone still resolved to a twin";
+
+    auto second = MakeShared<FakeStateObject>(0xA2u);
+    table.GetOrCreate(second) = MakeShared<FakeBackendObject>();
+    (*table.Find(second.get()))->marker = 2;
+
+    const MG_Pipe::MGPipeHandle secondHandle = table.HandleOf(second.get());
+    EXPECT_EQ(secondHandle.Slot, firstHandle.Slot) << "the free list did not hand the slot back";
+    EXPECT_NE(secondHandle.Gen, firstHandle.Gen) << "the generation did not move on slot reuse";
+    EXPECT_FALSE(firstHandle == secondHandle);
+
+    // The stale handle must not resolve to its successor's twin. This is the ABA the address key
+    // could only paper over.
+    EXPECT_EQ(table.FindByHandle(firstHandle), nullptr);
+    ASSERT_NE(table.FindByHandle(secondHandle), nullptr);
+    EXPECT_EQ((*table.FindByHandle(secondHandle))->marker, 2);
+}
+
+// Gen moves on reuse and ONLY on reuse: a live object that is looked up again, or respecified,
+// keeps the handle it was minted with (MGPipeHandles.h).
+TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
+    using namespace MobileGL;
+
+    FakeSlotTable table;
+    auto object = MakeShared<FakeStateObject>(0xB1u);
+    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
+
+    for (int i = 0; i < 8; ++i) {
+        auto* slot = table.GetOrCreate(object) ? table.Find(object.get()) : nullptr;
+        ASSERT_NE(slot, nullptr);
+        EXPECT_TRUE(table.HandleOf(object.get()) == handle) << "handle moved on lookup " << i;
+    }
+    EXPECT_EQ(table.LiveCount(), 1u);
+}
+
+// The lookup does not mutate the table, which is what lets SyncTextureObjectToBackend stop paying
+// a by-value copy plus a second Find to survive the registry's erase-inside-Find. A dead entry
+// stays put until the sweep, and a live entry's pointer is unaffected by looking up anything else.
+TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
+    using namespace MobileGL;
+
+    FakeSlotTable table;
+    auto kept = MakeShared<FakeStateObject>(0xC1u);
+    auto doomed = MakeShared<FakeStateObject>(0xC2u);
+    table.GetOrCreate(kept) = MakeShared<FakeBackendObject>();
+    table.GetOrCreate(doomed) = MakeShared<FakeBackendObject>();
+
+    auto* keptSlot = table.Find(kept.get());
+    ASSERT_NE(keptSlot, nullptr);
+    const FakeBackendObject* keptTwin = keptSlot->get();
+
+    doomed.reset();
+    // The registry's Find would have erased the expired entry here and relocated the rest of the
+    // probe cluster, invalidating keptSlot. This one answers null and touches nothing.
+    EXPECT_EQ(table.Find(kept.get()), keptSlot);
+    EXPECT_EQ(table.LiveCount(), 2u) << "Find reclaimed a slot; only the sweep may do that";
+    EXPECT_EQ(keptSlot->get(), keptTwin);
+
+    table.CollectGarbageNow();
+    EXPECT_EQ(table.LiveCount(), 1u);
+    EXPECT_EQ(table.Find(kept.get())->get(), keptTwin);
+}
+
+// ScopedDirectGLESTextureBindings saves a whole twin table by value, resets it with `= {}` and
+// restores it. The slot table has to keep that shape or the fixture stops isolating anything.
+TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
+    using namespace MobileGL;
+
+    FakeSlotTable table;
+    auto object = MakeShared<FakeStateObject>(0xD1u);
+    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    (*table.Find(object.get()))->marker = 7;
+
+    const FakeSlotTable saved = table;
+    table = {};
+    EXPECT_EQ(table.Find(object.get()), nullptr) << "the reset left the twin reachable";
+
+    table = saved;
+    ASSERT_NE(table.Find(object.get()), nullptr);
+    EXPECT_EQ((*table.Find(object.get()))->marker, 7);
+}
+
+// The whole point of routing every twin through the client allocator: a table that keeps its own
+// dense array still shares ONE identity per frontend object with every other holder of it.
+TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindAgreeOnOneObjectsHandle) {
+    using namespace MobileGL;
+
+    FakeSlotTable a;
+    FakeSlotTable b;
+    auto object = MakeShared<FakeStateObject>(0xE1u);
+    a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+
+    EXPECT_TRUE(a.HandleOf(object.get()) == b.HandleOf(object.get()));
+}
+#else
+// G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
+// exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
+// skips visibly - a vanishing test is exactly what that gate is there to stop.
+TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothing) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindAgreeOnOneObjectsHandle) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+#endif // MOBILEGL_PIPE_PUSH
