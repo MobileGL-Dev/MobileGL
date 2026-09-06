@@ -173,6 +173,63 @@ namespace MobileGL::MG_Pipe {
     static_assert(kMGPipePipelineChunkBytes == 396, "the pipeline subset is 396 bytes");
     static_assert(kMGPipeDynamicChunkBytes == 772, "the dynamic subset is 772 bytes");
 
+    // ---- global chunk bits, so nothing downstream hand-maintains a second table ----
+
+    // The GLOBAL chunk indices (bit i is chunk i of the 15) whose byte range overlaps
+    // [offset, offset + size). It falls straight out of the boundary table, which is the
+    // whole point: the applier scopes its derivation by the chunks a scatter actually moved
+    // (D5/D8), and a hand-written member -> chunk mapping is exactly the second table that
+    // would go stale the first time a boundary moves.
+    constexpr Uint32 MGPipeRenderStateChunkBitsCovering(SizeT offset, SizeT size) {
+        Uint32 bits = 0;
+        for (SizeT i = 0; i < kMGPipeRenderStateChunkCount; ++i) {
+            const SizeT begin = kMGPipeRenderStateChunkBoundaries[i];
+            const SizeT end = kMGPipeRenderStateChunkBoundaries[i + 1];
+            if (offset < end && begin < offset + size) bits |= Uint32{1} << i;
+        }
+        return bits;
+    }
+
+    // The wire masks are HALF-LOCAL (bit i of MGPRenderStateDesc::ChunkMask is pipeline chunk
+    // i); these widen them to the global indices the boundary table is written in. The
+    // halves alternate with chunk 0 dynamic, so the two conversions are arithmetic.
+    constexpr Uint32 MGPipeGlobalChunkBitsOfPipelineMask(Uint32 pipelineMask) {
+        Uint32 bits = 0;
+        for (SizeT i = 0; i < kMGPipePipelineChunkCount; ++i) {
+            if (((pipelineMask >> i) & 1u) != 0) bits |= Uint32{1} << (i * 2 + 1);
+        }
+        return bits;
+    }
+    constexpr Uint32 MGPipeGlobalChunkBitsOfDynamicMask(Uint32 dynamicMask) {
+        Uint32 bits = 0;
+        for (SizeT i = 0; i < kMGPipeDynamicChunkCount; ++i) {
+            if (((dynamicMask >> i) & 1u) != 0) bits |= Uint32{1} << (i * 2);
+        }
+        return bits;
+    }
+    inline constexpr Uint32 kMGPipeAllGlobalChunks =
+        static_cast<Uint32>((Uint64{1} << kMGPipeRenderStateChunkCount) - 1);
+
+    // The two conversions must agree with MGPipeRenderStateChunkIsPipeline, and together they
+    // must cover the table exactly - a widening that dropped or doubled a chunk would make
+    // the applier's scoping silently wrong rather than loud.
+    namespace MGPipeRenderStateChunkDetail {
+        inline constexpr Uint32 kAllPipelineHalfBits =
+            static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+        inline constexpr Uint32 kAllDynamicHalfBits =
+            static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+        inline constexpr Uint32 kWidenedPipeline = MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineHalfBits);
+        inline constexpr Uint32 kWidenedDynamic = MGPipeGlobalChunkBitsOfDynamicMask(kAllDynamicHalfBits);
+    } // namespace MGPipeRenderStateChunkDetail
+    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline &
+                   MGPipeRenderStateChunkDetail::kWidenedDynamic) == 0,
+                  "the two half-local -> global widenings must not overlap");
+    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline |
+                   MGPipeRenderStateChunkDetail::kWidenedDynamic) == kMGPipeAllGlobalChunks,
+                  "the two half-local -> global widenings must cover the whole chunk table");
+    static_assert(MGPipeRenderStateChunkBitsCovering(0, sizeof(RenderStateParameters)) == kMGPipeAllGlobalChunks,
+                  "every chunk must be covered by the whole block");
+
     // ---- the operations everything else is written against ----
 
     // The 396 pipeline bytes of `params`, in ascending chunk order, into `dst`.

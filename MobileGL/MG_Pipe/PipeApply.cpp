@@ -20,7 +20,80 @@
 #include <cstdlib>
 #include <cstring>
 
+// The 25 capabilities whose storage is a plain `<Name>Enabled` bool. Written ONCE and used
+// twice - once for the switch arms of DeriveCapability and once for the chunk set that guards
+// the capability walk - so the two cannot drift apart. The three P2 gave storage to
+// (DepthClamp, FramebufferSrgb, TextureCubeMapSeamless) are in the list like any other; the
+// three that are NOT are Blend (BlendStates[i].Enabled), ScissorTest (a 16-bit mask) and the
+// eight ClipDistances (an 8-bit mask), each handled by name below.
+#define MGP_PLAIN_CAPABILITY_LIST(X)                                                                                   \
+    X(ColorLogicOp)                                                                                                    \
+    X(DebugOutput)                                                                                                     \
+    X(DebugOutputSynchronous)                                                                                          \
+    X(DepthClamp)                                                                                                      \
+    X(DepthTest)                                                                                                       \
+    X(CullFace)                                                                                                        \
+    X(Dither)                                                                                                          \
+    X(FramebufferSrgb)                                                                                                 \
+    X(LineSmooth)                                                                                                      \
+    X(Multisample)                                                                                                     \
+    X(PolygonOffsetFill)                                                                                               \
+    X(PolygonOffsetLine)                                                                                               \
+    X(PolygonOffsetPoint)                                                                                              \
+    X(PolygonSmooth)                                                                                                   \
+    X(PrimitiveRestart)                                                                                                \
+    X(PrimitiveRestartFixedIndex)                                                                                      \
+    X(RasterizerDiscard)                                                                                               \
+    X(SampleAlphaToCoverage)                                                                                           \
+    X(SampleAlphaToOne)                                                                                                \
+    X(SampleCoverage)                                                                                                  \
+    X(SampleMask)                                                                                                      \
+    X(SampleShading)                                                                                                   \
+    X(StencilTest)                                                                                                     \
+    X(TextureCubeMapSeamless)                                                                                          \
+    X(ProgramPointSize)
+
 namespace MobileGL::MG_Pipe {
+    namespace {
+        // ----------------------------------------------------------------------------
+        // WHICH CHUNKS EACH DERIVATION READS.
+        //
+        // The derivation is called after every scatter, and a scatter usually moves ONE
+        // chunk: a per-frame glViewport sends dynamic chunk D0 and nothing else (D8). So the
+        // three wide loops and the 35-arm capability switch are guarded by the chunks whose
+        // bytes they read, and a scatter that did not touch those bytes does not pay for them.
+        //
+        // Nothing here is hand-mapped. Every constant is
+        // MGPipeRenderStateChunkBitsCovering(offsetof(member), sizeof(member)) over the
+        // members the guarded block actually reads, so the ONLY claim a reader has to check
+        // is "does this block read anything else?" - and a boundary move re-computes the
+        // guards rather than invalidating them.
+        // ----------------------------------------------------------------------------
+        using RSP = RenderStateParameters;
+#define MGP_CHUNKS_OF(member) MGPipeRenderStateChunkBitsCovering(offsetof(RSP, member), sizeof(RSP::member))
+
+        // The per-draw-buffer loop reads BlendStates (equations, factors, Enabled) and
+        // ColorMasks, and nothing else.
+        constexpr Uint32 kChunksBlendLoop = MGP_CHUNKS_OF(BlendStates) | MGP_CHUNKS_OF(ColorMasks);
+        // m_viewportIndexed[16] and the rounded m_viewport both read Viewports, and nothing else.
+        constexpr Uint32 kChunksViewportLoop = MGP_CHUNKS_OF(Viewports);
+        constexpr Uint32 kChunksDepthRangeLoop = MGP_CHUNKS_OF(DepthRanges);
+        constexpr Uint32 kChunksScissorEnableLoop = MGP_CHUNKS_OF(ScissorTestEnabledMask);
+        // DeriveCapability's sources: the 25 plain bools, plus the three masks/arrays the
+        // three special arms read.
+#define MGP_CAPABILITY_CHUNKS(capability) | MGP_CHUNKS_OF(capability##Enabled)
+        constexpr Uint32 kChunksCapabilityWalk = MGP_CHUNKS_OF(BlendStates) |
+                                                 MGP_CHUNKS_OF(ScissorTestEnabledMask) |
+                                                 MGP_CHUNKS_OF(ClipDistanceEnabledMask)
+                                                     MGP_PLAIN_CAPABILITY_LIST(MGP_CAPABILITY_CHUNKS);
+#undef MGP_CAPABILITY_CHUNKS
+
+        // The scalar copies are left unguarded on purpose: they are ~20 stores and two
+        // 28-byte struct copies, so guarding each would cost more branches than it saves
+        // stores - and an unguarded copy cannot go stale, which keeps the risk of the scoping
+        // confined to the four guards above.
+#undef MGP_CHUNKS_OF
+    } // namespace
 
     // The applier's door into PipeInputs' storage, the write-side twin of PipeFill.cpp's
     // MGPipeFillAccess. It does NOT stamp the poison generations: a stamp says "the filler
@@ -76,31 +149,7 @@ namespace MobileGL::MG_Pipe {
     case CapabilityInput::capability:                                                                                  \
         return p.capability##Enabled;
             switch (cap) {
-                MGP_DERIVE_CAPABILITY(ColorLogicOp)
-                MGP_DERIVE_CAPABILITY(DebugOutput)
-                MGP_DERIVE_CAPABILITY(DebugOutputSynchronous)
-                MGP_DERIVE_CAPABILITY(DepthClamp)
-                MGP_DERIVE_CAPABILITY(DepthTest)
-                MGP_DERIVE_CAPABILITY(CullFace)
-                MGP_DERIVE_CAPABILITY(Dither)
-                MGP_DERIVE_CAPABILITY(FramebufferSrgb)
-                MGP_DERIVE_CAPABILITY(LineSmooth)
-                MGP_DERIVE_CAPABILITY(Multisample)
-                MGP_DERIVE_CAPABILITY(PolygonOffsetFill)
-                MGP_DERIVE_CAPABILITY(PolygonOffsetLine)
-                MGP_DERIVE_CAPABILITY(PolygonOffsetPoint)
-                MGP_DERIVE_CAPABILITY(PolygonSmooth)
-                MGP_DERIVE_CAPABILITY(PrimitiveRestart)
-                MGP_DERIVE_CAPABILITY(PrimitiveRestartFixedIndex)
-                MGP_DERIVE_CAPABILITY(RasterizerDiscard)
-                MGP_DERIVE_CAPABILITY(SampleAlphaToCoverage)
-                MGP_DERIVE_CAPABILITY(SampleAlphaToOne)
-                MGP_DERIVE_CAPABILITY(SampleCoverage)
-                MGP_DERIVE_CAPABILITY(SampleMask)
-                MGP_DERIVE_CAPABILITY(SampleShading)
-                MGP_DERIVE_CAPABILITY(StencilTest)
-                MGP_DERIVE_CAPABILITY(TextureCubeMapSeamless)
-                MGP_DERIVE_CAPABILITY(ProgramPointSize)
+                MGP_PLAIN_CAPABILITY_LIST(MGP_DERIVE_CAPABILITY)
             // The non-indexed query of an INDEXED capability answers for index 0
             // (GL 4.6 core 22.1) - RenderState.cpp says it in the same words.
             case CapabilityInput::Blend:
@@ -126,40 +175,57 @@ namespace MobileGL::MG_Pipe {
 #undef MGP_DERIVE_CAPABILITY
         }
 
-        static void DeriveRenderStateFields(PipeInputs& inputs) {
+        // `chunkBits` names the GLOBAL chunks the scatter that called this actually moved;
+        // kMGPipeAllGlobalChunks is the whole-block form. See the guard constants at the top
+        // of this file for why the four wide walks are scoped and the scalars are not.
+        static void DeriveRenderStateFields(PipeInputs& inputs, Uint32 chunkBits) {
             const RenderStateParameters& p = inputs.m_renderState;
 
             // Per draw buffer: GetBlendEquationIndexed, GetBlendFuncIndexed,
             // GetColorMaskIndexed and IsCapabilityEnabledIndexed(Blend).
-            for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
-                const PerBufferBlendState& blend = p.BlendStates[i];
-                inputs.m_blendEquation[i][0] = blend.ColorEquation;
-                inputs.m_blendEquation[i][1] = blend.AlphaEquation;
-                inputs.m_blendFunc[i][0] = blend.SrcFactorRGB;
-                inputs.m_blendFunc[i][1] = blend.DstFactorRGB;
-                inputs.m_blendFunc[i][2] = blend.SrcFactorAlpha;
-                inputs.m_blendFunc[i][3] = blend.DstFactorAlpha;
-                inputs.m_colorMask[i] = p.ColorMasks[i];
-                inputs.m_capabilityIndexed.Blend[i] = blend.Enabled;
+            if ((chunkBits & kChunksBlendLoop) != 0) {
+                for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
+                    const PerBufferBlendState& blend = p.BlendStates[i];
+                    inputs.m_blendEquation[i][0] = blend.ColorEquation;
+                    inputs.m_blendEquation[i][1] = blend.AlphaEquation;
+                    inputs.m_blendFunc[i][0] = blend.SrcFactorRGB;
+                    inputs.m_blendFunc[i][1] = blend.DstFactorRGB;
+                    inputs.m_blendFunc[i][2] = blend.SrcFactorAlpha;
+                    inputs.m_blendFunc[i][3] = blend.DstFactorAlpha;
+                    inputs.m_colorMask[i] = p.ColorMasks[i];
+                    inputs.m_capabilityIndexed.Blend[i] = blend.Enabled;
+                }
             }
 
-            // Per viewport: GetViewportIndexed, GetDepthRangeIndexed and
-            // IsCapabilityEnabledIndexed(ScissorTest).
-            for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
-                inputs.m_viewportIndexed[i] = p.Viewports[i];
-                inputs.m_depthRange[i] = p.DepthRanges[i];
-                inputs.m_capabilityIndexed.ScissorTest[i] = (p.ScissorTestEnabledMask & (1u << i)) != 0;
+            // GetViewportIndexed, and GetViewport: viewport 0 ROUNDED - the other derivation
+            // that is not a field copy. glGetIntegerv on floating-point state rounds to
+            // nearest (GL 4.6 core 22.2), and truncating a 63.5-wide viewport would also hand
+            // the backends a rectangle one pixel short of what was asked for. std::lround,
+            // exactly as RenderState::GetViewport does it.
+            if ((chunkBits & kChunksViewportLoop) != 0) {
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    inputs.m_viewportIndexed[i] = p.Viewports[i];
+                }
+                const FloatVec4& viewport = p.Viewports[0];
+                inputs.m_viewport =
+                    IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
+                            static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
             }
 
-            // GetViewport: viewport 0 ROUNDED - the other derivation that is not a field
-            // copy. glGetIntegerv on floating-point state rounds to nearest (GL 4.6 core
-            // 22.2), and truncating a 63.5-wide viewport would also hand the backends a
-            // rectangle one pixel short of what was asked for. std::lround, exactly as
-            // RenderState::GetViewport does it.
-            const FloatVec4& viewport = p.Viewports[0];
-            inputs.m_viewport =
-                IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
-                        static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
+            // GetDepthRangeIndexed. Its own chunk (D2) - a glClearColor moves that chunk and
+            // a glViewport does not, so it cannot ride with the viewports.
+            if ((chunkBits & kChunksDepthRangeLoop) != 0) {
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    inputs.m_depthRange[i] = p.DepthRanges[i];
+                }
+            }
+
+            // IsCapabilityEnabledIndexed(ScissorTest): 16 bits of one pipeline word.
+            if ((chunkBits & kChunksScissorEnableLoop) != 0) {
+                for (Uint i = 0; i < PipeInputs::kMaxViewports; ++i) {
+                    inputs.m_capabilityIndexed.ScissorTest[i] = (p.ScissorTestEnabledMask & (1u << i)) != 0;
+                }
+            }
 
             // The scalar copies, in the order MGP_COVERAGE_EMITTED_LIST names them.
             inputs.m_blendColor = p.BlendColor;
@@ -192,8 +258,12 @@ namespace MobileGL::MG_Pipe {
                 inputs.m_stencil[face] = p.StencilStates[face];
             }
 
-            for (SizeT i = 0; i < PipeInputs::kCapabilityCount; ++i) {
-                inputs.m_capability[i] = DeriveCapability(p, static_cast<CapabilityInput>(i));
+            // The 35-arm switch, dispatched 35 times. The widest single thing the derivation
+            // does, and the one a per-frame glViewport most obviously must not pay for.
+            if ((chunkBits & kChunksCapabilityWalk) != 0) {
+                for (SizeT i = 0; i < PipeInputs::kCapabilityCount; ++i) {
+                    inputs.m_capability[i] = DeriveCapability(p, static_cast<CapabilityInput>(i));
+                }
             }
         }
     };
@@ -314,7 +384,10 @@ namespace MobileGL::MG_Pipe {
                                    MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateVersions(inputs, bind.Version, bind.PipelineVersion);
         g_applier.BoundRenderStateCso = bind.Cso;
-        MGPipeDeriveRenderStateFields(inputs);
+        // A bind scatters the WHOLE pipeline half - the record is always a complete one,
+        // whatever mask minted it - so the pipeline chunks are all "moved" here.
+        MGPipeDeriveRenderStateFieldsForChunks(
+            inputs, MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineChunks));
     }
 
     void MGPipeApplyDeleteRenderState(const MGPHandleOnly& handle) {
@@ -335,7 +408,7 @@ namespace MobileGL::MG_Pipe {
         PipeInputs& inputs = gPipeInputs;
         MGPipeScatterDynamicChunks(chunkBytes, dyn.ChunkMask, MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateParametersVersion(inputs, dyn.Version);
-        MGPipeDeriveRenderStateFields(inputs);
+        MGPipeDeriveRenderStateFieldsForChunks(inputs, MGPipeGlobalChunkBitsOfDynamicMask(dyn.ChunkMask));
     }
 
     void MGPipeApplySetPixelPackState(const MGPPixelPackState& pack) {
@@ -345,10 +418,50 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplySetPatchState(const MGPPatchState& patch) {
         PipeInputs& inputs = gPipeInputs;
         RenderStateParameters& working = MGPipeApplyAccess::RenderState(inputs);
+        const FloatVec4 outer(patch.Outer[0], patch.Outer[1], patch.Outer[2], patch.Outer[3]);
+        const FloatVec2 inner(patch.Inner[0], patch.Inner[1]);
+
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+        // THE SECOND TRIP WIRE (D6, D10). The patch trio travels TWICE - once in pipeline
+        // chunk P0, because it is pipeline state, and once as set_patch_state, because both
+        // backends bake it into the synthesized control stage from a shader-build path. The
+        // redundancy is the point: if the two carriers ever part, a stale set_patch_state
+        // silently clobbers what bind_render_state scattered and the tessellation levels a
+        // draw uses stop being the ones its CSO was minted for.
+        //
+        // Compared BITWISE, because a NaN outer level is a legal glPatchParameterfv value
+        // (ARCHITECTURE.md 5.2) and must compare equal to itself.
+        //
+        // Only once a CSO has delivered chunk P0: before the first bind_render_state of a
+        // context the working block still holds its defaults, and a set_patch_state that
+        // legitimately precedes the first bind has nothing to agree with yet. That is the
+        // ordering contract this trip wire places on the tracker - within a validate, the
+        // bind comes first.
+        if (!MGPipeHandleIsNull(g_applier.BoundRenderStateCso)) {
+            const Bool agrees = working.PatchVertices == patch.Vertices &&
+                                std::memcmp(&working.PatchDefaultOuterLevel, &outer, sizeof(outer)) == 0 &&
+                                std::memcmp(&working.PatchDefaultInnerLevel, &inner, sizeof(inner)) == 0;
+            if (!agrees) {
+                MGLOG_F("MGPipe: Fatal{PipePatchCarriersDiffer} set_patch_state says vertices=%u "
+                        "outer=(%g,%g,%g,%g) inner=(%g,%g); chunk P0 delivered vertices=%u "
+                        "outer=(%g,%g,%g,%g) inner=(%g,%g)",
+                        patch.Vertices, static_cast<double>(outer.x()), static_cast<double>(outer.y()),
+                        static_cast<double>(outer.z()), static_cast<double>(outer.w()),
+                        static_cast<double>(inner.x()), static_cast<double>(inner.y()), working.PatchVertices,
+                        static_cast<double>(working.PatchDefaultOuterLevel.x()),
+                        static_cast<double>(working.PatchDefaultOuterLevel.y()),
+                        static_cast<double>(working.PatchDefaultOuterLevel.z()),
+                        static_cast<double>(working.PatchDefaultOuterLevel.w()),
+                        static_cast<double>(working.PatchDefaultInnerLevel.x()),
+                        static_cast<double>(working.PatchDefaultInnerLevel.y()));
+                std::abort();
+            }
+        }
+#endif
+
         working.PatchVertices = patch.Vertices;
-        working.PatchDefaultOuterLevel =
-            FloatVec4(patch.Outer[0], patch.Outer[1], patch.Outer[2], patch.Outer[3]);
-        working.PatchDefaultInnerLevel = FloatVec2(patch.Inner[0], patch.Inner[1]);
+        working.PatchDefaultOuterLevel = outer;
+        working.PatchDefaultInnerLevel = inner;
         MGPipeApplyAccess::SetPatchState(inputs, working.PatchVertices, working.PatchDefaultOuterLevel,
                                          working.PatchDefaultInnerLevel);
     }
@@ -391,25 +504,41 @@ namespace MobileGL::MG_Pipe {
         // So the day a later call takes a capability over and forgets to carry it, the two
         // answers part and this says so on the next draw - which is what a migration carrier
         // is for.
-        const Bool* assembled = MGPipeApplyAccess::Capabilities(gPipeInputs);
+        //
+        // The comparison reads the WORKING BLOCK, not PipeInputs::m_capability. Those two
+        // agree after any scatter - the derivation is what puts the block's answer there -
+        // but m_capability is written ONLY by the derivation, so comparing against it would
+        // make this trip wire depend on a bind_render_state or a set_dynamic_state having
+        // already been applied to this context. The residual block is emitted ONCE PER
+        // CONTEXT (D9) and may legitimately be the first call of all, at which point
+        // m_capability is still all-false while the block's own defaults have Dither and
+        // Multisample true - the trip wire would fire on a context that is perfectly correct.
+        // Asking DeriveCapability the same question the derivation asks removes that ordering
+        // contract without weakening the check by one bit.
+        const RenderStateParameters& working = MGPipeApplyAccess::RenderState(gPipeInputs);
         for (SizeT i = 0; i < kCapabilityCount; ++i) {
             const Bool carried = ((block.CapabilityBits >> i) & 1ull) != 0;
-            if (carried == assembled[i]) continue;
+            const Bool assembledBit = MGPipeApplyAccess::DeriveCapability(working, static_cast<CapabilityInput>(i));
+            if (carried == assembledBit) continue;
 #if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
             MGLOG_F("MGPipe: Fatal{PipeResidualDiverged, \"%s\"} carried=%d assembled=%d",
-                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembled[i]));
+                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembledBit));
             std::abort();
 #else
             MGLOG_E("MGPipe: residual value block diverged on %s (carried=%d assembled=%d)",
-                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembled[i]));
+                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembledBit));
 #endif
         }
     }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
         // The derivation itself lives in MGPipeApplyAccess above, because that is the one
-        // struct PipeInputs names as a friend - see D5 there for what it recomputes, which
-        // getter each line was transcribed from, and why the verify comparator is its guard.
-        MGPipeApplyAccess::DeriveRenderStateFields(inputs);
+        // struct PipeInputs names as a friend - see D5 there for what it recomputes and which
+        // getter each line was transcribed from.
+        MGPipeApplyAccess::DeriveRenderStateFields(inputs, kMGPipeAllGlobalChunks);
+    }
+
+    void MGPipeDeriveRenderStateFieldsForChunks(PipeInputs& inputs, Uint32 globalChunkBits) {
+        MGPipeApplyAccess::DeriveRenderStateFields(inputs, globalChunkBits);
     }
 } // namespace MobileGL::MG_Pipe

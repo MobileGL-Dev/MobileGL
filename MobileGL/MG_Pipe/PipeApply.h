@@ -97,11 +97,25 @@ namespace MobileGL::MG_Pipe {
     // ---------------------------------------------------------------------------------
 
     // Recomputes every PipeInputs field that is a pure function of the working
-    // RenderStateParameters, instead of pulling it out of GLContext a second time. Called by
-    // the applier after ANY scatter.
+    // RenderStateParameters, instead of pulling it out of GLContext a second time.
     //
-    // The guard is the oracle P1 built: MOBILEGL_PIPE_VERIFY's compare-at-read re-reads each
-    // of these from the live context at every backend read, so a transcription error is
-    // caught on the first draw that reads it.
+    // The oracle is the one P1 built: MOBILEGL_PIPE_VERIFY's compare-at-read re-reads each of
+    // these from the live context at every backend read, so a transcription error is caught
+    // on the first draw that reads it - on the retrace and integration-verify LANES, which is
+    // where the comparator arms (MG_Config::Features.PipeVerify). A unit-test process never
+    // runs the config loader, so the unit oracle is a different one:
+    // RenderStateSpansTest.DerivationMatchesTheFrontendGetters walks every setter and
+    // compares all 29 derived values against the frontend getters they were transcribed from.
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs);
+
+    // The same derivation, SCOPED to the chunks a scatter actually moved (bit i is global
+    // chunk i - MGPipeGlobalChunkBitsOf{Pipeline,Dynamic}Mask widens a wire mask to it). This
+    // is what the applier calls, and it is why a per-frame glViewport - the D8 case whose
+    // whole point is that it sends dynamic chunk D0 alone - does not pay for the 8-wide blend
+    // loop, the 16-wide depth-range loop or the 35-arm capability switch. Every guard's chunk
+    // set is computed from the boundary table with MGPipeRenderStateChunkBitsCovering, so a
+    // boundary move cannot leave one stale, and
+    // RenderStateSpansTest.IncrementalChunksKeepEveryDerivedFieldInStep drives the scoped
+    // path against the frontend getters family by family.
+    void MGPipeDeriveRenderStateFieldsForChunks(PipeInputs& inputs, Uint32 globalChunkBits);
 } // namespace MobileGL::MG_Pipe
