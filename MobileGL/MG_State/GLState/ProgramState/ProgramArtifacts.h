@@ -397,4 +397,180 @@ namespace MobileGL::MG_State::GLState {
         // so every query keeps the truthful GL spelling.
         Bool pointSizeDemoted = false;
     };
+
+    // ---- the archive field tables (ARCHITECTURE.md:259): ONE table per type, serving both directions ----
+    //
+    // Visitor contract: v(const char* name, Field&) - Field is const when Self is const, so a
+    // single table serves the serializer (const) and the deserializer (non-const); `Self`
+    // deduces either. A visitor recurses into TypeFacts / ResourceReflection / XfbVarying by
+    // calling VisitFields on the element it was handed; the tables never recurse themselves.
+    //
+    // Free constrained templates rather than members so the struct bodies above stay a verbatim
+    // move. The sizeof trip wires below are what keep these tables honest: a member added to a
+    // struct changes its size, trips the assertion, and the message sends the author here.
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, TypeFacts>
+    void VisitFields(Self& a, V&& v) {
+        v("isArray", a.isArray);
+        v("isSizedArray", a.isSizedArray);
+        v("isMatrix", a.isMatrix);
+        v("isVector", a.isVector);
+        v("isOpaque", a.isOpaque);
+        v("isTexture", a.isTexture);
+        v("isImage", a.isImage);
+        v("isDouble", a.isDouble);
+        v("isVoid", a.isVoid);
+        v("isBuffer", a.isBuffer);
+        v("isPatch", a.isPatch);
+        v("hasIndex", a.hasIndex);
+        v("hasFormat", a.hasFormat);
+        v("vectorSize", a.vectorSize);
+        v("matrixCols", a.matrixCols);
+        v("matrixRows", a.matrixRows);
+        v("layoutIndex", a.layoutIndex);
+        v("layoutFormat", a.layoutFormat);
+        v("layoutMatrix", a.layoutMatrix);
+        v("basicType", a.basicType);
+    } // 20 fields
+
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, ResourceReflection>
+    void VisitFields(Self& a, V&& v) {
+        v("name", a.name);
+        v("glDefineType", a.glDefineType);
+        v("offset", a.offset);
+        v("size", a.size);
+        v("index", a.index);
+        v("counterIndex", a.counterIndex);
+        v("arrayStride", a.arrayStride);
+        v("topLevelArraySize", a.topLevelArraySize);
+        v("topLevelArrayStride", a.topLevelArrayStride);
+        v("binding", a.binding);
+        v("location", a.location);
+        v("stages", a.stages);
+        v("arraySize", a.arraySize);
+        v("type", a.type); // visited as a value; the visitor recurses with VisitFields(a.type, v) if it wants to
+    } // 14 fields
+
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, XfbVarying>
+    void VisitFields(Self& a, V&& v) {
+        v("name", a.name);
+        v("type", a.type);
+        v("size", a.size);
+        v("bufferIndex", a.bufferIndex);
+        v("offsetBytes", a.offsetBytes);
+        v("byteSize", a.byteSize);
+        v("packedOffsetBytes", a.packedOffsetBytes);
+        v("blockInstanceName", a.blockInstanceName);
+        v("blockName", a.blockName);
+        v("blockMemberIndex", a.blockMemberIndex);
+        v("blockMemberElement", a.blockMemberElement);
+    } // 11 fields
+
+    // Every member EXCEPT `program`: it is null for every archived instance by construction
+    // (ProgramTranslationCache.h asserts that at insert) and must never be serialized - it is
+    // the live glslang TProgram that only DoReflection may touch. 57 of the 58 members.
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, LinkArtifacts>
+    void VisitFields(Self& a, V&& v) {
+        v("uniformReflection", a.uniformReflection);
+        v("blockReflection", a.blockReflection);
+        v("pipeInputReflection", a.pipeInputReflection);
+        v("pipeOutputReflection", a.pipeOutputReflection);
+        v("lastStageIsFragment", a.lastStageIsFragment);
+        v("computeLocalSize", a.computeLocalSize);
+        v("uniformIndexByName", a.uniformIndexByName);
+        v("attribs", a.attribs);
+        v("attribTypes", a.attribTypes);
+        v("linkedFragDataLocation", a.linkedFragDataLocation);
+        v("linkedFragDataIndex", a.linkedFragDataIndex);
+        v("glUniformIndexToTProgram", a.glUniformIndexToTProgram);
+        v("tProgramUniformIndexToGl", a.tProgramUniformIndexToGl);
+        v("glBlockIndexToTProgram", a.glBlockIndexToTProgram);
+        v("tProgramBlockIndexToGl", a.tProgramBlockIndexToGl);
+        v("glUniformBlockIndexToBlock", a.glUniformBlockIndexToBlock);
+        v("blockIndexToGlUniformBlock", a.blockIndexToGlUniformBlock);
+        v("linkedExplicitUniformLocations", a.linkedExplicitUniformLocations);
+        v("uniformInitialValues", a.uniformInitialValues);
+        v("uniformLocations", a.uniformLocations);
+        v("writtenUniformLocationBits", a.writtenUniformLocationBits);
+        v("writtenUniformIndexBits", a.writtenUniformIndexBits);
+        v("writtenUniformIndices", a.writtenUniformIndices);
+        v("uniformIndexInTProgram", a.uniformIndexInTProgram);
+        v("uniformSamplerOrImageUnitIndex", a.uniformSamplerOrImageUnitIndex);
+        v("explicitOpaqueUniformBindings", a.explicitOpaqueUniformBindings);
+        v("uniformBlockIndexByName", a.uniformBlockIndexByName);
+        v("uniformBlockBinding", a.uniformBlockBinding);
+        v("shaderStorageBlockBinding", a.shaderStorageBlockBinding);
+        v("storageBlocksWithoutBinding", a.storageBlocksWithoutBinding);
+        v("uniformBlocksWithoutBinding", a.uniformBlocksWithoutBinding);
+        v("activeUniformCount", a.activeUniformCount);
+        v("usesReservedNumSamples", a.usesReservedNumSamples);
+        v("maxUniformLocation", a.maxUniformLocation);
+        v("uniformNameMaxLength", a.uniformNameMaxLength);
+        v("attribInNameMaxLength", a.attribInNameMaxLength);
+        v("uniformBlockNameMaxLength", a.uniformBlockNameMaxLength);
+        v("infoLog", a.infoLog);
+        v("linkStatus", a.linkStatus);
+        v("xfbVaryings", a.xfbVaryings);
+        v("xfbInterfaceNames", a.xfbInterfaceNames);
+        v("xfbStrides", a.xfbStrides);
+        v("gsStripTriangles", a.gsStripTriangles);
+        v("gsStripCaptureFixup", a.gsStripCaptureFixup);
+        v("gsInputPrimitive", a.gsInputPrimitive);
+        v("tcsOutputVertices", a.tcsOutputVertices);
+        v("gsOutputPrimitive", a.gsOutputPrimitive);
+        v("gsMaxVertices", a.gsMaxVertices);
+        v("gsInvocations", a.gsInvocations);
+        v("tessGenMode", a.tessGenMode);
+        v("tessGenSpacing", a.tessGenSpacing);
+        v("tessGenVertexOrder", a.tessGenVertexOrder);
+        v("tessGenPointMode", a.tessGenPointMode);
+        v("xfbBufferMode", a.xfbBufferMode);
+        v("xfbVaryingNameMaxLength", a.xfbVaryingNameMaxLength);
+        v("xfbNeedsScatteredCapture", a.xfbNeedsScatteredCapture);
+        v("xfbPackedStride", a.xfbPackedStride);
+    } // 57 fields (58 members minus `program`)
+
+    template <class Self, class V>
+        requires std::same_as<std::remove_const_t<Self>, SpirvArtifacts>
+    void VisitFields(Self& a, V&& v) {
+        v("generatedSpirv", a.generatedSpirv);
+        v("enableSpirvValidation", a.enableSpirvValidation);
+        v("uniformOffsets", a.uniformOffsets);
+        v("globalUboScratch", a.globalUboScratch);
+        v("reservedNumSamplesOffset", a.reservedNumSamplesOffset);
+        v("spirvStatus", a.spirvStatus);
+        v("nativeFloat64", a.nativeFloat64);
+        v("pointSizeDemoted", a.pointSizeDemoted);
+    } // 8 fields
+
+    // ---- trip wires ----
+    // TypeFacts is a POD on every ABI: 13 Bool + 3 bytes of padding + 7 x 4-byte scalars.
+    static_assert(std::is_trivially_copyable_v<TypeFacts> && sizeof(TypeFacts) == 44,
+                  "TypeFacts changed: add the field to VisitFields(TypeFacts) (and its serializer when one exists), then update this number");
+    // The container-bearing structs have one size per standard library (std::string and
+    // std::set differ between libstdc++ and libc++), so their numbers are pinned PER STL:
+    // libstdc++ (the Linux CI toolchain) here, libc++ (the NDK) by the integrator, MSVC
+    // unasserted. ProgramArtifactsTest records every sizeof as a ctest property on every
+    // platform, which is where a new toolchain's numbers are read from.
+#if defined(__GLIBCXX__) && !defined(_GLIBCXX_DEBUG) && (SIZE_MAX == UINT64_MAX)
+#define MGL_RESOURCEREFLECTION_SIZE 128
+#define MGL_XFBVARYING_SIZE 128
+#define MGL_LINKARTIFACTS_SIZE 1056
+#define MGL_SPIRVARTIFACTS_SIZE 88
+#elif defined(_LIBCPP_VERSION) && (SIZE_MAX == UINT64_MAX) && defined(MGL_ARTIFACT_SIZES_LIBCXX_PINNED)
+    // The integrator pins these from the NDK build (brief C.4); until then this branch is inert.
+#endif
+#ifdef MGL_LINKARTIFACTS_SIZE
+    static_assert(sizeof(ResourceReflection) == MGL_RESOURCEREFLECTION_SIZE,
+                  "ResourceReflection changed size: add the field to VisitFields(ResourceReflection) (and its serializer when one exists), then update this number");
+    static_assert(sizeof(XfbVarying) == MGL_XFBVARYING_SIZE,
+                  "XfbVarying changed size: add the field to VisitFields(XfbVarying) (and its serializer when one exists), then update this number");
+    static_assert(sizeof(LinkArtifacts) == MGL_LINKARTIFACTS_SIZE,
+                  "LinkArtifacts changed size: add the field to VisitFields(LinkArtifacts) (and its serializer when one exists), then update this number");
+    static_assert(sizeof(SpirvArtifacts) == MGL_SPIRVARTIFACTS_SIZE,
+                  "SpirvArtifacts changed size: add the field to VisitFields(SpirvArtifacts) (and its serializer when one exists), then update this number");
+#endif
 } // namespace MobileGL::MG_State::GLState
