@@ -72,7 +72,8 @@ namespace MobileGL::MG_Pipe {
             const Bool contentAddressed =
                 (MG_Config::Features.PipePush & kMGPipeBehaviourNoCsoContentAddressing) == 0;
             if (contentAddressed) {
-                const Uint64 hash = MGPipeHashPipelineBytes(bytes.data());
+                const Uint64 hash = s_hashForTest != nullptr ? s_hashForTest(bytes.data())
+                                                             : MGPipeHashPipelineBytes(bytes.data());
                 for (SizeT i = 0; i < m_entries.size(); ++i) {
                     if (m_entries[i].Hash != hash) continue;
                     if (std::memcmp(m_entries[i].Bytes.data(), bytes.data(), bytes.size()) != 0) {
@@ -109,6 +110,15 @@ namespace MobileGL::MG_Pipe {
 
         SizeT Size() const { return m_entries.size(); }
         const Counters& GetCounters() const { return m_counters; }
+
+        // TEST SEAM, and it is here because the thing it tests cannot be reached any other
+        // way. A 64-bit collision between two DIFFERENT render states is silent wrong pixels
+        // and it is exactly what the memcmp confirm above exists to stop, so
+        // CsoCacheTest.HashCollisionDoesNotAliasTwoStates has to be able to make one happen.
+        // Null in every real build - one never-taken, perfectly-predicted branch on a path
+        // that runs only when the pipeline version moved, i.e. never in the steady state.
+        using HashForTestFn = Uint64 (*)(const void* pipelineBytes);
+        inline static HashForTestFn s_hashForTest = nullptr;
 
     private:
         struct Entry {
