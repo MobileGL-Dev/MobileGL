@@ -360,11 +360,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
+      - name: Show installed toolchain
+        run: |
+          ccache --version
+          clang-20 --version
+          clang++-20 --version
+          ld.lld-20 --version || ld.lld --version || true
+          dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
+
       - name: Configure CMake
         # Release/INFO like the shipped build on purpose. The poison arms in this configuration
         # through MOBILEGL_PIPE_VERIFY (PipeInputs.h derives MOBILEGL_PIPE_POISON from it), so this
         # job needs neither a Debug log level nor MOBILEGL_BUILD_DISAGGREGATED - and a Debug build
-        # would compare a different library from the one the other lanes measure.
+        # would compare a different library from the one the other lanes measure. (build-linux
+        # switches to Debug under ACTIONS_STEP_DEBUG; this job deliberately does not - a Debug
+        # build flips CXX_VISIBILITY_PRESET and arms MOBILEGL_PIPE_POISON through a second, unrelated
+        # arm of its #if, so the debug switch would change what the lane is measuring.)
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
             -DCMAKE_C_COMPILER=clang-20 \
@@ -387,12 +398,31 @@ jobs:
       # The lane is worthless if the option silently did not take, and that is a one-character
       # mistake away at all times (a typo'd -D is not an error in CMake). Two checks, both cheap:
       # the comparator's entry point must be in the library, and the fill entry point with it.
+      #
+      # `nm` and NOT `nm -D`. The library is built CXX_VISIBILITY_PRESET hidden in every non-Debug
+      # configuration (CMakeLists.txt:600-604) and the MGPipe entry points are plain namespace
+      # functions with no export attribute, so not one of them appears in the DYNAMIC table: on a
+      # perfectly healthy verify build `nm -D --defined-only ... | grep -c MGPipe` answers 0 out of
+      # ~11900 exported symbols, and a gate spelled that way is red forever for a reason that has
+      # nothing to do with what it claims to test. The static symbol table has them as local `t`
+      # entries, this artifact is never stripped, and `No MG_Remote in the pull build` below already
+      # uses this spelling. The symbol count guards the remaining hole: a stripped library would
+      # make both greps fail for a third, silent reason.
       - name: The verify library really carries the comparator
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
-          nm -D --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q MGPipeVerifyInputs
-          nm -D --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q MGPipeFillForVerb
-          echo "libMobileGL.so exports MGPipeVerifyInputs and MGPipeFillForVerb"
+          defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
+          if [ "${defined}" -lt 1000 ]; then
+            echo "::error::nm --defined-only sees only ${defined} symbols in ${BUILD_DIR}/libMobileGL.so - it looks stripped, so the two checks below could not have failed honestly"
+            exit 1
+          fi
+          for entry in MGPipeVerifyInputs MGPipeFillForVerb; do
+            if ! nm --defined-only "${BUILD_DIR}/libMobileGL.so" | grep -q "${entry}"; then
+              echo "::error::libMobileGL.so defines no ${entry}: -DMOBILEGL_PIPE_VERIFY=ON did not take, and every lane that consumes this artifact would run the comparator-free library and pass having compared nothing"
+              exit 1
+            fi
+          done
+          echo "libMobileGL.so defines MGPipeVerifyInputs and MGPipeFillForVerb (${defined} defined symbols)"
 
       - name: Show ccache stats
         if: always()
@@ -487,6 +517,13 @@ jobs:
         # tests and reds here instead of reporting a green run of nothing. The other half is
         # PipeVerifyArmingScenario.Armed, which fails when the library never printed its arming
         # line - the failure mode a bare `MOBILEGL_PIPE_VERIFY=1` cannot detect by itself.
+        #
+        # SCOPE, stated so nobody reads more into a green than is there: this is every integration
+        # ENTRY under the comparator, not every integration CONFIGURATION. The `integration` job
+        # runs a second, filtered pass with MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 for the
+        # upload ring's staged-copy tier; that pass is 186 entries here and, at the 5-10x the
+        # comparator costs, is not affordable inside this job's budget. The tier is covered by
+        # `integration`, unverified, and P2 can take it once the comparator's cost is known.
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
           MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
@@ -501,22 +538,35 @@ jobs:
             ctest --output-on-failure -L integration-verify --no-tests=error
           fi
 
-      - name: Every verify process really armed
+      # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
+      # library opens it fopen(path, "w"), so after an ambient lane of 400-odd processes the file
+      # holds the LAST one - grepping it would say nothing about the other 405 and would red a
+      # healthy lane whenever the last entry happened not to issue a verb (which is what the
+      # PoisonOmissionScenario parent, the last ambient entry, does by construction: it forks,
+      # execve()s and reads files). The DirectGLES.VerifyArming. / DirectVulkan.VerifyArming.
+      # entries are one process each on a log path nothing else writes, so this grep means exactly
+      # what it says.
+      #
+      # What it proves: arming is a property of (this library, this environment), and these two
+      # processes ran the same library with the same MOBILEGL_PIPE_VERIFY=1 as their ~400 ambient
+      # siblings. It is not, and cannot be, a per-process census - the shared log cannot support one.
+      # It catches the case ctest cannot: an arming entry that SKIPPED still reports green.
+      - name: The verify lanes armed the comparator
         working-directory: build-verify
         run: |
           shopt -s nullglob
-          logs=(MobileGL/MG_IntegrationTest/pipe-verify-*.log)
-          if [ ${#logs[@]} -eq 0 ]; then
-            echo "::error::the verify lane wrote no pipe-verify-*.log at all"
+          logs=(MobileGL/MG_IntegrationTest/pipe-verify-arming-*.log)
+          if [ ${#logs[@]} -lt 2 ]; then
+            echo "::error::found ${#logs[@]} pipe-verify-arming-*.log (expected one per backend). The VerifyArming. entries did not run, so nothing in this job establishes that the comparator was ever armed."
             exit 1
           fi
           for log in "${logs[@]}"; do
             if ! grep -q "MGPipe: verify armed" "${log}"; then
-              echo "::error::${log} carries no arming line: that lane ran without the comparator"
+              echo "::error::${log} carries no arming line: that lane's process ran the whole scenario without the comparator, so every green entry beside it is green for no reason"
               exit 1
             fi
           done
-          echo "arming line present in ${#logs[@]} lane log(s)"
+          echo "arming line present in all ${#logs[@]} arming-lane log(s)"
 
       # NEGATIVE CONTROL A (gate G4). The knob perturbs one field in the snapshot arm before the
       # entry compare, so a working comparator must abort the run. This step passes when ctest
@@ -1150,7 +1200,10 @@ jobs:
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
         # rather than through a variable: the verify .so is put where that path points. The nm
         # check is what makes the swap falsifiable - a run against the ordinary library would
-        # export no comparator, ignore MOBILEGL_PIPE_VERIFY entirely, and match its golden.
+        # carry no comparator, ignore MOBILEGL_PIPE_VERIFY entirely, and match its golden.
+        #
+        # `nm`, not `nm -D`, for the reason spelled out in build-linux-verify: everything MGPipe is
+        # hidden-visibility in a Release build and the dynamic table has none of it.
         run: |
           tar -xzf mobilegl-linux-runtime-verify.tgz
           tar -xzf mobilegl-trace-replay.tgz
@@ -1158,7 +1211,10 @@ jobs:
           test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
           mkdir -p build-linux
           cp build-verify/libMobileGL.so build-linux/libMobileGL.so
-          nm -D --defined-only build-linux/libMobileGL.so | grep -q MGPipeVerifyInputs
+          if ! nm --defined-only build-linux/libMobileGL.so | grep -q MGPipeVerifyInputs; then
+            echo "::error::the library unpacked at build-linux/libMobileGL.so defines no MGPipeVerifyInputs, so this retrace would replay against a comparator-free build and pass on its golden having verified nothing"
+            exit 1
+          fi
           echo "the library at build-linux/libMobileGL.so is the verify build"
 
       - name: Retrace and validate under MOBILEGL_PIPE_VERIFY
@@ -1185,18 +1241,38 @@ jobs:
       # The retrace lane's own always-on negative control, on one case so it costs one short trace:
       # with a snapshot field corrupted, the SAME replay must fail. Without it, "40 traces, zero
       # divergences" would be a statement about a comparator nobody watched.
+      #
+      # The rerun replays into the SAME case directory, so the verified run's images are put aside
+      # first and restored before the verdict: "Upload actual image" below runs `if: always()` and
+      # would otherwise ship the deliberately corrupted run's output under the name of the good one.
+      # The restore happens whichever way the control goes, which is why the ctest exit status is
+      # captured rather than tested inline.
       - name: Negative control - a corrupted snapshot field must red this retrace
         if: ${{ matrix.case == 'OpenRA' && matrix.backend == 'DirectGLES' }}
         working-directory: build-retrace/tools/trace_replay
         run: |
           export MOBILEGL_PIPE_VERIFY=1
           export MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters
-          if ctest -V --no-tests=error --timeout 10800 \
-               -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$'; then
+          GOOD_OUTPUT="${RUNNER_TEMP}/openra-verified-output"
+          rm -rf "${GOOD_OUTPUT}"
+          if [ -d OpenRA ]; then
+            cp -a OpenRA "${GOOD_OUTPUT}"
+          fi
+          set +e
+          ctest -V --no-tests=error --timeout 10800 \
+            -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$'
+          control_rc=$?
+          set -e
+          if [ -d "${GOOD_OUTPUT}" ]; then
+            rm -rf OpenRA
+            mv "${GOOD_OUTPUT}" OpenRA
+            echo "restored the verified run's OpenRA output over the corrupted rerun's"
+          fi
+          if [ "${control_rc}" -eq 0 ]; then
             echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left the OpenRA retrace GREEN, so the comparator is not comparing and the whole verify retrace lane proves nothing."
             exit 1
           fi
-          echo "the corrupted field turned the retrace red, as it must"
+          echo "the corrupted field turned the retrace red, as it must (ctest exit ${control_rc})"
 
       - name: Upload core dumps
         if: failure()
@@ -1354,14 +1430,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Both retrace lanes, not just the pull one: `retrace verify (backend, case)` downloads
+          # the same trace-fixture-<case> artifact, and a failed verify retrace is exactly when
+          # someone needs that fixture to reproduce locally. The two prefixes are stripped in
+          # order, longest first, because "retrace (" is not a prefix of "retrace verify (".
           declare -A failed_cases=()
           while IFS= read -r job_name; do
-            case_name="${job_name#retrace (*, }"
+            case_name="${job_name#retrace verify (*, }"
+            case_name="${case_name#retrace (*, }"
             case_name="${case_name%)}"
             failed_cases["${case_name}"]=1
           done < <(
             gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name | startswith("retrace (")) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
+              --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
           )
 
           if ((${#failed_cases[@]})); then
