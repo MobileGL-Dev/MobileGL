@@ -351,6 +351,7 @@ namespace MobileGL::MG_Pipe {
             Bool Fatal = true;
             Bool InHook = false; // a re-read that re-enters an accessor is not re-verified
             Optional<MGPipeInputField> Corrupt;
+            String CorruptKnob; // the MOBILEGL_PIPE_VERIFY_CORRUPT value the last arm saw
             std::atomic<Uint64> Divergences{0};
             ~VerifyState() {
                 const Uint64 count = Divergences.load(std::memory_order_relaxed);
@@ -362,17 +363,24 @@ namespace MobileGL::MG_Pipe {
         };
         VerifyState g_verify;
 
-        // Armed on the first fill and re-armed only when Features.PipeVerify changes (the
-        // same reason as ParsePoisonOmissionKnob: one arm per lane process, a fresh arm for a
-        // forked test child that turns the knob on after its parent filled unarmed).
+        // Armed on the first fill and re-armed when any of the three verify knobs'
+        // Features value (PipeVerify, PipeVerifyFatal, PipeVerifyCorrupt) differs from what
+        // the last arm latched (the same reason as ParsePoisonOmissionKnob: one arm per lane
+        // process, a fresh arm for a forked test child that turns a knob after its parent
+        // filled). Cost: two Bool compares and one String compare per fill, verify builds only.
         void ArmVerify() {
-            if (g_verify.Parsed && g_verify.Enabled == MG_Config::Features.PipeVerify) return;
+            const auto& features = MG_Config::Features;
+            if (g_verify.Parsed && g_verify.Enabled == features.PipeVerify && g_verify.Fatal == features.PipeVerifyFatal &&
+                g_verify.CorruptKnob == features.PipeVerifyCorrupt) {
+                return;
+            }
             g_verify.Parsed = true;
-            g_verify.Enabled = MG_Config::Features.PipeVerify;
+            g_verify.Enabled = features.PipeVerify;
+            g_verify.Fatal = features.PipeVerifyFatal;
+            g_verify.CorruptKnob = features.PipeVerifyCorrupt;
             g_verify.Corrupt = Optional<MGPipeInputField>{};
             if (!g_verify.Enabled) return;
-            g_verify.Fatal = MG_Config::Features.PipeVerifyFatal;
-            const String& corrupt = MG_Config::Features.PipeVerifyCorrupt;
+            const String& corrupt = g_verify.CorruptKnob;
             if (!corrupt.empty()) {
                 const auto field = MGPipeFindInputField(corrupt.c_str());
                 if (!field) {
