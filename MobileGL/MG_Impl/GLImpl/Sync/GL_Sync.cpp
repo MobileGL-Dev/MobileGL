@@ -232,8 +232,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the function table itself is cleared.
         const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         for (const auto& [_, syncObject] : orphans) {
-            MGP_FILL(DeleteSync);
             if (backendDeleteSync && syncObject->backendHandle) {
+                MGP_FILL(DeleteSync);
                 backendDeleteSync(syncObject->backendHandle);
             }
             delete syncObject;
