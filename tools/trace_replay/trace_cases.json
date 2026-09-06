@@ -13,6 +13,7 @@
   "cases": [
     {
       "name": "OpenRA",
+      "verify": true,
       "trace_archive": "openra.tgz",
       "trace_file": "openra.trace",
       "golden": "openra.0000031249.png",
@@ -27,6 +28,7 @@
     },
     {
       "name": "minecraft-1.21.4-startup",
+      "verify": true,
       "trace_archive": "minecraft-1.21.4-startup.tgz",
       "golden": "minecraft-1.21.4-startup.0000092195.png",
       "target_call": 92195,
@@ -34,6 +36,7 @@
     },
     {
       "name": "minecraft-1.21.4-main-menu",
+      "verify": true,
       "trace_archive": "minecraft-1.21.4-main-menu.tgz",
       "golden": "minecraft-1.21.4-main-menu.0000481787.png",
       "alternate_golden": "minecraft-1.21.4-main-menu.0000481787-mali.png",
@@ -42,6 +45,7 @@
     },
     {
       "name": "minecraft-1.21.11-main-menu",
+      "verify": true,
       "trace_archive": "minecraft-1.21.11-main-menu.tgz",
       "golden": "minecraft-1.21.11-main-menu.0000205347.png",
       "target_call": 205347,
@@ -49,6 +53,7 @@
     },
     {
       "name": "minecraft-1.17-main-menu-854",
+      "verify": true,
       "trace_archive": "minecraft-1.17-main-menu-854.tgz",
       "golden": "minecraft-1.17-main-menu-854.0000117757.png",
       "target_call": 117757,
@@ -56,6 +61,7 @@
     },
     {
       "name": "minecraft-1.21.4-in-world",
+      "verify": true,
       "trace_archive": "minecraft-1.21.4-in-world.tgz",
       "golden": "minecraft-1.21.4-in-world.0000280000.png",
       "target_call": 280000
@@ -70,6 +76,7 @@
     },
     {
       "name": "minecraft-1.21.4-fabric-sodium-in-world",
+      "verify": true,
       "trace_archive": "minecraft-1.21.4-fabric-sodium-in-world.tgz",
       "golden": "minecraft-1.21.4-fabric-sodium-in-world.0000923340.png",
       "target_call": 923340,
@@ -277,6 +284,7 @@
     },
     {
       "name": "improved-transparency-minecraft-26.3",
+      "verify": true,
       "trace_archive": "improved-transparency-minecraft-26.3.tgz",
       "golden": "improved-transparency-minecraft-26.3.0002667619.png",
       "target_call": 2667619,

@@ -372,10 +372,12 @@ function(add_trace_replay_test CASE_NAME BACKEND)
             -P ${MOBILEGL_TRACE_ROOT}/run_trace_case.cmake)
     if(BACKEND STREQUAL "DirectGLES")
         set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
-                ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+                ENVIRONMENT "EGL_PLATFORM=surfaceless;LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
+                LABELS retrace)
     else()
         set_tests_properties(MobileGLTraceReplay.${CASE_NAME}.${BACKEND} PROPERTIES
-                ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330")
+                ENVIRONMENT "LIBGL_ALWAYS_SOFTWARE=1;MESA_GL_VERSION_OVERRIDE=3.3;MESA_GLSL_VERSION_OVERRIDE=330"
+                LABELS retrace)
     endif()
 endfunction()
 

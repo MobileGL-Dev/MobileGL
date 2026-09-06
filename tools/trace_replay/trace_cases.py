@@ -26,6 +26,16 @@ def load_trace_case_manifest(path=TRACE_CASES_JSON):
         for key in ("trace_archive", "trace_file", "golden", "target_call", "width", "height"):
             if key not in merged:
                 raise ValueError(f"{key} is required for {name}")
+        # "verify" opts a case into the MOBILEGL_PIPE_VERIFY retrace subset. It is checked here
+        # rather than where the matrix is built so that a typo is a loud manifest error in every
+        # consumer (the cmake emitter included) instead of a subset that is quietly one case short.
+        verify = merged.get("verify", False)
+        if not isinstance(verify, bool):
+            raise ValueError(f"verify must be true or false for {name}")
+        if verify and not merged.get("ci", True):
+            raise ValueError(
+                f"{name} is marked verify but excluded from CI, so the verify matrix would drop it"
+            )
         cases.append(merged)
     return {"defaults": defaults, "cases": cases}
 
@@ -72,6 +82,16 @@ def ci_trace_cases(cases):
     return [case for case in cases if case.get("ci", True)]
 
 
+def verify_trace_cases(cases):
+    """The subset the third CI mode retraces.
+
+    The verify build compares two state models at every verb boundary and again at every accessor
+    read, which the design budgets at 5-10x, so the per-push lane runs a named subset and the full
+    79-case sweep happens at the phase exit and on workflow_dispatch.
+    """
+    return [case for case in cases if case.get("verify", False)]
+
+
 def ci_backends(case):
     backends = case.get("ci_backends")
     if backends is None:
@@ -96,6 +116,10 @@ def github_test_matrix(cases):
             for backend in ci_backends(case)
         ]
     }
+
+
+def github_verify_matrix(cases):
+    return github_test_matrix(verify_trace_cases(cases))
 
 
 def github_apk_matrix(cases):
@@ -158,6 +182,7 @@ def parse_args():
         choices=(
             "names",
             "github-test-matrix",
+            "github-verify-matrix",
             "github-apk",
             "github-apk-matrix",
             "fixture-files",
@@ -177,6 +202,8 @@ def main():
         print(json.dumps([case["name"] for case in cases], separators=(",", ":")))
     elif args.format == "github-test-matrix":
         print(json.dumps(github_test_matrix(cases), separators=(",", ":")))
+    elif args.format == "github-verify-matrix":
+        print(json.dumps(github_verify_matrix(cases), separators=(",", ":")))
     elif args.format == "github-apk":
         print(json.dumps([github_apk_case(case) for case in cases], separators=(",", ":")))
     elif args.format == "github-apk-matrix":
