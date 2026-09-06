@@ -6706,7 +6706,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             };
 
-#if MOBILEGL_PIPE_PUSH
+            // Already inside #if MOBILEGL_PIPE_PUSH, so no second guard here: the arm choice
+            // below is the RUNTIME one.
             if (EsprytSlotTablesEnabled()) {
                 FramebufferImpl::g_backendFramebufferObjects.ForEachLive(
                     [&](const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBO,
@@ -6715,7 +6716,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     });
                 return;
             }
-#endif
 #if MOBILEGL_PIPE_LEGACY_MEMOS
             for (auto it = FramebufferImpl::g_backendFramebufferObjects.begin();
                  it != FramebufferImpl::g_backendFramebufferObjects.end(); ++it) {

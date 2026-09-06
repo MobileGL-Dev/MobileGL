@@ -3263,8 +3263,16 @@ TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
 
     FakeSlotTable table;
     auto object = MakeShared<FakeStateObject>(0xB1u);
+    // HandleOf caches whatever the allocator answered, INCLUDING the null handle - an object
+    // that is bound but never synced has no twin, and re-probing the hash for it every draw is
+    // exactly what the memo exists to avoid. What makes that safe is that GetOrCreate refreshes
+    // the memo, so a cached "no handle" can never outlive the twin's creation. Nothing pinned
+    // that; this does.
+    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(object.get())));
     table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
     const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle))
+        << "the memo went on answering the null handle it cached before the twin existed";
 
     for (int i = 0; i < 8; ++i) {
         auto* slot = table.GetOrCreate(object) ? table.Find(object.get()) : nullptr;
@@ -3413,7 +3421,11 @@ TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutA
     EXPECT_EQ(table.LiveCount(), 0u);
     EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
         << "the churn leaked slots the announced deaths should have returned";
-    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, 1u)
+    // 2 and not 1: on a cold allocator the high-water mark counts the RESERVED slot 0
+    // (kMGPipeFirstAllocatableSlot is 1) as well as the one slot this loop recycles, and ctest
+    // runs every case in its own process, so this case sees a cold allocator. What the bound
+    // rules out is the thing that matters - 256 churned objects growing the space by 256.
+    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, 2u)
         << "the slot space grew with the churn instead of being recycled";
 }
 
@@ -3430,6 +3442,18 @@ TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
     EXPECT_EQ(table.LiveCount(), 0u) << "a null object took a slot";
     EXPECT_EQ(table.Find(nullptr), nullptr);
     EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(nullptr)));
+
+    // ...and a SECOND null call is handed the same parking slot rather than destroying what the
+    // first one was given. The map arm kept its null-keyed entry until a sweep, so a table that
+    // reset here would answer differently on the two arms in the one path that documents
+    // relying on this tolerance.
+    twin = MakeShared<FakeBackendObject>();
+    twin->marker = 5;
+    auto& again = table.GetOrCreate(none);
+    ASSERT_NE(again, nullptr) << "the second null call destroyed the first one's parked twin";
+    EXPECT_EQ(again->marker, 5);
+    EXPECT_EQ(&again, &twin);
+    EXPECT_EQ(table.LiveCount(), 0u);
 }
 // P2 step e2, the backend half. A sweep is a stand-in for a death notice; this is the notice.
 // Nothing below calls CollectGarbage*: the slot comes back, and the twin goes, at the moment

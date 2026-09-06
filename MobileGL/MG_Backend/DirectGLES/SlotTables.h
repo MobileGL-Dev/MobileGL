@@ -137,12 +137,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // No assert on null here, unlike the map arm: null is TOLERATED, so a DEBUG build
             // must not trap where the release build quietly does the documented thing.
             if (stateObj == nullptr) {
-                // The registry this replaces inserted a null key and handed back ITS twin slot
-                // (DirectGLES.cpp's SyncTextureObjectToBackend documents relying on exactly
-                // that tolerance), so a release build never dereferenced null here. Keep the
-                // shape: one per-table parking slot, never live, never swept, never handed a
-                // handle. A null object has no identity and therefore cannot have a twin.
-                m_nullTwin.reset();
+                // The registry this replaces inserted a null KEY and handed back that entry's
+                // twin (DirectGLES.cpp's SyncTextureObjectToBackend documents relying on
+                // exactly that tolerance), so a release build never dereferenced null here.
+                // Keep the shape exactly, INCLUDING across calls: the map kept its null-keyed
+                // entry, so a second null call was handed the same twin the first one got.
+                // Resetting here instead would have destroyed it - an arm difference in the one
+                // path that documents relying on this. One per-table parking slot, never live,
+                // never swept, never handed a handle, because a null object has no identity and
+                // therefore cannot have a {slot, gen}.
                 return m_nullTwin;
             }
 
@@ -285,11 +288,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // a dangling key the way the old iteration could.
         template <typename Fn>
         void ForEachLive(Fn&& fn) const {
-            for (const Entry& entry : m_slots) {
+            // Index loop and a COPIED twin, not a range-for over references: fn is arbitrary
+            // backend code, and a nested GetOrCreate on this table would resize m_slots and
+            // invalidate both the iterator and any reference into the vector that outlives the
+            // call. ReclaimDeadSlots walks by index for the same reason. The one caller today
+            // happens not to insert; that is not a property the walk should depend on.
+            for (SizeT slot = 0; slot < m_slots.size(); ++slot) {
+                const Entry& entry = m_slots[slot];
                 if (!entry.Live || !entry.backend) continue;
                 const StatePtr state = entry.stateRef.lock();
                 if (!state) continue;
-                fn(state, entry.backend);
+                const BackendPtr twin = entry.backend;
+                fn(state, twin);
             }
         }
 
@@ -322,12 +332,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handed back by GetOrCreate for a null state object. Never live, never swept.
         BackendPtr m_nullTwin;
 
-        // ONE-entry resolution memo, lifetimeId -> handle. The three per-draw resolution paths
-        // (ResolveVaoTwin, SyncCurrentProgram, BindCurrentFBO) ask the SAME table for the SAME
-        // object every draw, so this turns the steady state back into an integer compare plus
-        // one array index - which is what the deleted TwinLookupMemos bought and what D13
-        // promises ("direct slot indexing - the memo existed only to avoid the hash probe").
-        // Without it every resolution went through the allocator's ByLifetimeId hash.
+        // ONE-entry resolution memo, lifetimeId -> handle. It exists because without it every
+        // resolution goes through the allocator's ByLifetimeId hash, which the deleted
+        // TwinLookupMemos existed to avoid and which D13 promises to replace with "direct slot
+        // indexing".
+        //
+        // It is one entry and therefore only helps a caller that asks for the SAME object twice
+        // running - ResolveVaoTwin and SyncCurrentProgram do, once per draw each. Two callers
+        // it does NOT help, recorded rather than claimed away: BindCurrentFBO resolves BOTH
+        // targets in a frame, and ResolveUnitSamplerBackend asks for a different sampler per
+        // texture unit, so both thrash a single-entry memo and pay the probe P1 did not (P1 had
+        // a per-unit memo and a direct-mapped 6-slot array there). Making the memo per-unit /
+        // per-target is the fix, and G11 - the device-side gate that would price it - is owed.
         //
         // It cannot serve a stale answer, by two independent arguments:
         //   * the key is a lifetime id, which MG_State never hands out twice, so a recycled
