@@ -3263,16 +3263,93 @@ TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
 
 // The whole point of routing every twin through the client allocator: a table that keeps its own
 // dense array still shares ONE identity per frontend object with every other holder of it.
-TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindAgreeOnOneObjectsHandle) {
+//
+// Comparing a.HandleOf(o) with b.HandleOf(o) alone would prove nothing - HandleOf never reads the
+// table, so any two tables agree for any implementation. What is actually load-bearing, and what
+// is asserted here, is that ONE slot of the kind is consumed for the object no matter how many
+// tables hold a twin of it (a per-table allocator would pass the pure compare and fail this), and
+// that the shared handle still addresses each table's OWN twin.
+TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
     using namespace MobileGL;
+
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
 
     FakeSlotTable a;
     FakeSlotTable b;
     auto object = MakeShared<FakeStateObject>(0xE1u);
     a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    (*a.Find(object.get()))->marker = 1;
     b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    (*b.Find(object.get()))->marker = 2;
 
-    EXPECT_TRUE(a.HandleOf(object.get()) == b.HandleOf(object.get()));
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u)
+        << "the two tables minted a slot each; Magma's table would then resolve a different "
+           "handle for the same object than Espryt's";
+
+    const MG_Pipe::MGPipeHandle handle = a.HandleOf(object.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    EXPECT_TRUE(b.HandleOf(object.get()) == handle);
+
+    ASSERT_NE(a.FindByHandle(handle), nullptr);
+    ASSERT_NE(b.FindByHandle(handle), nullptr);
+    EXPECT_EQ((*a.FindByHandle(handle))->marker, 1);
+    EXPECT_EQ((*b.FindByHandle(handle))->marker, 2);
+    // Deliberately no sweep: two tables of ONE kind both hold this slot, and whichever swept
+    // first would return it to the allocator while the other still names it. The six shipping
+    // registries are one table per kind, so that cannot arise outside this case.
+}
+
+// The sweep has TWO drivers and the table must carry both. Nothing below calls
+// CollectGarbageIfNeeded() or CollectGarbageNow(): this is the CREATION-driven half, and it is
+// the one that matters for a workload that churns objects without drawing much. The draw-path
+// tick is 1024 CollectGarbageIfNeeded calls, i.e. ~100 CTS-shaped cases at ~10 per-draw ticks
+// each, which is how the registry this replaces came to hold ~100 cases' worth of dead,
+// gigabyte-sized twins at once before the creation tick was added to fix it.
+TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
+    using namespace MobileGL;
+
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 interval = FakeSlotTable::CreationGCIntervalForTest();
+    // The churn count is a FIXED constant, not a multiple of the interval: a negative control
+    // that pushes the interval out of reach must make this case go red, not make it run for
+    // 2^32 iterations.
+    constexpr Uint32 kChurn = 256u;
+    ASSERT_GT(interval, 0u);
+    ASSERT_LT(interval, kChurn) << "the creation sweep can no longer fire inside this case";
+    const Uint32 highWaterBefore = slots.HighWater(MG_Pipe::MGPipeKind::Query);
+
+    FakeSlotTable table;
+    Uint32 peakLive = 0;
+    for (Uint32 i = 0; i < kChurn; ++i) {
+        auto object = MakeShared<FakeStateObject>(0xF0000000ull + i);
+        table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+        peakLive = std::max(peakLive, table.LiveCount());
+        // The object dies here. NOTHING announces that to the table (step e2 is not landed);
+        // the only thing that can notice is a sweep.
+    }
+
+    EXPECT_LE(peakLive, interval + 2u)
+        << peakLive << " dead twins accumulated at once with " << kChurn
+        << " objects churned - object churn stopped driving the sweep";
+    EXPECT_LE(table.LiveCount(), interval + 2u);
+    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, interval + 2u)
+        << "the slot space grew with the churn instead of being recycled";
+}
+
+// The map arm inserted a null key and handed back that entry's twin, and
+// SyncTextureObjectToBackend documents relying on it. Release builds compile the assert out, so
+// on the handle arm this has to be a defined answer rather than a dereference of null.
+TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
+    using namespace MobileGL;
+
+    FakeSlotTable table;
+    const SharedPtr<FakeStateObject> none;
+    auto& twin = table.GetOrCreate(none);
+    EXPECT_EQ(twin, nullptr);
+    EXPECT_EQ(table.LiveCount(), 0u) << "a null object took a slot";
+    EXPECT_EQ(table.Find(nullptr), nullptr);
+    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(nullptr)));
 }
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
@@ -3294,7 +3371,15 @@ TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
-TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindAgreeOnOneObjectsHandle) {
+TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
