@@ -32,12 +32,19 @@ visible in the output rather than only in the reader's assumptions.
 
 This tool is informational by default (ARCHITECTURE.md:507, job name `monolith-symbol-report`
 ARCHITECTURE.md:568): with no gate flag it prints its report and exits 0, whatever it found.
-Two flags turn it into a hard gate, and P1's G1 uses both - the strangler's pull build has to
-stay byte-identical, so `--fail-on-symbol-set-change --fail-on-added-bytes 0` is the spelling of
-"nothing was added, removed or grown":
+Three flags turn it into a hard gate, and P1's G1 uses the first two - the strangler's pull build
+has to stay byte-identical, and G1 spells that out as `added == removed == resized == renamed == 0`
+with a `.text` delta of zero:
 
     python3 scripts/symbol_report.py --before base.so --after head.so \
         --threshold 0 --fail-on-symbol-set-change --fail-on-added-bytes 0
+
+  * `--fail-on-symbol-set-change` covers all FOUR buckets, not just added/removed: a resize at zero
+    net delta and a rename at zero net delta are both source changes, and both are what a guard
+    rewrite produces. It always compares at threshold 0, whatever `--threshold` is set to.
+  * `--fail-on-added-bytes 0` means byte-identical, so a SHRUNK .text fails it too; a positive
+    budget keeps the one-sided "must not grow by more than N" meaning. `--fail-on-text-delta` is
+    the explicit spelling of the zero case for a run that wants no byte budget at all.
 
 A gate that fires still writes its Markdown and JSON first: the report IS the diagnosis, and a
 CI job that failed before uploading its artifact is a job nobody can act on.
@@ -241,21 +248,40 @@ Total          1600
 """)
 
 
-def gate_failures(added, removed, text_delta, fail_on_added_bytes, fail_on_symbol_set_change):
+def gate_failures(added, removed, resized, renamed, text_delta, fail_on_added_bytes,
+                  fail_on_symbol_set_change, fail_on_text_delta=False):
     """The reasons this run should fail, in the order they are reported. Empty means green.
 
     Pure, and takes the buckets rather than the file paths, so the self-test can drive it from the
     canned transcripts: a gate whose only test is a real build is a gate nobody re-tests.
+
+    P1's G1 is spelled `added == removed == resized == renamed == 0` and `.text` delta 0, so all
+    FOUR buckets are part of --fail-on-symbol-set-change and a budget of 0 bytes means zero
+    movement in EITHER direction. A shrunk .text and a resize with zero net delta are exactly the
+    shapes a guard rewrite produces, and both used to walk straight through this function.
     """
     reasons = []
-    if fail_on_symbol_set_change and (added or removed):
+    if fail_on_symbol_set_change and (added or removed or resized or renamed):
         reasons.append(
-            "--fail-on-symbol-set-change: {} symbol(s) added, {} removed. The defined-symbol set "
-            "is not a property of the build machine, so any change here is a source change - name "
-            "each one in the commit message or fix it.".format(len(added), len(removed)))
-    if fail_on_added_bytes is not None and text_delta > fail_on_added_bytes:
+            "--fail-on-symbol-set-change: {} symbol(s) added, {} removed, {} resized, {} renamed. "
+            "None of that is a property of the build machine, so any change here is a source "
+            "change - name each one in the commit message or fix it.".format(
+                len(added), len(removed), len(resized), len(renamed)))
+    if fail_on_text_delta and text_delta != 0:
         reasons.append(
-            "--fail-on-added-bytes {}: .text grew by {} bytes.".format(fail_on_added_bytes, text_delta))
+            "--fail-on-text-delta: .text moved by {:+d} bytes.".format(text_delta))
+    if fail_on_added_bytes is not None:
+        # A budget of zero is not "must not grow", it is "must not move": the pull build of a
+        # strangler that got smaller is just as much a code change as one that got bigger, and G1
+        # names the delta, not its sign. A positive budget keeps the older, one-sided meaning.
+        if fail_on_added_bytes == 0 and text_delta != 0 and not fail_on_text_delta:
+            reasons.append(
+                "--fail-on-added-bytes 0: .text moved by {:+d} bytes (a budget of 0 means the "
+                "section must be byte-identical, in either direction).".format(text_delta))
+        elif fail_on_added_bytes > 0 and text_delta > fail_on_added_bytes:
+            reasons.append(
+                "--fail-on-added-bytes {}: .text grew by {} bytes.".format(
+                    fail_on_added_bytes, text_delta))
     return reasons
 
 
@@ -283,23 +309,36 @@ def self_test():
         problems.append("unchanged count: {} (expected 2)".format(unchanged))
     if before_sections.get(".text") != 1000 or after_sections.get("Total") != 1600:
         problems.append("size --format=sysv parse: {} / {}".format(before_sections, after_sections))
-    # The two gates, driven from the same canned transcripts: the after side adds one symbol,
-    # removes one and grows .text by 100, so each flag must fire, each must stay quiet when it is
-    # not asked for, and --fail-on-added-bytes must accept a delta it was told to tolerate.
+    # The three gates, driven from the same canned transcripts: the after side adds one symbol,
+    # removes one, resizes one, renames one and grows .text by 100, so each flag must fire, each
+    # must stay quiet when it is not asked for, and --fail-on-added-bytes must accept a delta it
+    # was told to tolerate.
     text_delta = after_sections.get(".text", 0) - before_sections.get(".text", 0)
-    if gate_failures(added, removed, text_delta, None, False):
+    if gate_failures(added, removed, resized, renamed, text_delta, None, False):
         problems.append("gates fired with no flag set")
-    if len(gate_failures(added, removed, text_delta, None, True)) != 1:
+    if len(gate_failures(added, removed, resized, renamed, text_delta, None, True)) != 1:
         problems.append("--fail-on-symbol-set-change did not fire on 1 added + 1 removed")
-    if len(gate_failures(added, removed, text_delta, 0, False)) != 1:
+    if len(gate_failures(added, removed, resized, renamed, text_delta, 0, False)) != 1:
         problems.append("--fail-on-added-bytes 0 did not fire on a +100 .text delta")
-    if gate_failures(added, removed, text_delta, 100, False):
+    if gate_failures(added, removed, resized, renamed, text_delta, 100, False):
         problems.append("--fail-on-added-bytes 100 fired on a +100 .text delta")
-    if len(gate_failures([], [], text_delta, 0, True)) != 1:
+    if len(gate_failures([], [], [], [], text_delta, 0, True)) != 1:
         problems.append("an unchanged symbol set still tripped --fail-on-symbol-set-change")
+    # The three shapes that used to walk through: a SHRUNK .text under a zero budget, a resize with
+    # no net delta, and a rename with no net delta. G1 forbids all three by name.
+    if not gate_failures([], [], [], [], -4096, 0, False):
+        problems.append("--fail-on-added-bytes 0 passed a .text that SHRANK by 4096 bytes")
+    if not gate_failures([], [], resized, [], 0, None, True):
+        problems.append("--fail-on-symbol-set-change passed a resized symbol at zero net delta")
+    if not gate_failures([], [], [], renamed, 0, None, True):
+        problems.append("--fail-on-symbol-set-change passed a renamed symbol at zero net delta")
+    if not gate_failures([], [], [], [], -4096, None, False, True):
+        problems.append("--fail-on-text-delta passed a .text that SHRANK by 4096 bytes")
+    if gate_failures([], [], [], [], 0, None, False, True):
+        problems.append("--fail-on-text-delta fired on a zero .text delta")
     for problem in problems:
         say("self-test: " + problem)
-    say("self-test: " + ("OK (2 canned transcripts, 5 buckets, 2 gates)" if not problems else "FAILED"))
+    say("self-test: " + ("OK (2 canned transcripts, 5 buckets, 3 gates)" if not problems else "FAILED"))
     return 0 if not problems else 1
 
 
@@ -325,11 +364,17 @@ def main():
     parser.add_argument("--threshold", type=int, default=0,
                         help="ignore size deltas of at most this many bytes")
     parser.add_argument("--fail-on-added-bytes", type=int, default=None,
-                        help="exit non-zero when .text grew by more than this many bytes "
-                             "(0 = the pull build must not grow at all)")
+                        help="exit non-zero when .text grew by more than this many bytes; 0 is "
+                             "special and means the section must be BYTE-IDENTICAL, so a shrink "
+                             "fails it too (that is what P1's G1 asks for)")
+    parser.add_argument("--fail-on-text-delta", action="store_true",
+                        help="exit non-zero when .text moved at all, in either direction. The "
+                             "explicit spelling of what --fail-on-added-bytes 0 also does.")
     parser.add_argument("--fail-on-symbol-set-change", action="store_true",
-                        help="exit non-zero when any defined symbol was added or removed "
-                             "(renamed-only folds, see --strip-scope, do not count)")
+                        help="exit non-zero when any defined symbol was added, removed, resized or "
+                             "renamed (the four buckets of the report; --strip-scope decides which "
+                             "of added+removed vs renamed a de-nesting lands in, it does not "
+                             "excuse it). Compared at threshold 0 whatever --threshold says.")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -338,6 +383,9 @@ def main():
 
     if not args.before or not args.after:
         parser.error("--before and --after are required (or use --self-test)")
+
+    if args.fail_on_added_bytes is not None and args.fail_on_added_bytes < 0:
+        parser.error("--fail-on-added-bytes takes a byte budget of 0 or more")
 
     rename_map = []
     for entry in args.rename_map:
@@ -353,6 +401,13 @@ def main():
         args.after, args.nm, args.size, args.cxxfilt, args.strip_scope, rename_map)
 
     removed, added, resized, renamed, unchanged = bucket(before, after, only_names, args.threshold)
+    # --threshold is a REPORT control - "do not list resizes smaller than this" - and a gate that
+    # read the thresholded buckets would quietly weaken itself the day someone raised it. The gates
+    # always see the threshold-0 buckets.
+    if args.threshold:
+        gate_removed, gate_added, gate_resized, gate_renamed, _ = bucket(before, after, only_names, 0)
+    else:
+        gate_removed, gate_added, gate_resized, gate_renamed = removed, added, resized, renamed
 
     before_text = before_sections.get(".text", 0)
     after_text = after_sections.get(".text", 0)
@@ -382,10 +437,17 @@ def main():
         len(before), len(after), unchanged))
     if only_names:
         say("listing restricted to names containing: " + ", ".join(only_names))
-    gates = gate_failures(added, removed, delta, args.fail_on_added_bytes,
-                          args.fail_on_symbol_set_change)
-    if args.fail_on_added_bytes is None and not args.fail_on_symbol_set_change:
+    gates = gate_failures(gate_added, gate_removed, gate_resized, gate_renamed, delta,
+                          args.fail_on_added_bytes, args.fail_on_symbol_set_change,
+                          args.fail_on_text_delta)
+    if (args.fail_on_added_bytes is None and not args.fail_on_symbol_set_change
+            and not args.fail_on_text_delta):
         say("no gate flag: informational run")
+    elif args.threshold:
+        say("gates compare at threshold 0 ({} added, {} removed, {} resized, {} renamed there); "
+            "--threshold {} only shortens the report".format(
+                len(gate_added), len(gate_removed), len(gate_resized), len(gate_renamed),
+                args.threshold))
 
     lines = ["# MobileGL symbol report", "",
              "| side | path | file bytes | .text |",
