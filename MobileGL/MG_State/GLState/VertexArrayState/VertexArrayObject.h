@@ -106,6 +106,22 @@ namespace MobileGL {
                 // "any vertex-input state changed" with one compare.
                 Uint32 GetConfigVersion() const { return m_configVersion; }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                // ---- THE BACKEND'S THREE MEMOS ON THE FRONTEND OBJECT ----
+                //
+                // P2 D12.5 (ARCHITECTURE.md 9.5) retires all three: a frontend state object
+                // must not hold the backend's raw pointers, and under split it cannot - the
+                // backend is in another process and its cache entry has no address the client
+                // could store. Magma's handle arm keeps the same three facts in a slot-indexed
+                // table it owns itself (VertexInputStateFactory::VaoBackendMemos), keyed on the
+                // VAO's {slot, gen} and validated by the same config version, so nothing is
+                // recomputed more often than it was.
+                //
+                // They stay compiled under MOBILEGL_PIPE_LEGACY_MEMOS - which a PULL build
+                // forces ON - because that is the arm the pre-handle A/B runs, and because G1
+                // admits no change to the pull build. They are deleted outright with the pull
+                // path at P13.
+                //
                 // Backend-owned content-hash memo, valid while the config version matches
                 // (same idea as ProgramObject's hash memo — avoids re-hashing all
                 // attributes on every draw).
@@ -154,6 +170,7 @@ namespace MobileGL {
                     m_backendAuxMemo1 = aux1;
                     m_backendAuxMemoVersion = m_configVersion;
                 }
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
             private:
                 void BumpAttributeFormatVersion(Uint index);
@@ -193,6 +210,10 @@ namespace MobileGL {
                 Array<Bool, MAX_VERTEX_ATTRIBS> m_attributeUsesBindingModel = {};
 
                 Uint32 m_configVersion = 0;
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                // The storage behind the three accessors above; retired with them (D12.5).
+                // A pull build forces MOBILEGL_PIPE_LEGACY_MEMOS ON, so sizeof(this) does not
+                // move there and G1 sees no change.
                 mutable Uint64 m_backendHashMemo = 0;
                 mutable Uint32 m_backendHashMemoVersion = ~0u;
                 mutable const void* m_backendStateMemo = nullptr;
@@ -201,6 +222,7 @@ namespace MobileGL {
                 mutable Uint64 m_backendAuxMemo0 = 0;
                 mutable Uint64 m_backendAuxMemo1 = 0;
                 mutable Uint32 m_backendAuxMemoVersion = ~0u;
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
             };
         } // namespace GLState
     } // namespace MG_State

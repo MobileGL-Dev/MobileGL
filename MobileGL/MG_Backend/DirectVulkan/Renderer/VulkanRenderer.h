@@ -1387,6 +1387,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return handle;
         }
 #endif
+        // "Is this VAO's content hash already memoized?", asked of whichever side owns the
+        // memo (P2 D12.5). Force-inlined and defined in the class body so that the PULL
+        // build's three readers keep compiling to the very same two loads they always did -
+        // G1 admits no resize, and an out-of-line call here would be one.
+        [[gnu::always_inline]] inline Bool VaoContentHashIfKnown(
+            const MG_State::GLState::VertexArrayObject& vao, Uint64& outHash) const {
+#if MOBILEGL_PIPE_PUSH
+            return m_vertexInputStateFactory->TryGetMemoizedHash(vao, outHash);
+#else
+            return vao.GetBackendHashMemo(outHash);
+#endif
+        }
         // Finds the slot holding `vao`, or recycles the older of its two candidate
         // slots into an empty memo keyed on `vao`. Never returns null.
         VaoDrawMemo* LookupVaoDrawMemo(const MG_State::GLState::VertexArrayObject* vao);

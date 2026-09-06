@@ -3749,7 +3749,7 @@ void main() {
         VaoDrawMemo* slot = nullptr;
         ResolvedVertexBindings* memo = nullptr;
         Uint64 vaoContentHash = 0;
-        const Bool vaoHashKnown = vao.GetBackendHashMemo(vaoContentHash);
+        const Bool vaoHashKnown = VaoContentHashIfKnown(vao, vaoContentHash);
         if (vaoHashKnown) {
             slot = LookupVaoDrawMemo(&vao);
             memo = &slot->bindings;
@@ -6385,7 +6385,7 @@ void main() {
             Uint64 auxMasks = 0;
             Bool factsKnown = false;
             Uint64 contentHash = 0;
-            if (vao.GetBackendHashMemo(contentHash)) {
+            if (VaoContentHashIfKnown(vao, contentHash)) {
                 const VaoDrawMemo* vaoMemo = LookupVaoDrawMemo(&vao);
                 if (vaoMemo->layoutFactsValid && vaoMemo->contentHash == contentHash) {
                     vaoLayoutHash = vaoMemo->layoutHash;
@@ -6402,7 +6402,7 @@ void main() {
                 auxMasks = VertexInputStateFactory::PackVertexInputAuxMasks(
                     vertexInputState.unsupportedAttribMask, vertexInputState.attributeLocationMask);
                 Uint64 stampedHash = 0;
-                if (vao.GetBackendHashMemo(stampedHash)) {
+                if (VaoContentHashIfKnown(vao, stampedHash)) {
                     VaoDrawMemo* vaoMemo = LookupVaoDrawMemo(&vao);
                     vaoMemo->contentHash = stampedHash;
                     vaoMemo->layoutHash = vaoLayoutHash;
