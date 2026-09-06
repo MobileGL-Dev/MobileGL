@@ -27,6 +27,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
+#include <MG_Test/ScopedPipeVerb.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
@@ -4477,6 +4478,10 @@ TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) 
     MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 8); // rows of 3 words (12 B) pad to 16 B
     MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_ROWS, 1);
     MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_PIXELS, 1);
+    // The store reads the PACK block out of the frontend, and it is only ever reached from a
+    // readback verb: a test that calls it directly says so, or the block is unfilled and the
+    // first read is Fatal{UnmigratedPipeInput} in a push build.
+    MG_Test::ScopedPipeVerb readback(MG_Pipe::MGPipeVerb::ReadPixels);
     ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
                                                        /*sliceHeight=*/2, /*sliceCount=*/1,
                                                        GL_UNSIGNED_INT_5_9_9_9_REV, destination,
@@ -4499,6 +4504,8 @@ TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) 
     MG_Impl::GLImpl::PixelStorei(GL_PACK_SKIP_PIXELS, 0);
     MG_Impl::GLImpl::PixelStorei(GL_PACK_ALIGNMENT, 1);
     MG_Impl::GLImpl::PixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+    // A second readback, after the PACK parameters moved.
+    readback.Renew();
     ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
                                                        /*sliceHeight=*/1, /*sliceCount=*/1,
                                                        GL_UNSIGNED_INT_5_9_9_9_REV, destination,

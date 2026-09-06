@@ -25,6 +25,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include <MG_State/GLState/TextureState/TextureState.h>
+#include <MG_Test/ScopedPipeVerb.h>
 #include <MG_Backend/DirectVulkan/Renderer/ProgramFactory.h>
 #include <MG_Backend/DirectVulkan/Renderer/UniformManager.h>
 #include <MG_Backend/DirectVulkan/Renderer/VkRenderPassManager.h>
@@ -321,7 +322,10 @@ TEST(DirectGLESSanity, BindsAMultisampleTextureDespiteTheDefaultMipmapFilter) {
     backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
     const GLuint backendTextureId = backendTexture->GetBackendTextureId();
 
-    // The symptom itself: the per-unit walk has to actually bind it.
+    // The symptom itself: the per-unit walk has to actually bind it. BindCurrentTextures() is
+    // the per-draw walk - it reads GetProgramForDraw - so the block it reads is the one a draw
+    // fills; without saying so, its first read is Fatal{UnmigratedPipeInput} in a push build.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     DirectGLES::BindCurrentTextures();
     ASSERT_EQ(state.bindCalls.size(), 1u)
         << "the multisample texture was not bound; every texelFetch against it reads zero";
@@ -362,6 +366,9 @@ TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
     backendTexture = MakeShared<DirectGLES::TextureImpl::BackendTextureObject>();
     const GLuint backendTextureId = backendTexture->GetBackendTextureId();
 
+    // Each walk below is the texture half of one draw, so each gets its own verb (the second
+    // and third stand after frontend state moved, exactly as a second entry point's fill would).
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     DirectGLES::BindCurrentTextures();
     ASSERT_EQ(state.bindCalls.size(), 1u);
     EXPECT_EQ(state.bindCalls[0].target, GL_TEXTURE_2D);
@@ -369,6 +376,7 @@ TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
 
     // The default 1D slot maps to the same native ES target as 2D. It must not clear and force a
     // redundant rebind while the real 2D frontend object remains current.
+    draw.Renew();
     DirectGLES::BindCurrentTextures();
     EXPECT_EQ(state.bindCalls.size(), 1u);
 
@@ -379,6 +387,7 @@ TEST(DirectGLESSanity, BindingZeroClearsPreviousNativeTextureBinding) {
             .GetBoundObject()
             .get()));
 
+    draw.Renew();
     DirectGLES::BindCurrentTextures();
 
     ASSERT_EQ(state.bindCalls.size(), 2u);
@@ -3015,7 +3024,9 @@ TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
     ASSERT_NE(resident, nullptr);
 
     // First sync: builds the memo with unit 0 -> `resident`, and gives `resident`'s twin its
-    // 16x16 backend storage.
+    // 16x16 backend storage. The unit walk is the per-draw one, so both syncs below stand in a
+    // draw - the fill is what a real glDraw* would have done before reaching this helper.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
     auto* residentSlot = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects.Find(resident.get());
     ASSERT_NE(residentSlot, nullptr);
@@ -3031,6 +3042,9 @@ TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
     MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(foreign);
 
     const SizeT specsBeforeReplay = specs.size();
+    // The second draw. Its fill re-reads the memo's keys off the live context, which is the
+    // premise being tested: the silent slot swap moved none of them.
+    draw.Renew();
     MG_Backend::DirectGLES::TextureImpl::SyncNeccessaryTextures();
 
     // `foreign` must have been synced through its OWN twin...

@@ -22,6 +22,7 @@
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Test/ScopedPipeVerb.h>
 
 using namespace MobileGL;
 
@@ -1229,6 +1230,11 @@ TEST_F(FramebufferTest, DrawIntoAWidenedDrawBufferReachesTheDriverWithAlphaWrite
 
     // What the application asked for: write every channel of every draw buffer.
     MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    // SyncRenderState is reached from a verb, never on its own: a test that calls it directly
+    // has to say which verb it stands in, or the block it reads is unfilled and unstamped and
+    // its first read is Fatal{UnmigratedPipeInput} in a push build. forColorClear=false is the
+    // draw arm.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     // What the driver was told. Draw buffer 0 is untouched; draw buffer 1 loses alpha.
@@ -1260,14 +1266,22 @@ TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitu
     MG_Impl::GLImpl::ColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
     // A draw first, so the mask really is doctored when the clear arrives...
-    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
     ASSERT_EQ(g_driverIndexedColorMasks[1].a, GL_FALSE);
 
     // ...and now the clear, with NOTHING changed in the frontend parameter block. The frontend's
     // render-state version has not moved, so only the purpose-aware memo can force this push -
     // without it the clear would inherit the draw's alpha-off mask and never write the 1.0.
     ResetRecordedColorMasks();
-    MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
+    {
+        // A different verb CLASS, so a scope of its own: kClear's fill set is what a clear may
+        // read, and this half has to go through on that set alone.
+        MG_Test::ScopedPipeVerb clear(MG_Pipe::MGPipeVerb::Clear);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true);
+    }
     ASSERT_TRUE(g_driverIndexedColorMasks[1].seen) << "the clear must re-push the colour mask";
     EXPECT_EQ(g_driverIndexedColorMasks[1].a, GL_TRUE) << "a clear is what puts the 1.0 in the stored alpha";
 
@@ -1305,6 +1319,7 @@ TEST_F(FramebufferTest, ApplicationAlphaMaskOffIsStillHonouredOnANativeDrawBuffe
     MG_Impl::GLImpl::ColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
     MG_Impl::GLImpl::ColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     MG_Impl::GLImpl::ColorMaski(2, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     EXPECT_EQ(g_driverIndexedColorMasks[0].a, GL_FALSE) << "the application's own alpha mask survives";
@@ -1337,6 +1352,7 @@ TEST_F(FramebufferTest, DualSourceBlendFactorsReachTheDriverWhenTheExtensionIsTh
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR) << "GL_SRC1_* is core since 3.3; glBlendFunc must take it";
     ResetRecordedBlend();
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
@@ -1357,6 +1373,7 @@ TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensio
     ResetRecordedBlend();
 
     // The whole point: this used to be `throw std::runtime_error` straight through the GL ABI.
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
 
     ASSERT_TRUE(g_driverBlend[0].enableSeen) << "the blend enable still has to be pushed";
@@ -1374,6 +1391,7 @@ TEST_F(FramebufferTest, DualSourceBlendIsDeclinedRatherThanThrownWhenTheExtensio
     // is what has to push it.
     MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     ResetRecordedBlend();
+    draw.Renew();
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
     EXPECT_TRUE(g_driverBlend[0].enabled);
@@ -1400,6 +1418,7 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
     ResetRecordedBlend();
 
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false));
 
     for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
@@ -1416,7 +1435,10 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     // the flag only steers the alpha-widen colour mask, so it must not reopen this either.
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_COLOR, GL_ONE_MINUS_SRC1_COLOR);
     ResetRecordedBlend();
-    ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true));
+    {
+        MG_Test::ScopedPipeVerb clear(MG_Pipe::MGPipeVerb::Clear);
+        ASSERT_NO_THROW(MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/true));
+    }
     for (Uint i = 0; i < kRecordedDrawBuffers; ++i) {
         EXPECT_NE(g_driverBlend[i].srcRGB, static_cast<GLenum>(GL_SRC1_COLOR)) << "draw buffer " << i;
         EXPECT_NE(g_driverBlend[i].dstRGB, static_cast<GLenum>(GL_ONE_MINUS_SRC1_COLOR)) << "draw buffer " << i;
@@ -1427,6 +1449,7 @@ TEST_F(FramebufferTest, DualSourceFactorsAreDeclinedEvenWithBlendingDisabled) {
     MG_Impl::GLImpl::Enable(GL_BLEND);
     MG_Impl::GLImpl::BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     ResetRecordedBlend();
+    draw.Renew();
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
     EXPECT_TRUE(g_driverBlend[0].enabled) << "the enable has to be pushed - the shadow said 'off' because it was";
@@ -1444,6 +1467,7 @@ TEST_F(FramebufferTest, DualSourceFactorsWithBlendingDisabledStillReachACapableD
     MG_Impl::GLImpl::Disable(GL_BLEND);
     MG_Impl::GLImpl::BlendFunc(GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA);
     ResetRecordedBlend();
+    MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
     MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
 
     ASSERT_TRUE(g_driverBlend[0].factorsSeen);
