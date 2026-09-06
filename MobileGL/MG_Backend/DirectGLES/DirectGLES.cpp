@@ -1218,8 +1218,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the result to the buffer sync (resolved-buffers memo host), the VAO sync and
         // the draw-time bind, which each used to run their own registry Find. The raw
         // pointer stays valid for the whole draw: the frontend VAO is pinned by the
-        // context binding, and a live object's registry entry is never erased nor its
-        // twin replaced (see TwinLookupMemo's contract).
+        // context binding, and a live object's twin is never erased nor replaced - on the
+        // legacy arm that is TwinLookupMemo's contract, and on the {slot, gen} arm it is
+        // simply that nothing but the sweep frees a slot and the sweep only takes slots
+        // whose frontend object is already gone.
         BackendVertexArrayObject* ResolveVaoTwin(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -1390,7 +1392,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* slot = g_backendTextureObjects.Find(textureObject.get());
                 MOBILEGL_ASSERT(slot != nullptr && *slot != nullptr,
                                 "the texture twin resolved at entry is gone after its own sync");
-                return *slot;
+                if (slot != nullptr && *slot != nullptr) {
+                    return *slot;
+                }
+                // Cannot happen - the caller holds the frontend object, so its slot cannot be
+                // reclaimed underneath this call - but the return is a reference, and a null
+                // deref in a release build is a worse way to learn that than a re-created twin.
+                auto& repaired = g_backendTextureObjects.GetOrCreate(textureObject);
+                if (!repaired) {
+                    repaired = backendObj;
+                }
+                return repaired;
             }
 #endif
             auto* refreshedSlot = g_backendTextureObjects.Find(textureObject.get());
