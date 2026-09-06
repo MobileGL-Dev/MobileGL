@@ -407,6 +407,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return MG_Pipe::kMGPipeNullHandle;
         }
 
+        // The twin at a handle, or null when the slot is free or its Gen has moved on. This is
+        // the lookup a backend memo that already holds a handle wants: no lifetime-id probe.
+        BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.FindByHandle(handle);
+            }
+            return nullptr;
+        }
+
         // fn(const StatePtr& state, const BackendPtr& twin) over every live entry. The legacy
         // begin()/end() handed out the map key, i.e. the raw frontend address - exactly the
         // identity the backend must stop reading - and handed it out for entries whose state

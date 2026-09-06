@@ -57,9 +57,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static SharedPtr<MG_State::GLState::SamplerObject> g_rawDepthFetchSamplerState;
     static SharedPtr<SamplerImpl::BackendSamplerObject> g_rawDepthFetchSamplerBackend;
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
     // Two objects are the same binding iff they share a control block. Raw addresses lie
     // (a freed object's heap slot is reused), but a held weak_ptr pins the control block,
     // so no later object can ever owner-equal a snapshot of its predecessor.
+    //
+    // This is the pre-handle identity mechanism, and it is compiled only for the legacy arm.
+    // On the {slot, gen} arm nothing needs it: a handle already cannot be reproduced by a
+    // recycled address, so there is no snapshot to owner-compare.
     template <typename T>
     static Bool OwnerEquals(const WeakPtr<T>& snapshot, const SharedPtr<T>& current) {
         return !snapshot.owner_before(current) && !current.owner_before(snapshot);
@@ -130,6 +135,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // FBOs; 64 slots is plenty.
     static TwinLookupMemo<MG_State::GLState::FramebufferObject, FramebufferImpl::BackendFramebufferObject, 6>
         g_fboTwinLookupMemo;
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
     // Cached addresses of the frontend's framebuffer binding slots. The frontend
     // getter linear-scans its slot array per call and the draw path asks for these
@@ -142,9 +148,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // exactly the pointer compare below.
     using FbBindingSlot =
         std::remove_reference_t<decltype(MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
+#if !MOBILEGL_PIPE_PUSH
     static const void* g_fbSlotCacheContext = nullptr;
     static Array<FbBindingSlot*, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fbSlotCache = {};
-    static inline FbBindingSlot& GetFramebufferBindingSlotFast(FramebufferTarget target) {
+#endif
+    // P2 step e4. Under push this is an ORDINARY read of pushed state and the cache above does
+    // not exist, which closes the P1 accessor bypass: the cached raw pointer ran the checked
+    // accessor once per context change and then handed out the pointee forever, so at all five
+    // call sites the per-verb poison stamp (MGP_INPUT_CHECK) and the verify read-hook
+    // (MGP_INPUT_VERIFY_READ) were skipped. A verb that legitimately never fills
+    // GetFramebufferBindingSlot could not be caught here, and a verify build compared the field
+    // only where the slow accessor was used. In the pull build MGB_CTX is the live GLContext,
+    // there is no poison to bypass and the frontend getter still linear-scans, so the cache is
+    // exactly the code it was.
+    static inline FbBindingSlot& GetFramebufferBindingSlotChecked(FramebufferTarget target) {
+#if MOBILEGL_PIPE_PUSH
+        return MGB_CTX->GetFramebufferBindingSlot(target);
+#else
         const void* ctx = MGB_CTX_IDENTITY;
         if (ctx != g_fbSlotCacheContext) {
             auto& live = *MGB_CTX;
@@ -154,6 +174,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_fbSlotCacheContext = ctx;
         }
         return *g_fbSlotCache[SizeT(target)];
+#endif
     }
 
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
@@ -1203,6 +1224,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                // No memo on this arm. The memo existed to turn the registry's hash probe into
+                // an array index; the slot table's Find already IS the array index, and the
+                // memo's whole safety argument - owner-equality against a recycled heap address
+                // - is answered by {slot, gen} instead of re-derived per lookup.
+                auto* slot = g_backendVertexArrayObjects.Find(vao.get());
+                auto& backendObj = slot ? *slot : g_backendVertexArrayObjects.GetOrCreate(vao);
+                if (!backendObj) {
+                    backendObj = MakeShared<BackendVertexArrayObject>();
+                }
+                return backendObj.get();
+            }
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
             if (auto* twin = g_vaoTwinLookupMemo.Lookup(vao)) {
                 return twin;
             }
@@ -1213,6 +1249,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             g_vaoTwinLookupMemo.Store(vao, backendObj.get());
             return backendObj.get();
+#else
+            return nullptr;
+#endif
         }
 
         void SyncCurrentVAO(const SharedPtr<MG_State::GLState::VertexArrayObject>& currentVAOObject,
@@ -1317,6 +1356,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // relocate every entry - leaving the reference dangling. Holding the object itself
             // keeps the calls below working on the right twin regardless; the slot is re-resolved
             // at the end for the reference this function returns.
+            //
+            // The slot-table arm has no such hazard - an entry is an array element and a nested
+            // insert can only reallocate the vector, which the re-resolve at the tail already
+            // handles - so the copy is a refcount it does not need to pay. It keeps the copy for
+            // exactly one thing: holding the twin alive across the nested sync.
             const SharedPtr<BackendTextureObject> backendObj = backendSlot;
 
             if (imageBindableStorageRequired) {
@@ -1337,6 +1381,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 backendObj->SyncBuiltinSamplerToBackend(textureObject);
             }
 
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                // One re-resolve, and only because a nested GetOrCreate may have GROWN the
+                // vector and moved the element; the entry itself cannot have been erased, since
+                // nothing on this arm erases a live slot. No second Find-or-create, no
+                // put-the-twin-back repair.
+                auto* slot = g_backendTextureObjects.Find(textureObject.get());
+                MOBILEGL_ASSERT(slot != nullptr && *slot != nullptr,
+                                "the texture twin resolved at entry is gone after its own sync");
+                return *slot;
+            }
+#endif
             auto* refreshedSlot = g_backendTextureObjects.Find(textureObject.get());
             auto& refreshedBackendObj = refreshedSlot ? *refreshedSlot
                                                       : g_backendTextureObjects.GetOrCreate(textureObject);
@@ -1363,6 +1419,55 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //   * everything unit bindings say nothing about: the touched-unit high-water mark,
         //     the frontend context identity, the backend ES context generation, and (for the
         //     resolution memo) the program keys that arbitrate aliased targets.
+#if MOBILEGL_PIPE_PUSH
+        // P2: the snapshot stops holding weak_ptrs and holds the frontend objects' LIFETIME IDs.
+        // The weak_ptr was here for one reason - a raw address lies once the allocator recycles
+        // it - and a lifetime id is a monotone per-class counter that is never handed out twice,
+        // so it answers the same question with an integer compare and without pinning a control
+        // block. 0 means "nothing bound", which no live object can collide with (the counters
+        // start at 1). This is not the twin table's {slot, gen}: a bound texture that has never
+        // been synced has no twin and therefore no handle, so a handle-keyed snapshot would read
+        // two never-synced textures as equal. The identity has to exist before the twin does.
+        struct UnitBindingsSnapshot {
+            Array<Uint64, (SizeT)TextureTarget::TextureTargetCount> slotObjects{};
+            Uint64 samplerObject = 0;
+        };
+
+        static Uint64 LifetimeIdOf(const SharedPtr<MG_State::GLState::ITextureObject>& object) {
+            return object ? object->GetLifetimeId() : 0;
+        }
+
+        static Uint64 LifetimeIdOf(const SharedPtr<MG_State::GLState::SamplerObject>& object) {
+            return object ? object->GetLifetimeId() : 0;
+        }
+
+        static void CaptureUnitBindings(Int maxTouchedUnit, Vector<UnitBindingsSnapshot>& out) {
+            out.resize(static_cast<SizeT>(maxTouchedUnit + 1));
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
+                auto& snapshot = out[static_cast<SizeT>(unit)];
+                const auto& slots = textureUnit.GetAllBindingSlots();
+                for (SizeT i = 0; i < slots.size(); ++i) {
+                    snapshot.slotObjects[i] = LifetimeIdOf(slots[i].GetBoundObject());
+                }
+                snapshot.samplerObject = LifetimeIdOf(textureUnit.GetSamplerObject());
+            }
+        }
+
+        static Bool UnitBindingsUnchanged(Int maxTouchedUnit, const Vector<UnitBindingsSnapshot>& snapshots) {
+            if (snapshots.size() != static_cast<SizeT>(maxTouchedUnit + 1)) return false;
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                auto& textureUnit = MGB_CTX->GetTextureUnitObject(unit);
+                const auto& snapshot = snapshots[static_cast<SizeT>(unit)];
+                const auto& slots = textureUnit.GetAllBindingSlots();
+                for (SizeT i = 0; i < slots.size(); ++i) {
+                    if (snapshot.slotObjects[i] != LifetimeIdOf(slots[i].GetBoundObject())) return false;
+                }
+                if (snapshot.samplerObject != LifetimeIdOf(textureUnit.GetSamplerObject())) return false;
+            }
+            return true;
+        }
+#else
         struct UnitBindingsSnapshot {
             Array<WeakPtr<MG_State::GLState::ITextureObject>, (SizeT)TextureTarget::TextureTargetCount>
                 slotObjects{};
@@ -1395,6 +1500,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return true;
         }
+#endif
 
         static Vector<UnitBindingsSnapshot> g_observedUnitBindings;
         static Uint64 g_observedUnitBindingsContextId = 0;
@@ -1610,7 +1716,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // registry keeps a backend object alive until its frontend texture expires, which an
             // attached texture cannot. A renderbuffer-only FBO - the common Minecraft frame -
             // reduces to the key compare and an empty loop.
-            const auto& drawSlot = GetFramebufferBindingSlotFast(FramebufferTarget::Draw);
+            const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
             const auto& currentFBO = drawSlot.GetBoundObject();
             if (currentFBO) {
                 const Uint16 fboSlotVersion = drawSlot.GetVersion();
@@ -1904,7 +2010,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MG_State::GLState::FramebufferObject* lastUpdatedFBO = nullptr;
 
             for (auto& target : fboTargets) {
-                auto& slot = GetFramebufferBindingSlotFast(target);
+                auto& slot = GetFramebufferBindingSlotChecked(target);
                 auto& currentFBO = slot.GetBoundObject();
 
                 // The three memos together say "this target is already synced": which object is
@@ -2742,7 +2848,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // only runs later in PrepareForDraw: a program compiled against a stale count
             // would not be relinked until the draw after the one that needed it.
             {
-                const auto& drawSlot = GetFramebufferBindingSlotFast(FramebufferTarget::Draw);
+                const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
                 const auto& drawFBO = drawSlot.GetBoundObject();
                 const Uint16 slotVersion = drawSlot.GetVersion();
                 const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
@@ -2766,16 +2872,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_fragColorBroadcastCount = g_broadcastMemoCount;
             }
 
-            BackendProgramObjectImpl* twin = g_programTwinLookupMemo.Lookup(currentProgram);
-            if (!twin) {
-                auto* backendProgramSlot = g_backendProgramObjects.Find(currentProgram.get());
-                auto& backendObj =
-                    backendProgramSlot ? *backendProgramSlot : g_backendProgramObjects.GetOrCreate(currentProgram);
+            BackendProgramObjectImpl* twin = nullptr;
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                auto* slot = g_backendProgramObjects.Find(currentProgram.get());
+                auto& backendObj = slot ? *slot : g_backendProgramObjects.GetOrCreate(currentProgram);
                 if (!backendObj) {
                     backendObj = MakeShared<BackendProgramObjectImpl>();
                 }
-                g_programTwinLookupMemo.Store(currentProgram, backendObj.get());
                 twin = backendObj.get();
+            } else
+#endif
+            {
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                twin = g_programTwinLookupMemo.Lookup(currentProgram);
+                if (!twin) {
+                    auto* backendProgramSlot = g_backendProgramObjects.Find(currentProgram.get());
+                    auto& backendObj = backendProgramSlot ? *backendProgramSlot
+                                                          : g_backendProgramObjects.GetOrCreate(currentProgram);
+                    if (!backendObj) {
+                        backendObj = MakeShared<BackendProgramObjectImpl>();
+                    }
+                    g_programTwinLookupMemo.Store(currentProgram, backendObj.get());
+                    twin = backendObj.get();
+                }
+#endif
             }
             // A link-version mismatch means the program was relinked: the backend
             // shaders and every cache built by CacheResourceLocations (block
@@ -2857,7 +2978,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-        auto& slot = GetFramebufferBindingSlotFast(target);
+        auto& slot = GetFramebufferBindingSlotChecked(target);
         // No fast path on the binding slot's version. It is a 16-bit counter that only
         // ForceBindCurrentFBO ever stamps here, so the comparison was against an arbitrarily old
         // snapshot and any later slot version that happened to land on it - one wrap of the
@@ -2871,13 +2992,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and the twin memo replaces even that with an array probe on the steady path.
         const auto& currentFBO = slot.GetBoundObject();
         if (currentFBO && currentFBO != MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo->defaultFBO) {
-            FramebufferImpl::BackendFramebufferObject* twin = g_fboTwinLookupMemo.Lookup(currentFBO);
-            if (!twin) {
-                auto* backendFBOSlot = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
-                if (backendFBOSlot && *backendFBOSlot) {
-                    twin = backendFBOSlot->get();
-                    g_fboTwinLookupMemo.Store(currentFBO, twin);
+            FramebufferImpl::BackendFramebufferObject* twin = nullptr;
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                auto* slot = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
+                if (slot && *slot) {
+                    twin = slot->get();
                 }
+            } else
+#endif
+            {
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                twin = g_fboTwinLookupMemo.Lookup(currentFBO);
+                if (!twin) {
+                    auto* backendFBOSlot = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
+                    if (backendFBOSlot && *backendFBOSlot) {
+                        twin = backendFBOSlot->get();
+                        g_fboTwinLookupMemo.Store(currentFBO, twin);
+                    }
+                }
+#endif
             }
             if (twin) {
                 twin->Bind(target);
@@ -2932,7 +3066,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-        auto& slot = GetFramebufferBindingSlotFast(target);
+        auto& slot = GetFramebufferBindingSlotChecked(target);
         const auto& fbo = slot.GetBoundObject();
         SyncAndBindFramebufferObject(fbo, target);
         FramebufferImpl::g_fboSyncedSlotVersions[(SizeT)target] = slot.GetVersion();
@@ -3155,7 +3289,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // pass creates it later in the same draw), and a cached miss would keep skipping the
     // bind after it appears.
     struct UnitSamplerLookupMemo {
+#if MOBILEGL_PIPE_PUSH
+        // The {slot, gen} of the frontend sampler this row was resolved for. It replaces the
+        // weak_ptr and its owner compare: a stale row cannot match, because the successor of a
+        // freed sampler is handed the same slot only with a higher Gen.
+        MG_Pipe::MGPipeHandle frontendHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
         WeakPtr<MG_State::GLState::SamplerObject> frontend{};
+#endif
         SamplerImpl::BackendSamplerObject* backend = nullptr;
     };
     static Array<UnitSamplerLookupMemo, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
@@ -3164,6 +3306,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static SamplerImpl::BackendSamplerObject* ResolveUnitSamplerBackend(
         Int unit, const SharedPtr<MG_State::GLState::SamplerObject>& samplerObject) {
         auto& memo = g_unitSamplerLookupMemos[static_cast<SizeT>(unit)];
+#if MOBILEGL_PIPE_PUSH
+        if (EsprytSlotTablesEnabled()) {
+            const MG_Pipe::MGPipeHandle handle =
+                SamplerImpl::g_backendSamplerObjects.HandleOf(samplerObject.get());
+            if (memo.backend && !MG_Pipe::MGPipeHandleIsNull(handle) && memo.frontendHandle == handle) {
+                return memo.backend;
+            }
+            auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(handle);
+            if (slot && *slot) {
+                // A MISS is still never cached: the twin may not exist yet when the unit pass
+                // runs, because the program pass creates it later in the same draw.
+                memo.frontendHandle = handle;
+                memo.backend = slot->get();
+                return memo.backend;
+            }
+            return nullptr;
+        }
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
         if (memo.backend && OwnerEquals(memo.frontend, samplerObject)) {
             return memo.backend;
         }
@@ -3173,6 +3334,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             memo.backend = backendSamplerSlot->get();
             return memo.backend;
         }
+#endif
         return nullptr;
     }
 
@@ -6410,6 +6572,86 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const GLuint backendTextureId = (*backendTextureSlot)->GetBackendTextureId();
 
+            // The one direct-iteration site over a twin table. The legacy walk reads the map
+            // KEY, i.e. the raw frontend address, and has to test the entry's weak_ptr by hand
+            // before it dares dereference it. ForEachLive hands over a strong reference instead,
+            // so that hazard cannot arise; the body is otherwise identical, which is why it is
+            // lifted into a lambda both arms call.
+#if MOBILEGL_PIPE_PUSH
+            // The push arm walks the twin table through ForEachLive, which hands over a
+            // STRONG reference to the state object; the legacy map walk below it reads the
+            // map key - the raw frontend address - and has to test the entry weak_ptr by
+            // hand first. The body is shared between the two arms through the lambda.
+            const auto detachFrom = [&](MG_State::GLState::FramebufferObject* stateFBO,
+                                        const SharedPtr<FramebufferImpl::BackendFramebufferObject>& backendFBO) {
+                if (stateFBO == nullptr || !backendFBO || stateFBO->IsDefaultFramebuffer()) {
+                    return;
+                }
+
+                const auto& attachments = stateFBO->GetAllAttachmentObjects();
+                for (SizeT i = 0; i < attachments.size(); ++i) {
+                    const auto& attachmentObject = attachments[i];
+                    if (!attachmentObject.IsTexture() || attachmentObject.GetTexture().get() != texture.get()) {
+                        continue;
+                    }
+
+                    const auto frontendType = static_cast<FramebufferAttachmentType>(i);
+                    GLenum backendAttachment = GL_NONE;
+                    if (frontendType >= FramebufferAttachmentType::Color0 &&
+                        frontendType <= FramebufferAttachmentType::Color31) {
+                        backendAttachment = backendFBO->GetBackendAttachmentType(frontendType);
+                    } else {
+                        backendAttachment = MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(frontendType);
+                    }
+                    if (backendAttachment == GL_NONE || backendAttachment == GL_UNKNOWN_MGL) {
+                        continue;
+                    }
+
+                    GLenum textureTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(
+                        attachmentObject.GetTextureUploadTarget());
+                    if (textureTarget == GL_UNKNOWN_MGL) {
+                        textureTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(texture->GetTarget());
+                    }
+
+                    const GLuint backendFBOId = backendFBO->GetBackendFramebufferId();
+                    FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, backendFBOId);
+                    if (attachmentObject.IsLayered()) {
+                        g_GLESFuncs.glFramebufferTexture(GL_DRAW_FRAMEBUFFER, backendAttachment, 0, 0);
+                    } else {
+                        g_GLESFuncs.glFramebufferTexture2D(
+                            GL_DRAW_FRAMEBUFFER, backendAttachment, textureTarget, 0, 0);
+                    }
+                    ClearGLErrors();
+                    m_detachedAttachments.push_back(
+                        {backendFBOId, backendAttachment, textureTarget, backendTextureId,
+                         static_cast<GLint>(attachmentObject.GetTextureLevel()), attachmentObject.IsLayered()});
+                }
+            };
+
+#if MOBILEGL_PIPE_PUSH
+            if (EsprytSlotTablesEnabled()) {
+                FramebufferImpl::g_backendFramebufferObjects.ForEachLive(
+                    [&](const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBO,
+                        const SharedPtr<FramebufferImpl::BackendFramebufferObject>& backendFBO) {
+                        detachFrom(stateFBO.get(), backendFBO);
+                    });
+                return;
+            }
+#endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+            for (auto it = FramebufferImpl::g_backendFramebufferObjects.begin();
+                 it != FramebufferImpl::g_backendFramebufferObjects.end(); ++it) {
+                // An entry whose state object died is only waiting for the next collection;
+                // the key is a dangling address, so it must not be dereferenced here.
+                if (it->second.stateRef.expired()) {
+                    continue;
+                }
+                detachFrom(it->first, it->second.backend);
+            }
+#endif
+#else
+            // Pull build: exactly the pre-P2 walk, so this translation unit generates the
+            // same code it did before P2 (G1).
             for (auto it = FramebufferImpl::g_backendFramebufferObjects.begin();
                  it != FramebufferImpl::g_backendFramebufferObjects.end(); ++it) {
                 auto* stateFBO = it->first;
@@ -6460,6 +6702,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                          static_cast<GLint>(attachmentObject.GetTextureLevel()), attachmentObject.IsLayered()});
                 }
             }
+#endif
         }
 
         ~ScopedDetachedTextureFramebufferAttachments() {
