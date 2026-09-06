@@ -56,7 +56,13 @@ namespace MobileGL::MG_Pipe {
     public:
         struct Counters {
             Uint64 Mints = 0;     // create_render_state emissions
-            Uint64 Binds = 0;     // bind_render_state emissions, mint or reuse
+            // bind_render_state emissions, mint or reuse. Counted in Acquire because Acquire
+            // has exactly ONE caller (PipeFill.cpp's EmitRenderState) and that caller binds
+            // immediately after every call - so "acquisitions" and "binds" are the same
+            // number, and counting it here keeps the count from depending on an emitter
+            // remembering to tick it. mints/binds is the cache's hit rate and it is the
+            // number the CSO content-addressing negative control moves.
+            Uint64 Binds = 0;
             Uint64 Hits = 0;      // a probe that found a live entry and passed the memcmp
             Uint64 Collisions = 0; // a hash hit the memcmp REJECTED - the reason it exists
             Uint64 Evictions = 0; // LRU evictions, each one a delete_render_state
@@ -68,6 +74,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle Acquire(const RenderStateParameters& params, Uint64& payloadBytes) {
             Array<Uint8, kMGPipePipelineChunkBytes> bytes;
             MGPipeGatherPipelineBytes(params, bytes.data());
+            ++m_counters.Binds;
 
             const Bool contentAddressed =
                 (MG_Config::Features.PipePush & kMGPipeBehaviourNoCsoContentAddressing) == 0;
