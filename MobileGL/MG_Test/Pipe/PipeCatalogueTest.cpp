@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <limits>
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
@@ -231,6 +232,116 @@ TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
     // The next verb makes the same value stale, which a written-once bitmap could not see.
     state.CurrentVerbSerial = 2;
     EXPECT_FALSE(MGPipeInputFieldIsFresh(state, MGPipeInputField::GetRenderStateParameters));
+}
+
+// G5b: the verb enum is GLFunctionsTable's member list (69 entries), every class has verbs,
+// and the seven sticky fields ride in every class mask (P1 brief D7).
+TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
+    EXPECT_EQ(kMGPipeVerbCount, 69u);
+    EXPECT_EQ(kMGPipeVerbClassCount, 9u);
+    SizeT perClass[kMGPipeVerbClassCount] = {};
+    for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
+        ++perClass[static_cast<SizeT>(kMGPipeVerbClass[v])];
+    }
+    for (SizeT c = 0; c < kMGPipeVerbClassCount; ++c) {
+        EXPECT_GT(perClass[c], 0u) << kMGPipeVerbClassNames[c];
+        for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+            if (kMGPipeInputFieldSticky[f]) {
+                EXPECT_TRUE(MGPipeFieldMaskHas(kMGPipeClassFieldMask[c], static_cast<MGPipeInputField>(f)))
+                    << kMGPipeInputFieldNames[f] << " in " << kMGPipeVerbClassNames[c];
+            }
+        }
+    }
+    // The class table of D7, spot-checked at its edges: a draw reads the render state, a
+    // query reads only the paused-primitive counter, and GenerateMipmap is a texture op.
+    const auto& draw = kMGPipeClassFieldMask[static_cast<SizeT>(MGPipeVerbClass::kDraw)];
+    const auto& query = kMGPipeClassFieldMask[static_cast<SizeT>(MGPipeVerbClass::kQuery)];
+    EXPECT_TRUE(MGPipeFieldMaskHas(draw, MGPipeInputField::GetRenderStateParameters));
+    EXPECT_FALSE(MGPipeFieldMaskHas(query, MGPipeInputField::GetRenderStateParameters));
+    EXPECT_TRUE(MGPipeFieldMaskHas(query, MGPipeInputField::GetTransformFeedbackPausedPrimitiveCounter));
+    EXPECT_EQ(kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::GenerateMipmap)], MGPipeVerbClass::kTextureOp);
+    EXPECT_STREQ(kMGPipeVerbNames[static_cast<SizeT>(MGPipeVerb::GetGpuTimestampNs)], "GetGpuTimestampNs");
+}
+
+// The sticky set is exactly the seven forwarded, argument-keyed accessors (P1 brief D6); no
+// version or generation accessor is among them.
+TEST(PipeCatalogue, StickyFieldsAreExactlyTheSeven) {
+    const char* const expected[] = {"GetBufferBindingPointCount", "GetProgramObject",   "GetTextureObject",
+                                    "HasOpenTransformFeedbackSpan", "InvalidateCompileEnv", "ValidateProgramName",
+                                    "RecordError"};
+    SizeT count = 0;
+    for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+        Bool listed = false;
+        for (const char* name : expected) {
+            if (std::strcmp(kMGPipeInputFieldNames[f], name) == 0) listed = true;
+        }
+        EXPECT_EQ(kMGPipeInputFieldSticky[f], listed) << kMGPipeInputFieldNames[f];
+        if (kMGPipeInputFieldSticky[f]) ++count;
+    }
+    EXPECT_EQ(count, 7u);
+    EXPECT_EQ(kMGPipeInputStickyFieldCount, 7u);
+    EXPECT_FALSE(kMGPipeInputFieldSticky[static_cast<SizeT>(MGPipeInputField::GetTextureContextId)]);
+    EXPECT_FALSE(kMGPipeInputFieldSticky[static_cast<SizeT>(MGPipeInputField::GetSamplingResolutionGeneration)]);
+    EXPECT_FALSE(kMGPipeInputFieldSticky[static_cast<SizeT>(MGPipeInputField::GetPipelineStateVersion)]);
+}
+
+// G4 compares floating point BY BITS (P1 brief D8): a NaN equals itself, a negative zero
+// does not equal a positive one, and a vector type inside an Array inside a value struct is
+// reached field by field - the differing member of the residual block is named.
+TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
+    const Float nan = std::numeric_limits<Float>::quiet_NaN();
+    const FloatVec4 a{nan, 1.f, 2.f, 3.f};
+    const FloatVec4 b{nan, 1.f, 2.f, 3.f};
+    EXPECT_TRUE(MGPipeFieldEqual(a, b));
+    EXPECT_FALSE(a == b); // IEEE ==, the comparison the comparator must NOT use
+    const FloatVec4 zero{0.f, 0.f, 0.f, 0.f};
+    const FloatVec4 negativeZero{-0.f, 0.f, 0.f, 0.f};
+    EXPECT_FALSE(MGPipeFieldEqual(zero, negativeZero));
+    EXPECT_TRUE(zero == negativeZero);
+    EXPECT_TRUE(MGPipeFieldEqual(1.5f, 1.5f));
+    EXPECT_FALSE(MGPipeFieldEqual(-0.f, 0.f));
+
+    ResidualValueBlock left{};
+    ResidualValueBlock right{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(left, right, &field));
+    right.RenderState.BlendStates[3].SrcFactorRGB = BlendFactor::DstColor;
+    EXPECT_FALSE(MGPipeVerify(left, right, &field));
+    EXPECT_STREQ(field, "RenderState");
+    const char* inner = nullptr;
+    EXPECT_FALSE(MGPipeVerify(left.RenderState, right.RenderState, &inner));
+    EXPECT_STREQ(inner, "BlendStates");
+    // A NaN patch level in the render state equals itself too.
+    right = left;
+    left.RenderState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
+    right.RenderState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
+    EXPECT_TRUE(MGPipeVerify(left, right, &field));
+}
+
+// The six value structs have field lists of their own (P1 brief D8): 63 + 6 payloads, and
+// the struct that used to memcmp is compared member by member.
+TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 69u);
+    static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
+    static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
+    static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
+    static_assert(MGPipeHasFieldVerifier<StencilFaceState>::value);
+    static_assert(MGPipeHasFieldVerifier<DynamicBackendParameters>::value);
+    static_assert(MGPipeHasFieldVerifier<MGHostSpan>::value);
+    PixelStoreParameters p{};
+    PixelStoreParameters q{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(p, q, &field));
+    q.SkipRows = 2;
+    EXPECT_FALSE(MGPipeVerify(p, q, &field));
+    EXPECT_STREQ(field, "SkipRows");
+    MGHostSpan s{};
+    MGHostSpan t{};
+    t.Pad0 = 0x5A; // padding is not a field
+    EXPECT_TRUE(MGPipeVerify(s, t, &field));
+    t.Offset = 8;
+    EXPECT_FALSE(MGPipeVerify(s, t, &field));
+    EXPECT_STREQ(field, "Offset");
 }
 
 // G7 pins the member list the pipeline/dynamic split is derived from.
