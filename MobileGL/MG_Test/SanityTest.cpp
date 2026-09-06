@@ -3552,6 +3552,100 @@ TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
               0ull);
 }
 
+namespace {
+    // One kind's worth of the walk the re-key exists for - acquire, look up by object, look up
+    // by handle, delete, re-acquire - driven through the REAL registry global that every
+    // shipping path uses, and therefore through StateBackendObjectRegistry's arm dispatch.
+    //
+    // That "through the real registry" is the whole point of this helper. The eleven
+    // DirectGLESSlotTable cases above drive BackendSlotTable directly on the throwaway kinds
+    // Query and Fence, so they would pass unchanged had the six registries never been re-keyed;
+    // and of the D13 "must not break" cases only the sampled-set staleness walk makes a twin at
+    // all, all four of them of kind Texture. Five of the six re-keyed kinds therefore had no
+    // case that could go red for the switch-over. This is that case.
+    //
+    // No backend twin is constructed: every one of the six twin classes generates a driver id
+    // in its constructor, and none of that is what was re-keyed. What is asserted instead is
+    // that GetOrCreate, Find(object) and FindByHandle(handle) all name the SAME twin storage,
+    // that the handle is a real {slot, gen} rather than the null handle the legacy arm answers,
+    // and that a successor object landing on the freed slot gets a different Gen while the
+    // predecessor's handle resolves to nothing.
+    template <typename Registry, typename MakeObject>
+    void ExpectTheHandleArmDrivesThisKind(const char* kindName, Registry& registry, MakeObject make) {
+        using namespace MobileGL;
+
+        auto first = make();
+        ASSERT_NE(first, nullptr) << kindName;
+        auto& firstTwin = registry.GetOrCreate(first);
+        ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+            << kindName << ": twinning an object did not install the death-notice consumer";
+
+        const MG_Pipe::MGPipeHandle firstHandle = registry.HandleOf(first.get());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle))
+            << kindName << ": GetOrCreate on the real registry minted no handle, so this kind is "
+                           "not running on the {slot, gen} arm at all";
+        EXPECT_EQ(registry.Find(first.get()), &firstTwin)
+            << kindName << ": Find resolved a different twin slot than GetOrCreate handed back";
+        EXPECT_EQ(registry.FindByHandle(firstHandle), &firstTwin)
+            << kindName << ": the handle does not address the twin GetOrCreate handed back";
+
+        // The frontend object dies. NOTHING below sweeps - the destructor's own notice is the
+        // only thing that can free the slot, which is what makes this the e2/e3 pair end to end.
+        const Uint64 firstLifetimeId = first->GetLifetimeId();
+        first.reset();
+        EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr)
+            << kindName << ": the twin outlived the announced death of its object";
+        EXPECT_FALSE(registry.DestroyByLifetimeId(firstLifetimeId))
+            << kindName << ": the slot was still held after its object announced its death";
+
+        auto second = make();
+        ASSERT_NE(second, nullptr) << kindName;
+        auto& secondTwin = registry.GetOrCreate(second);
+        const MG_Pipe::MGPipeHandle secondHandle = registry.HandleOf(second.get());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(secondHandle)) << kindName;
+        EXPECT_EQ(secondHandle.Slot, firstHandle.Slot)
+            << kindName << ": the freed slot was not handed back, so this walk did not exercise "
+                           "the recycle it exists to test";
+        EXPECT_NE(secondHandle.Gen, firstHandle.Gen)
+            << kindName << ": Gen did not move on slot reuse - the predecessor's handle would "
+                           "resolve to the successor's twin, which is the ABA the address key "
+                           "could only paper over";
+        EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr)
+            << kindName << ": the STALE handle resolved to a twin";
+        EXPECT_EQ(registry.FindByHandle(secondHandle), &secondTwin) << kindName;
+
+        second.reset();
+        EXPECT_EQ(registry.FindByHandle(secondHandle), nullptr) << kindName;
+    }
+} // namespace
+
+// The gate on MAJOR 2 of the round-3 review: every kind this package re-keyed, exercised
+// through the registry the shipping code calls, on the arm this package wrote.
+TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and answers the "
+                        "null handle, so there is no {slot, gen} walk to drive";
+    }
+
+    ExpectTheHandleArmDrivesThisKind("Texture", TextureImpl::g_backendTextureObjects, [] {
+        return SharedPtr<ITextureObject>(MakeShared<TextureObject2D>(0u));
+    });
+    ExpectTheHandleArmDrivesThisKind("Framebuffer", FramebufferImpl::g_backendFramebufferObjects,
+                                     [] { return MakeShared<FramebufferObject>(1u); });
+    ExpectTheHandleArmDrivesThisKind("Renderbuffer", RenderbufferImpl::g_backendRenderbufferObjects,
+                                     [] { return MakeShared<RenderbufferObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("SamplerCso", SamplerImpl::g_backendSamplerObjects,
+                                     [] { return MakeShared<SamplerObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("ShaderCso", PrgramImpl::g_backendProgramObjects,
+                                     [] { return MakeShared<ProgramObject>(0u); });
+    ExpectTheHandleArmDrivesThisKind("VertexElementsCso", VertexArrayImpl::g_backendVertexArrayObjects,
+                                     [] { return MakeShared<VertexArrayObject>(0u); });
+}
+
 // The gate on MAJOR 1 of the round-3 review. Commit d89fb684 raised
 // Fatal{PipeLegacyMemosDisabled} from inside InitDisplayAndContext(), i.e. from inside EGL
 // bring-up - and the integration harness pre-flights EGL bring-up in a FORKED CHILD, converting
@@ -3677,6 +3771,10 @@ TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
 }
 
 TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
