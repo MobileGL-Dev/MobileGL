@@ -784,6 +784,48 @@ namespace MobileGL::MG_Pipe {
             return sizeof(MGPVertexAttribDefaults) + header.Count * sizeof(MGPAttribValue);
         }
 
+
+        // set_residual_value_state (P2 brief D9, ARCHITECTURE.md 9.4).
+        //
+        // Since P2 the block is one Uint64 of capability bits, and every one of the 35 is
+        // ALSO answerable from the assembled working block now that the contract closed the
+        // FramebufferSrgb / DepthClamp / TextureCubeMapSeamless storage holes. That
+        // redundancy is the whole point: the bits are read HERE from the frontend, and the
+        // applier compares them against the assembled answer, so the day a later call takes
+        // a capability over and forgets to carry it the block says so on the next draw
+        // (Fatal{PipeResidualDiverged, "<Cap>"}).
+        //
+        // Building the carried bits from the ASSEMBLED block instead would make the trip
+        // wire a tautology, which is exactly the failure P1's entry compare had and P2 is
+        // paying to remove.
+        //
+        // Emitted once per context and again whenever the capability set may have moved,
+        // which is whenever the pipeline version moved: every SET_CAPABILITY arm calls
+        // BumpVersions, so that shutter cannot miss one.
+        Uint64 EmitResidualValueState(GLContext& ctx) {
+            ResidualValueBlock block{};
+            constexpr SizeT kCapabilityCount = static_cast<SizeT>(CapabilityInput::CapabilityInputCount);
+            static_assert(kCapabilityCount <= 64, "CapabilityBits is a Uint64");
+            for (SizeT i = 0; i < kCapabilityCount; ++i) {
+                if (ctx.IsCapabilityEnabled(static_cast<CapabilityInput>(i))) {
+                    block.CapabilityBits |= Uint64{1} << i;
+                }
+            }
+            MGPipeApplySetResidualValueState(block);
+            if (MG_Util::PipeStats::Enabled()) {
+                // ByteClass::ResidualValueBlock has been a placeholder that "stays at 0
+                // until P2" since P0. This is what makes it non-zero.
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::ResidualValueBlock,
+                                             sizeof(ResidualValueBlock));
+            }
+            return sizeof(MGPResidualValueState) + sizeof(ResidualValueBlock);
+        }
+
+        // Set when the capability set may have moved, cleared when the block goes out. It is
+        // not part of the tracker because it is emission state, not a shutter: the shutter
+        // (the pipeline version) has already been consumed by the time this is read.
+        Bool g_residualDue = true;
+
         constexpr Uint32 kAllDynamicChunks =
             static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
 
@@ -903,13 +945,6 @@ namespace MobileGL::MG_Pipe {
             (dirty & MGPipeDirtyBit(MGPipeDirty::NewVertexAttribDefaults)) != 0) {
             payloadBytes += EmitVertexAttribDefaults(*ctx);
         }
-        if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
-            // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
-            // P0 and called by nothing; this is its first emitter, and the 24-bucket
-            // histogram is what answers ROADMAP.md open question 4's chunk-granularity
-            // retune with data instead of a guess.
-            MG_Util::PipeStats::RecordDrawPayloadBytes(payloadBytes);
-        }
 
         // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
         const Bool applierDerives = ApplierDerivesRenderStateFields();
@@ -942,6 +977,33 @@ namespace MobileGL::MG_Pipe {
             // The value is copied either way; only the stamp is withheld for the omitted pair.
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;
 #endif
+        }
+        // ---- step 4b: the residual value block, and it goes out HERE ----
+        // Its trip wire compares the carried bits against the ASSEMBLED capability mirror,
+        // and that mirror is written either by the applier's derivation or by the fill loop
+        // above - so the block is only meaningful once step 4 has run. Emitting it with the
+        // other calls would compare against the previous verb's answer.
+        if ((pushMask & kMGPipeSubsystemResidualValues) != 0) {
+            if (tracker.FreshlyPrimed() || (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) != 0) {
+                g_residualDue = true;
+            }
+            // The trip wire compares against the ASSEMBLED capability mirror, so it can only
+            // run at a verb whose class actually carries that mirror - IsCapabilityEnabled is
+            // in seven of the nine class masks and kQuery and kXfbSpan do not read it, so at
+            // those verbs the mirror is whatever the last verb that did read it left behind.
+            // The change is HELD rather than dropped: dropping it would silently disarm the
+            // wire for a capability that moved between two queries.
+            if (g_residualDue && MGPipeFieldMaskHas(mask, MGPipeInputField::IsCapabilityEnabled)) {
+                payloadBytes += EmitResidualValueState(*ctx);
+                g_residualDue = false;
+            }
+        }
+        if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
+            // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
+            // P0 and called by nothing; this is its first emitter, and the 24-bucket
+            // histogram is what answers ROADMAP.md open question 4's chunk-granularity
+            // retune with data instead of a guess.
+            MG_Util::PipeStats::RecordDrawPayloadBytes(payloadBytes);
         }
 #if MOBILEGL_PIPE_VERIFY
         EntryCompare(inputs, mask);
