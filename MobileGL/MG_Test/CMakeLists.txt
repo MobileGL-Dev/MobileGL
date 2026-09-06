@@ -64,6 +64,15 @@ set(LINK_LIBRARIES
 include(GoogleTest)
 gtest_discover_tests(SanityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
+if (MSVC)
+    # The GL headers declare gl* as dllimport on Windows, so any test that pulls
+    # GetProcAddress.cpp out of the static library references __imp_gl*, which only
+    # resolves when the in-library entry-point definitions are part of the link.
+    # Applies to every test executable below, the way the DirectVulkan and
+    # integration test targets already do it for themselves.
+    add_link_options(/WHOLEARCHIVE:MobileGL_s)
+endif()
+
 add_subdirectory(BackendLoader)
 add_subdirectory(Buffer)
 # The heap-address-is-not-an-identity invariant the backends' per-object memos

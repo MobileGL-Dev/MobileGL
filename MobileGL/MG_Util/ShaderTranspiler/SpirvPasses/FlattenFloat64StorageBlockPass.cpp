@@ -84,8 +84,18 @@ namespace MobileGL {
                 struct BlockPlan {
                     Instruction* structType = nullptr;
                     uint32_t storageClass = 0;
+                    // A bounded block's length in words. For an open-ended block - one whose
+                    // last member is a runtime array - the FIXED PREFIX in words, i.e. the
+                    // runtime array's own offset, which is where its element 0 starts.
                     uint32_t wordCount = 0;
+                    bool openEnded = false;
+                    // The original runtime array's stride in words; what one element of it
+                    // steps by, and what its word count divides by to become a length.
+                    uint32_t tailStrideWords = 0;
                     std::vector<ChainPlan> chains;
+                    // The OpArrayLength users of an open-ended block's variables, which count
+                    // WORDS once the member is a `uint[]` and so have to be rewritten too.
+                    std::vector<Instruction*> arrayLengths;
                 };
 
                 bool IsDoubleType(const Instruction* type) {
@@ -178,8 +188,9 @@ namespace MobileGL {
                 }
 
                 // Byte size of a type as it is laid out INSIDE a block, or 0 when this pass
-                // cannot describe it (a runtime array, a width it does not carry, a matrix with
-                // no stride or a row-major one).
+                // cannot describe it (a runtime array - the one place a block may have one is
+                // its last member, which MeasureBlock handles above this - a width it does not
+                // carry, a matrix with no stride or a row-major one).
                 uint32_t LaidOutByteSize(IRContext* context, const TypeCursor& cursor) {
                     const Instruction* type = context->get_def_use_mgr()->GetDef(cursor.typeId);
                     if (type == nullptr) return 0;
@@ -231,8 +242,17 @@ namespace MobileGL {
                 }
 
                 // Whether this type decomposes into scalars the rewrite can move one word at a
-                // time, counting them so a whole-aggregate access can be refused before it is
-                // expanded.
+                // time. |leafCount| counts them, so a whole-aggregate access can be refused
+                // before it is expanded; passing NULL asks the SHAPE question alone - is this
+                // type addressable at all - and then identical array elements and vector
+                // components are walked once instead of once each, because the answer cannot
+                // differ between them and the walk of a big one would not be free.
+                //
+                // The two questions are separate because only a LOAD or a STORE expands into
+                // leaves, and the cap bounds one of those. How large a runtime array's element
+                // is says nothing about how many scalars a single access to it moves, so
+                // MeasureBlock asks for the shape and BuildPlans applies the cap where it
+                // belongs - per chain, to the type that chain actually names.
                 bool CanDecompose(IRContext* context, const TypeCursor& cursor, uint32_t* leafCount) {
                     const Instruction* type = context->get_def_use_mgr()->GetDef(cursor.typeId);
                     if (type == nullptr) return false;
@@ -240,12 +260,15 @@ namespace MobileGL {
                     case spv::Op::OpTypeInt:
                     case spv::Op::OpTypeFloat:
                         if (ScalarByteSize(type) == 0) return false;
+                        if (leafCount == nullptr) return true;
                         ++*leafCount;
                         return *leafCount <= kMaxLeavesPerAccess;
                     case spv::Op::OpTypeVector: {
                         TypeCursor component;
                         component.typeId = type->GetSingleWordInOperand(0);
-                        for (uint32_t i = 0; i < type->GetSingleWordInOperand(1); ++i) {
+                        const uint32_t repeats =
+                            leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
+                        for (uint32_t i = 0; i < repeats; ++i) {
                             if (!CanDecompose(context, component, leafCount)) return false;
                         }
                         return true;
@@ -257,7 +280,9 @@ namespace MobileGL {
                         }
                         TypeCursor column;
                         column.typeId = type->GetSingleWordInOperand(0);
-                        for (uint32_t i = 0; i < type->GetSingleWordInOperand(1); ++i) {
+                        const uint32_t repeats =
+                            leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
+                        for (uint32_t i = 0; i < repeats; ++i) {
                             if (!CanDecompose(context, column, leafCount)) return false;
                         }
                         return true;
@@ -273,10 +298,12 @@ namespace MobileGL {
                             context->get_constant_mgr()->FindDeclaredConstant(type->GetSingleWordInOperand(1));
                         if (length == nullptr || length->AsIntConstant() == nullptr) return false;
                         const uint32_t count = length->AsIntConstant()->GetU32BitValue();
-                        if (count == 0 || count > kMaxLeavesPerAccess) return false;
+                        if (count == 0) return false;
+                        if (leafCount != nullptr && count > kMaxLeavesPerAccess) return false;
                         TypeCursor element = cursor;
                         element.typeId = type->GetSingleWordInOperand(0);
-                        for (uint32_t i = 0; i < count; ++i) {
+                        const uint32_t repeats = leafCount == nullptr ? 1u : count;
+                        for (uint32_t i = 0; i < repeats; ++i) {
                             if (!CanDecompose(context, element, leafCount)) return false;
                         }
                         return true;
@@ -298,6 +325,63 @@ namespace MobileGL {
                     default:
                         return false;
                     }
+                }
+
+                // Measures the block struct itself. A bounded block reports its laid-out byte
+                // size; a block whose LAST member is a runtime array - the only place GLSL lets
+                // one stand, and the only place SPIR-V lets a Block have one - reports the byte
+                // offset that array starts at and says so through |openEnded|, with the array's
+                // stride alongside. A runtime array anywhere else, one without a stride the
+                // words can step by, or one whose element the rewrite could not take apart is a
+                // shape this pass does not describe, and so is a bounded block it cannot size.
+                bool MeasureBlock(IRContext* context, const Instruction* structType, uint32_t* bytes,
+                                  bool* openEnded, uint32_t* tailStrideBytes) {
+                    *bytes = 0;
+                    *openEnded = false;
+                    *tailStrideBytes = 0;
+                    const uint32_t structId = structType->result_id();
+                    const uint32_t memberCount = structType->NumInOperands();
+                    uint64_t end = 0;
+                    for (uint32_t member = 0; member < memberCount; ++member) {
+                        uint32_t offset = 0;
+                        if (!TryGetMemberDecorationLiteral(context, structId, member, spv::Decoration::Offset,
+                                                           &offset)) {
+                            return false;
+                        }
+                        const TypeCursor cursor = MemberCursor(context, structType, member);
+                        const Instruction* type = context->get_def_use_mgr()->GetDef(cursor.typeId);
+                        if (type == nullptr) return false;
+                        if (type->opcode() == spv::Op::OpTypeRuntimeArray) {
+                            if (member + 1 != memberCount) return false;
+                            uint32_t stride = 0;
+                            if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride,
+                                                         &stride) ||
+                                stride == 0 || stride % kWordBytes != 0) {
+                                return false;
+                            }
+                            // The member's own matrix decorations describe the array's ELEMENTS,
+                            // exactly as they do for a bounded array of matrices. Only the shape
+                            // is asked for: how big one element is decides nothing about how
+                            // many scalars one access moves, and a leaf cap here would decline a
+                            // block over a member the shader may never read whole.
+                            TypeCursor element = cursor;
+                            element.typeId = type->GetSingleWordInOperand(0);
+                            if (!CanDecompose(context, element, nullptr)) return false;
+                            // Element 0 has to start past every fixed member, or the words the
+                            // prefix owns and the words the array owns would overlap.
+                            if (offset < end) return false;
+                            end = offset;
+                            *openEnded = true;
+                            *tailStrideBytes = stride;
+                            break;
+                        }
+                        const uint32_t size = LaidOutByteSize(context, cursor);
+                        if (size == 0) return false;
+                        end = std::max<uint64_t>(end, static_cast<uint64_t>(offset) + size);
+                    }
+                    if (end > kMaxBlockBytes) return false;
+                    *bytes = static_cast<uint32_t>(end);
+                    return true;
                 }
 
                 bool TypeContainsFloat64(IRContext* context, uint32_t typeId,
@@ -366,6 +450,9 @@ namespace MobileGL {
 
                         switch (type->opcode()) {
                         case spv::Op::OpTypeArray:
+                        // A runtime array steps exactly like a bounded one; only its end is
+                        // unknown, and a chain never needs that.
+                        case spv::Op::OpTypeRuntimeArray:
                             if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride,
                                                          &stride)) {
                                 return false;
@@ -611,6 +698,39 @@ namespace MobileGL {
                         }
                     }
 
+                    // Replaces an OpArrayLength of an open-ended block with the element count
+                    // of the ORIGINAL runtime array. The instruction now counts the words of
+                    // the flattened `uint[]`, so the length is `(words - prefix) / stride`, in
+                    // unsigned arithmetic and clamped at zero when the bound range does not
+                    // even reach the array's offset - a wrapped subtraction would otherwise
+                    // report a few billion elements. The division floors, which is what GL
+                    // defines `.length()` as for a range that is not a whole number of
+                    // elements. A fresh OpArrayLength is issued rather than the old one re-aimed,
+                    // so the uses being redirected are never the ones the arithmetic just made.
+                    void RewriteArrayLength(Instruction* arrayLength, uint32_t prefixWords, uint32_t strideWords) {
+                        InstructionBuilder builder(m_context, arrayLength, kPreservedAnalyses);
+                        const uint32_t variableId = arrayLength->GetSingleWordInOperand(0);
+                        const uint32_t wordsId = m_context->TakeNextId();
+                        builder.AddInstruction(MakeUnique<Instruction>(
+                            m_context, spv::Op::OpArrayLength, m_uintTypeId, wordsId,
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {variableId}},
+                                                           {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}}));
+                        uint32_t count = wordsId;
+                        if (prefixWords != 0) {
+                            const uint32_t prefixId = UintConstant(prefixWords);
+                            const uint32_t past = Binary(builder, spv::Op::OpISub, m_uintTypeId, count, prefixId);
+                            const uint32_t tooShort =
+                                Binary(builder, spv::Op::OpULessThan, m_boolTypeId, count, prefixId);
+                            count = Select(builder, tooShort, UintConstant(0), past);
+                        }
+                        if (strideWords != 1) {
+                            count = Binary(builder, spv::Op::OpUDiv, m_uintTypeId, count,
+                                           UintConstant(strideWords));
+                        }
+                        m_context->ReplaceAllUsesWith(arrayLength->result_id(), count);
+                        m_context->KillInst(arrayLength);
+                    }
+
                 private:
                     uint32_t ComponentWords(uint32_t componentTypeId) {
                         return ScalarByteSize(m_context->get_def_use_mgr()->GetDef(componentTypeId)) /
@@ -788,38 +908,72 @@ namespace MobileGL {
                     return false;
                 }
 
-                // A fresh `uint[length]` with ArrayStride 4, spliced in immediately BEFORE the
-                // block that will name it - SPIR-V has no forward references between types, so
-                // appending it at the end of the section would make the module invalid. A
-                // duplicate OpTypeArray is legal (SPIR-V 2.8 exempts aggregates from the
-                // uniqueness rule, and so does spirv-val), so no search for an existing one is
-                // needed; the LENGTH CONSTANT is not exempt, and if the module already declares
-                // it after the block there is nowhere legal to put the array - the block is then
-                // declined and keeps today's behaviour. Returns 0 for that, and for a uint type
-                // that is itself declared too late.
+                // A fresh `uint[length]` with ArrayStride 4 - or, for an open-ended block, a
+                // `uint[]` runtime array with the same stride and no length at all - spliced in
+                // immediately BEFORE the block that will name it: SPIR-V has no forward
+                // references between types, so appending it at the end of the section would make
+                // the module invalid. A duplicate OpTypeArray or OpTypeRuntimeArray is legal
+                // (SPIR-V 2.8 exempts aggregates from the uniqueness rule, and so does
+                // spirv-val), so no search for an existing one is needed; the LENGTH CONSTANT is
+                // not exempt, and if the module already declares it after the block there is
+                // nowhere legal to put the array - the block is then declined and keeps today's
+                // behaviour. Returns 0 for that; an open-ended block has no length constant to
+                // place, so that reason cannot reach it.
+                //
+                // The `uint` element type is a different matter, and only for an OPEN-ENDED
+                // block. The front end declares types in first-use order, so a block that is the
+                // first thing a shader touches sits BEFORE the module's `uint` (or the module has
+                // none, and the one the pass asked for was appended at the end). Declining there
+                // would send exactly the buffers this rewrite exists for back to the demotion on
+                // nothing but where they stand in the source. OpTypeInt has no operands, and
+                // nothing that names it can precede where it was, so moving it up in front of the
+                // block is always legal. A BOUNDED block keeps declining instead: that is what it
+                // has always done, and widening it is a change to a path this one does not need.
+                //
+                // NOTHING IS WRITTEN until every reason to decline has been ruled out, so a block
+                // this returns 0 for leaves the module as it found it - which is what lets
+                // Process() truthfully report SuccessWithoutChange for a module of only those.
                 uint32_t CreateWordArrayTypeBefore(IRContext* context, Instruction* structType,
-                                                   uint32_t uintTypeId, uint32_t length) {
-                    if (!DeclaredBefore(context, uintTypeId, structType->result_id())) return 0;
+                                                   uint32_t uintTypeId, uint32_t length, bool openEnded) {
+                    Instruction* uintType = context->get_def_use_mgr()->GetDef(uintTypeId);
+                    if (uintType == nullptr || uintType->opcode() != spv::Op::OpTypeInt) return 0;
+                    const bool hoistUint = !DeclaredBefore(context, uintTypeId, structType->result_id());
+                    if (hoistUint && !openEnded) return 0;
 
-                    auto* constantMgr = context->get_constant_mgr();
-                    const spvtools::opt::analysis::Type* uintType = context->get_type_mgr()->GetType(uintTypeId);
-                    if (uintType == nullptr) return 0;
-                    const spvtools::opt::analysis::Constant* lengthConstant =
-                        constantMgr->GetConstant(uintType, {length});
-                    if (lengthConstant == nullptr) return 0;
+                    uint32_t lengthConstantId = 0;
+                    if (!openEnded) {
+                        auto* constantMgr = context->get_constant_mgr();
+                        const spvtools::opt::analysis::Type* uintDescriptor =
+                            context->get_type_mgr()->GetType(uintTypeId);
+                        if (uintDescriptor == nullptr) return 0;
+                        const spvtools::opt::analysis::Constant* lengthConstant =
+                            constantMgr->GetConstant(uintDescriptor, {length});
+                        if (lengthConstant == nullptr) return 0;
 
-                    Module::inst_iterator position = PositionOf(context, structType);
-                    if (position == context->types_values_end()) return 0;
-                    Instruction* lengthInst = constantMgr->GetDefiningInstruction(lengthConstant, 0, &position);
-                    if (lengthInst == nullptr) return 0;
-                    if (!DeclaredBefore(context, lengthInst->result_id(), structType->result_id())) return 0;
+                        Module::inst_iterator position = PositionOf(context, structType);
+                        if (position == context->types_values_end()) return 0;
+                        // Created in front of the block when it is not there yet, so the only way
+                        // this declines is a constant the module already declares after it.
+                        Instruction* lengthInst =
+                            constantMgr->GetDefiningInstruction(lengthConstant, 0, &position);
+                        if (lengthInst == nullptr) return 0;
+                        if (!DeclaredBefore(context, lengthInst->result_id(), structType->result_id())) return 0;
+                        lengthConstantId = lengthInst->result_id();
+                    }
 
                     const uint32_t arrayTypeId = context->TakeNextId();
                     if (arrayTypeId == 0) return 0;
-                    auto arrayType = MakeUnique<Instruction>(
-                        context, spv::Op::OpTypeArray, 0, arrayTypeId,
-                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}},
-                                                       {SPV_OPERAND_TYPE_ID, {lengthInst->result_id()}}});
+
+                    if (hoistUint) uintType->InsertBefore(structType);
+                    std::unique_ptr<Instruction> arrayType =
+                        openEnded
+                            ? MakeUnique<Instruction>(
+                                  context, spv::Op::OpTypeRuntimeArray, 0, arrayTypeId,
+                                  std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}}})
+                            : MakeUnique<Instruction>(
+                                  context, spv::Op::OpTypeArray, 0, arrayTypeId,
+                                  std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}},
+                                                                 {SPV_OPERAND_TYPE_ID, {lengthConstantId}}});
                     Instruction* inserted = structType->InsertBefore(std::move(arrayType));
                     context->AnalyzeDefUse(inserted);
                     context->get_decoration_mgr()->AddDecorationVal(
@@ -948,8 +1102,14 @@ namespace MobileGL {
                         Instruction* structType = defUseMgr->GetDef(structId);
                         TypeCursor blockCursor;
                         blockCursor.typeId = structId;
-                        const uint32_t blockBytes = LaidOutByteSize(context, blockCursor);
-                        if (blockBytes == 0 || blockBytes % kWordBytes != 0) {
+                        uint32_t blockBytes = 0;
+                        bool openEnded = false;
+                        uint32_t tailStrideBytes = 0;
+                        // An open-ended block whose runtime array is its only member measures a
+                        // prefix of 0 bytes and is perfectly describable; only a BOUNDED block of
+                        // no bytes is not, and MeasureBlock already refuses to size one of those.
+                        if (!MeasureBlock(context, structType, &blockBytes, &openEnded, &tailStrideBytes) ||
+                            blockBytes % kWordBytes != 0 || (!openEnded && blockBytes == 0)) {
                             MGLOG_D("[spirv] storage block %%%u holds a double but its byte layout cannot be "
                                     "described exactly; left to the fp64 demotion",
                                     structId);
@@ -960,11 +1120,15 @@ namespace MobileGL {
                         plan.structType = structType;
                         plan.storageClass = storageClassByStruct[structId];
                         plan.wordCount = blockBytes / kWordBytes;
+                        plan.openEnded = openEnded;
+                        plan.tailStrideWords = tailStrideBytes / kWordBytes;
+                        const uint32_t lastMember = structType->NumInOperands() - 1;
 
                         bool expressible = true;
                         for (Instruction* variable : variablesByStruct[structId]) {
                             std::vector<Instruction*> chains;
                             std::unordered_set<uint32_t> seenChains;
+                            std::unordered_set<uint32_t> seenLengths;
                             defUseMgr->ForEachUser(variable, [&](Instruction* user) {
                                 if (!expressible) return;
                                 switch (user->opcode()) {
@@ -982,6 +1146,27 @@ namespace MobileGL {
                                     }
                                     expressible = false;
                                     return;
+                                case spv::Op::OpArrayLength: {
+                                    // Only an open-ended block has a length to ask for, and
+                                    // only of its last member; the result has to be the 32-bit
+                                    // uint the rewrite's arithmetic is typed in, which is the
+                                    // only result type the instruction allows anyway.
+                                    const Instruction* resultType = defUseMgr->GetDef(user->type_id());
+                                    const bool isUint = resultType != nullptr &&
+                                                        resultType->opcode() == spv::Op::OpTypeInt &&
+                                                        resultType->GetSingleWordInOperand(0) == 32u &&
+                                                        resultType->GetSingleWordInOperand(1) == 0u;
+                                    if (openEnded && isUint && user->NumInOperands() >= 2 &&
+                                        user->GetSingleWordInOperand(0) == variable->result_id() &&
+                                        user->GetSingleWordInOperand(1) == lastMember) {
+                                        if (seenLengths.insert(user->result_id()).second) {
+                                            plan.arrayLengths.push_back(user);
+                                        }
+                                        return;
+                                    }
+                                    expressible = false;
+                                    return;
+                                }
                                 default:
                                     expressible = false;
                                     return;
@@ -1058,16 +1243,25 @@ namespace MobileGL {
 
                 Emitter emitter(irContext, uintTypeId, boolTypeId, floatTypeId);
                 bool modified = false;
+                // Every block declines before anything is written for it, so |touched| only ever
+                // parts company with |modified| on a shape that cannot happen without the module
+                // running out of ids - and even then the status must not claim the bytes are
+                // untouched, because the caller relies on that to skip invalidating its analyses.
+                bool touched = false;
                 for (BlockPlan& plan : plans) {
                     const uint32_t structId = plan.structType->result_id();
-                    const uint32_t arrayTypeId =
-                        CreateWordArrayTypeBefore(irContext, plan.structType, uintTypeId, plan.wordCount);
+                    const uint32_t arrayTypeId = CreateWordArrayTypeBefore(
+                        irContext, plan.structType, uintTypeId, plan.wordCount, plan.openEnded);
                     if (arrayTypeId == 0) {
+                        // Nothing was written for it, so the module is still the one that came in.
                         MGLOG_D("[spirv] storage block %%%u: no legal place for the flattened word array; "
                                 "left to the fp64 demotion",
                                 structId);
                         continue;
                     }
+                    // Past this point the module HAS been written to, so an abandoned block would
+                    // leave a dead type behind - the status has to say so even then.
+                    touched = true;
                     const uint32_t wordPointerTypeId = irContext->get_type_mgr()->FindPointerToType(
                         uintTypeId, static_cast<spv::StorageClass>(plan.storageClass));
                     if (wordPointerTypeId == 0) continue;
@@ -1095,6 +1289,9 @@ namespace MobileGL {
                         }
                         irContext->KillInst(chainPlan.chain);
                     }
+                    for (Instruction* arrayLength : plan.arrayLengths) {
+                        emitter.RewriteArrayLength(arrayLength, plan.wordCount, plan.tailStrideWords);
+                    }
 
                     const std::vector<spv::Decoration> surviving = SurvivingAccessQualifiers(
                         irContext, structId, plan.structType->NumInOperands());
@@ -1113,12 +1310,19 @@ namespace MobileGL {
                              {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(kind)}}});
                     }
                     modified = true;
-                    MGLOG_D("[spirv] storage block %%%u: flattened into %u words so its 64-bit members keep "
-                            "the byte layout the application bound",
-                            structId, plan.wordCount);
+                    if (plan.openEnded) {
+                        MGLOG_D("[spirv] storage block %%%u: flattened into an open-ended word array (%u-word "
+                                "prefix, %u-word elements) so its 64-bit members keep the byte layout the "
+                                "application bound",
+                                structId, plan.wordCount, plan.tailStrideWords);
+                    } else {
+                        MGLOG_D("[spirv] storage block %%%u: flattened into %u words so its 64-bit members "
+                                "keep the byte layout the application bound",
+                                structId, plan.wordCount);
+                    }
                 }
 
-                if (!modified) {
+                if (!modified && !touched) {
                     return Status::SuccessWithoutChange;
                 }
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

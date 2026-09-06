@@ -66,17 +66,32 @@ namespace MobileGL {
             // fp32 promise DemoteFloat64Pass already makes - what changes is only that the
             // BYTES around the value stay where the application put them.
             //
+            // AN OPEN-ENDED BLOCK - one whose last member is a runtime array, the
+            // `buffer B { double data[]; }` every unsized storage buffer is spelled as - is
+            // flattened the same way: the members before the array are the fixed prefix, and
+            // the flattened member is itself a `uint[]` runtime array, ArrayStride 4, with no
+            // length for the driver to re-derive. Element i of the original array lives at
+            // word `prefix + i * stride` of it, which is where the application put it. The
+            // block's `.length()` is rewritten too, because OpArrayLength on the flattened
+            // member counts WORDS: it becomes `(words - prefix) / stride` in unsigned
+            // arithmetic, clamped at zero when the bound range is shorter than the prefix,
+            // which is the floor GL defines `.length()` as.
+            //
             // DECLINES, leaving the block exactly as it was for DemoteFloat64Pass to handle the
             // old way, whenever it meets something it cannot rewrite exactly:
             //   - a block whose variable is used as anything but an access-chain base (loaded
-            //     whole, handed to a function, asked its OpArrayLength);
+            //     whole, handed to a function), or asked an OpArrayLength it is not open-ended
+            //     for;
             //   - an access chain that is not rooted at the variable, or whose result feeds
             //     anything but a plain OpLoad / OpStore (an atomic, OpCopyMemory, a further
-            //     chain);
-            //   - a non-constant index into a struct, a runtime array anywhere in the block, a
-            //     RowMajor matrix (its columns are not contiguous, so a whole-column access is
-            //     not one range), a member width other than 32 or 64 bits, or an offset or
-            //     stride that is not a multiple of 4;
+            //     chain), or one that names a whole runtime array rather than an element of it;
+            //   - a non-constant index into a struct, a runtime array that is not the last
+            //     member of the block itself (nested in a member, or followed by another -
+            //     shapes GLSL cannot spell but SPIR-V can), a runtime array without an
+            //     ArrayStride or whose element the pass cannot decompose, a RowMajor matrix (its
+            //     columns are not contiguous, so a whole-column access is not one range), a
+            //     member width other than 32 or 64 bits, or an offset or stride that is not a
+            //     multiple of 4;
             //   - a load or store whose type decomposes into more scalars than the cap below,
             //     so legalizing a block can never explode the module.
             //

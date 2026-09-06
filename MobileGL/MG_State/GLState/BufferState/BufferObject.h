@@ -81,7 +81,9 @@ namespace MobileGL {
             // Contents update of [offset, offset + size) from the shadow.
             void (*SubData)(BufferObject& bufferObject, SizeT offset, SizeT size) = nullptr;
             // Contents update of an ADOPTED (GPU-resident) store. `data` holds the app's
-            // bytes; the frontend has NOT touched the resident mapping. GL orders a
+            // bytes, valid for the duration of the call only (a write map's staging
+            // store is freed the moment the unmap that lands it returns); the frontend
+            // has NOT touched the resident mapping. GL orders a
             // glBufferSubData after already-submitted GPU reads of the store, and an
             // in-place host write into the coherent mapping tears the frames still
             // reading the old bytes (Minecraft patches LIVE chunk sections this way -
@@ -157,9 +159,14 @@ namespace MobileGL {
             // Adopt backend host-visible coherent GPU storage as the source of truth
             // (used for GPU-written targets like transform feedback capture, so
             // MapBuffer/GetBufferSubData read real GPU results). No-op when already
-            // resident or when the backend declines.
+            // resident, while the buffer is mapped (adoption releases the shadow a
+            // mapping may have handed the application), or when the backend declines.
             Bool EnsureGpuResidentStorage();
-            void ReleaseMemory();
+            // Unmap. A write map's staged bytes land in the store on the way out, unless
+            // the caller is about to replace that store (a respecification) and passes
+            // false - landing them there would copy a whole mapped range into storage
+            // being handed back on the next line.
+            void ReleaseMemory(Bool landStagedWrites = true);
             void FlushMemoryRange(SizeT offset, SizeT length);
 
             // Pushes the persistently-mapped write range to the backend; called by
@@ -234,6 +241,12 @@ namespace MobileGL {
             // so this only bumps the change serial; otherwise it dispatches a backend
             // SubData transfer to sync the backend's separate GPU copy.
             void NotifyContentWrite(SizeT offset, SizeT size);
+            // The one route CPU-sourced bytes take into an ADOPTED (GPU-resident) store:
+            // glBufferSubData, a buffer clear, a buffer copy, and the landing of a
+            // non-persistent write map at unmap / explicit flush all go through it, so
+            // the routes cannot drift apart again. Carries no mapping asserts on
+            // purpose - the unmap landing runs while the buffer is still mapped.
+            void LandBytesIntoResidentStore(SizeT offset, DataPtr bytes);
 
             static Uint64 AllocateLifetimeId();
 
