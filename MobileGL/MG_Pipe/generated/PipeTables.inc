@@ -12,7 +12,7 @@
 // Regenerate with `python3 scripts/gen_pipe.py`; CI runs it and diffs the result.
 // This file is included from MG_Pipe/MGPipe.h inside namespace MobileGL::MG_Pipe.
 
-// share group: 10 calls. A null entry means the backend does not implement this
+// share group: 11 calls. A null entry means the backend does not implement this
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeScreen {
     void (*GetCaps)(const MGPCaps* payload, MGPReplySlot* reply);
@@ -25,9 +25,10 @@ struct MGPipeScreen {
     void (*FenceStatus)(const MGPHandleOnly* payload, MGPReplySlot* reply);
     void (*FenceWait)(const MGPFenceWait* payload, MGPReplySlot* reply);
     void (*FenceDestroy)(const MGPHandleOnly* payload);
+    void (*FenceWaitServer)(const MGPFenceWait* payload);
 };
 
-// context: 58 calls. A null entry means the backend does not implement this
+// context: 60 calls. A null entry means the backend does not implement this
 // call and the frontend keeps its own path (plan B section 4.1).
 struct MGPipeContext {
     void (*QueryCreate)(const MGPQueryDesc* payload);
@@ -88,11 +89,13 @@ struct MGPipeContext {
     void (*Flush)(const MGPFlush* payload);
     void (*Present)(const MGPPresent* payload);
     void (*SetSwapInterval)(const MGPSwapInterval* payload);
+    void (*QueryTimestamp)(const MGPTimestampRequest* payload, MGPReplySlot* reply);
+    void (*QueryCounter)(const MGPQueryDesc* payload);
 };
 
-inline constexpr SizeT kMGPipeScreenCallCount = 10;
-inline constexpr SizeT kMGPipeContextCallCount = 58;
-inline constexpr SizeT kMGPipeCallCount = 68;
+inline constexpr SizeT kMGPipeScreenCallCount = 11;
+inline constexpr SizeT kMGPipeContextCallCount = 60;
+inline constexpr SizeT kMGPipeCallCount = 71;
 
 // A table that is not exactly its call count of function pointers has grown a
 // member that no generator knows about.

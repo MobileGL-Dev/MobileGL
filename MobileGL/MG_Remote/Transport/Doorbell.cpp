@@ -20,6 +20,12 @@
 #include <unistd.h>
 #endif
 
+// Same fallback as FdPassing.cpp: on macOS / BSD the protection is SO_NOSIGPIPE on the
+// socket, set in SocketDoorbell's constructor, not a per-send flag.
+#if !defined(_WIN32) && !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0
+#endif
+
 namespace MobileGL::MG_Remote::Transport {
 
     // -----------------------------------------------------------------------
@@ -100,7 +106,16 @@ namespace MobileGL::MG_Remote::Transport {
     // -----------------------------------------------------------------------
 
     SocketDoorbell::SocketDoorbell(int fd, std::uint8_t code, bool ownsFd)
-        : m_fd(fd), m_code(code), m_ownsFd(ownsFd) {}
+        : m_fd(fd), m_code(code), m_ownsFd(ownsFd) {
+#if defined(SO_NOSIGPIPE)
+        // The per-socket form of MSG_NOSIGNAL, on the platforms that lack the per-call one:
+        // a Notify to a hung-up peer must come back as EPIPE, not as a fatal signal.
+        if (m_fd >= 0) {
+            const int one = 1;
+            (void)::setsockopt(m_fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+        }
+#endif
+    }
 
     SocketDoorbell::~SocketDoorbell() {
         if (m_ownsFd && m_fd >= 0) {

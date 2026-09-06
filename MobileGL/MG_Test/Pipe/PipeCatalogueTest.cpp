@@ -12,6 +12,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 
@@ -81,8 +83,8 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(kMGPipeContextCallCount, kMGPipeCallCount - ClassCount<kScreen>());
 
     // The per-class counts PipeCalls.def documents in its header.
-    EXPECT_EQ(ClassCount<kScreen>(), 10u);
-    EXPECT_EQ(ClassCount<kCtxQuery>(), 6u);
+    EXPECT_EQ(ClassCount<kScreen>(), 11u);
+    EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 17u);
     EXPECT_EQ(ClassCount<kCtxObject>(), 9u);
@@ -121,6 +123,17 @@ TEST(PipeCatalogue, WireOpcodesAreThePositionsInTheCatalogue) {
     EXPECT_EQ(sizeof(MGPWireRec_DrawVbo) % 8, 0u);
     EXPECT_EQ(sizeof(MGPWireRec_BindRenderState) % 8, 0u);
     EXPECT_EQ(sizeof(MGPWireRec_SetResidualValueState) % 8, 0u);
+}
+
+// Records are append-only. The three carriers added after the first cut - for the live
+// GLFunctionsTable entries GetGpuTimestampNs, QueryCounterTimestamp and WaitSync - sit at
+// the END of the list, after SetSwapInterval, so no opcode the first cut assigned has moved.
+TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetSwapInterval), 68);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryTimestamp), 69);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryCounter), 70);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::FenceWaitServer), 71);
+    EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 72);
 }
 
 // A well-formed record passes the applier's bounds gate. P0 has no applier, so "accepted"
@@ -217,4 +230,60 @@ TEST(PipeCatalogue, HostSpanResolvesTheMonolithPointer) {
     staged.Size = 16;
     EXPECT_EQ(gMGPipeSegmentResolver, nullptr);
     EXPECT_EQ(MGPipeHostBytes(staged), nullptr);
+}
+
+// D-B8: a bound buffer range carries no inline host span. The named-UBO bytes are an
+// optional second var-tail announced by HostSpanCount, so the SSBO, atomic-counter and XFB
+// ranges - the majority - pay nothing for a payload whose shape is not frozen yet.
+TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
+    static_assert(sizeof(MGPBufferRange) == 24);
+    static_assert(sizeof(MGPShaderBuffers) == 32);
+    EXPECT_LT(sizeof(MGPBufferRange), sizeof(MGHostSpan));
+
+    // The call still declares the span it may carry, so the transport lays the tail out.
+    Uint32 flags = 0;
+#define MGP_FLAGS_OF_SET_SHADER_BUFFERS(Name, Payload, Class, Flags)                                                   \
+    if (std::strcmp(#Name, "SetShaderBuffers") == 0) flags = static_cast<Uint32>(Flags);
+    MGP_CALL_LIST(MGP_FLAGS_OF_SET_SHADER_BUFFERS)
+#undef MGP_FLAGS_OF_SET_SHADER_BUFFERS
+    EXPECT_EQ(flags & (kVarTail | kHostSpan), static_cast<Uint32>(kVarTail | kHostSpan));
+
+    // And the comparator sees the count that announces the tail.
+    MGPShaderBuffers a{};
+    MGPShaderBuffers b{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    b.HostSpanCount = 4;
+    EXPECT_FALSE(MGPipeVerify(a, b, &field));
+    EXPECT_STREQ(field, "HostSpanCount");
+}
+
+// The buffer half of resource_subdata has no level and no box of its own: [offset, size)
+// rides in UnionBox.X / UnionBox.W, and only through the two helpers, which also say where
+// one record stops and the emitter has to split.
+TEST(PipeCatalogue, SubDataBufferRangeRidesInTheUnionBox) {
+    MGPSubData record{};
+    record.Level = 3;
+    record.RegionCount = 2;
+    ASSERT_TRUE(MGPipeSetSubDataBufferRange(record, 4096, 65536));
+    EXPECT_EQ(record.UnionBox.X, 4096);
+    EXPECT_EQ(record.UnionBox.W, 65536u);
+    EXPECT_EQ(record.UnionBox.Y, 0);
+    EXPECT_EQ(record.UnionBox.Z, 0);
+    EXPECT_EQ(record.UnionBox.H, 1u);
+    EXPECT_EQ(record.UnionBox.D, 1u);
+    EXPECT_EQ(record.Level, 0);
+    EXPECT_EQ(record.RegionCount, 0u);
+    EXPECT_EQ(MGPipeSubDataBufferOffset(record), 4096u);
+    EXPECT_EQ(MGPipeSubDataBufferSize(record), 65536u);
+
+    // The largest range one record expresses...
+    ASSERT_TRUE(MGPipeSetSubDataBufferRange(record, 0x7FFFFFFFull, 0xFFFFFFFFull));
+    EXPECT_EQ(MGPipeSubDataBufferOffset(record), 0x7FFFFFFFull);
+    EXPECT_EQ(MGPipeSubDataBufferSize(record), 0xFFFFFFFFull);
+    // ...and beyond it the emitter splits: refused, record untouched.
+    EXPECT_FALSE(MGPipeSetSubDataBufferRange(record, 0x80000000ull, 1));
+    EXPECT_FALSE(MGPipeSetSubDataBufferRange(record, 0, 0x100000000ull));
+    EXPECT_EQ(MGPipeSubDataBufferOffset(record), 0x7FFFFFFFull);
+    EXPECT_EQ(MGPipeSubDataBufferSize(record), 0xFFFFFFFFull);
 }

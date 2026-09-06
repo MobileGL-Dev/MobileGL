@@ -112,7 +112,10 @@ enum class MGPWireOp : Uint16 {
     Flush = 66,
     Present = 67,
     SetSwapInterval = 68,
-    kOpCount = 69,
+    QueryTimestamp = 69,
+    QueryCounter = 70,
+    FenceWaitServer = 71,
+    kOpCount = 72,
 };
 
 struct alignas(8) MGPWireRec_GetCaps {
@@ -659,6 +662,30 @@ static_assert(sizeof(MGPWireRec_SetSwapInterval) ==
                   ((sizeof(MGPWireRecHeader) + sizeof(MGPSwapInterval) + 7u) & ~SizeT(7u)),
               "MGPWireRec_SetSwapInterval gained padding; the wire format moved");
 
+struct alignas(8) MGPWireRec_QueryTimestamp {
+    MGPWireRecHeader Header;
+    MGPTimestampRequest Payload;
+};
+static_assert(sizeof(MGPWireRec_QueryTimestamp) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPTimestampRequest) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_QueryTimestamp gained padding; the wire format moved");
+
+struct alignas(8) MGPWireRec_QueryCounter {
+    MGPWireRecHeader Header;
+    MGPQueryDesc Payload;
+};
+static_assert(sizeof(MGPWireRec_QueryCounter) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPQueryDesc) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_QueryCounter gained padding; the wire format moved");
+
+struct alignas(8) MGPWireRec_FenceWaitServer {
+    MGPWireRecHeader Header;
+    MGPFenceWait Payload;
+};
+static_assert(sizeof(MGPWireRec_FenceWaitServer) ==
+                  ((sizeof(MGPWireRecHeader) + sizeof(MGPFenceWait) + 7u) & ~SizeT(7u)),
+              "MGPWireRec_FenceWaitServer gained padding; the wire format moved");
+
 [[noreturn]] inline void MGPipeWireProtocolFatal(const char* call, Uint64 size, Uint64 remaining) {
     MGLOG_F("MGPipe: protocol corruption applying %s: size=%llu remaining=%llu", call,
             static_cast<unsigned long long>(size), static_cast<unsigned long long>(remaining));
@@ -884,6 +911,15 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
         return false;
     case MGPWireOp::SetSwapInterval:
         MGP_WIRE_CHECK_BOUNDS(MGPWireRec_SetSwapInterval, "SetSwapInterval");
+        return false;
+    case MGPWireOp::QueryTimestamp:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryTimestamp, "QueryTimestamp");
+        return false;
+    case MGPWireOp::QueryCounter:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_QueryCounter, "QueryCounter");
+        return false;
+    case MGPWireOp::FenceWaitServer:
+        MGP_WIRE_CHECK_BOUNDS(MGPWireRec_FenceWaitServer, "FenceWaitServer");
         return false;
     case MGPWireOp::kInvalid:
     case MGPWireOp::kOpCount:

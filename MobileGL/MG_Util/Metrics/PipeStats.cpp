@@ -296,7 +296,12 @@ namespace MobileGL::MG_Util::PipeStats {
     void RecordDrawPayloadBytes(Uint64 bytes) { Bump(g_totalPayloadBuckets[PayloadBucketOf(bytes)], 1); }
 
     void OnPresent() {
-#ifdef TRACY_ENABLE
+        // Every frame accumulator is EXCHANGED for zero, and the exchanged value is what gets
+        // plotted. A read followed by a store(0) would lose any Bump that lands in between -
+        // buffer and texture staging reach these counters from more than one thread - from
+        // the plot AND from every frame; an exchange hands every add to exactly one frame.
+        // Without Tracy the value is taken and dropped: the clear is still the point.
+        //
         // One plot per counter, the frame's value. Tracy keeps the series by name, and the
         // names are the static literals above, which is what TracyPlot requires. A gate is
         // two series - hits and misses - because the ratio is the deliverable and a miss
@@ -305,26 +310,30 @@ namespace MobileGL::MG_Util::PipeStats {
         // The payload histogram is deliberately NOT plotted: it is a run-total distribution
         // over draws (section 4.5.7), not a per-frame scalar, and Tracy has no histogram
         // series. It reaches the operator through the JSON dump.
+        const auto take = [](Counter& counter) { return counter.exchange(0, std::memory_order_relaxed); };
         for (Uint32 i = 0; i < kByteClassCount; ++i) {
-            TracyPlot(kByteClassNames[i], static_cast<Int64>(Read(g_frameBytes[i])));
-        }
-        for (Uint32 i = 0; i < kCallClassCount; ++i) {
-            TracyPlot(kCallClassNames[i], static_cast<Int64>(Read(g_frameCalls[i])));
-        }
-        for (Uint32 i = 0; i < kGateCount; ++i) {
-            TracyPlot(kGateHitPlotNames[i], static_cast<Int64>(Read(g_frameGateHit[i])));
-            TracyPlot(kGateMissPlotNames[i], static_cast<Int64>(Read(g_frameGateMiss[i])));
-        }
+            const Uint64 value = take(g_frameBytes[i]);
+            (void)value;
+#ifdef TRACY_ENABLE
+            TracyPlot(kByteClassNames[i], static_cast<Int64>(value));
 #endif
-        for (Uint32 i = 0; i < kByteClassCount; ++i) {
-            g_frameBytes[i].store(0, std::memory_order_relaxed);
         }
         for (Uint32 i = 0; i < kCallClassCount; ++i) {
-            g_frameCalls[i].store(0, std::memory_order_relaxed);
+            const Uint64 value = take(g_frameCalls[i]);
+            (void)value;
+#ifdef TRACY_ENABLE
+            TracyPlot(kCallClassNames[i], static_cast<Int64>(value));
+#endif
         }
         for (Uint32 i = 0; i < kGateCount; ++i) {
-            g_frameGateHit[i].store(0, std::memory_order_relaxed);
-            g_frameGateMiss[i].store(0, std::memory_order_relaxed);
+            const Uint64 hits = take(g_frameGateHit[i]);
+            const Uint64 misses = take(g_frameGateMiss[i]);
+            (void)hits;
+            (void)misses;
+#ifdef TRACY_ENABLE
+            TracyPlot(kGateHitPlotNames[i], static_cast<Int64>(hits));
+            TracyPlot(kGateMissPlotNames[i], static_cast<Int64>(misses));
+#endif
         }
         const Uint64 frames = g_frameCount.fetch_add(1, std::memory_order_relaxed) + 1;
         if (frames % kSummaryFramePeriod == 0) {

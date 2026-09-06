@@ -54,6 +54,9 @@
 #define MGP_FIELDS_MGPQueryResultRequest(F) \
     F(Query) F(Wait)
 
+#define MGP_FIELDS_MGPTimestampRequest(F) \
+    F(Reserved)
+
 #define MGP_FIELDS_MGPRenderStateDesc(F) \
     F(Cso) F(BaseCso) F(ChunkMask) F(Blob)
 
@@ -116,10 +119,10 @@
     F(Start) F(Count) F(ContentHash)
 
 #define MGP_FIELDS_MGPBufferRange(F) \
-    F(Res) F(Offset) F(Size) F(Payload)
+    F(Res) F(Offset) F(Size)
 
 #define MGP_FIELDS_MGPShaderBuffers(F) \
-    F(Class) F(Start) F(Count) F(WritableMask) F(ContentHash)
+    F(Class) F(Start) F(Count) F(WritableMask) F(HostSpanCount) F(ContentHash)
 
 #define MGP_FIELDS_MGPStreamOutputTargets(F) \
     F(Count) F(Generation) F(ContentHash)
@@ -219,7 +222,7 @@
 // macros; gen_pipe.py reads THIS list to know what to emit.
 #define MGP_VERIFY_PAYLOAD_LIST(P) \
     P(MGPBlobRef) P(MGPRange) P(MGPBox) P(MGPReplySlot) P(MGPStateChunk) P(MGPHandleOnly) P(MGPCaps) \
-    P(MGPResourceDesc) P(MGPFenceWait) P(MGPQueryDesc) P(MGPQueryResultRequest) P(MGPRenderStateDesc) \
+    P(MGPResourceDesc) P(MGPFenceWait) P(MGPQueryDesc) P(MGPQueryResultRequest) P(MGPTimestampRequest) P(MGPRenderStateDesc) \
     P(MGPBindRenderState) P(MGPDynamicState) P(MGPVertexElements) P(MGPSamplerDesc) P(MGPSamplerView) \
     P(MGPTextureParams) P(MGPProgramDesc) P(MGPSurface) P(MGPFramebufferState) P(MGPVertexBuffer) \
     P(MGPVertexBuffers) P(MGPIndexBuffer) P(MGPIndirectBuffers) P(MGPBoundView) P(MGPSamplerViews) \

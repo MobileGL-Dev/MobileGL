@@ -830,15 +830,17 @@ jobs:
       # once inside a mutex critical section. Nothing under these two trees prints to a
       # stdio stream today - MGLOG_D compiles out in INFO builds and is the only channel
       # they are allowed to use - so this gate starts with no exceptions, and any addition
-      # to it needs a reason in the pull request rather than a quiet whitelist entry.
+      # to it needs a reason in the pull request rather than a quiet whitelist entry. The
+      # alternation names every stdio spelling, not just the two that were committed:
+      # fprintf to either stream, printf, puts, and the iostream pair.
       - name: No stdio instrumentation in MG_Backend or MG_State
         run: |
-          if grep -rnE 'fprintf[[:space:]]*\(stderr|(^|[^[:alnum:]_>.])printf[[:space:]]*\(' \
+          if grep -rnE 'fprintf[[:space:]]*\((stderr|stdout)|(^|[^[:alnum:]_>.])printf[[:space:]]*\(|(^|[^[:alnum:]_>.:])puts[[:space:]]*\(|std::(cout|cerr)' \
               MobileGL/MG_Backend MobileGL/MG_State; then
             echo "::error::stdio instrumentation found; use MGLOG_D (compiled out in INFO builds)"
             exit 1
           fi
-          echo "no fprintf(stderr / printf( under MobileGL/MG_Backend or MobileGL/MG_State"
+          echo "no fprintf(stderr/stdout / printf( / puts( / std::cout|cerr under MobileGL/MG_Backend or MobileGL/MG_State"
 
       # Informational: the frontend mutation surface an MGPipe aggregate generation has to
       # cover. It becomes a gate in P1, when the mapping file exists to diff against.

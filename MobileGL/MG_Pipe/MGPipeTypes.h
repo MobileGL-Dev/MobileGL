@@ -14,7 +14,9 @@
 
 // Every MGPipe payload (plan B section 4.5). Each one is a flat POD with explicit padding,
 // carries a static_assert on trivial copyability and one on its exact size, and never
-// contains a pointer other than the single MGHostSpan the design isolates on purpose.
+// contains a pointer: MGHostSpan, the one shape that changes with the transport, only ever
+// rides in a variable tail (draw_vbo's user indices, set_shader_buffers' named-UBO bytes),
+// never inline in a fixed payload.
 //
 // Sizes are asserted rather than merely documented because the wire records generated from
 // these structs (generated/PipeWire.inc) are memcpy'd; a field silently changing width is a
@@ -193,6 +195,15 @@ namespace MobileGL::MG_Pipe {
         Uint32 Pad1;
     };
     MGP_ASSERT_POD(MGPQueryResultRequest, 16);
+
+    // query_timestamp: glGetInteger64v(GL_TIMESTAMP), the synchronous "what time is it on the
+    // GPU" GLFunctionsTable::GetGpuTimestampNs answers today. The request names nothing; the
+    // Int64 nanosecond stamp comes back through the reply slot.
+    struct MGPTimestampRequest {
+        Uint32 Reserved;
+        Uint32 Pad0;
+    };
+    MGP_ASSERT_POD(MGPTimestampRequest, 8);
 
     // ---------------------------------------------------------------------------------
     // CSOs
@@ -409,25 +420,32 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPShaderImages, 16);
 
-    // One bound buffer range. Payload is populated for the Uniform class only, and only
-    // while kCapNeedsHostUboBytes is set (D-B8).
+    // One bound buffer range: 24 bytes, no inline host span. The named-UBO host bytes a
+    // backend needs under kCapNeedsHostUboBytes (D-B8) travel as an OPTIONAL second var-tail,
+    // MGHostSpan[HostSpanCount] behind the ranges, announced by MGPShaderBuffers below. An
+    // inline span would have cost every SSBO, atomic-counter and XFB range 32 dead bytes, and
+    // D-B8 says not to freeze that payload's shape before the stage-ubo-named counter has
+    // produced numbers.
     struct MGPBufferRange {
         MGPipeHandle Res;
         Uint64 Offset;
         Uint64 Size;
-        MGHostSpan Payload;
     };
-    MGP_ASSERT_POD(MGPBufferRange, 56);
+    MGP_ASSERT_POD(MGPBufferRange, 24);
 
-    // Var-tail header: MGPBufferRange[Count] follows.
+    // Var-tail header: MGPBufferRange[Count], then MGHostSpan[HostSpanCount]. HostSpanCount is
+    // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (a range with nothing to
+    // ship carries an empty span, so the two arrays stay index-aligned).
     struct MGPShaderBuffers {
         Uint32 Class; // Uniform | ShaderStorage | AtomicCounter
         Uint32 Start;
         Uint32 Count;
         Uint32 WritableMask;
+        Uint32 HostSpanCount; // 0, or Count when the kHostSpan tail is present (D-B8)
+        Uint32 Pad0;
         Uint64 ContentHash;
     };
-    MGP_ASSERT_POD(MGPShaderBuffers, 24);
+    MGP_ASSERT_POD(MGPShaderBuffers, 32);
 
     // Var-tail header: MGPBufferRange[Count] then Uint32 offsets[Count].
     struct MGPStreamOutputTargets {
@@ -470,7 +488,11 @@ namespace MobileGL::MG_Pipe {
         PixelStoreParameters Pack;
     };
     static_assert(std::is_trivially_copyable_v<MGPPixelPackState>);
-    static_assert(sizeof(MGPPixelPackState) == sizeof(PixelStoreParameters));
+    // 28 is what PixelStoreParameters measures: two Bools, two bytes of padding, six Ints.
+    // Asserting against sizeof(PixelStoreParameters) itself was a tautology that could not
+    // notice the value struct changing width under the wire format.
+    static_assert(sizeof(MGPPixelPackState) == 28,
+                  "MGPPixelPackState changed size; update the wire format and this assertion");
 
     // Also a shader-variant input: both backends bake these into the synthesized
     // pass-through control stage.
@@ -542,6 +564,15 @@ namespace MobileGL::MG_Pipe {
     // Carries the union box AND the region list so the SERVER picks the upload shape - the
     // decision belongs on the side that pays the GPU cost. Mali prices texture upload by
     // JOB COUNT: ~100 sprite rects against one union box measured +6 ms/frame.
+    //
+    // THE BUFFER HALF. With Target == Buffer there is no level and no box, so the destination
+    // byte range rides in the box's first coordinate and first extent: UnionBox.X is the byte
+    // offset, UnionBox.W the byte size, Y = Z = 0, H = D = 1, Level = 0, RegionCount = 0, and
+    // Blob holds exactly Size source bytes. That caps ONE record at a 2^31-1 offset and a
+    // 2^32-1 size; a range beyond either is split by the emitter - the same rule, and at
+    // SEG_STAGE's 32 MiB the far tighter one, that the ring's half-capacity bound already
+    // imposes on it. MGPipeSetSubDataBufferRange / MGPipeSubDataBufferOffset / Size below are
+    // the only spelling of this convention; nothing else reads the box for a buffer.
     struct MGPSubData {
         MGPipeHandle Res;
         Uint16 Target, Level;
@@ -555,6 +586,24 @@ namespace MobileGL::MG_Pipe {
         MGPBlobRef Blob;
     };
     MGP_ASSERT_POD(MGPSubData, 72);
+
+    // Encodes a buffer byte range into the record's box. False, with the record untouched,
+    // when the range does not fit one record: the emitter has to split it.
+    inline Bool MGPipeSetSubDataBufferRange(MGPSubData& record, Uint64 offset, Uint64 size) {
+        if (offset > 0x7FFFFFFFull || size > 0xFFFFFFFFull) {
+            return false;
+        }
+        record.UnionBox = MGPBox{static_cast<Int32>(offset), 0, 0, static_cast<Uint32>(size), 1, 1};
+        record.Level = 0;
+        record.RegionCount = 0;
+        return true;
+    }
+    inline Uint64 MGPipeSubDataBufferOffset(const MGPSubData& record) {
+        // A negative X is a corrupt record (the encoder never writes one); read as unsigned
+        // it lands above the encodable bound, which the applier's bounds gate refuses.
+        return static_cast<Uint64>(static_cast<Uint32>(record.UnionBox.X));
+    }
+    inline Uint64 MGPipeSubDataBufferSize(const MGPSubData& record) { return record.UnionBox.W; }
 
     // The forward terminator for a server-initiated texture pull (section 7.1). May carry
     // zero regions - that is how a pull that needs nothing is answered.

@@ -27,22 +27,23 @@
 // that the expansion, the two generated tables and this number agree.
 //
 //   class       entries   group (as the plan tabulates it)
-//   kScreen        10     screen: caps 1 + resource 3 + persistent map 2 + fence 4
-//   kCtxQuery       6     query object namespace
+//   kScreen        11     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
+//                         appended server-side fence wait 1
+//   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      17     16 of the 17 set_* calls + the temporary set_residual_value_state
 //   kCtxObject      9     set_texture_params (the 17th set_*) + 8 object-scoped transfers
 //   kCtxVerb       13     3 context-reading transfer calls + the 10 commands
-//   total          68
+//   total          71
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:
 //   - "screen 14" tabulates the fence and query families together with the screen block.
 //     Section 4.3 assigns the query NAMESPACE to the context ("VAO / FBO / XFB object /
 //     query namespaces, the command stream, present"), so the six query calls carry
-//     kCtxQuery and live in MGPipeContext. Screen keeps 10. The eight EGL lifecycle entry
-//     points stay virtual functions on pActiveBackendObject and are deliberately NOT calls
-//     here (section 4.4.1, last row).
+//     kCtxQuery and live in MGPipeContext. Screen keeps 10 of the plan's (11 with the appended
+//     FenceWaitServer, below). The eight EGL lifecycle entry points stay virtual functions on
+//     pActiveBackendObject and are deliberately NOT calls here (section 4.4.1, last row).
 //   - "CSO 15" is create/bind/delete x 5 kinds. Two of those binds are ALSO named in the
 //     set_* catalogue as their array forms - bind_sampler_states and set_sampler_views
 //     (section 4.4.3) - and a call may only exist once, so they are emitted under
@@ -54,10 +55,18 @@
 //     resource_subdata_complete). Eleven is what is emitted; the twelfth is not named
 //     anywhere in the plan.
 //   - "about 74 items" in section 4.1 is the sum of those headline numbers, so it inherits
-//     the same double counting. 68 unique records is the honest total.
+//     the same double counting. 68 unique records was the honest total of the plan's own
+//     catalogue.
+//   - Three LIVE GLFunctionsTable entries had no carrier in it at all: GetGpuTimestampNs
+//     (glGetInteger64v(GL_TIMESTAMP), a synchronous server answer), QueryCounterTimestamp
+//     (glQueryCounter, a one-shot stamp rather than a begin/end pair) and WaitSync (the
+//     GPU-side wait, which FenceWait's client-side wait does not express). They are
+//     QueryTimestamp, QueryCounter and FenceWaitServer, APPENDED at the end of the list -
+//     not slotted into their groups - because the wire opcode is the position, so a record
+//     that arrives late goes last. 71 unique records.
 // ---------------------------------------------------------------------------------------
 
-#define MGP_CALL_LIST_DOCUMENTED_COUNT 68
+#define MGP_CALL_LIST_DOCUMENTED_COUNT 71
 
 // clang-format off
 #define MGP_CALL_LIST(X)                                                                            \
@@ -137,7 +146,18 @@
     X(ResumeStreamOutput,       MGPStreamOutputControl,     kCtxVerb,   kNone)                      \
     X(Flush,                    MGPFlush,                   kCtxVerb,   kNone)                      \
     X(Present,                  MGPPresent,                 kCtxVerb,   kNone)                      \
-    X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional)
+    X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional)                  \
+    /* ---- APPENDED. Opcodes are positional, so a late arrival goes at the END, never into ---- */ \
+    /* ---- its group: three live GLFunctionsTable entries the catalogue had no carrier for. ---- */ \
+    /* glGetInteger64v(GL_TIMESTAMP) - GetGpuTimestampNs, a synchronous server answer, which  */    \
+    /* the reply slot carries. The query namespace is the context's (plan 4.3).                */    \
+    X(QueryTimestamp,           MGPTimestampRequest,        kCtxQuery,  kReplySlot)                 \
+    /* glQueryCounter(GL_TIMESTAMP) - QueryCounterTimestamp, a one-shot stamp into a query    */    \
+    /* object, NOT a begin/end pair. Kind carries GL_TIMESTAMP.                                */    \
+    X(QueryCounter,             MGPQueryDesc,               kCtxQuery,  kNone)                      \
+    /* glWaitSync - WaitSync, the GPU-side wait, distinct from FenceWait's client-side one.   */    \
+    /* TimeoutNs is GL_TIMEOUT_IGNORED by contract.                                            */    \
+    X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone)
 // clang-format on
 
 // Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):

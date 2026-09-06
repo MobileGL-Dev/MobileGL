@@ -441,9 +441,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/flatbuffers/include/flatbuffers/flatbuffers.h")
     message(WARNING
         "MOBILEGL_BUILD_DISAGGREGATED=ON but 3rdparty/flatbuffers/include is missing. "
-        "Run `git submodule update --init 3rdparty/flatbuffers`. Forcing the option OFF.")
-    set(MOBILEGL_BUILD_DISAGGREGATED OFF CACHE BOOL
-        "Build the MG_Remote transport layer (two-process shape)" FORCE)
+        "Run `git submodule update --init 3rdparty/flatbuffers`. Building without the "
+        "disaggregated shape for this configure; the cached ON takes effect once the "
+        "submodule is present.")
+    # A NORMAL variable, deliberately not `CACHE BOOL ... FORCE`: forcing OFF into the cache
+    # made the plain re-configure after `git submodule update` stay OFF with no message at
+    # all. Shadowing the cache entry for this configure only keeps the operator's ON where it
+    # was, so the next configure - with the submodule there - honours it.
+    set(MOBILEGL_BUILD_DISAGGREGATED OFF)
 endif()
 
 if (MOBILEGL_BUILD_DISAGGREGATED)

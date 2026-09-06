@@ -24,6 +24,9 @@ from the catalogue (they all consume the same .def).
 
     python3 scripts/gen_pipe.py            # write the generated files, print the summary
     python3 scripts/gen_pipe.py --check    # fail if regenerating would change anything
+
+Both modes refuse a catalogue whose call payload has no field list in PipeFields.def: a
+payload the G4 comparator cannot see is a payload MOBILEGL_PIPE_VERIFY is blind to.
 """
 
 import argparse
@@ -157,6 +160,17 @@ def parse_calls():
     return calls
 
 
+# The member types the G4 comparator falls back to memcmp for (see gen_verify): the
+# MG_State / MG_Backend value structs and MGHostSpan. They are not call payloads and get
+# field lists of their own in P0.5. Nothing else may be missing from PipeFields.def.
+MEMCMP_FALLBACK_TYPES = {
+    "RenderStateParameters",
+    "PixelStoreParameters",
+    "DynamicBackendParameters",
+    "MGHostSpan",
+}
+
+
 def parse_verify_payloads():
     text = read(os.path.join(PIPE_DIR, "PipeFields.def"))
     match = re.search(r"#define MGP_VERIFY_PAYLOAD_LIST\(P\)(.*?)\n\n", text, re.S)
@@ -167,6 +181,17 @@ def parse_verify_payloads():
         if ("#define MGP_FIELDS_%s(F)" % payload) not in text:
             sys.exit("PipeFields.def: %s is in the payload list with no field macro" % payload)
     return payloads
+
+
+def check_call_payloads_have_field_lists(calls, payloads):
+    """Every payload PipeCalls.def names must have a G4 field list, or the verify comparator
+    is silently blind to that call. Runs in both modes, --check included."""
+    known = set(payloads)
+    missing = sorted({c.Payload for c in calls
+                      if c.Payload not in known and c.Payload not in MEMCMP_FALLBACK_TYPES})
+    if missing:
+        sys.exit("PipeFields.def: call payload(s) with no field list, so MOBILEGL_PIPE_VERIFY "
+                 "would be blind to them: %s" % ", ".join(missing))
 
 
 def parse_coverage():
@@ -608,6 +633,7 @@ def main():
 
     calls = parse_calls()
     payloads = parse_verify_payloads()
+    check_call_payloads_have_field_lists(calls, payloads)
     accessors, deltas = parse_coverage()
     rows = parse_inventory()
 

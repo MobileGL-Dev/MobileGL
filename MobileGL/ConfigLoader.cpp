@@ -159,8 +159,11 @@ namespace MobileGL::MG_ConfigLoader {
         return static_cast<Uint32>(parsedValue);
     }
 
-    // Same contract as QueryEnvUint32, over 64 bits and accepting a 0x prefix: the one
-    // consumer is a subsystem BITMASK, and a bitmask written in decimal is unreadable.
+    // Same contract as QueryEnvUint32, over 64 bits and accepting an explicit 0x prefix: the
+    // one consumer is a subsystem BITMASK, and a bitmask written in decimal is unreadable.
+    // Decimal otherwise - never strtoull's base 0, whose "leading zero means octal" rule
+    // silently read MOBILEGL_PIPE_PUSH=010 as 8 - and a '-' anywhere is rejected rather than
+    // wrapped, which strtoull would otherwise do without complaint (-1 -> every bit set).
     inline Uint64 QueryEnvUint64(const String& key, Uint64 defaultValue) {
         auto it = acceptedEnvVariablesMap->find(key);
         if (it == acceptedEnvVariablesMap->end()) {
@@ -168,12 +171,19 @@ namespace MobileGL::MG_ConfigLoader {
         }
 
         const String& value = it->second;
+        const char* text = value.c_str();
+        int base = 10;
+        if (value.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+            text += 2;
+            base = 16;
+        }
         char* parseEnd = nullptr;
         errno = 0;
-        const unsigned long long parsedValue = std::strtoull(value.c_str(), &parseEnd, 0);
-        if (parseEnd == value.c_str() || *parseEnd != '\0' || errno == ERANGE) {
-            MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected an integer (decimal or "
-                    "0x-prefixed), using default %llu",
+        const bool negative = value.find('-') != String::npos;
+        const unsigned long long parsedValue = negative ? 0 : std::strtoull(text, &parseEnd, base);
+        if (negative || parseEnd == text || *parseEnd != '\0' || errno == ERANGE) {
+            MGLOG_W("Config: Ignoring invalid env variable %s='%s'; expected a non-negative integer "
+                    "(decimal, or 0x-prefixed hexadecimal), using default %llu",
                     key.c_str(), value.c_str(), static_cast<unsigned long long>(defaultValue));
             return defaultValue;
         }

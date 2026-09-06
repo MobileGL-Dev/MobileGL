@@ -288,3 +288,15 @@ inline void MGP_Present(const MGPPresent* payload) {
 inline void MGP_SetSwapInterval(const MGPSwapInterval* payload) {
     gMGPipeContext.SetSwapInterval(payload);
 }
+
+inline void MGP_QueryTimestamp(const MGPTimestampRequest* payload, MGPReplySlot* reply) {
+    gMGPipeContext.QueryTimestamp(payload, reply);
+}
+
+inline void MGP_QueryCounter(const MGPQueryDesc* payload) {
+    gMGPipeContext.QueryCounter(payload);
+}
+
+inline void MGP_FenceWaitServer(const MGPFenceWait* payload) {
+    gMGPipeScreen.FenceWaitServer(payload);
+}

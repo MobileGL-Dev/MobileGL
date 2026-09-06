@@ -38,6 +38,7 @@ inline Bool MGPipeVerify(const MGPResourceDesc& a, const MGPResourceDesc& b, con
 inline Bool MGPipeVerify(const MGPFenceWait& a, const MGPFenceWait& b, const char** outField);
 inline Bool MGPipeVerify(const MGPQueryDesc& a, const MGPQueryDesc& b, const char** outField);
 inline Bool MGPipeVerify(const MGPQueryResultRequest& a, const MGPQueryResultRequest& b, const char** outField);
+inline Bool MGPipeVerify(const MGPTimestampRequest& a, const MGPTimestampRequest& b, const char** outField);
 inline Bool MGPipeVerify(const MGPRenderStateDesc& a, const MGPRenderStateDesc& b, const char** outField);
 inline Bool MGPipeVerify(const MGPBindRenderState& a, const MGPBindRenderState& b, const char** outField);
 inline Bool MGPipeVerify(const MGPDynamicState& a, const MGPDynamicState& b, const char** outField);
@@ -112,6 +113,8 @@ template <>
 struct MGPipeHasFieldVerifier<MGPQueryDesc> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPQueryResultRequest> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGPTimestampRequest> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPRenderStateDesc> : std::true_type {};
 template <>
@@ -302,6 +305,11 @@ inline Bool MGPipeVerify(const MGPQueryDesc& a, const MGPQueryDesc& b, const cha
 
 inline Bool MGPipeVerify(const MGPQueryResultRequest& a, const MGPQueryResultRequest& b, const char** outField) {
     MGP_FIELDS_MGPQueryResultRequest(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGPTimestampRequest& a, const MGPTimestampRequest& b, const char** outField) {
+    MGP_FIELDS_MGPTimestampRequest(MGP_VERIFY_FIELD)
     return true;
 }
 
@@ -562,4 +570,4 @@ inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 62;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 63;

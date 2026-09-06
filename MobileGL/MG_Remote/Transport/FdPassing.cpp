@@ -15,10 +15,19 @@
 
 #if !defined(_WIN32)
 #include <cerrno>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
+
+// MSG_NOSIGNAL is Linux (and Android). macOS and the BSDs spell the same protection as the
+// SO_NOSIGPIPE socket option, set once per socket at creation (CreateSocketPair below, and
+// SocketDoorbell's constructor). With neither, a write to a hung-up peer raises SIGPIPE and
+// kills the process instead of returning EPIPE.
+#if !defined(_WIN32) && !defined(MSG_NOSIGNAL)
+#define MSG_NOSIGNAL 0
 #endif
 
 namespace MobileGL::MG_Remote::Transport::FdPassing {
@@ -84,6 +93,13 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
             MGLOG_E("MG_Remote fd passing: socketpair failed (errno=%d)", errno);
             return MOBILEGL_ERR_TRANSPORT_CLOSED;
         }
+#if defined(SO_NOSIGPIPE)
+        // The per-socket form of MSG_NOSIGNAL, on the platforms that lack the per-call one.
+        for (int fd : fds) {
+            const int one = 1;
+            (void)::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+        }
+#endif
         outFds[0] = fds[0];
         outFds[1] = fds[1];
         return MOBILEGL_OK;
@@ -241,6 +257,17 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
                 received[receivedCount++] = fd;
             }
         }
+#if !defined(MSG_CMSG_CLOEXEC)
+        // No atomic close-on-exec on receive here (macOS, the BSDs): set it by hand on every
+        // descriptor that arrived, before anything else can fork. The window between the
+        // recvmsg and this loop is the platform's, not ours; leaving the flag off altogether
+        // would hand every shared segment to every child the process ever spawns.
+        for (int i = 0; i < receivedCount; ++i) {
+            if (received[i] >= 0) {
+                (void)::fcntl(received[i], F_SETFD, FD_CLOEXEC);
+            }
+        }
+#endif
         const auto closeAll = [&](int keepIndex) {
             for (int i = 0; i < receivedCount; ++i) {
                 if (i != keepIndex && received[i] >= 0) {
