@@ -140,10 +140,13 @@ endif()
 # retrace is untouched:
 #   * mobilegl.log exists - the replay wrote one, so the library was loaded and logging;
 #   * it carries "MGPipe: verify armed" - the comparator armed in THIS process;
-#   * it carries neither Fatal{PipeVerifyDiffer (a push/pull divergence, the thing the mode
-#     exists to find) nor Fatal{UnmigratedPipeInput (a backend read of a field the verb's fill
-#     table does not list - fixed by adding the row to MG_Pipe/FillPoints.def, never by marking
-#     the field sticky).
+#   * it carries none of the three MGPipe Fatals: Fatal{PipeVerifyDiffer (a push/pull divergence,
+#     the thing the mode exists to find), Fatal{UnmigratedPipeInput (a backend read of a field the
+#     verb's fill table does not list - fixed by adding the row to MG_Pipe/FillPoints.def, never by
+#     marking the field sticky), and Fatal{PipeVerifyBadKnob (a misspelt MOBILEGL_PIPE_VERIFY_CORRUPT
+#     or MOBILEGL_PIPE_POISON_OMIT). The third is in the regex on purpose even though D2 makes it
+#     abort the process: with MOBILEGL_PIPE_VERIFY_FATAL=0 the abort is exactly what does not
+#     happen, and a typo'd knob would otherwise leave the negative-control lane looking healthy.
 # The Fatal check is not redundant with the replay's exit status: MOBILEGL_PIPE_VERIFY_FATAL=0 is
 # the supported triage configuration, and there the divergence is logged and counted rather than
 # aborted, so the run would otherwise finish 0 with its own report in the log.
@@ -168,7 +171,7 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "runtime artifact is the one unpacked at ${MOBILEGL_LIBRARY}.")
         endif()
         file(STRINGS "${mobilegl_log}" pipe_verify_fatals
-                REGEX "Fatal\\{(PipeVerifyDiffer|UnmigratedPipeInput)")
+                REGEX "Fatal\\{(PipeVerifyDiffer|UnmigratedPipeInput|PipeVerifyBadKnob)")
         if(pipe_verify_fatals)
             foreach(line IN LISTS pipe_verify_fatals)
                 message(STATUS "${line}")
@@ -179,7 +182,9 @@ if(DEFINED ENV{MOBILEGL_PIPE_VERIFY} AND NOT "$ENV{MOBILEGL_PIPE_VERIFY}" STREQU
                     "MOBILEGL_PIPE_VERIFY. Fatal{PipeVerifyDiffer, \"<Field>@<Verb>\"} is a real push/pull "
                     "divergence and is recorded, not silenced; Fatal{UnmigratedPipeInput, \"<Field>@<Verb>\"} "
                     "is a missing row in MG_Pipe/FillPoints.def's class table - add it, regenerate, rerun "
-                    "(never mark the field sticky).")
+                    "(never mark the field sticky); Fatal{PipeVerifyBadKnob, ...} is a misspelt "
+                    "MOBILEGL_PIPE_VERIFY_CORRUPT / MOBILEGL_PIPE_POISON_OMIT - fix the spelling, the "
+                    "vocabularies are kMGPipeInputFieldNames[] and kMGPipeVerbNames[].")
         endif()
         message(STATUS "MGPipe verify: ${pipe_verify_case} armed, zero divergences, zero unmigrated reads")
     endif()
