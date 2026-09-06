@@ -318,7 +318,113 @@ namespace MobileGL::MG_Pipe {
         [[maybe_unused]] Bool IsOmitted(MGPipeVerb verb, MGPipeInputField field) {
             return g_omission.Armed && g_omission.Verb == verb && g_omission.Field == field;
         }
+
+#if MOBILEGL_PIPE_VERIFY
+        // ---- the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8) ----
+        // Two mechanisms, both active only when Features.PipeVerify is set: the ENTRY compare
+        // once per verb (the pushed block against a second snapshot of the live context,
+        // taken at the same instant - tautological until P2 gives the first arm a real
+        // filler, and kept falsifiable by MOBILEGL_PIPE_VERIFY_CORRUPT), and the
+        // COMPARE-AT-READ in every accessor (the stored value against a fresh read of the
+        // live context at the moment the backend reads it - the arm that is real in P1: it
+        // catches a value that changed between the verb boundary and the read).
+        PipeInputs g_snapshot{};    // the second arm
+        PipeInputs g_readScratch{}; // where the compare-at-read re-read lands
+
+        struct VerifyState {
+            Bool Parsed = false;
+            Bool Enabled = false;
+            Bool Fatal = true;
+            Bool InHook = false; // a re-read that re-enters an accessor is not re-verified
+            Optional<MGPipeInputField> Corrupt;
+            std::atomic<Uint64> Divergences{0};
+            ~VerifyState() {
+                const Uint64 count = Divergences.load(std::memory_order_relaxed);
+                if (count != 0) {
+                    MGLOG_E("MGPipe: verify summary - %llu divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0",
+                            static_cast<unsigned long long>(count));
+                }
+            }
+        };
+        VerifyState g_verify;
+
+        void ArmVerify() {
+            if (g_verify.Parsed) return;
+            g_verify.Parsed = true;
+            g_verify.Enabled = MG_Config::Features.PipeVerify;
+            if (!g_verify.Enabled) return;
+            g_verify.Fatal = MG_Config::Features.PipeVerifyFatal;
+            const String& corrupt = MG_Config::Features.PipeVerifyCorrupt;
+            if (!corrupt.empty()) {
+                const auto field = MGPipeFindInputField(corrupt.c_str());
+                if (!field) {
+                    BadKnob("MOBILEGL_PIPE_VERIFY_CORRUPT", corrupt.c_str(), "no such field in kMGPipeInputFieldNames");
+                }
+                g_verify.Corrupt = field;
+            }
+            // The lanes grep for this line: a verify run whose log lacks it never armed.
+            MGLOG_I("MGPipe: verify armed - %u fields, %u verbs, fatal=%d", static_cast<unsigned>(kMGPipeInputFieldCount),
+                    static_cast<unsigned>(kMGPipeVerbCount), g_verify.Fatal ? 1 : 0);
+            if (g_verify.Corrupt) {
+                MGLOG_I("MGPipe: verify corruption armed - %s", kMGPipeInputFieldNames[static_cast<SizeT>(*g_verify.Corrupt)]);
+            }
+        }
+
+        void ReportDivergence(MGPipeInputField field, const char* where) {
+            const Uint64 serial = MGPipeFillAccess::Filled(gPipeInputs).CurrentVerbSerial;
+            MGLOG_F("MGPipe: Fatal{PipeVerifyDiffer, \"%s@%s\", verb=%llu, where=%s}",
+                    kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(gPipeInputs.CurrentVerb()),
+                    static_cast<unsigned long long>(serial), where);
+            if (g_verify.Fatal) std::abort();
+            g_verify.Divergences.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void EntryCompare(PipeInputs& inputs, const MGPipeFieldMask& mask) {
+            if (!g_verify.Enabled) return;
+            SnapshotFromGLContext(g_snapshot, mask);
+            // Negative control A: perturb the SNAPSHOT arm, so a green run goes red naming the
+            // field. A field outside this verb's mask is not compared and stays untouched.
+            if (g_verify.Corrupt && MGPipeFieldMaskHas(mask, *g_verify.Corrupt)) {
+                MGPipeApplyVerifyCorruption(g_snapshot, *g_verify.Corrupt);
+            }
+            MGPipeInputField differing = MGPipeInputField::kFieldCount;
+            if (!MGPipeVerifyInputs(inputs, g_snapshot, mask, &differing)) ReportDivergence(differing, "entry");
+        }
+#endif // MOBILEGL_PIPE_VERIFY
     } // namespace
+
+#if MOBILEGL_PIPE_VERIFY
+    void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask) {
+        auto* ctx = LiveContext();
+        MGPipeFillAccess::SetIdentity(snapshot, ctx);
+        MGPipeFillAccess::SetVerb(snapshot, gPipeInputs.CurrentVerb());
+        if (ctx == nullptr) return;
+        for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
+            const auto field = static_cast<MGPipeInputField>(i);
+            if (!MGPipeFieldMaskHas(mask, field) || kMGPipeInputFieldSticky[i]) continue;
+            MGPipeFillAccess::CopyField(snapshot, *ctx, field);
+        }
+    }
+
+    void MGPipeVerifyReadHook(const PipeInputs& self, MGPipeInputField field, Uint index0, Uint index1) {
+        if (&self != &gPipeInputs || !g_verify.Enabled || g_verify.InHook) return;
+        const auto index = static_cast<SizeT>(field);
+        if (kMGPipeInputFieldSticky[index]) return;
+        auto* ctx = LiveContext();
+        if (ctx == nullptr) return;
+        // The whole field is re-read and compared - a superset of "the same indices", so a
+        // divergence in an index the backend did not ask for is still a divergence between
+        // the boundary value and the live value. The indices only decorate the report.
+        g_verify.InHook = true;
+        MGPipeFillAccess::CopyField(g_readScratch, *ctx, field);
+        const Bool equal = MGPipeInputsFieldEqual(field, self, g_readScratch);
+        g_verify.InHook = false;
+        if (equal) return;
+        MGLOG_E("MGPipe: verify read of %s (index %u, %u) differs from the live context", kMGPipeInputFieldNames[index],
+                index0, index1);
+        ReportDivergence(field, "read");
+    }
+#endif // MOBILEGL_PIPE_VERIFY
 
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
         if (verb == nullptr || field == nullptr) {
@@ -386,6 +492,16 @@ namespace MobileGL::MG_Pipe {
     void MGPipeFillForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
         ParsePoisonOmissionKnob();
+#if MOBILEGL_PIPE_VERIFY
+        ArmVerify();
+#else
+        // The runtime knob without the compiled comparator is a no-op that would look green;
+        // this warning is what a lane's arming assertion turns into red.
+        if (MG_Config::Features.PipeVerify) {
+            MGLOG_W_ONCE("MGPipe: MOBILEGL_PIPE_VERIFY=1 requested but the comparator is not compiled in "
+                         "(configure with -DMOBILEGL_PIPE_VERIFY=ON)");
+        }
+#endif
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState& filled = MGPipeFillAccess::Filled(inputs);
         // Starts at 1, so FilledGen == 0 means "never filled".
@@ -415,5 +531,8 @@ namespace MobileGL::MG_Pipe {
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;
 #endif
         }
+#if MOBILEGL_PIPE_VERIFY
+        EntryCompare(inputs, mask);
+#endif
     }
 } // namespace MobileGL::MG_Pipe

@@ -16,6 +16,8 @@
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
+    struct PipeInputs;
+
     // PipeFill.cpp. Bumps the per-verb serial, records the verb and the context identity,
     // and copies every field in the verb class's may-read mask (kMGPipeClassFieldMask) out
     // of the live GLContext, stamping each with the new serial. In a verify build it then
@@ -29,6 +31,14 @@ namespace MobileGL::MG_Pipe {
     // fill; tests call it directly. Both null clears the omission. An unknown name is
     // Fatal{PipeVerifyBadKnob}.
     void MGPipeSetPoisonOmission(const char* verb, const char* field);
+
+#if MOBILEGL_PIPE_VERIFY
+    // PipeFill.cpp. The second arm of the comparator (P1 brief D8, ARCHITECTURE.md 13.2-2):
+    // fills `snapshot` from the live GLContext the old way, for every field in `mask`. This
+    // is the branch that survives P13, which is why it is its own function rather than the
+    // filler's loop.
+    void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask);
+#endif
 } // namespace MobileGL::MG_Pipe
 #define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeFillForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)
 #else

@@ -50,10 +50,20 @@ namespace MobileGL::MG_Pipe {
 #else
 #define MGP_INPUT_CHECK(Field) ((void)0)
 #endif
-    // The compare-at-read hook of the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8): re-reads
-    // the same accessor with the same indices from the live context and compares. Armed by
-    // the comparator commit; until then every build's accessor is a load.
+    // The compare-at-read hook of the MOBILEGL_PIPE_VERIFY comparator (P1 brief D8), defined
+    // in MG_Impl/Pipe/PipeFill.cpp: re-reads the field from the live context and compares it
+    // against the stored value, and reports the FIRST divergence as
+    // Fatal{PipeVerifyDiffer, "Field@Verb", verb=<serial>, where=read} (the indices go in a
+    // preceding MGLOG_E). Only the live block (gPipeInputs) is verified; a snapshot's own
+    // accessors are plain loads. Off in every other build.
+    struct PipeInputs;
+#if MOBILEGL_PIPE_VERIFY
+    void MGPipeVerifyReadHook(const PipeInputs& self, MGPipeInputField field, Uint index0, Uint index1);
+#define MGP_INPUT_VERIFY_READ(Field, Index0, Index1)                                                                   \
+    ::MobileGL::MG_Pipe::MGPipeVerifyReadHook(*this, (Field), static_cast<Uint>(Index0), static_cast<Uint>(Index1))
+#else
 #define MGP_INPUT_VERIFY_READ(Field, Index0, Index1) ((void)0)
+#endif
 
     // The V/O storage of every field that has storage, by field id. The seven F-class
     // (forwarded) fields have none. PipeInputs::VisitStorage dispatches on this list, which
@@ -675,10 +685,20 @@ namespace MobileGL::MG_Pipe {
     // PipeInputs.cpp. Per-field equality for the entry compare (P1 brief D8): V by value
     // through G4's MGPipeFieldEqual (bitwise floats, field-wise structs), O by identity, F
     // always equal (no storage).
-    Bool MGPipeInputsFieldEqual(MGPipeInputField field, PipeInputs& a, PipeInputs& b);
+    Bool MGPipeInputsFieldEqual(MGPipeInputField field, const PipeInputs& a, const PipeInputs& b);
+    // PipeInputs.cpp. The entry compare: every field in `mask` of the pushed block against the
+    // snapshot, first differing field out. Exported from the shared library on purpose - the
+    // retrace-verify CI job proves it swapped in a verify build by finding this symbol with
+    // nm -D, so a "green" run against a library without the comparator cannot happen.
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((visibility("default")))
+#endif
+    Bool MGPipeVerifyInputs(const PipeInputs& pushed, const PipeInputs& snapshot, const MGPipeFieldMask& mask,
+                            MGPipeInputField* outField);
     // PipeInputs.cpp. Negative control A: perturbs one field's storage (flip a Bool, +1 a
-    // scalar, ^0x5A the first byte of a struct, null a pointer). Returns false for a forwarded
-    // field, which has nothing to corrupt.
+    // scalar, ^0x5A the first byte of a struct, flip a pointer's low bits - never
+    // dereferenced, the snapshot is only ever compared). Returns false for a forwarded field,
+    // which has nothing to corrupt.
     Bool MGPipeApplyVerifyCorruption(PipeInputs& snapshot, MGPipeInputField field);
 #endif
 } // namespace MobileGL::MG_Pipe
