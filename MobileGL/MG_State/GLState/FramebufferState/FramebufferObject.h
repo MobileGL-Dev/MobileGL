@@ -115,6 +115,12 @@ namespace MobileGL {
                 Array<Uint16, static_cast<SizeT>(FramebufferAttachmentType::FramebufferAttachmentTypeCount)>;
 
             FramebufferObject(Uint externalIndex);
+#if MOBILEGL_PIPE_PUSH
+            // P2 step e2. Out of line, and declared only where there is a notice to raise:
+            // in a pull build this class keeps its implicit destructor, which is what keeps
+            // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+            ~FramebufferObject();
+#endif
 
             void AttachTexture(FramebufferAttachmentType type, const SharedPtr<ITextureObject>& texture,
                                TextureUploadTarget textureUploadTarget = TextureUploadTarget::Unknown, int level = 0,

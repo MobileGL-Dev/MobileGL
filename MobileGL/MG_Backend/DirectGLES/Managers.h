@@ -451,6 +451,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #endif
 
+        // The seven DirectGLES.cpp call sites drive the LEGACY arm and nothing else. On the
+        // handle arm death is announced by the frontend object's destructor
+        // (MG_State/GLState/StateObjectDeathNotice.h), so there is no garbage to collect on a
+        // tick and this is the predicted branch plus a return - which is how ROADMAP.md:18's
+        // "delete the GC" is delivered without deleting the legacy arm's own collector while
+        // that arm is still compiled beside it.
         void CollectGarbageIfNeeded() {
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
@@ -458,12 +464,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 #endif
+#if MOBILEGL_PIPE_LEGACY_MEMOS
             ++m_gcTick;
             if (m_gcTick < kGCInterval) {
                 return;
             }
             CollectGarbage();
             m_gcTick = 0;
+#endif
         }
 
         void CollectGarbageNow() {

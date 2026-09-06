@@ -33,28 +33,26 @@
 //  * Slots are dense per kind, which is what lets the server side (ARCHITECTURE.md 10.1,
 //    MG_Remote/Server/PipeObjectTables) be an array rather than an object graph.
 //
-// Death: announced where the package may announce it, discovered everywhere else.
-// DestroyByLifetimeId() below is step e2's backend half and it is complete - it drops the twin
-// and returns the slot the moment the frontend object's last SharedPtr goes - and the notice
-// that drives it (MG_State/GLState/StateObjectDeathNotice.h, BufferBackendOps' shape) is
-// registered for all six kinds. What is only PARTLY wired is the firing side: a destructor has
-// to raise the notice, and of the six object classes the P2 file-ownership table gives
-// {Texture,Framebuffer,Sampler,VertexArray}State/* to other packages, so only ProgramObject
-// and RenderbufferObject fire it here. The four that do not still rely on the sweep, which is
-// why the table keeps ONE weak_ptr per entry and uses it for exactly one thing:
-// ReclaimDeadSlots() frees the slot - and the twin, and the driver storage it owns - once the
-// frontend object is gone. That is a liveness sweep, not an identity test, and it is what
-// bumps Gen, which is precisely the ABA defence: a slot is only ever handed out again after it
-// was freed. The four remaining one-line destructor calls retire the sweep entirely.
+// Death is ANNOUNCED, and that is what lets this table have no garbage collector - the
+// deliverable ROADMAP.md:18 spells "GC" in and the one D13 makes a precondition of the switch-
+// over. All six re-keyed object classes raise MG_State::GLState::NotifyStateObjectDestroyed()
+// from their destructor (BufferBackendOps' shape, one entry point for six kinds), the backend
+// consumes it in Managers.cpp, and DestroyByLifetimeId() below drops the twin and returns the
+// slot at the moment the frontend object's last SharedPtr goes. So:
+//   * there is NO draw-path tick and NO creation tick on this arm. CollectGarbageIfNeeded() is
+//     an empty call, and the seven call sites in DirectGLES.cpp drive the LEGACY registry only;
+//   * a twin, and the driver storage it owns, is freed when the application lets go of the
+//     object rather than up to 64 creations or 1024 draw ticks later. That is what
+//     Managers.h's "dead gigabytes" note asked for.
 //
-// Because the sweep is still the only death signal, this table carries BOTH of the drivers
-// the registry it replaces carries, and for the same reasons:
-//   * the draw-path tick (kGCInterval = 1024 CollectGarbageIfNeeded calls), and
-//   * the CREATION tick (kCreationGCInterval = 64 first-time insertions), because object CHURN
-//     rather than draw count is what makes the sweep urgent - a CTS-shaped case runs ~10
-//     per-draw ticks, so 1024 of them span ~100 cases' worth of dead, gigabyte-sized objects.
-// Dropping the second one would have made this table's memory behaviour strictly WORSE than
-// the map it replaces, which is the opposite of what the slice is for.
+// The weak_ptr per entry survives, and only for what it is honest about:
+//   * ForEachLive() hands the callee a STRONG reference to the frontend object, which the one
+//     direct-iteration site (ScopedDetachedTextureFramebufferAttachments) needs; and
+//   * ReclaimDeadSlots() is kept as the body of the EXPLICIT CollectGarbageNow(), i.e. a
+//     collection someone asks for, never a periodic one. It is the backstop for the one case
+//     the notice cannot cover: a destructor that runs after exit() has begun, where
+//     InProcessTeardown() drops the notice because a twin destructor must not call the driver.
+// It is never an identity test - that is what Gen is for.
 //
 // P3+ DEBT, recorded rather than hidden: this header is under MG_Backend/ and it MINTS
 // handles (MGPipeSlots().Acquire below) off a frontend SharedPtr's GetLifetimeId().
@@ -148,22 +146,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return m_nullTwin;
             }
 
-            // Sweep BEFORE the entry reference below exists, for the same reason the map arm
-            // does it here: EntryAt may grow m_slots and move every element, so a reference
-            // taken first would not survive it. The sweep is owed from an earlier creation
-            // rather than triggered by this one.
-            if (m_creationTick >= kCreationGCInterval) {
-                m_creationTick = 0;
-                ReclaimDeadSlots();
-            }
-
             const MG_Pipe::MGPipeHandle handle =
                 MG_Pipe::MGPipeSlots().Acquire(kKind, stateObj->GetLifetimeId());
             MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
                             "MGPipe slot space of kind %u is exhausted",
                             static_cast<Uint32>(kKind));
             Entry& entry = EntryAt(handle.Slot);
-            const Bool firstInsertion = !entry.Live || entry.Gen != handle.Gen;
             if (entry.Live && entry.Gen != handle.Gen) {
                 // The slot was reclaimed and handed to a new object: the twin at it describes
                 // driver ids the new state object never made.
@@ -172,19 +160,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             entry.Gen = handle.Gen;
             entry.Live = true;
             entry.stateRef = stateObj;
-            if (firstInsertion) {
-                // A slot this table has never held (or held for a previous owner). Nothing
-                // tells the backend that a texture or renderbuffer was DELETED - the twin, and
-                // the driver storage it owns, lives until a collection - and
-                // CollectGarbageIfNeeded is ticked only from the per-draw sync paths, which a
-                // CTS-shaped workload runs about ten times per case. 1024 of those ticks then
-                // span ~100 cases, so ~100 cases' worth of dead (and, for this suite,
-                // gigabyte-sized) objects would stay allocated at once. Object CHURN rather
-                // than draw count is what makes the sweep urgent, so a twin the table has
-                // never seen ticks it too - and it does so on the path that is about to
-                // allocate, which is exactly when the memory is needed.
-                ++m_creationTick;
-            }
+            // No creation tick and no sweep here. The registry this replaces needed both,
+            // because nothing told it a texture or a renderbuffer had been DELETED and object
+            // CHURN rather than draw count is what made that urgent. Every one of the six kinds
+            // now announces its own death from its destructor, so a dead twin's slot is already
+            // back before the next creation asks for one.
             RememberHandle(stateObj->GetLifetimeId(), handle);
             return entry.backend;
         }
@@ -285,24 +265,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        void CollectGarbageIfNeeded() {
-            ++m_gcTick;
-            if (m_gcTick < kGCInterval) return;
-            m_gcTick = 0;
-            m_creationTick = 0;
-            ReclaimDeadSlots();
-        }
+        // Deliberately EMPTY, and this is the P2 deliverable rather than an omission: on this
+        // arm death is announced, so there is nothing for a periodic sweep to discover. The
+        // seven DirectGLES.cpp call sites keep their spelling because they are the legacy
+        // registry's driver and that arm is still compiled beside this one; on this arm they
+        // cost the predicted branch in StateBackendObjectRegistry and return.
+        void CollectGarbageIfNeeded() {}
 
-        void CollectGarbageNow() {
-            m_creationTick = 0;
-            ReclaimDeadSlots();
-        }
-
-        // Test-only introspection: how many first-time insertions are owed before the
-        // creation-driven sweep fires. Reading it is what lets a test pin the CADENCE rather
-        // than only the effect of an explicit CollectGarbageNow().
-        Uint32 CreationTickForTest() const { return m_creationTick; }
-        static constexpr Uint32 CreationGCIntervalForTest() { return kCreationGCInterval; }
+        // An EXPLICIT collection - someone asked, so it runs. Not a driver: nothing calls this
+        // on a tick. It is the backstop for a notice that could not be delivered (see the
+        // InProcessTeardown() note in the file header) and the tests' way of forcing the
+        // liveness sweep without waiting for one.
+        void CollectGarbageNow() { ReclaimDeadSlots(); }
 
         // fn(const StatePtr& state, const BackendPtr& twin) over every live, still-owned entry.
         // Replaces the registry's begin()/end(), whose iterator exposed the raw frontend
@@ -342,16 +316,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_memoHandle = MG_Pipe::kMGPipeNullHandle;
         }
 
-        static constexpr Uint32 kGCInterval = 1024;
-        // Creations are far rarer than draws, so this counts in a much smaller unit than
-        // kGCInterval does. Same value the map arm uses, so the two arms sweep at the same
-        // cadence under the same workload.
-        static constexpr Uint32 kCreationGCInterval = 64;
-
         // Indexed by MGPipeHandle::Slot; [0] is the reserved slot and is never live.
         Vector<Entry> m_slots;
-        Uint32 m_gcTick = 0;
-        Uint32 m_creationTick = 0;
         Bool m_isCollecting = false;
         // Handed back by GetOrCreate for a null state object. Never live, never swept.
         BackendPtr m_nullTwin;

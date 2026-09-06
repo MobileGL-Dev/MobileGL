@@ -25,6 +25,12 @@ namespace MobileGL {
                 static constexpr int MAX_VERTEX_ATTRIB_BINDINGS = 32;
 
                 VertexArrayObject(Uint externIndex);
+#if MOBILEGL_PIPE_PUSH
+                // P2 step e2. Out of line, and declared only where there is a notice to raise:
+                // in a pull build this class keeps its implicit destructor, which is what keeps
+                // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+                ~VertexArrayObject();
+#endif
 
                 void EnableAttribute(Uint index);
                 void DisableAttribute(Uint index);

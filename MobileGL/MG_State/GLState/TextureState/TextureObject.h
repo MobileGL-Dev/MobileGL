@@ -116,7 +116,15 @@ namespace MobileGL::MG_State::GLState {
     class TextureObjectBase : public ITextureObject {
     public:
         TextureObjectBase(TextureTarget target, Uint externalIndex);
+#if MOBILEGL_PIPE_PUSH
+        // P2 step e2. Out of line, and declared only where there is a notice to raise: in a
+        // pull build this stays the implicit `= default` the pre-P2 tree had, which is what
+        // keeps the pull build's symbol set byte-for-byte the pre-P2 one (G1). Declared on the
+        // BASE, so every concrete texture class - 2D, 3D, cube, buffer, view - announces once.
+        virtual ~TextureObjectBase();
+#else
         virtual ~TextureObjectBase() = default;
+#endif
 
         TextureInternalFormat GetFormat() const override;
         TextureTarget GetTarget() const override;

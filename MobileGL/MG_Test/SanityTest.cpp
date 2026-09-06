@@ -41,7 +41,10 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_State/GLState/SamplerState/SamplerObject.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
+#include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <csignal>
 #include <limits>
 #include <set>
@@ -3375,24 +3378,20 @@ TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin)
         << "the shared slot outlived both holders and the object";
 }
 
-// The sweep has TWO drivers and the table must carry both. Nothing below calls
-// CollectGarbageIfNeeded() or CollectGarbageNow(): this is the CREATION-driven half, and it is
-// the one that matters for a workload that churns objects without drawing much. The draw-path
-// tick is 1024 CollectGarbageIfNeeded calls, i.e. ~100 CTS-shaped cases at ~10 per-draw ticks
-// each, which is how the registry this replaces came to hold ~100 cases' worth of dead,
-// gigabyte-sized twins at once before the creation tick was added to fix it.
-TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
+// The sweep and both of its drivers are RETIRED on this arm (ROADMAP.md:18's "delete the GC"),
+// and this is the property that replaces them. The registry this table replaces learned of a
+// death only by finding an expired weak_ptr, so it needed a 1024-call draw tick AND a
+// 64-creation tick and still held up to 64 dead, gigabyte-sized twins at once. An announced
+// death returns the slot before the next creation asks for one, so NOTHING accumulates -
+// nothing below calls CollectGarbageIfNeeded() or CollectGarbageNow(), and on this arm the
+// former does nothing at all.
+TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
     using namespace MobileGL;
 
     auto& slots = MG_Pipe::MGPipeSlots();
-    const Uint32 interval = FakeSlotTable::CreationGCIntervalForTest();
-    // The churn count is a FIXED constant, not a multiple of the interval: a negative control
-    // that pushes the interval out of reach must make this case go red, not make it run for
-    // 2^32 iterations.
     constexpr Uint32 kChurn = 256u;
-    ASSERT_GT(interval, 0u);
-    ASSERT_LT(interval, kChurn) << "the creation sweep can no longer fire inside this case";
     const Uint32 highWaterBefore = slots.HighWater(MG_Pipe::MGPipeKind::Query);
+    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
 
     FakeSlotTable table;
     Uint32 peakLive = 0;
@@ -3400,15 +3399,21 @@ TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
         auto object = MakeShared<FakeStateObject>(0xF0000000ull + i);
         table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
         peakLive = std::max(peakLive, table.LiveCount());
-        // The object dies here. NOTHING announces that to the table (step e2 is not landed);
-        // the only thing that can notice is a sweep.
+        // What a real object's destructor raises. FakeStateObject is not one of the six
+        // re-keyed frontend classes, so the firing half is driven by hand here; that those six
+        // classes really do fire it is EveryReKeyedObjectClassAnnouncesItsOwnDeath below, and
+        // that the registries answer it per kind is
+        // EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm.
+        EXPECT_TRUE(table.DestroyByLifetimeId(object->GetLifetimeId()));
     }
 
-    EXPECT_LE(peakLive, interval + 2u)
-        << peakLive << " dead twins accumulated at once with " << kChurn
-        << " objects churned - object churn stopped driving the sweep";
-    EXPECT_LE(table.LiveCount(), interval + 2u);
-    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, interval + 2u)
+    EXPECT_EQ(peakLive, 1u)
+        << peakLive << " twins were live at once with " << kChurn
+        << " objects churned and every death announced - the notice stopped freeing the twin";
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
+        << "the churn leaked slots the announced deaths should have returned";
+    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, 1u)
         << "the slot space grew with the churn instead of being recycled";
 }
 
@@ -3459,45 +3464,57 @@ TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
     EXPECT_FALSE(other.DestroyByLifetimeId(object->GetLifetimeId()));
 }
 
-// The firing side of e2, on the two of the six object classes whose files this package owns.
-// The notice has to arrive when the LAST SharedPtr drops - not when glDeleteProgram marks the
-// name, because a still-bound object goes on living - so the object is simply dropped here.
-TEST(DirectGLESSlotTable, AProgramAndARenderbufferAnnounceTheirOwnDeath) {
+// The firing side of e2, on ALL SIX re-keyed object classes - the round-3 review's MAJOR 3.
+// Until this round only ProgramObject and RenderbufferObject raised the notice and the other
+// four discovered their death in a sweep; the sweep is now retired, so a class that stopped
+// announcing would leak its twin and the driver storage that twin owns for the life of the
+// process. The notice has to arrive when the LAST SharedPtr drops - not when glDelete* marks
+// the name, because a still-bound object goes on living - so the objects are simply dropped.
+TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
     using namespace MobileGL;
 
-    struct Notice {
-        MG_Pipe::MGPipeKind kind = MG_Pipe::MGPipeKind::None;
-        Uint64 lifetimeId = 0;
-    };
-    static Vector<Notice> notices;
+    static Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> notices;
     notices.clear();
     const MG_State::GLState::StateObjectDeathOps recording = {
         .OnDestroyed = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
-            notices.push_back(Notice{kind, lifetimeId});
+            notices.emplace_back(kind, lifetimeId);
         },
     };
     const MG_State::GLState::StateObjectDeathOps* previous =
         MG_State::GLState::GetStateObjectDeathOps();
     MG_State::GLState::SetStateObjectDeathOps(&recording);
 
-    Uint64 programId = 0;
-    Uint64 renderbufferId = 0;
+    Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> expected;
     {
         auto program = MakeShared<MG_State::GLState::ProgramObject>(0u);
-        programId = program->GetLifetimeId();
         auto renderbuffer = MakeShared<MG_State::GLState::RenderbufferObject>(0u);
-        renderbufferId = renderbuffer->GetLifetimeId();
+        auto texture = MakeShared<MG_State::GLState::TextureObject2D>(0u);
+        auto framebuffer = MakeShared<MG_State::GLState::FramebufferObject>(1u);
+        auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+        auto vertexArray = MakeShared<MG_State::GLState::VertexArrayObject>(0u);
+
+        expected.emplace_back(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId());
+        expected.emplace_back(MG_Pipe::MGPipeKind::VertexElementsCso, vertexArray->GetLifetimeId());
+
         EXPECT_TRUE(notices.empty()) << "a live object announced its own death";
     }
 
     MG_State::GLState::SetStateObjectDeathOps(previous);
 
-    ASSERT_EQ(notices.size(), 2u);
-    // Destruction is reverse of construction, so the renderbuffer speaks first.
-    EXPECT_EQ(notices[0].kind, MG_Pipe::MGPipeKind::Renderbuffer);
-    EXPECT_EQ(notices[0].lifetimeId, renderbufferId);
-    EXPECT_EQ(notices[1].kind, MG_Pipe::MGPipeKind::ShaderCso);
-    EXPECT_EQ(notices[1].lifetimeId, programId);
+    // Membership rather than a count or an order: every TextureObjectBase owns a private
+    // SamplerObject (TextureObject.cpp), so tearing a texture down legitimately raises a
+    // SamplerCso notice as well. What must hold is that each of the six classes announced its
+    // OWN id under its OWN kind.
+    for (const auto& want : expected) {
+        EXPECT_NE(std::find(notices.begin(), notices.end(), want), notices.end())
+            << "kind " << static_cast<Uint32>(want.first) << " lifetime id " << want.second
+            << " was destroyed without announcing it, so its twin would wait for a sweep that "
+               "this arm no longer runs";
+    }
 }
 
 // ... and that the backend actually installs a consumer for it, rather than the two halves
@@ -3635,7 +3652,7 @@ TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin)
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
-TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
+TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
@@ -3651,7 +3668,7 @@ TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
-TEST(DirectGLESSlotTable, AProgramAndARenderbufferAnnounceTheirOwnDeath) {
+TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
