@@ -121,7 +121,7 @@ namespace {
         std::printf("sizeof: TypeFacts=%zu ResourceReflection=%zu XfbVarying=%zu LinkArtifacts=%zu SpirvArtifacts=%zu\n",
                     sizeof(TypeFacts), sizeof(ResourceReflection), sizeof(XfbVarying), sizeof(LinkArtifacts),
                     sizeof(SpirvArtifacts));
-#if defined(__GLIBCXX__) && !defined(_GLIBCXX_DEBUG) && (SIZE_MAX == UINT64_MAX)
+#ifdef MGL_LINKARTIFACTS_SIZE // whichever STL branch the header pinned, this twin follows it
         EXPECT_EQ(sizeof(ResourceReflection), static_cast<std::size_t>(MGL_RESOURCEREFLECTION_SIZE));
         EXPECT_EQ(sizeof(XfbVarying), static_cast<std::size_t>(MGL_XFBVARYING_SIZE));
         EXPECT_EQ(sizeof(LinkArtifacts), static_cast<std::size_t>(MGL_LINKARTIFACTS_SIZE));

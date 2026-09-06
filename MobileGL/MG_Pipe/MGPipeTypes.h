@@ -24,7 +24,8 @@
 //
 // P0.5 DEBT, half repaid. The MG_State half is gone: ResidualValueBlock's
 // RenderStateParameters and PixelStoreParameters now come from MGPipeValueTypes.h, so
-// this header no longer reaches into MG_State. What remains is MGPCaps embedding
+// this header no longer reaches RenderState.h (its closure still touches TextureEnum.h,
+// through BackendObject.h, for the reason in the next sentence). What remains is MGPCaps embedding
 // MG_Backend's DynamicBackendParameters - deliberate, the caps block IS that struct
 // (section 4.4.1) - and that one include is what still keeps purity gate A (section
 // 10.3) off this header; the gate asserts MGPipeValueTypes.h instead. The caps block

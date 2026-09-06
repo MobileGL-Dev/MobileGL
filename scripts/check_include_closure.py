@@ -50,6 +50,7 @@ once they exist - the integrator flips `--require-all` on as the ratchet.
 """
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -317,7 +318,12 @@ def flags_from_compile_commands(path):
             tokens = shlex.split(entry.get("command", ""))
         flags = []
         skip_next = False
+        keep_next = False
         for token in tokens[1:]:
+            if keep_next:
+                keep_next = False
+                flags.append(token)
+                continue
             if skip_next:
                 skip_next = False
                 continue
@@ -325,8 +331,9 @@ def flags_from_compile_commands(path):
                 skip_next = token in ("-o", "-MF", "-MT", "-MQ")
                 continue
             if token == "-isystem":
-                skip_next = False
+                # two-token form: keep the flag AND its directory
                 flags.append(token)
+                keep_next = True
                 continue
             if token.startswith(keep_prefixes):
                 flags.append(token)
@@ -570,6 +577,7 @@ def main():
         check_clang_prereqs()
 
     tmpdir = tempfile.mkdtemp(prefix="mgl-include-closure-")
+    atexit.register(shutil.rmtree, tmpdir, True)
     context = {
         "tmpdir": tmpdir,
         "counter": [0],
@@ -600,6 +608,16 @@ def main():
     results = []
     problems = 0
     skipped = 0
+    if args.require_all:
+        # The ratchet is about the two P0.5 headers existing, whether or not --probe
+        # narrowed this run to something else: a required header that is missing is a
+        # failure even when its probe was not selected.
+        selected_names = {probe["Name"] for probe in selected}
+        for probe in PROBES:
+            if probe["Name"] in REQUIRED_PROBE_NAMES and probe["Name"] not in selected_names                     and not os.path.isfile(os.path.join(REPO_ROOT, probe["Header"])):
+                problems += 1
+                say("{} is required under --require-all but its header does not exist: {}".format(
+                    probe["Name"], probe["Header"]))
     for probe in selected:
         # D9: a header that does not exist yet is one SKIP line, counted once, and a
         # failure only under --require-all (the ratchet the integrator flips).
