@@ -310,8 +310,12 @@ struct MGPipeFilledState {
     std::abort();
 }
 
+// FilledGen == 0 is "never filled" on BOTH branches: before the first MGPipeFillForVerb the
+// serial is 0 as well, and a read in that window is the poison's "<Field>@<none>" case
+// (P1 brief D6), never a fresh read of default-constructed storage.
 inline Bool MGPipeInputFieldIsFresh(const MGPipeFilledState& state, MGPipeInputField field) {
     const SizeT index = static_cast<SizeT>(field);
-    return kMGPipeInputFieldSticky[index] ? state.FilledGen[index] != 0
-                                          : state.FilledGen[index] == state.CurrentVerbSerial;
+    const Uint64 gen = state.FilledGen[index];
+    if (gen == 0) return false;
+    return kMGPipeInputFieldSticky[index] || gen == state.CurrentVerbSerial;
 }

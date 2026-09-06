@@ -338,6 +338,13 @@ namespace MobileGL::MG_Pipe {
         PipeInputs g_snapshot{};    // the second arm
         PipeInputs g_readScratch{}; // where the compare-at-read re-read lands
 
+        // The read hook arms at the first fill (ArmVerify below), so it cannot see a read
+        // made before that. That window is covered by the poison instead: MGP_INPUT_CHECK
+        // precedes MGP_INPUT_VERIFY_READ in every accessor and a stamp of 0 is never fresh,
+        // so such a read is Fatal{UnmigratedPipeInput, "<Field>@<none>"} before the hook
+        // could matter - which holds only while a verify build always carries the poison.
+        static_assert(MOBILEGL_PIPE_POISON, "the compare-at-read hook relies on the poison for reads before the first fill");
+
         struct VerifyState {
             Bool Parsed = false;
             Bool Enabled = false;
@@ -515,7 +522,9 @@ namespace MobileGL::MG_Pipe {
 #endif
 #if MOBILEGL_PIPE_POISON
         MGPipeFilledState& filled = MGPipeFillAccess::Filled(inputs);
-        // Starts at 1, so FilledGen == 0 means "never filled".
+        // Starts at 1: FilledGen == 0 is "never filled", and MGPipeInputFieldIsFresh refuses
+        // it on both branches, so a read before this first bump is
+        // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
         ++filled.CurrentVerbSerial;
 #endif
         MGPipeFillAccess::SetVerb(inputs, verb);
