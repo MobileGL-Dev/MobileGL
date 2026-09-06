@@ -22,8 +22,8 @@
 // field stamps it with that serial, and reading a non-sticky field whose stamp is older is
 // Fatal{UnmigratedPipeInput} (section 6.2.2).
 //
-// P0 is the skeleton: the enum, the tables and the assertion helper exist, PipeInputs
-// itself lands in P1.
+// PipeInputs itself is MG_Backend/MGPipe/PipeInputs.h (P1); the verb enum and the
+// per-class fill masks are G5b, generated/PipeFillPoints.inc.
 
 enum class MGPipeInputField : Uint16 {
     GetActiveTextureUnit,
@@ -87,11 +87,13 @@ enum class MGPipeInputField : Uint16 {
     InvalidateCompileEnv,
     ValidateProgramName,
     RecordError,
+    GetBoundTransformFeedbackLifetimeId,
+    HasOpenTransformFeedbackSpan,
     kFieldCount,
 };
 
 inline constexpr SizeT kMGPipeInputFieldCount = static_cast<SizeT>(MGPipeInputField::kFieldCount);
-static_assert(kMGPipeInputFieldCount == 61, "the PipeInputs field set moved");
+static_assert(kMGPipeInputFieldCount == 63, "the PipeInputs field set moved");
 
 inline constexpr const char* kMGPipeInputFieldNames[kMGPipeInputFieldCount] = {
     "GetActiveTextureUnit",
@@ -155,11 +157,13 @@ inline constexpr const char* kMGPipeInputFieldNames[kMGPipeInputFieldCount] = {
     "InvalidateCompileEnv",
     "ValidateProgramName",
     "RecordError",
+    "GetBoundTransformFeedbackLifetimeId",
+    "HasOpenTransformFeedbackSpan",
 };
 
-// Fields whose value is valid ACROSS verbs. Every entry is false in P0 and each
-// true has to be argued for in P1 when the fillers land: a sticky field is a field
-// the poison cannot protect.
+// Fields whose value is valid ACROSS verbs: a sticky field is a field the poison
+// cannot protect, so every true is argued for in Coverage.def's
+// MGP_COVERAGE_STICKY_LIST (the seven forwarded, argument-keyed accessors).
 inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {
     false, // GetActiveTextureUnit
     false, // GetBlendColor
@@ -169,7 +173,7 @@ inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {
     false, // GetBoundVertexArray
     false, // GetBufferBindingSlot
     false, // GetBufferBindingPoint
-    false, // GetBufferBindingPointCount
+    true,  // GetBufferBindingPointCount: keyed by target: a constexpr capacity table, not verb state
     false, // GetTouchedBufferBindingPointCount
     false, // GetClampReadColor
     false, // GetClearColor
@@ -198,7 +202,7 @@ inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {
     false, // GetPrimitiveRestartIndex
     false, // GetProgramForDispatch
     false, // GetProgramForDraw
-    false, // GetProgramObject
+    true,  // GetProgramObject: keyed by GL name: an object lookup, not verb state
     false, // GetProvokingVertexMode
     false, // GetRenderStateParameters
     false, // GetRenderStateParametersVersion
@@ -207,7 +211,7 @@ inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {
     false, // GetStencilState
     false, // GetTextureBindGeneration
     false, // GetTextureContextId
-    false, // GetTextureObject
+    true,  // GetTextureObject: keyed by GL name: an object lookup, not verb state
     false, // GetTextureUnitObject
     false, // GetTransformFeedbackCapturedVertices
     false, // GetTransformFeedbackGeneration
@@ -219,10 +223,13 @@ inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {
     false, // IsCapabilityEnabledIndexed
     false, // IsTransformFeedbackActive
     false, // IsTransformFeedbackPaused
-    false, // InvalidateCompileEnv
-    false, // ValidateProgramName
-    false, // RecordError
+    true,  // InvalidateCompileEnv: reverse channel: a write into the frontend, not a state read
+    true,  // ValidateProgramName: keyed by GL name: a name-table lookup, not verb state
+    true,  // RecordError: reverse channel: a write into the frontend, not a state read
+    false, // GetBoundTransformFeedbackLifetimeId
+    true,  // HasOpenTransformFeedbackSpan: keyed by lifetime id: an object lookup, not verb state
 };
+inline constexpr SizeT kMGPipeInputStickyFieldCount = 7;
 
 // Which call is expected to have filled a field by the time a verb reads it. Names
 // come from Coverage.def, so this table and the coverage table cannot disagree.
@@ -288,6 +295,8 @@ inline constexpr const char* kMGPipeInputFieldFilledBy[kMGPipeInputFieldCount] =
     "kClientResolved", // pseudo-call: not filled by a forward record
     "kClientResolved", // pseudo-call: not filled by a forward record
     "kReverseChannel", // pseudo-call: not filled by a forward record
+    "SetStreamOutputTargets",
+    "SetStreamOutputTargets",
 };
 
 struct MGPipeFilledState {

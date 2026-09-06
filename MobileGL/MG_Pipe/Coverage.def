@@ -31,11 +31,13 @@
     X(GetBlendColor,                            SetDynamicState)         \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
     X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    /* dead: no backend reads it since D21; kept for inventory row 594 */  \
     X(GetBoundTransformFeedbackName,            SetStreamOutputTargets)  \
     X(GetBoundVertexArray,                      BindVertexElements)      \
     /* Polymorphic over BufferTarget: its rows split across set_vertex_buffers,     */  \
-    /* set_index_buffer, set_indirect_buffers and set_shader_buffers once the       */  \
-    /* inventory carries the target argument (P1). Named for the plan's explicit    */  \
+    /* set_index_buffer, set_indirect_buffers and set_shader_buffers when the       */  \
+    /* inventory is re-vendored carrying the target argument (deferred out of P1:   */  \
+    /* the extractor lives in MobileGL-CS). Named for the plan's explicit           */  \
     /* replacement of the DrawIndirect/Parameter pair.                              */  \
     X(GetBufferBindingSlot,                     SetIndirectBuffers)      \
     X(GetBufferBindingPoint,                    SetShaderBuffers)        \
@@ -94,7 +96,30 @@
     X(IsTransformFeedbackPaused,                PauseStreamOutput)       \
     X(InvalidateCompileEnv,                     kClientResolved)         \
     X(ValidateProgramName,                      kClientResolved)         \
-    X(RecordError,                              kReverseChannel)
+    X(RecordError,                              kReverseChannel)         \
+    /* The D21 XFB counter-slot rekey's reads (VulkanRenderer.cpp); the calls they   */  \
+    /* map to are GetTransformFeedbackGeneration's.                                 */  \
+    X(GetBoundTransformFeedbackLifetimeId,      SetStreamOutputTargets)  \
+    X(HasOpenTransformFeedbackSpan,             SetStreamOutputTargets)
+
+// X(Accessor, Reason) - the STICKY fields (P1 brief D6): the only PipeInputs fields whose
+// value is valid across verbs, so the poison's per-verb generation does not apply to them.
+// Exactly the seven F-class (forwarded) accessors, and the argument for each is the same:
+// it takes an argument that is not verb state - a GL name, a lifetime id, a target - i.e.
+// it is a lookup or a reverse-channel write, not a state read; there is no value the
+// filler could copy and no verb whose fill could make it stale; phase C replaces them
+// with handle tables and callbacks. None of the version/generation accessors is sticky:
+// those change under verbs and are precisely what the poison must protect. The verify
+// lane's Fatal{UnmigratedPipeInput} is fixed by a FillPoints.def row, never by a row here.
+// gen_pipe.py refuses a name that is not an accessor above.
+#define MGP_COVERAGE_STICKY_LIST(X)                                                                        \
+    X(GetBufferBindingPointCount, "keyed by target: a constexpr capacity table, not verb state")           \
+    X(GetProgramObject,           "keyed by GL name: an object lookup, not verb state")                    \
+    X(GetTextureObject,           "keyed by GL name: an object lookup, not verb state")                    \
+    X(HasOpenTransformFeedbackSpan, "keyed by lifetime id: an object lookup, not verb state")              \
+    X(ValidateProgramName,        "keyed by GL name: a name-table lookup, not verb state")                 \
+    X(InvalidateCompileEnv,       "reverse channel: a write into the frontend, not a state read")          \
+    X(RecordError,                "reverse channel: a write into the frontend, not a state read")
 
 // X(DeltaKind, PipeCall) - for inventory rows with no accessor in the member column.
 // Read by gen_pipe.py ONLY, never by the C++ preprocessor: the delta kinds are the

@@ -22,6 +22,11 @@ option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when 
 # gates keep (section 10.3).
 option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
+# The PipeInputs strangler (ARCHITECTURE.md 9.2). OFF is the pull build and must stay
+# byte-identical to a tree without either option: MGB_CTX is the live GLContext, no
+# MGPipe/PipeInputs source is compiled, every MGP_FILL is ((void)0).
+option(MOBILEGL_PIPE_PUSH "Backends read frontend state through the MGPipe PipeInputs block instead of MG_State::pGLContext (ARCHITECTURE.md 9.2 phase A)" OFF)
+option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; implies MOBILEGL_PIPE_PUSH; never shipped" OFF)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
@@ -451,6 +456,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     set(MOBILEGL_BUILD_DISAGGREGATED OFF)
 endif()
 
+# MOBILEGL_PIPE_VERIFY implies MOBILEGL_PIPE_PUSH: the comparator compares the pushed block
+# against a snapshot, so there has to be a pushed block. A normal variable, not a forced
+# cache write, for the same reason as the disaggregated fallback above.
+if (MOBILEGL_PIPE_VERIFY AND NOT MOBILEGL_PIPE_PUSH)
+    message(STATUS "MobileGL: MOBILEGL_PIPE_VERIFY=ON forces MOBILEGL_PIPE_PUSH ON for this configure")
+    set(MOBILEGL_PIPE_PUSH ON)
+endif()
+
+if (MOBILEGL_PIPE_PUSH)
+    message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
+    list(APPEND SOURCE_FILES
+        MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
+        MobileGL/MG_Impl/Pipe/PipeFill.cpp
+    )
+endif()
+
 if (MOBILEGL_BUILD_DISAGGREGATED)
     message(STATUS "MobileGL: disaggregated transport ON, appending MG_Remote sources")
     list(APPEND SOURCE_FILES
@@ -522,6 +543,13 @@ set(MOBILEGL_COMPILE_DEF
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_BUILD_DISAGGREGATED=1)
+endif()
+
+if (MOBILEGL_PIPE_PUSH)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_PUSH=1)
+endif()
+if (MOBILEGL_PIPE_VERIFY)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
 endif()
 
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")

@@ -330,6 +330,26 @@ namespace MobileGL::MG_Config {
         // the semantic gate that replaces byte identity, and it catches the dangerous
         // direction - a dirty bit that fires too RARELY - which no purity gate can see.
         Bool PipeVerify = false;
+#if MOBILEGL_PIPE_PUSH
+        // The three knobs of the MOBILEGL_PIPE_VERIFY build (P1 brief D2). Compiled only
+        // under MOBILEGL_PIPE_PUSH so the pull build's FeaturesTable does not change size.
+        // MOBILEGL_PIPE_VERIFY_FATAL: the first divergence aborts (default). 0 logs and
+        // counts instead, for triage and for the lane that must survive to read its own
+        // log. Tri-state parse like PipeLegacyMemos: only an explicit falsy value turns it
+        // off.
+        Bool PipeVerifyFatal = true;
+        // MOBILEGL_PIPE_VERIFY_CORRUPT: a field name from kMGPipeInputFieldNames[]; the
+        // comparator perturbs that field in the SNAPSHOT arm before the entry compare, so a
+        // green verify run goes red naming it (negative control A). Unknown name is
+        // Fatal{PipeVerifyBadKnob}.
+        String PipeVerifyCorrupt;
+        // MOBILEGL_PIPE_POISON_OMIT: <Verb>:<FieldName>; the filler skips the STAMP (not
+        // the value) of that field for that verb, an omission indistinguishable from a
+        // forgotten FillPoints.def row, so that verb's read of it is
+        // Fatal{UnmigratedPipeInput} (negative control B). Unknown name is
+        // Fatal{PipeVerifyBadKnob}.
+        String PipePoisonOmit;
+#endif
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
         // texture pulls, upload shapes, residual-block bytes, index mirror bytes).
         Bool PipeStats = false;

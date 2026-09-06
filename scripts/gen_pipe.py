@@ -8,11 +8,14 @@
 # End of Source File Header
 """The seven MGPipe generators, G1..G7 (plan B section 4.1).
 
-Reads the three hand-maintained sources of truth
+Reads the four hand-maintained sources of truth
 
     MobileGL/MG_Pipe/PipeCalls.def      the call catalogue
     MobileGL/MG_Pipe/PipeFields.def     per-payload field lists for the verify comparator
-    MobileGL/MG_Pipe/Coverage.def       accessor -> call mapping for the read inventory
+    MobileGL/MG_Pipe/Coverage.def       accessor -> call mapping for the read inventory,
+                                        and the sticky-field list
+    MobileGL/MG_Pipe/FillPoints.def     verb -> class and class -> may-read field tables
+                                        (G5b), checked against MG_Backend::GLFunctionsTable
 
 plus the vendored copy of the backend read inventory
 
@@ -38,6 +41,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIPE_DIR = os.path.join(REPO_ROOT, "MobileGL", "MG_Pipe")
 GENERATED_DIR = os.path.join(PIPE_DIR, "generated")
 INVENTORY = os.path.join(REPO_ROOT, "scripts", "data", "backend_read_inventory.md")
+FUNCTION_TABLE_HEADER = os.path.join(REPO_ROOT, "MobileGL", "MG_Backend", "BackendObject.h")
 
 GENERATED_BANNER = """// MobileGL - MobileGL/MG_Pipe/generated/{name}
 // Copyright (c) 2025-2026 MobileGL-Dev
@@ -209,7 +213,18 @@ def parse_coverage():
         sys.exit("Coverage.def: MGP_COVERAGE_DELTA_LIST is missing")
     for kind, call in re.findall(r"X\(([^,]+),\s*(\w+)\)", block.group(1)):
         deltas.append((kind.strip(), call))
-    return accessors, deltas
+    sticky = []
+    block = re.search(r"#define MGP_COVERAGE_STICKY_LIST\(X\)(.*?)\n\n", text, re.S)
+    if not block:
+        sys.exit("Coverage.def: MGP_COVERAGE_STICKY_LIST is missing")
+    accessor_names = set(name for name, _ in accessors)
+    for name, reason in re.findall(r"X\((\w+)\s*,\s*\"([^\"]*)\"\)", block.group(1)):
+        if name not in accessor_names:
+            sys.exit("Coverage.def: sticky field %s is not an accessor in MGP_COVERAGE_ACCESSOR_LIST" % name)
+        if name in dict(sticky):
+            sys.exit("Coverage.def: sticky field %s is listed twice" % name)
+        sticky.append((name, reason))
+    return accessors, deltas, sticky
 
 
 INVENTORY_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|")
@@ -444,8 +459,9 @@ inline Bool MGPipeFieldEqual(const T (&a)[N], const T (&b)[N]) {
     return "\n".join(out) + "\n"
 
 
-def gen_filled(accessors, calls):
+def gen_filled(accessors, calls, sticky):
     call_names = set(c.Name for c in calls)
+    sticky_map = dict(sticky)
     out = [banner("PipeFilled.inc", "G5: PipeInputs field ids and the per-verb poison generations.",
                   "Coverage.def and PipeCalls.def")]
     out.append("""// One field id per GLContext accessor the backends actually read (plan B section 6.2:
@@ -458,8 +474,8 @@ def gen_filled(accessors, calls):
 // field stamps it with that serial, and reading a non-sticky field whose stamp is older is
 // Fatal{UnmigratedPipeInput} (section 6.2.2).
 //
-// P0 is the skeleton: the enum, the tables and the assertion helper exist, PipeInputs
-// itself lands in P1.
+// PipeInputs itself is MG_Backend/MGPipe/PipeInputs.h (P1); the verb enum and the
+// per-class fill masks are G5b, generated/PipeFillPoints.inc.
 """)
     out.append("enum class MGPipeInputField : Uint16 {")
     for name, _ in accessors:
@@ -475,13 +491,17 @@ def gen_filled(accessors, calls):
         out.append("    \"%s\"," % name)
     out.append("};")
     out.append("")
-    out.append("// Fields whose value is valid ACROSS verbs. Every entry is false in P0 and each")
-    out.append("// true has to be argued for in P1 when the fillers land: a sticky field is a field")
-    out.append("// the poison cannot protect.")
+    out.append("// Fields whose value is valid ACROSS verbs: a sticky field is a field the poison")
+    out.append("// cannot protect, so every true is argued for in Coverage.def's")
+    out.append("// MGP_COVERAGE_STICKY_LIST (the seven forwarded, argument-keyed accessors).")
     out.append("inline constexpr Bool kMGPipeInputFieldSticky[kMGPipeInputFieldCount] = {")
     for name, _ in accessors:
-        out.append("    false, // %s" % name)
+        if name in sticky_map:
+            out.append("    true,  // %s: %s" % (name, sticky_map[name]))
+        else:
+            out.append("    false, // %s" % name)
     out.append("};")
+    out.append("inline constexpr SizeT kMGPipeInputStickyFieldCount = %d;" % len(sticky))
     out.append("")
     out.append("// Which call is expected to have filled a field by the time a verb reads it. Names")
     out.append("// come from Coverage.def, so this table and the coverage table cannot disagree.")
@@ -507,6 +527,153 @@ inline Bool MGPipeInputFieldIsFresh(const MGPipeFilledState& state, MGPipeInputF
     return kMGPipeInputFieldSticky[index] ? state.FilledGen[index] != 0
                                           : state.FilledGen[index] == state.CurrentVerbSerial;
 }""")
+    return "\n".join(out) + "\n"
+
+
+FUNCTION_POINTER_MEMBER_RE = re.compile(r"\(\s*\*\s*(\w+)\s*\)\s*\(")
+
+
+def parse_function_table():
+    """The function-pointer members of MG_Backend::GLFunctionsTable, in declaration order.
+    Data members (PrefersCpuXfbPrimitiveAccounting) are not verbs and are skipped; comments
+    are masked line by line."""
+    text = read(FUNCTION_TABLE_HEADER)
+    start = text.find("struct GLFunctionsTable {")
+    if start < 0:
+        sys.exit("%s: struct GLFunctionsTable is missing" % FUNCTION_TABLE_HEADER)
+    members = []
+    for line in text[start:].splitlines()[1:]:
+        if re.match(r"^\s*};", line):
+            break
+        code = line.split("//", 1)[0]
+        for name in FUNCTION_POINTER_MEMBER_RE.findall(code):
+            members.append(name)
+    if not members:
+        sys.exit("%s: GLFunctionsTable has no function-pointer members" % FUNCTION_TABLE_HEADER)
+    return members
+
+
+def parse_fill_points(accessors, table_members=None):
+    """FillPoints.def -> (verbs, classes, fields): verbs is [(verb, class)] in file order,
+    classes is [class], fields is {class: [field]}. Refuses a verb set that is not exactly
+    GLFunctionsTable's function-pointer members in declaration order, a verb in two
+    classes, a class with no verbs, a field that is not an accessor, a duplicate
+    (class, field) row, and a class row that names no class."""
+    text = read(os.path.join(PIPE_DIR, "FillPoints.def"))
+    if table_members is None:
+        table_members = parse_function_table()
+
+    def block(macro):
+        match = re.search(r"#define %s\(X\)(.*?)\n\n" % macro, text, re.S)
+        if not match:
+            sys.exit("FillPoints.def: %s is missing (or not followed by a blank line)" % macro)
+        return match.group(1)
+
+    classes = re.findall(r"X\((\w+)\)", block("MGP_FILL_CLASS_LIST"))
+    if len(classes) != len(set(classes)):
+        sys.exit("FillPoints.def: a class is listed twice in MGP_FILL_CLASS_LIST")
+    verbs = re.findall(r"X\((\w+)\s*,\s*(\w+)\)", block("MGP_FILL_VERB_LIST"))
+    seen = set()
+    for verb, cls in verbs:
+        if verb in seen:
+            sys.exit("FillPoints.def: verb %s is in two classes" % verb)
+        seen.add(verb)
+        if cls not in classes:
+            sys.exit("FillPoints.def: verb %s names unknown class %s" % (verb, cls))
+    verb_names = [verb for verb, _ in verbs]
+    missing = [m for m in table_members if m not in seen]
+    if missing:
+        sys.exit("FillPoints.def: GLFunctionsTable member(s) without a verb row: %s" % ", ".join(missing))
+    extra = [v for v in verb_names if v not in table_members]
+    if extra:
+        sys.exit("FillPoints.def: verb(s) that are not GLFunctionsTable members: %s" % ", ".join(extra))
+    if verb_names != table_members:
+        sys.exit("FillPoints.def: verb rows are not in GLFunctionsTable declaration order "
+                 "(first difference at %s)" % next(a for a, b in zip(verb_names, table_members) if a != b))
+    for cls in classes:
+        if not any(c == cls for _, c in verbs):
+            sys.exit("FillPoints.def: class %s has no verbs" % cls)
+    accessor_names = set(name for name, _ in accessors)
+    fields = {cls: [] for cls in classes}
+    for cls, field in re.findall(r"X\((\w+)\s*,\s*(\w+)\)", block("MGP_FILL_FIELD_LIST")):
+        if cls not in fields:
+            sys.exit("FillPoints.def: field row names unknown class %s" % cls)
+        if field not in accessor_names:
+            sys.exit("FillPoints.def: %s is not an accessor in Coverage.def" % field)
+        if field in fields[cls]:
+            sys.exit("FillPoints.def: duplicate row (%s, %s)" % (cls, field))
+        fields[cls].append(field)
+    return verbs, classes, fields
+
+
+def gen_fill_points(accessors, sticky, verbs, classes, fields):
+    field_index = {name: i for i, (name, _) in enumerate(accessors)}
+    # Two words minimum (the P1 contract shape, headroom for the 64th field); grows on demand.
+    words = max(2, (len(accessors) + 63) // 64)
+    sticky_names = [name for name, _ in sticky]
+    out = [banner("PipeFillPoints.inc", "G5b: the verb enum, the verb classes and their may-read field masks.",
+                  "FillPoints.def, Coverage.def and MG_Backend/BackendObject.h")]
+    out.append("""// One verb per function-pointer member of MG_Backend::GLFunctionsTable, in declaration
+// order, so the enum IS the table's member list. MG_Impl spells MGP_FILL(Verb) before every
+// call through the table; MGPipeFillForVerb fills exactly the fields of the verb's class
+// (plus the sticky fields, OR'ed into every mask) and stamps them with the new serial. A
+// read of any other field is Fatal{UnmigratedPipeInput, \"Field@Verb\"} in a poison build.
+""")
+    out.append("enum class MGPipeVerb : Uint8 {")
+    for verb, _ in verbs:
+        out.append("    %s," % verb)
+    out.append("    kVerbCount,")
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr SizeT kMGPipeVerbCount = static_cast<SizeT>(MGPipeVerb::kVerbCount);")
+    out.append("static_assert(kMGPipeVerbCount == %d, \"the GLFunctionsTable verb set moved\");" % len(verbs))
+    out.append("")
+    out.append("inline constexpr const char* kMGPipeVerbNames[kMGPipeVerbCount] = {")
+    for verb, _ in verbs:
+        out.append("    \"%s\"," % verb)
+    out.append("};")
+    out.append("")
+    out.append("enum class MGPipeVerbClass : Uint8 {")
+    for cls in classes:
+        out.append("    %s," % cls)
+    out.append("    kClassCount,")
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr SizeT kMGPipeVerbClassCount = static_cast<SizeT>(MGPipeVerbClass::kClassCount);")
+    out.append("static_assert(kMGPipeVerbClassCount == %d, \"the verb class set moved\");" % len(classes))
+    out.append("")
+    out.append("inline constexpr const char* kMGPipeVerbClassNames[kMGPipeVerbClassCount] = {")
+    for cls in classes:
+        out.append("    \"%s\"," % cls)
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr MGPipeVerbClass kMGPipeVerbClass[kMGPipeVerbCount] = {")
+    for verb, cls in verbs:
+        out.append("    MGPipeVerbClass::%s, // %s" % (cls, verb))
+    out.append("};")
+    out.append("")
+    out.append("// One bit per MGPipeInputField. The %d sticky fields are OR'ed into every class." % len(sticky))
+    out.append("struct MGPipeFieldMask {")
+    out.append("    Uint64 Words[%d];" % words)
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr Bool MGPipeFieldMaskHas(const MGPipeFieldMask& mask, MGPipeInputField field) {")
+    out.append("    const SizeT index = static_cast<SizeT>(field);")
+    out.append("    return (mask.Words[index / 64] >> (index % 64)) & 1u;")
+    out.append("}")
+    out.append("")
+    out.append("inline constexpr MGPipeFieldMask kMGPipeClassFieldMask[kMGPipeVerbClassCount] = {")
+    for cls in classes:
+        bits = [0] * words
+        names = fields[cls] + [n for n in sticky_names if n not in fields[cls]]
+        for name in names:
+            index = field_index[name]
+            bits[index // 64] |= 1 << (index % 64)
+        out.append("    // %s: %d fields (%d own + %d sticky)" % (cls, len(names), len(fields[cls]), len(names) - len(fields[cls])))
+        out.append("    {{%s}}," % ", ".join("0x%016xull" % b for b in bits))
+    out.append("};")
+    out.append("")
+    out.append("static_assert(kMGPipeInputFieldCount <= %d * 64, \"MGPipeFieldMask needs another word\");" % words)
     return "\n".join(out) + "\n"
 
 
@@ -635,7 +802,8 @@ def main():
     calls = parse_calls()
     payloads = parse_verify_payloads()
     check_call_payloads_have_field_lists(calls, payloads)
-    accessors, deltas = parse_coverage()
+    accessors, deltas, sticky = parse_coverage()
+    verbs, classes, fields = parse_fill_points(accessors)
     rows = parse_inventory()
 
     if not os.path.isdir(GENERATED_DIR):
@@ -647,13 +815,17 @@ def main():
     write(os.path.join(GENERATED_DIR, "PipeThunks.inc"), gen_thunks(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeWire.inc"), gen_wire(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeVerify.inc"), gen_verify(payloads), args.check, changed)
-    write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls), args.check, changed)
+    write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls, sticky), args.check, changed)
+    write(os.path.join(GENERATED_DIR, "PipeFillPoints.inc"),
+          gen_fill_points(accessors, sticky, verbs, classes, fields), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeCoverage.inc"), coverage_text, args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeSpanTable.inc"), gen_span_table(), args.check, changed)
 
     screen = sum(1 for c in calls if c.IsScreen)
-    print("gen_pipe: %d calls (%d screen, %d context), %d verify payloads, %d PipeInputs fields"
-          % (len(calls), screen, len(calls) - screen, len(payloads), len(accessors)))
+    print("gen_pipe: %d calls (%d screen, %d context), %d verify payloads, %d PipeInputs fields "
+          "(%d sticky), %d verbs, %d classes"
+          % (len(calls), screen, len(calls) - screen, len(payloads), len(accessors), len(sticky),
+             len(verbs), len(classes)))
     print("gen_pipe: inventory %d rows: %d -> call, %d client-resolved, %d reverse-channel, "
           "%d structural handle, %d UNMAPPED"
           % (len(rows), mapped, pseudo["kClientResolved"], pseudo["kReverseChannel"],

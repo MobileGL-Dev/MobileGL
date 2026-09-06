@@ -1,0 +1,267 @@
+// MobileGL - MobileGL/MG_Pipe/FillPoints.def
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
+// The per-verb fill points of the PipeInputs strangler (ARCHITECTURE.md 9.2, phase A; the
+// P1 brief D7). Three hand-maintained lists, read by scripts/gen_pipe.py (G5b) into
+// generated/PipeFillPoints.inc:
+//
+//   MGP_FILL_VERB_LIST   every verb the frontend calls through GLFunctionsTable, with its class
+//   MGP_FILL_CLASS_LIST  the verb classes
+//   MGP_FILL_FIELD_LIST  the may-read table: which PipeInputs fields a class of verb may read
+//
+// The verb set IS the function-pointer member set of MG_Backend::GLFunctionsTable
+// (MG_Backend/BackendObject.h), in declaration order: gen_pipe.py parses that struct and
+// refuses a row set that is not exactly its member set in that order, so the MGPipeVerb enum
+// and the table cannot drift apart. MG_Impl spells MGP_FILL(Verb) immediately before every
+// call through the table (83 statements over these 69 verbs); Present and SetSwapInterval go
+// through BackendObject virtuals and read no frontend state, so they are not verbs here.
+//
+// The seven sticky fields (Coverage.def, MGP_COVERAGE_STICKY_LIST) are implicit in every
+// class and are not listed. The verify lane is the oracle for this table: a
+// Fatal{UnmigratedPipeInput, "Field@Verb"} found there is fixed by adding the (class, field)
+// row, never by marking the field sticky.
+//
+// gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.
+//
+// clang-format off
+
+// X(Verb, Class) - one row per function-pointer member of MG_Backend::GLFunctionsTable (BackendObject.h),
+// in declaration order. gen_pipe.py parses that struct and refuses a row set that is not exactly its member set.
+#define MGP_FILL_VERB_LIST(X)                                          \
+    X(DrawArrays,                                     kDraw)           \
+    X(DrawElements,                                   kDraw)           \
+    X(DrawElementsBaseVertex,                         kDraw)           \
+    X(MultiDrawArrays,                                kDraw)           \
+    X(MultiDrawElements,                              kDraw)           \
+    X(MultiDrawElementsBaseVertex,                    kDraw)           \
+    X(MultiDrawElementsIndirect,                      kDraw)           \
+    X(MultiDrawArraysIndirect,                        kDraw)           \
+    X(MultiDrawElementsIndirectCount,                 kDraw)           \
+    X(MultiDrawArraysIndirectCount,                   kDraw)           \
+    X(DrawRangeElementsBaseVertex,                    kDraw)           \
+    X(DrawRangeElements,                              kDraw)           \
+    X(DrawElementsInstancedBaseVertexBaseInstance,    kDraw)           \
+    X(DrawElementsInstancedBaseVertex,                kDraw)           \
+    X(DrawElementsInstancedBaseInstance,              kDraw)           \
+    X(DrawElementsInstanced,                          kDraw)           \
+    X(DrawArraysInstancedBaseInstance,                kDraw)           \
+    X(DrawArraysInstanced,                            kDraw)           \
+    X(DrawElementsIndirect,                           kDraw)           \
+    X(DrawArraysIndirect,                             kDraw)           \
+    X(Clear,                                          kClear)          \
+    X(ClearBufferfi,                                  kClear)          \
+    X(ClearBufferfv,                                  kClear)          \
+    X(ClearBufferuiv,                                 kClear)          \
+    X(ClearBufferiv,                                  kClear)          \
+    X(ClearNamedFramebufferfv,                        kClear)          \
+    X(ClearNamedFramebufferfi,                        kClear)          \
+    X(ClearNamedFramebufferiv,                        kClear)          \
+    X(ClearNamedFramebufferuiv,                       kClear)          \
+    X(BlitFramebuffer,                                kBlitOrCopy)     \
+    X(BlitNamedFramebuffer,                           kBlitOrCopy)     \
+    X(CopyTexImage2D,                                 kBlitOrCopy)     \
+    X(CopyTexSubImage2D,                              kBlitOrCopy)     \
+    X(CopyImageSubData,                               kBlitOrCopy)     \
+    X(GenerateMipmap,                                 kTextureOp)      \
+    X(ReadPixels,                                     kReadback)       \
+    X(GetTexImage,                                    kReadback)       \
+    X(GetTextureImage,                                kReadback)       \
+    X(DispatchCompute,                                kDispatch)       \
+    X(DispatchComputeIndirect,                        kDispatch)       \
+    X(MemoryBarrier,                                  kQuery)          \
+    X(MemoryBarrierByRegion,                          kQuery)          \
+    X(BindImageTexture,                               kTextureOp)      \
+    X(GetIntegeri_v,                                  kQuery)          \
+    X(ShaderStorageBlockBinding,                      kProgramOp)      \
+    X(FenceSync,                                      kQuery)          \
+    X(ClientWaitSync,                                 kQuery)          \
+    X(WaitSync,                                       kQuery)          \
+    X(DeleteSync,                                     kQuery)          \
+    X(GetSyncStatus,                                  kQuery)          \
+    X(IsTimerQuerySupported,                          kQuery)          \
+    X(BeginTimeElapsedQuery,                          kQuery)          \
+    X(EndTimeElapsedQuery,                            kQuery)          \
+    X(QueryCounterTimestamp,                          kQuery)          \
+    X(IsQueryResultAvailable,                         kQuery)          \
+    X(GetQueryResult64,                               kQuery)          \
+    X(DeleteBackendQuery,                             kQuery)          \
+    X(BeginOcclusionQuery,                            kQuery)          \
+    X(EndOcclusionQuery,                              kQuery)          \
+    X(BeginXfbPrimitivesQuery,                        kQuery)          \
+    X(EndXfbPrimitivesQuery,                          kQuery)          \
+    X(PatchParameteri,                                kQuery)          \
+    X(BeginTransformFeedback,                         kXfbSpan)        \
+    X(EndTransformFeedback,                           kXfbSpan)        \
+    X(PauseTransformFeedback,                         kXfbSpan)        \
+    X(ResumeTransformFeedback,                        kXfbSpan)        \
+    X(BindTransformFeedback,                          kXfbSpan)        \
+    X(DeleteTransformFeedback,                        kXfbSpan)        \
+    X(GetGpuTimestampNs,                              kQuery)
+
+// X(Class) - the nine verb classes (ARCHITECTURE.md:153 names eight; kProgramOp is split out because
+// ShaderStorageBlockBinding is the one non-draw verb that syncs Espryt's render state and textures).
+#define MGP_FILL_CLASS_LIST(X) \
+    X(kDraw) X(kDispatch) X(kClear) X(kBlitOrCopy) X(kTextureOp) X(kReadback) X(kXfbSpan) X(kProgramOp) X(kQuery)
+
+// X(Class, Field) - the may-read table. A field named here is filled and stamped at every verb of the class;
+// a read of a field NOT named here is Fatal{UnmigratedPipeInput, "Field@Verb"} in a poison build.
+// Derived from the verified reachability of every backend read (both backends, union), P1 brief D7.
+#define MGP_FILL_FIELD_LIST(X)                                         \
+    /* kDraw: every draw entry of both backends */                     \
+    X(kDraw,        GetBoundVertexArray)                               \
+    X(kDraw,        GetProgramForDraw)                                 \
+    X(kDraw,        GetBufferBindingSlot)                              \
+    X(kDraw,        GetBufferBindingPoint)                             \
+    X(kDraw,        GetTouchedBufferBindingPointCount)                 \
+    X(kDraw,        GetTextureUnitObject)                              \
+    X(kDraw,        GetTextureContextId)                               \
+    X(kDraw,        GetTextureBindGeneration)                          \
+    X(kDraw,        GetMaxTouchedTextureUnit)                          \
+    X(kDraw,        GetSamplingResolutionGeneration)                   \
+    X(kDraw,        GetImageTextureBinding)                            \
+    X(kDraw,        GetCurrentVertexAttribute)                         \
+    X(kDraw,        GetRenderStateParameters)                          \
+    X(kDraw,        GetRenderStateParametersVersion)                   \
+    X(kDraw,        GetPipelineStateVersion)                           \
+    X(kDraw,        GetViewport)                                       \
+    X(kDraw,        GetViewportIndexed)                                \
+    X(kDraw,        GetDepthRangeIndexed)                              \
+    X(kDraw,        GetScissorBox)                                     \
+    X(kDraw,        IsCapabilityEnabled)                               \
+    X(kDraw,        IsCapabilityEnabledIndexed)                        \
+    X(kDraw,        GetBlendColor)                                     \
+    X(kDraw,        GetBlendFuncIndexed)                               \
+    X(kDraw,        GetBlendEquationIndexed)                           \
+    X(kDraw,        GetColorMaskIndexed)                               \
+    X(kDraw,        GetLogicOp)                                        \
+    X(kDraw,        GetDepthFunc)                                      \
+    X(kDraw,        GetDepthMask)                                      \
+    X(kDraw,        GetStencilState)                                   \
+    X(kDraw,        GetCullFaceMode)                                   \
+    X(kDraw,        GetPolygonModeFront)                               \
+    X(kDraw,        GetPolygonOffsetFactor)                            \
+    X(kDraw,        GetPolygonOffsetUnits)                             \
+    X(kDraw,        GetLineWidth)                                      \
+    X(kDraw,        GetMinSampleShadingValue)                          \
+    X(kDraw,        GetProvokingVertexMode)                            \
+    X(kDraw,        GetPatchVertices)                                  \
+    X(kDraw,        GetPatchDefaultOuterLevel)                         \
+    X(kDraw,        GetPatchDefaultInnerLevel)                         \
+    X(kDraw,        GetPrimitiveRestartIndex)                          \
+    X(kDraw,        GetFramebufferBindingSlot)                         \
+    X(kDraw,        IsTransformFeedbackActive)                         \
+    X(kDraw,        IsTransformFeedbackPaused)                         \
+    X(kDraw,        GetTransformFeedbackProgram)                       \
+    X(kDraw,        GetTransformFeedbackGeneration)                    \
+    X(kDraw,        GetBoundTransformFeedbackLifetimeId)               \
+    X(kDraw,        GetTransformFeedbackCapturedVertices)              \
+    /* kDispatch: the patch fields are Espryt's SyncCurrentProgram ->  */ \
+    /* AttachPassthroughTessControlStage (Managers.cpp)                */ \
+    X(kDispatch,    GetProgramForDispatch)                             \
+    X(kDispatch,    GetBufferBindingSlot)                              \
+    X(kDispatch,    GetBufferBindingPoint)                             \
+    X(kDispatch,    GetTouchedBufferBindingPointCount)                 \
+    X(kDispatch,    GetTextureUnitObject)                              \
+    X(kDispatch,    GetTextureContextId)                               \
+    X(kDispatch,    GetTextureBindGeneration)                          \
+    X(kDispatch,    GetMaxTouchedTextureUnit)                          \
+    X(kDispatch,    GetSamplingResolutionGeneration)                   \
+    X(kDispatch,    GetImageTextureBinding)                            \
+    X(kDispatch,    GetFramebufferBindingSlot)                         \
+    X(kDispatch,    GetPatchVertices)                                  \
+    X(kDispatch,    GetPatchDefaultOuterLevel)                         \
+    X(kDispatch,    GetPatchDefaultInnerLevel)                         \
+    /* kClear */                                                       \
+    X(kClear,       GetRenderStateParameters)                          \
+    X(kClear,       GetRenderStateParametersVersion)                   \
+    X(kClear,       GetViewport)                                       \
+    X(kClear,       IsCapabilityEnabled)                               \
+    X(kClear,       GetFramebufferBindingSlot)                         \
+    X(kClear,       GetClearColor)                                     \
+    X(kClear,       GetClearDepth)                                     \
+    X(kClear,       GetClearStencil)                                   \
+    X(kClear,       GetScissorBox)                                     \
+    X(kClear,       GetColorMaskIndexed)                               \
+    X(kClear,       GetDepthMask)                                      \
+    X(kClear,       GetStencilState)                                   \
+    X(kClear,       GetTextureUnitObject)                              \
+    X(kClear,       GetTextureContextId)                               \
+    X(kClear,       GetSamplingResolutionGeneration)                   \
+    X(kClear,       GetTextureBindGeneration)                          \
+    X(kClear,       GetMaxTouchedTextureUnit)                          \
+    X(kClear,       GetImageTextureBinding)                            \
+    /* kBlitOrCopy */                                                  \
+    X(kBlitOrCopy,  GetFramebufferBindingSlot)                         \
+    X(kBlitOrCopy,  IsCapabilityEnabled)                               \
+    X(kBlitOrCopy,  GetScissorBox)                                     \
+    X(kBlitOrCopy,  IsTransformFeedbackActive)                         \
+    X(kBlitOrCopy,  IsTransformFeedbackPaused)                         \
+    X(kBlitOrCopy,  GetRenderStateParameters)                          \
+    X(kBlitOrCopy,  GetRenderStateParametersVersion)                   \
+    X(kBlitOrCopy,  GetViewport)                                       \
+    X(kBlitOrCopy,  GetActiveTextureUnit)                              \
+    X(kBlitOrCopy,  GetTextureUnitObject)                              \
+    X(kBlitOrCopy,  GetTextureContextId)                               \
+    X(kBlitOrCopy,  GetSamplingResolutionGeneration)                   \
+    X(kBlitOrCopy,  GetTextureBindGeneration)                          \
+    X(kBlitOrCopy,  GetMaxTouchedTextureUnit)                          \
+    X(kBlitOrCopy,  GetImageTextureBinding)                            \
+    X(kBlitOrCopy,  GetColorMaskIndexed)                               \
+    X(kBlitOrCopy,  GetDepthMask)                                      \
+    X(kBlitOrCopy,  GetStencilState)                                   \
+    /* kTextureOp */                                                   \
+    X(kTextureOp,   GetActiveTextureUnit)                              \
+    X(kTextureOp,   GetTextureUnitObject)                              \
+    X(kTextureOp,   GetImageTextureBinding)                            \
+    X(kTextureOp,   GetTextureContextId)                               \
+    X(kTextureOp,   GetSamplingResolutionGeneration)                   \
+    X(kTextureOp,   GetTextureBindGeneration)                          \
+    X(kTextureOp,   GetMaxTouchedTextureUnit)                          \
+    /* kReadback */                                                    \
+    X(kReadback,    GetPixelStoreParameters)                           \
+    X(kReadback,    GetBufferBindingSlot)                              \
+    X(kReadback,    GetFramebufferBindingSlot)                         \
+    X(kReadback,    GetActiveTextureUnit)                              \
+    X(kReadback,    GetTextureUnitObject)                              \
+    X(kReadback,    GetClampReadColor)                                 \
+    X(kReadback,    IsCapabilityEnabled)                               \
+    X(kReadback,    GetRenderStateParameters)                          \
+    X(kReadback,    GetRenderStateParametersVersion)                   \
+    X(kReadback,    GetViewport)                                       \
+    X(kReadback,    GetTextureContextId)                               \
+    X(kReadback,    GetSamplingResolutionGeneration)                   \
+    X(kReadback,    GetTextureBindGeneration)                          \
+    X(kReadback,    GetMaxTouchedTextureUnit)                          \
+    X(kReadback,    GetImageTextureBinding)                            \
+    /* kXfbSpan */                                                     \
+    X(kXfbSpan,     GetTransformFeedbackProgram)                       \
+    X(kXfbSpan,     GetBufferBindingPoint)                             \
+    X(kXfbSpan,     GetTouchedBufferBindingPointCount)                 \
+    X(kXfbSpan,     GetTransformFeedbackCapturedVertices)              \
+    X(kXfbSpan,     IsTransformFeedbackActive)                         \
+    X(kXfbSpan,     IsTransformFeedbackPaused)                         \
+    X(kXfbSpan,     GetTransformFeedbackGeneration)                    \
+    X(kXfbSpan,     GetBoundTransformFeedbackLifetimeId)               \
+    /* kProgramOp: ShaderStorageBlockBinding syncs Espryt's render state and textures */ \
+    X(kProgramOp,   GetRenderStateParameters)                          \
+    X(kProgramOp,   GetRenderStateParametersVersion)                   \
+    X(kProgramOp,   GetViewport)                                       \
+    X(kProgramOp,   IsCapabilityEnabled)                               \
+    X(kProgramOp,   GetFramebufferBindingSlot)                         \
+    X(kProgramOp,   GetTextureUnitObject)                              \
+    X(kProgramOp,   GetTextureContextId)                               \
+    X(kProgramOp,   GetSamplingResolutionGeneration)                   \
+    X(kProgramOp,   GetTextureBindGeneration)                          \
+    X(kProgramOp,   GetMaxTouchedTextureUnit)                          \
+    X(kProgramOp,   GetImageTextureBinding)                            \
+    /* kQuery: Magma's transform feedback query end reads the paused counter */ \
+    /* (DirectVulkan.cpp); every other verb in the class reads nothing and */   \
+    /* its fill is a serial bump                                          */   \
+    X(kQuery,       GetTransformFeedbackPausedPrimitiveCounter)
+
+// clang-format on

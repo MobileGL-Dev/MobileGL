@@ -222,7 +222,7 @@ TEST(PipeCatalogue, CoverageAccountsForEveryInventoryRow) {
 // G5's field ids come from the same accessor list as the coverage table, and every field
 // starts un-filled: reading one before its verb fills it is the poison's whole job.
 TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
-    EXPECT_EQ(kMGPipeInputFieldCount, 61u);
+    EXPECT_EQ(kMGPipeInputFieldCount, 63u);
     MGPipeFilledState state{};
     state.CurrentVerbSerial = 1;
     EXPECT_FALSE(MGPipeInputFieldIsFresh(state, MGPipeInputField::GetRenderStateParameters));

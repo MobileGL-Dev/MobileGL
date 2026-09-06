@@ -244,6 +244,13 @@ namespace MobileGL::MG_ConfigLoader {
         // that starts with MOBILEGL_ is visible to these queries by construction.
         features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", 0);
         features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
+#if MOBILEGL_PIPE_PUSH
+        // Defaults ON: read as a tri-state so only an explicitly falsy value turns it off.
+        features.PipeVerifyFatal =
+            QueryEnvQuirkOverride("MOBILEGL_PIPE_VERIFY_FATAL") != MG_Config::QuirkOverride::ForceOff;
+        QueryEnvVariable("MOBILEGL_PIPE_VERIFY_CORRUPT", features.PipeVerifyCorrupt, "");
+        QueryEnvVariable("MOBILEGL_PIPE_POISON_OMIT", features.PipePoisonOmit, "");
+#endif
         features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
         // Defaults ON, so the flag has to be read as a tri-state rather than as a plain
         // truthy check: unset must keep the memos, and only an explicitly falsy value may

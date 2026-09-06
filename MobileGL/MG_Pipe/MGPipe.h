@@ -85,6 +85,11 @@ namespace MobileGL::MG_Pipe {
     // G5: PipeInputs field ids and the per-verb poison generations.
 #include "generated/PipeFilled.inc"
 
+    // G5b: the verb enum (one per GLFunctionsTable entry), the verb classes and their
+    // may-read field masks - what MGPipeFillForVerb fills and what a poison build lets a
+    // verb read (FillPoints.def).
+#include "generated/PipeFillPoints.inc"
+
     // G6: the backend read inventory's coverage table.
 #include "generated/PipeCoverage.inc"
 
