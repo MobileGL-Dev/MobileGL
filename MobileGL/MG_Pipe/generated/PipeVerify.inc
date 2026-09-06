@@ -230,11 +230,11 @@ inline Bool MGPipeFieldEqual(const T& a, const T& b) {
     } else if constexpr (requires(const T& x, const T& y) { x == y; }) {
         return a == b;
     } else {
-        // MEMCMP FALLBACK. Only reached by the payload members that are still MG_State /
-        // MG_Backend value structs (RenderStateParameters, PixelStoreParameters,
-        // DynamicBackendParameters) and by MGHostSpan. Those are exactly the types P0.5
-        // moves into MGPipeValueTypes.h, at which point they get field lists of their own
-        // and this branch stops being reachable from any payload.
+        // MEMCMP FALLBACK. Only reached by the payload members that are still value structs
+        // without a field list (RenderStateParameters, PixelStoreParameters,
+        // DynamicBackendParameters) and by MGHostSpan. P0.5 moved the first two into
+        // MGPipeValueTypes.h; P1 gives them field lists of their own, at which point this
+        // branch stops being reachable from any payload.
         return std::memcmp(&a, &b, sizeof(T)) == 0;
     }
 }

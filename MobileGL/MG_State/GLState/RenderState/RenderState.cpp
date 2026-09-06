@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "RenderState.h"
+#include <MG_State/GLState/FramebufferState/FramebufferObject.h>
 #include "MG_Util/Debug/Log.h"
 #include "MG_Util/Types.h"
 

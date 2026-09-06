@@ -22,19 +22,19 @@
 // these structs (generated/PipeWire.inc) are memcpy'd; a field silently changing width is a
 // protocol break that no test would otherwise see.
 //
-// P0.5 DEBT, recorded here so it is impossible to miss: two payloads reach into headers
-// this directory is eventually forbidden to see - MGPCaps embeds MG_Backend's
-// DynamicBackendParameters, and ResidualValueBlock embeds MG_State's RenderStateParameters
-// and PixelStoreParameters. Both are deliberate: the caps block IS that struct (section
-// 4.4.1) and the residual block is the migration carrier for Track V (section 6.3). P0.5
-// extracts MGPipeValueTypes.h and both includes below go away; until then purity gate A
-// (section 10.3) cannot be armed for this header.
+// P0.5 DEBT, half repaid. The MG_State half is gone: ResidualValueBlock's
+// RenderStateParameters and PixelStoreParameters now come from MGPipeValueTypes.h, so
+// this header no longer reaches into MG_State. What remains is MGPCaps embedding
+// MG_Backend's DynamicBackendParameters - deliberate, the caps block IS that struct
+// (section 4.4.1) - and that one include is what still keeps purity gate A (section
+// 10.3) off this header; the gate asserts MGPipeValueTypes.h instead. The caps block
+// needs fixed-width members before it can move (a type change, not a move): P1/P7.
 #include <MG_Backend/BackendObject.h>
-#include <MG_State/GLState/RenderState/RenderState.h>
+#include "MGPipeValueTypes.h"
 
 namespace MobileGL::MG_Pipe {
     using MG_Backend::DynamicBackendParameters;
-    // Both live directly in namespace MobileGL today; P0.5 moves them into
+    // Both live directly in namespace MobileGL and, since P0.5, are declared in
     // MG_Pipe/MGPipeValueTypes.h.
     using MobileGL::PixelStoreParameters;
     using MobileGL::RenderStateParameters;

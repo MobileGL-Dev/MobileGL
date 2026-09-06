@@ -8,93 +8,9 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Util/Math/VectorTypes.h>
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL {
-    enum class SamplerFilterMode {
-        Nearest,
-        Linear,
-        SamplerFilterCount,
-        Unknown = -1
-    };
-
-    enum class SamplerMipmapMode {
-        None,
-        Nearest,
-        Linear,
-        SamplerMipmapModeCount,
-        Unknown = -1
-    };
-
-    enum class SamplerWrapMode {
-        ClampToEdge,
-        MirroredRepeat,
-        Repeat,
-        ClampToBorder,
-        MirrorClampToEdge,
-        SamplerWrapModeCount,
-        Unknown = -1
-    };
-
-    enum class SamplerCompareMode {
-        None,
-        CompareToTexture,
-        SamplerCompareModeCount,
-        Unknown = -1
-    };
-
-    enum class SamplerCompareFunc {
-        Never,
-        Less,
-        Equal,
-        LessEqual,
-        Greater,
-        NotEqual,
-        GreaterEqual,
-        Always,
-        SamplerCompareFuncCount,
-        Unknown = -1
-    };
-
-    // Which of the three GL_TEXTURE_BORDER_COLOR entry-point families last wrote the border colour,
-    // and therefore which of the three stored representations is AUTHORITATIVE. GL 4.6 core 8.10:
-    // TexParameterIiv/Iuiv store an integer border colour "unmodified, with an internal data type of
-    // integer", TexParameterfv stores a floating-point one, and the derived forms are only a
-    // convenience for a getter of the other spelling. A backend cannot pick the right driver entry
-    // point (glSamplerParameterIiv vs fv) or the right VkBorderColor family without this: numerically
-    // the three representations are always populated, so the value alone says nothing about the form.
-    enum class BorderColorForm : Uint8 {
-        Float,
-        Int,
-        Uint
-    };
-
-    struct SamplerParameters {
-        SamplerWrapMode wrapS = SamplerWrapMode::Repeat;
-        SamplerWrapMode wrapT = SamplerWrapMode::Repeat;
-        SamplerWrapMode wrapR = SamplerWrapMode::Repeat;
-        SamplerFilterMode minFilter = SamplerFilterMode::Nearest;
-        SamplerFilterMode magFilter = SamplerFilterMode::Linear;
-        SamplerMipmapMode mipmapMode = SamplerMipmapMode::Linear;
-        Float minLod = -1000.0f;
-        Float maxLod = 1000.0f;
-        Float lodBias = 0.0f;
-        Float maxAnisotropy = 1.0f;
-        // GL 4.6 core table 23.18 / GLES 3.2 table 21.16: TEXTURE_COMPARE_FUNC starts at LEQUAL,
-        // for both sampler objects and the sampler state a texture object carries.
-        SamplerCompareFunc compareFunc = SamplerCompareFunc::LessEqual;
-        SamplerCompareMode compareMode = SamplerCompareMode::None;
-        // TEXTURE_BORDER_COLOR is sampler state (GL 4.6 core table 23.18), so it belongs here and
-        // not on the texture - a texture object reaches it through the sampler object it owns. The
-        // three representations are the float, integer and unsigned-integer forms glSamplerParameterfv,
-        // glSamplerParameterIiv and glSamplerParameterIuiv set; whichever is written last defines
-        // the colour and the other two follow it, so a getter always has an answer.
-        FloatVec4 borderColor = {0.0f, 0.0f, 0.0f, 0.0f};
-        IntVec4 borderColorI = {0, 0, 0, 0};
-        UintVec4 borderColorUI = {0, 0, 0, 0};
-        BorderColorForm borderColorForm = BorderColorForm::Float;
-    };
-
     namespace MG_State {
         namespace GLState {
             class SamplerObject {

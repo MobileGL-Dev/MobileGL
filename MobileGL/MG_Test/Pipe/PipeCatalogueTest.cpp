@@ -113,6 +113,39 @@ TEST(PipeCatalogue, ResidualBlockSizeIsPinned) {
     EXPECT_GE(sizeof(ResidualValueBlock), sizeof(RenderStateParameters) + sizeof(PixelStoreParameters));
 }
 
+// P0.5 moved the value structs into MG_Pipe/MGPipeValueTypes.h. These are the runtime twins
+// of that header's static assertions, so the numbers show up in ctest output on every
+// platform - including one where a static assertion is skipped. Every number here is also
+// what MGL_RESIDUAL_BLOCK_SIZE (MGPipeTypes.h) and the Espryt offsetof spans depend on.
+TEST(PipeCatalogue, ValueTypeLayoutsArePinned) {
+    EXPECT_EQ(sizeof(PixelStoreParameters), 28u);
+    EXPECT_EQ(sizeof(PerBufferBlendState), 28u);
+    EXPECT_EQ(sizeof(StencilFaceState), 28u);
+    EXPECT_EQ(sizeof(RenderStateParameters), 1168u);
+    EXPECT_EQ(sizeof(SamplerParameters), 100u);
+    EXPECT_EQ(sizeof(MG_State::GLState::VertexAttributeVersion), 6u);
+    EXPECT_TRUE(std::is_trivially_copyable_v<PixelStoreParameters>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<PerBufferBlendState>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<StencilFaceState>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<RenderStateParameters>);
+    EXPECT_TRUE(std::is_standard_layout_v<RenderStateParameters>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<SamplerParameters>);
+    EXPECT_TRUE(std::is_trivially_copyable_v<MG_State::GLState::VertexAttributeVersion>);
+    EXPECT_LT(offsetof(RenderStateParameters, BlendStates), offsetof(RenderStateParameters, LogicOp));
+    EXPECT_EQ(std::tuple_size_v<decltype(RenderStateParameters::BlendStates)>, static_cast<SizeT>(kMGMaxDrawBuffers));
+    EXPECT_EQ(std::tuple_size_v<decltype(RenderStateParameters::ColorMasks)>, static_cast<SizeT>(kMGMaxDrawBuffers));
+    EXPECT_EQ(kMGMaxDrawBuffers, 8u);
+}
+
+// The move did not alter the carrier: the residual block is still the render-state struct,
+// then the pack struct, then the 8-aligned capability word, at the offsets it had before.
+TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
+    EXPECT_EQ(offsetof(ResidualValueBlock, RenderState), 0u);
+    EXPECT_EQ(offsetof(ResidualValueBlock, Pack), sizeof(RenderStateParameters));
+    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 1200u);
+    EXPECT_EQ(offsetof(ResidualValueBlock, PatchVertices), 1208u);
+}
+
 // G3's opcode numbering is the wire protocol. Position in PipeCalls.def, 1-based, no holes.
 TEST(PipeCatalogue, WireOpcodesAreThePositionsInTheCatalogue) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetCaps), 1);

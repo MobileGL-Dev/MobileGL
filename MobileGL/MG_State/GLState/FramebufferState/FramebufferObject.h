@@ -11,6 +11,7 @@
 #include <Includes.h>
 #include <MG_State/GLState/TextureState/TextureObject.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_Pipe/MGPipeValueTypes.h>
 
 namespace MobileGL {
     enum class FramebufferTarget {
@@ -103,7 +104,7 @@ namespace MobileGL {
 
         class FramebufferObject {
         public:
-            static constexpr Uint MAX_DRAW_BUFFERS = 8;
+            static constexpr Uint MAX_DRAW_BUFFERS = MobileGL::kMGMaxDrawBuffers;
 
             using TargetEnum = FramebufferTarget;
             using FramebufferAttachmentObjectArray =
