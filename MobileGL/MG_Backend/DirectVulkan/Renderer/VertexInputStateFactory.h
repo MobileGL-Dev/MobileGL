@@ -12,6 +12,7 @@
 #include <MG_Pipe/MGPipeHandles.h>
 
 #include "Config.h"
+#include "MagmaPipeArms.h"
 #include "VertexInputStateBuilder.h"
 #include "MG_State/GLState/VertexArrayState/VertexArrayObject.h"
 #include <Includes.h>
@@ -73,8 +74,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
         };
 
+#if MOBILEGL_PIPE_PUSH
+        // The mint is the RENDERER's (MagmaPipeIdentityTables), not a process-global and not
+        // this factory's: VulkanRenderer::LookupVaoDrawMemo has to derive the same {slot, gen}
+        // for the same VAO, and a table that outlived the context it was minted for would share
+        // one reclamation clock across two live contexts (review v2 minor 4).
+        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice,
+                                MagmaPipeIdentityTables& identity):
+            m_config(config), m_physicalDevice(physicalDevice), m_identity(&identity) {}
+#else
         VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
             m_config(config), m_physicalDevice(physicalDevice) {}
+#endif
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 
@@ -146,14 +157,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 StateEpoch = 0;
             Uint32 StateConfigVersion = ~0u;
         };
-        // Fixed, and a BIJECTION with the identity table that mints the slots
-        // (MagmaPipeVaoIdentity): entry i is slot i + kMGPipeFirstAllocatableSlot, so the
-        // index is exact, no two live VAOs can share an entry, and the eviction decision lives
-        // once - in the identity table's 2-way LRU - instead of once per consumer table.
-        // Pinned against the mint by a static_assert in VertexInputStateFactory.cpp.
-        // 2048 x 48 B is 96 KB.
-        static constexpr Uint32 kVaoMemoSlotCount = 2048; // power of two
-        mutable Vector<VaoBackendMemos> m_vaoMemos;
+        // Grow-on-demand (D12.4), one entry per slot the renderer's mint has ever handed
+        // out, and NO CAPACITY: these two memos had none before this package either - they
+        // were unbounded mutable fields on the VertexArrayObject itself - and re-introducing
+        // eviction here is what review v2 rejected. MagmaPipeSlotTable grows in chunks so an
+        // entry reference stays valid across the nested GetOrCreateVertexInputState call.
+        // 48 B per live VAO, reclaimed with the slot when the object goes idle.
+        mutable MagmaPipeSlotTable<VaoBackendMemos> m_vaoMemos;
+        // The renderer's {slot, gen} mint (see the constructor). Never null under push.
+        MagmaPipeIdentityTables* m_identity = nullptr;
         // The entry belonging to `vao`, claimed (and cleared) if the slot currently holds
         // someone else's.
         VaoBackendMemos& MemosFor(const MG_State::GLState::VertexArrayObject& vao) const;

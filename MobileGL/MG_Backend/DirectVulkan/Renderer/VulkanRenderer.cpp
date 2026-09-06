@@ -410,6 +410,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //
     // The brief (P2 D12.3) expects every input to be dynamic; the tree says otherwise for
     // exactly one, and the tree is right - see the ScissorTestEnabledMask note below.
+    //
+    // These assertions ARE D19's DynamicChunksCoverMagmasDynamicTailKey, in the only file this
+    // package owns. D19 names it as a case in MG_Test/Pipe/RenderStateSpansTest.cpp, which
+    // belongs to package A (C.5). INTEGRATOR: make sure the outcome is not "neither" - if
+    // package A did not land that case, this static_assert block is the whole gate, and if it
+    // did, the two are redundant on purpose and both should stay.
     namespace {
         // Is [begin, begin + size) covered entirely by DYNAMIC chunks?
         constexpr Bool MagmaRenderStateRangeIsDynamic(SizeT begin, SizeT size) {
@@ -3290,7 +3296,12 @@ void main() {
             m_physicalDevice.properties.limits.minUniformBufferOffsetAlignment, m_config.MaxFramesInFlight,
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
+#if MOBILEGL_PIPE_PUSH
+        m_vertexInputStateFactory =
+            MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle, m_pipeIdentity);
+#else
         m_vertexInputStateFactory = MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle);
+#endif
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
@@ -3641,36 +3652,54 @@ void main() {
 #if MOBILEGL_PIPE_PUSH
         // ---- P2 D12.4, the handle arm ----
         //
-        // The slot IS the index, exactly: this table and MagmaPipeVaoIdentity() hold the same
-        // number of entries and the mint hands out slot i + kMGPipeFirstAllocatableSlot for
-        // entry i, so the map from live handle to entry is a BIJECTION. No Fibonacci mix of an
-        // address, no two-way probe here, no frame-serial recycling choice here - not because
-        // eviction stopped being necessary, but because it happens ONE level down, in the
-        // identity table's 2-way LRU, where a single decision serves this table and the
-        // factory's. Two live VAOs cannot land on one entry of this table at all.
+        // The slot PICKS the entry, and the handle DECIDES whether the entry is this VAO's -
+        // the same division of labour the legacy arm below gives the address and the lifetime
+        // id, with two differences that are both improvements:
         //
-        // The whole validation is one handle compare, and a handle cannot alias: Gen moves
-        // whenever a slot changes owner, so neither a deleted VAO's successor at the same heap
-        // address nor a VAO whose slot was recycled under LRU pressure can match a predecessor's
-        // entry, even with a byte-identical configuration.
+        //   * the slot is dense from 1, so below kVaoDrawMemoSlotCount live slots the map is a
+        //     bijection and the two-way probe never collides at all, where an address hash
+        //     collides by the birthday rule from the first few dozen VAOs;
+        //   * the handle is an exact identity - Gen moves whenever a slot changes owner - so
+        //     neither a deleted VAO's successor at the same heap address nor a VAO whose slot
+        //     was recycled can match a predecessor's entry, even byte-identically configured.
+        //     That is what makes the lifetime-id half of the legacy compare unnecessary here.
+        //
+        // The capacity and the victim rule are deliberately the base ref's, unchanged: this is
+        // the one memo of the three that HAD a capacity before P2, and an entry lost to a
+        // collision costs exactly what it cost then (one vertex-binding re-resolve). Above
+        // kVaoDrawMemoSlotCount live VAOs a set of two ways serves four slots, and degrades
+        // from there - never worse than the address-hashed table it replaces, which was already
+        // colliding.
         if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
             const MG_Pipe::MGPipeHandle handle = ResolveVaoHandle(*vao);
-            const Uint32 index = MagmaPipeSlotIndex(handle);
-            VaoDrawMemo& entry = m_vaoDrawMemoTable[index];
-            if (entry.vaoHandle == handle) {
-                return &entry;
+            const Uint32 index = MagmaPipeSlotIndex(handle) & (kVaoDrawMemoSlotCount - 1u);
+            VaoDrawMemo& first = m_vaoDrawMemoTable[index];
+            if (first.vaoHandle == handle) {
+                return &first;
             }
-            entry.vaoHandle = handle;
-            entry.vaoKey = vao;
-            entry.vaoLifetimeId = vao->GetLifetimeId();
-            entry.contentHash = 0;
-            entry.layoutFactsValid = false;
+            VaoDrawMemo& second = m_vaoDrawMemoTable[index ^ 1u];
+            if (second.vaoHandle == handle) {
+                return &second;
+            }
+            // Miss: recycle a slot. Prefer an unclaimed one; otherwise evict the entry whose
+            // bindings memo is older (its VAO is the one drawn less recently).
+            VaoDrawMemo* victim = &first;
+            if (!MG_Pipe::MGPipeHandleIsNull(first.vaoHandle) &&
+                (MG_Pipe::MGPipeHandleIsNull(second.vaoHandle) ||
+                 second.bindings.frameSerial < first.bindings.frameSerial)) {
+                victim = &second;
+            }
+            victim->vaoHandle = handle;
+            victim->vaoKey = vao;
+            victim->vaoLifetimeId = vao->GetLifetimeId();
+            victim->contentHash = 0;
+            victim->layoutFactsValid = false;
             // Unmatchable until a resolve completes (same rule as the legacy arm: a bailed-out
             // resolve must never leave stale contents matchable).
-            entry.bindings.frameSerial = 0;
-            entry.bindings.indexFrameSerial = 0;
-            entry.bindings.indexBuffer = nullptr;
-            return &entry;
+            victim->bindings.frameSerial = 0;
+            victim->bindings.indexFrameSerial = 0;
+            victim->bindings.indexBuffer = nullptr;
+            return victim;
         }
 #endif
         // Multiplicative mix of the (16-byte-aligned) address; take high bits, they
@@ -12771,6 +12800,14 @@ void main() {
         if (m_vertexInputStateFactory) {
             m_vertexInputStateFactory->OnFrameBoundary();
         }
+#if MOBILEGL_PIPE_PUSH
+        // Reclaim {slot, gen} for objects that have not been drawn for a long time, on the same
+        // cadence and the same retirement age as the entries those slots key. This is the
+        // stand-in for the frontend death notification P2 has no hook for, and it is what keeps
+        // the mint's footprint the LIVE working set rather than every object ever created
+        // (review v2 MAJOR 1 / MAJOR 3).
+        m_pipeIdentity.OnFrameBoundary();
+#endif
         if (m_samplerManager) {
             m_samplerManager->OnFrameBoundary();
         }
@@ -13136,6 +13173,9 @@ void main() {
             InvalidateSetupDrawSnapshots();
         }
         m_vertexInputStateFactory->OnFrameBoundary();
+#if MOBILEGL_PIPE_PUSH
+        m_pipeIdentity.OnFrameBoundary();
+#endif
         m_samplerManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();

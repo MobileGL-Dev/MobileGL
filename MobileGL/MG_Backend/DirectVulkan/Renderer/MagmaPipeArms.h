@@ -21,7 +21,7 @@
 #include <cstdlib>
 
 // Magma's arm selector for the P2 Track H / render-state re-keys (P2 brief D14), and the
-// bounded {slot, gen} mint the re-keyed sites are written against.
+// {slot, gen} mint the re-keyed sites are written against.
 //
 // Two switches decide which arm a re-keyed site runs, and they are NOT the same switch:
 //
@@ -64,7 +64,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //    DirectVulkan run does not execute one line of DirectGLES' re-key), so
     //    MOBILEGL_PIPE_PUSH=0x20 must not kill a Magma run, and MOBILEGL_PIPE_PUSH=0x40 must
     //    not kill an Espryt one.
-    //  * bit 0 (kMGPipeSubsystemRenderState) is NOT Track H and is NOT checked. It is not a
+    //  * bit 0 (kMGPipeSubsystemRenderState) is NOT Track H and is NOT fatal. It is not a
     //    memo re-key at all: it decides where the pipeline memo's STATE KEY comes from, and
     //    a clear bit there simply means the client is not pushing render-state CSOs in this
     //    run, which GetOrCreatePipeline answers with its own state hash. D14 labels bits 5
@@ -72,7 +72,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //  * it is Fatal at STARTUP, once, not on a draw. A per-draw abort inside
     //    GetOrCreatePipeline turns a configuration mistake into a mid-frame crash and puts a
     //    branch nobody needs on the hottest path in the backend.
+    //
+    // [declared deviation from D14, review v2 minor 2] D14's runtime row reads "false: the
+    // legacy arm is never entered", and D14's compile-switch row names ComputePipelineStateHash
+    // as part of the pre-handle arm. Those two together would make MOBILEGL_PIPE_LEGACY_MEMOS=0
+    // with bit 0 CLEAR a contradiction: the pipeline memo has no CSO handle to key on, so it
+    // keys on a state hash, and in a build that compiles the pre-handle arm that hash IS
+    // ComputePipelineStateHash. Magma does not make that fatal - bit 0 is not Track H, and
+    // there is a correct answer (the state hash) where for bits 5/6 there is none - but it no
+    // longer does it SILENTLY: the combination is named once, at startup, right here.
     inline void MagmaPipeValidateSubsystemConfiguration() {
+        if (!MG_Config::Features.PipeLegacyMemos &&
+            !MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
+            MGLOG_W("MGPipe: MOBILEGL_PIPE_LEGACY_MEMOS=0 with kMGPipeSubsystemRenderState (bit 0 "
+                    "of MOBILEGL_PIPE_PUSH) clear - Magma's pipeline memo has no CSO handle to key "
+                    "on, so every draw whose pipeline-state version moved runs the pre-handle STATE "
+                    "HASH instead. That is not a Track-H subsystem and not fatal, but it is not the "
+                    "handle arm either: set bit 0 (MOBILEGL_PIPE_PUSH=0x%llx) if this run was meant "
+                    "to measure it.",
+                    static_cast<unsigned long long>(MG_Config::Features.PipePush |
+                                                    MG_Pipe::kMGPipeSubsystemRenderState));
+        }
 #if MOBILEGL_PIPE_LEGACY_MEMOS
         // The pre-handle arm is compiled AND the operator has not forbidden entering it, so a
         // clear bit is an ordinary, valid A/B: the site takes the legacy arm.
@@ -114,102 +134,221 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // The {slot, gen} mint
     // ---------------------------------------------------------------------------------
     //
-    // A FIXED-CAPACITY, SELF-RECYCLING identity table: 2-way set-associative, indexed by the
-    // frontend object's lifetime id, LRU victim within the set, and Gen incremented whenever
-    // a slot changes owner. It hands out slots in [kMGPipeFirstAllocatableSlot, Count], so a
-    // consumer's per-slot table is a BIJECTION with this one - one entry per slot, no
-    // masking, no collision, no probe.
+    // Maps a frontend object's never-reused lifetime id to a dense {slot, gen}. Three
+    // properties, and the third is the one review v2 got wrong:
     //
-    // Why not MG_Impl/Pipe/SlotAllocator (the client's allocator, which is what mints handles
-    // in the finished design)? Because in P2 nothing on this side ever frees one. The tracker
-    // does not emit object-class state yet (P2 emits for dirty bits 0-4), so no create_*/
-    // delete_* pair travels for a VAO or a buffer, and the frontend has no death notification
-    // Magma could hook: BufferBackendOps::OnDestroy is handed a BackendBufferResource, not the
-    // BufferObject, and fires only for a buffer that ever had one, while VertexArrayObject has
-    // no hook at all (adding one is D13's explicit-destroy work, and it covers Espryt's six
-    // kinds, not VertexElementsCso). An allocator with a live Allocate and a dead Free grows
-    // by one SlotState plus one hash-map node per object EVER created, for the life of the
-    // process, on a platform with an LMK - and its slot numbers then grow monotonically with
-    // objects ever created, which is exactly what would make a slot-indexed table collide.
+    //   1. exact identity - Gen moves whenever a slot changes owner, so a stale handle can
+    //      never match a live object even if the allocator hands back the same heap address
+    //      (the ABA HandleRecycleScenario reproduces);
+    //   2. dense slots - the slot IS an index, so a consumer's per-slot table needs no hash,
+    //      no probe and no mix;
+    //   3. NO CAPACITY CLIFF. A live object's handle never changes while the object is being
+    //      drawn, whatever the working set size.
     //
-    // So Magma mints its own, bounded, and says so. This is a P2 STAND-IN either way (the
-    // client is what mints handles once object-class state travels); what it must not be is a
-    // leak. Recycling costs the same thing the address-hashed table it replaces cost: a
-    // colliding pair of live objects evicts each other and re-derives. It is strictly better
-    // than that table, because the {slot, gen} compare is an exact identity, so an eviction
-    // can only ever cost a recompute - never the ABA the lifetime-id compare was added for.
+    // Property 3 is why this is not the fixed 2-way set-associative LRU the previous round
+    // shipped. That structure evicted a LIVE object once the working set passed its capacity,
+    // and every consumer memo keyed on the handle died with it: measured on a verbatim
+    // transcription, 54% of uses lost their handle at 2500 live VAOs against 2048 entries, and
+    // 20% at 1024 live VAOs once the lifetime ids are sparse (an app that creates and destroys
+    // VAOs, which is the Minecraft chunk shape this exists for). Two of the three memos it
+    // fed - the content-hash memo and the resolved-state memo - had NO capacity before this
+    // package: they were unbounded mutable fields on VertexArrayObject. Introducing eviction
+    // there turns one ComputeHash per VAO reconfiguration into one per DRAW, and, once the
+    // buffer table thrashes too, makes the vertex-input content hash a per-draw value that
+    // inserts a fresh heap-allocated BackendVertexInputState into an unbounded map on every
+    // draw. That is a worse leak than the one it was introduced to avoid.
     //
-    // Single-threaded, like MGPipeSlots() and like the rest of the renderer.
+    // So: grow on demand, and reclaim by AGE instead of by capacity.
+    //
+    //   * Acquire hits an UnorderedMap<lifetimeId, slotIndex>, in front of which sits a
+    //     one-entry memo. Every re-keyed site in a draw asks about the SAME VAO, so the memo
+    //     turns the five-or-six acquisitions a draw makes into one map probe plus five Uint64
+    //     compares - less than the address multiply plus two-way probe the pre-handle arm ran.
+    //   * OnFrameBoundary retires slots whose object has not been drawn for
+    //     kRetireAgeBoundaries boundaries and returns them to a free list, so the table's
+    //     footprint tracks the LIVE DRAWN working set, not objects ever created. That is the
+    //     property MG_Impl/Pipe/SlotAllocator cannot have here: nothing in P2 can call its
+    //     Free (the tracker emits no object-class state, BufferBackendOps::OnDestroy is handed
+    //     a BackendBufferResource rather than the BufferObject, and VertexArrayObject has no
+    //     death hook at all - adding one is D13's explicit-destroy work, which covers Espryt's
+    //     six kinds, not VertexElementsCso), so an allocator here would grow by one SlotState
+    //     plus one map node per object EVER created, for the life of the process, on a
+    //     platform with an LMK. Age-based reclamation is the stand-in for the death
+    //     notification, and it is exactly as ABA-proof, because reuse bumps Gen.
+    //   * A retire costs at most one memo recompute if the object is drawn again - the same
+    //     price a cache miss costs - and it is charged only to objects that went idle for
+    //     ~1024 frames, never to a hot one.
+    //
+    // Memory: one map node plus one 24-byte Entry per live object, i.e. tens of bytes against
+    // the kilobyte a VertexArrayObject or a BufferObject already costs the frontend. There is
+    // no capacity to size off a device measurement because there is no capacity; what the
+    // device run in D.4.2 can still want is the number itself, so the high-water mark is
+    // logged at MGLOG_D on the allocate-a-new-slot branch (once per new object, never on a
+    // draw - ROADMAP.md:7).
+    //
+    // Single-threaded, like the rest of the renderer. Owned per VulkanRenderer (see
+    // MagmaPipeIdentityTables): a process-global would share one table, and one reclamation
+    // clock, across two live contexts.
     class MagmaPipeIdentityTable {
     public:
-        explicit MagmaPipeIdentityTable(Uint32 entryCount) : m_entryCount(entryCount) {}
+        explicit MagmaPipeIdentityTable(const char* kindName) : m_kindName(kindName) {}
 
-        // One entry per slot, so a consumer table sized Count() and indexed by
-        // MagmaPipeSlotIndex() has exactly one entry per handle this table can hand out.
-        Uint32 Count() const { return m_entryCount; }
+        // Slots ever minted. A consumer table indexed by MagmaPipeSlotIndex() needs this many
+        // entries; MagmaPipeSlotTable below grows itself, so nobody has to ask.
+        Uint32 Count() const { return static_cast<Uint32>(m_entries.size()); }
+        // Objects currently holding a slot - the live working set this table tracks.
+        Uint32 LiveCount() const { return static_cast<Uint32>(m_index.size()); }
 
         MG_Pipe::MGPipeHandle Acquire(Uint64 lifetimeId) {
             // Unreachable: MG_State hands out lifetime ids from 1 precisely so that a
             // zero-initialised memo slot cannot carry a live object's id. Guarded anyway so
             // that a zero can never be minted into a slot and then indexed with.
             if (lifetimeId == 0) return MG_Pipe::kMGPipeNullHandle;
-            if (m_entries.empty()) m_entries.resize(m_entryCount);
+            // The one-entry front memo. Cleared by any retire, so it can never serve a slot
+            // that has been handed back to the free list.
+            if (lifetimeId == m_lastLifetimeId) {
+                m_entries[m_lastIndex].LastUse = m_boundary;
+                return m_lastHandle;
+            }
+            Uint32 index = 0;
+            const auto it = m_index.find(lifetimeId);
+            if (it != m_index.end()) {
+                index = it->second;
+            } else {
+                index = ClaimSlot();
+                m_entries[index].LifetimeId = lifetimeId;
+                m_index.emplace(lifetimeId, index);
+            }
+            Entry& entry = m_entries[index];
+            entry.LastUse = m_boundary;
+            m_lastLifetimeId = lifetimeId;
+            m_lastIndex = index;
+            m_lastHandle = MG_Pipe::MGPipeHandle{index + MG_Pipe::kMGPipeFirstAllocatableSlot,
+                                                 entry.Gen};
+            return m_lastHandle;
+        }
 
-            // Lifetime ids are monotonic from 1, so the low bits ARE the dense index: object
-            // n and object n+1 land in adjacent sets. No mix, because there is no entropy to
-            // spread - a multiply here would only scatter a sequence that is already perfect.
-            const Uint32 set = static_cast<Uint32>(lifetimeId) & (SetCount() - 1u);
-            const Uint32 way0 = set * 2u;
-            const Uint32 way1 = way0 + 1u;
-
-            if (m_entries[way0].LifetimeId == lifetimeId) return Touch(way0);
-            if (m_entries[way1].LifetimeId == lifetimeId) return Touch(way1);
-
-            // Miss. Evict the set's least recently used way - the same victim rule the
-            // address-hashed VaoDrawMemo table used, kept here so that it lives in ONE place
-            // instead of once per consumer table.
-            const Uint32 victim = (m_entries[way0].LastUse <= m_entries[way1].LastUse) ? way0 : way1;
-            Entry& entry = m_entries[victim];
-            // The one place Gen may move, and it moves on REUSE: a respecify of the same
-            // object keeps its {slot, gen} because its lifetime id still matches above.
-            MOBILEGL_ASSERT(entry.Gen != ~Uint32{0},
-                            "Magma handle generation wrapped on slot %u; {slot, gen} is no longer "
-                            "unique",
-                            victim + MG_Pipe::kMGPipeFirstAllocatableSlot);
-            ++entry.Gen;
-            entry.LifetimeId = lifetimeId;
-            return Touch(victim);
+        // Ages the table and returns idle slots to the free list. Same shape and the same
+        // self-gating as VertexInputStateFactory::OnFrameBoundary, which is what the reclaimed
+        // slots' consumers use.
+        void OnFrameBoundary() {
+            ++m_boundary;
+            if ((m_boundary % kSweepInterval) != 0) return;
+            SizeT retired = 0;
+            for (auto it = m_index.begin(); it != m_index.end();) {
+                Entry& entry = m_entries[it->second];
+                if ((m_boundary - entry.LastUse) > kRetireAgeBoundaries) {
+                    entry.LifetimeId = 0;
+                    m_freeSlots.push_back(it->second);
+                    it = m_index.erase(it);
+                    ++retired;
+                } else {
+                    ++it;
+                }
+            }
+            if (retired != 0) {
+                // A retired slot's Gen has not moved yet - it moves when the slot is reused -
+                // so a front memo pointing at one would still hand out a handle the consumer
+                // tables would accept. Drop it.
+                m_lastLifetimeId = 0;
+                m_lastHandle = MG_Pipe::kMGPipeNullHandle;
+                MGLOG_D("MagmaPipeIdentityTable(%s): retired %zu idle slots, %u live of %u minted",
+                        m_kindName, retired, LiveCount(), Count());
+            }
         }
 
     private:
+        // Sweep cadence and retirement age, deliberately the same numbers
+        // VertexInputStateFactory::OnFrameBoundary uses for the entries these slots key: a slot
+        // retired earlier than its cache entry would mint a new handle for an object whose
+        // entry is still live and still correct, which is a pure waste.
+        static constexpr Uint64 kSweepInterval = 256;
+        static constexpr Uint64 kRetireAgeBoundaries = 1024;
+
         struct Entry {
             Uint64 LifetimeId = 0;
+            Uint64 LastUse = 0;
+            // Moves ONLY on slot reuse, never on respecify: an object that keeps its slot keeps
+            // its generation, which is what makes a memo survive a reconfiguration.
             Uint32 Gen = 0;
-            Uint32 LastUse = 0;
         };
 
-        Uint32 SetCount() const { return m_entryCount / 2u; }
-
-        MG_Pipe::MGPipeHandle Touch(Uint32 index) {
-            m_entries[index].LastUse = ++m_clock;
-            return MG_Pipe::MGPipeHandle{index + MG_Pipe::kMGPipeFirstAllocatableSlot,
-                                         m_entries[index].Gen};
+        Uint32 ClaimSlot() {
+            while (!m_freeSlots.empty()) {
+                const Uint32 index = m_freeSlots.back();
+                m_freeSlots.pop_back();
+                // MGPipeHandles.h:52-58 defends the Gen wrap only in a debug allocator, and
+                // MOBILEGL_ASSERT is compiled out of every build P2 runs (Defines.h: asserts are
+                // live only at MOBILEGL_LOG_ACTIVE_LEVEL == DEBUG). So the wrap is handled on the
+                // RELEASE path instead of asserted: a slot that has been reused 2^32 times is
+                // permanently retired rather than wrapped, because a wrapped Gen would let a
+                // stale handle match a live object. It costs one slot.
+                if (m_entries[index].Gen == ~Uint32{0}) {
+                    MGLOG_W("MagmaPipeIdentityTable(%s): slot %u reached generation 2^32-1 and is "
+                            "retired for good; {slot, gen} stays unique",
+                            m_kindName, index + MG_Pipe::kMGPipeFirstAllocatableSlot);
+                    continue;
+                }
+                ++m_entries[index].Gen;
+                return index;
+            }
+            const Uint32 index = static_cast<Uint32>(m_entries.size());
+            m_entries.push_back(Entry{});
+            m_entries[index].Gen = 1;
+            // The high-water mark, at powers of two from 1024 up. Once per NEW slot, which is
+            // once per object this backend has ever seen - never on a draw. This is the number
+            // D.4.2 should read out of a device log to size anything that ever does need a
+            // capacity (ROADMAP.md:7: no instrumentation on the hot path).
+            const SizeT minted = m_entries.size();
+            if (minted >= 1024 && (minted & (minted - 1)) == 0) {
+                MGLOG_D("MagmaPipeIdentityTable(%s): high-water %zu slots minted, %u live",
+                        m_kindName, minted, LiveCount());
+            }
+            return index;
         }
 
-        Uint32 m_entryCount = 0;
-        // Wraps every 2^32 acquisitions. A wrapped clock can only ever pick the wrong victim
-        // inside one set - a cache decision, never a correctness one.
-        Uint32 m_clock = 0;
+        const char* m_kindName = "";
+        Uint64 m_boundary = 0;
         Vector<Entry> m_entries;
+        Vector<Uint32> m_freeSlots;
+        UnorderedMap<Uint64, Uint32> m_index;
+        // One-entry front memo (see Acquire). m_lastLifetimeId == 0 means "empty": a live
+        // object's lifetime id is never 0.
+        Uint64 m_lastLifetimeId = 0;
+        Uint32 m_lastIndex = 0;
+        MG_Pipe::MGPipeHandle m_lastHandle = MG_Pipe::kMGPipeNullHandle;
     };
 
-    // The table entry a handle names. Every per-slot table Magma keeps is sized Count() and
-    // indexed by this, so the index is exact and in range by construction.
+    // The two mints one renderer owns. Per renderer, NOT process-global: two live contexts (or
+    // a context recreation, which destroys and rebuilds the renderer) would otherwise share one
+    // table and one reclamation clock, and both consumer tables are per-instance already.
+    class MagmaPipeIdentityTables {
+    public:
+        // A VAO is kind VertexElementsCso: that is the gallium-shaped CSO a vertex array
+        // resolves to, and the only kind in MGPipeKind that names vertex-input state.
+        MG_Pipe::MGPipeHandle HandleOf(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            return kind == MG_Pipe::MGPipeKind::Buffer ? m_buffers.Acquire(lifetimeId)
+                                                       : m_vaos.Acquire(lifetimeId);
+        }
+        void OnFrameBoundary() {
+            m_vaos.OnFrameBoundary();
+            m_buffers.OnFrameBoundary();
+        }
+        const MagmaPipeIdentityTable& Vaos() const { return m_vaos; }
+        const MagmaPipeIdentityTable& Buffers() const { return m_buffers; }
+
+    private:
+        MagmaPipeIdentityTable m_vaos{"VertexElementsCso"};
+        MagmaPipeIdentityTable m_buffers{"Buffer"};
+    };
+
+    // The table entry a handle names. Every per-slot table Magma keeps is indexed by this.
     //
     // A null handle has no slot, and it is unreachable here: both lifetime-id sources start at
-    // 1 (VertexArrayObject.cpp, BufferObject.cpp), so Acquire's zero guard never fires.
-    // Asserted rather than assumed, because being wrong about it would be an out-of-range
-    // index rather than a wrong answer.
+    // 1 (VertexArrayObject.cpp, BufferObject.cpp), so Acquire's zero guard never fires. The
+    // ternary, not the assertion, is what has effect in a shipped build (Defines.h compiles
+    // MOBILEGL_ASSERT out at INFO), and slot 0 of a consumer table is a real entry that a null
+    // handle can never match, because MGPipeHandleIsNull is also what the consumers compare.
     inline Uint32 MagmaPipeSlotIndex(const MG_Pipe::MGPipeHandle& handle) {
         MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
                         "a null MGPipeHandle has no slot to index a per-slot table with");
@@ -218,35 +357,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                    : handle.Slot - MG_Pipe::kMGPipeFirstAllocatableSlot;
     }
 
-    // A VAO is kind VertexElementsCso: that is the gallium-shaped CSO a vertex array resolves
-    // to, and it is the only kind in MGPipeKind that names vertex-input state. 2048 entries
-    // is what the address-hashed VaoDrawMemo table it replaces held, so the working set this
-    // covers without eviction is unchanged; at 16 B/entry the table itself is 32 KB.
-    inline constexpr Uint32 kMagmaVaoIdentityEntries = 2048;
-    // Buffers are far more numerous than VAOs (Minecraft cycles chunk vertex/index buffers),
-    // and unlike the VAO table this one feeds a CONTENT hash: an eviction changes the key a
-    // vertex-input cache entry was built under, so it costs a rebuild rather than a lookup.
-    // It is only ever consulted when a VAO's configuration version moved (ComputeHash is
-    // memoised per VAO), so the price is paid per reconfiguration, not per draw - but the
-    // table is sized four times the VAO one anyway, 128 KB, to keep it rare.
-    inline constexpr Uint32 kMagmaBufferIdentityEntries = 8192;
+    // A grow-on-demand per-slot table whose ENTRY ADDRESSES NEVER MOVE.
+    //
+    // D12.4 asks for a grow-on-demand Vector, and with an unbounded mint that is what a
+    // consumer needs - but a Vector that grows relocates its elements, and the draw path holds
+    // references into these entries across nested calls. Chunks of kChunkEntries are appended
+    // instead: the Vector of owning pointers reallocates, the chunks never do, so an entry
+    // reference is valid for the life of the table. That is the same guarantee the fixed table
+    // it replaces gave, without the fixed capacity.
+    template <typename T, Uint32 kChunkEntries = 256>
+    class MagmaPipeSlotTable {
+    public:
+        T& operator[](Uint32 index) {
+            const Uint32 chunk = index / kChunkEntries;
+            while (m_chunks.size() <= chunk) {
+                m_chunks.push_back(MakeUnique<Chunk>());
+            }
+            return m_chunks[chunk]->Entries[index % kChunkEntries];
+        }
+        SizeT Capacity() const { return m_chunks.size() * kChunkEntries; }
 
-    inline MagmaPipeIdentityTable& MagmaPipeVaoIdentity() {
-        static MagmaPipeIdentityTable table(kMagmaVaoIdentityEntries);
-        return table;
-    }
-    inline MagmaPipeIdentityTable& MagmaPipeBufferIdentity() {
-        static MagmaPipeIdentityTable table(kMagmaBufferIdentityEntries);
-        return table;
-    }
-
-    // The {slot, gen} of a frontend object. `lifetimeId` is the client's own identity for the
-    // object - never a GL name, never a heap address - so a deleted-and-recreated object at
-    // the same address cannot reproduce a handle, which is precisely the ABA
-    // HandleRecycleScenario reproduces.
-    inline MG_Pipe::MGPipeHandle MagmaPipeHandleOf(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
-        return kind == MG_Pipe::MGPipeKind::Buffer ? MagmaPipeBufferIdentity().Acquire(lifetimeId)
-                                                   : MagmaPipeVaoIdentity().Acquire(lifetimeId);
-    }
+    private:
+        struct Chunk {
+            T Entries[kChunkEntries] = {};
+        };
+        Vector<UniquePtr<Chunk>> m_chunks;
+    };
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectVulkan

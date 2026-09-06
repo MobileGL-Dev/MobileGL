@@ -61,7 +61,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // identity while its neighbours keyed on the handle.
                 if (MagmaPipeTrackHArmIsHandles(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) {
                     const MG_Pipe::MGPipeHandle handle =
-                        MagmaPipeHandleOf(MG_Pipe::MGPipeKind::Buffer, attr.Buffer->GetLifetimeId());
+                        m_identity->HandleOf(MG_Pipe::MGPipeKind::Buffer, attr.Buffer->GetLifetimeId());
                     bufferKey = static_cast<Uint64>(handle.Slot) | (static_cast<Uint64>(handle.Gen) << 32);
                 } else if (MG_Config::Features.PipeHandleAbaControl) {
                     // Negative control C (P2 brief D18), and it applies to the PRE-HANDLE arm
@@ -83,18 +83,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_PIPE_PUSH
     VertexInputStateFactory::VaoBackendMemos& VertexInputStateFactory::MemosFor(
         const MG_State::GLState::VertexArrayObject& vao) const {
-        static_assert(kVaoMemoSlotCount == kMagmaVaoIdentityEntries,
-                      "this table is indexed directly by MagmaPipeSlotIndex, so it has to hold "
-                      "exactly one entry per slot the VAO identity table can mint");
-        if (m_vaoMemos.empty()) {
-            m_vaoMemos.resize(kVaoMemoSlotCount);
-        }
         const MG_Pipe::MGPipeHandle handle =
-            MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, vao.GetLifetimeId());
-        // One entry per mintable slot - see the static_assert on kVaoMemoSlotCount - so this
-        // index is exact and two live VAOs cannot share an entry. There is no probe in front
-        // of it because the mint itself is one: an array index and at most two Uint64
-        // compares, which is less than the address hash the pre-handle arm ran.
+            m_identity->HandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, vao.GetLifetimeId());
+        // One entry per mintable slot, grown on demand: the mint has no capacity, so neither
+        // does this, and no two live VAOs can share an entry however large the working set is.
+        // There is no probe in front of it because the mint itself is one - a one-entry memo
+        // hit for every acquisition after this draw's first, and a hash probe otherwise.
         VaoBackendMemos& memos = m_vaoMemos[MagmaPipeSlotIndex(handle)];
         if (!(memos.Owner == handle)) {
             // A slot whose Gen moved because the identity table recycled it for a different

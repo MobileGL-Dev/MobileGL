@@ -893,24 +893,49 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // The fallback is warned ONCE rather than logged at debug, and that is deliberate: a
         // silent fallback is what makes "the CSO arm never ran" easy to miss. W is compiled in
-        // at every shipped log level, _ONCE costs one static bool test, and its ABSENCE from a
-        // run's log is the positive evidence that every draw keyed on a handle.
+        // at every shipped log level.
+        //
+        // The latch is a plain member bool, NOT MGLOG_W_ONCE. MOBILEGL_LOG_ONCE_INTERNAL
+        // (MG_Util/Debug/Log.h) is an UNCONDITIONAL std::atomic_flag::test_and_set - a locked
+        // xchg, executed on every evaluation, not "one static bool test" as an earlier round of
+        // this comment claimed - and this site is on the per-draw pipeline path in the very
+        // configuration that reaches it (no tracker: every draw). ROADMAP.md:7 forbids leaving
+        // instrumentation on a hot path, so the once-ness is one non-atomic, always-predicted
+        // load of a member that is false exactly once. Single-threaded like the rest of the
+        // renderer, and per renderer rather than per process, which is also the right scope: a
+        // second context that never binds a CSO deserves to say so.
+        //
+        // What the absence of this warning from a run's log proves, EXACTLY: that no draw took
+        // the fallback WHILE bit 0 was set. With kMGPipeSubsystemRenderState clear the function
+        // returns before the latch, so absence proves nothing at all - and no draw is keyed on a
+        // handle either. Grep the mask out of the log beside it (review v2 minor 3).
         //
         // Push-only by construction: the pull build does not compile this function at all, so
         // its two callers are statement-for-statement what they were (G1).
+        //
+        // [routed to the integrator, review v2 minor 11] MG_Pipe::MGPipeApplier() is ONE
+        // process-global applier (MG_Pipe/PipeApply.cpp), not the per-context CSO store D2
+        // specifies. In a multi-context process this reads whatever CSO another context last
+        // bound. The defect is package A's and the fix belongs there; Magma is its only P2
+        // consumer, so it is named here rather than left for both reviews to assume the other
+        // caught it.
         MG_Pipe::MGPipeHandle ResolveBoundRenderStateCso() const {
             if (!MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
                 return MG_Pipe::kMGPipeNullHandle;
             }
             const MG_Pipe::MGPipeHandle boundCso = MG_Pipe::MGPipeApplier().BoundRenderStateCso;
-            if (MG_Pipe::MGPipeHandleIsNull(boundCso)) {
-                MGLOG_W_ONCE("MGPipe: kMGPipeSubsystemRenderState is on but no render-state CSO is "
-                             "bound; the pipeline memo is running on a state hash, not on the CSO "
-                             "handle (no tracker on this build, or a draw between "
-                             "delete_render_state and the next bind)");
+            if (MG_Pipe::MGPipeHandleIsNull(boundCso) && !m_pipelineCsoFallbackWarned) {
+                m_pipelineCsoFallbackWarned = true;
+                MGLOG_W("MGPipe: kMGPipeSubsystemRenderState is on but no render-state CSO is "
+                        "bound; the pipeline memo is running on a state hash, not on the CSO "
+                        "handle (no tracker on this build, or a draw between "
+                        "delete_render_state and the next bind)");
             }
             return boundCso;
         }
+        // Latch for the warning above. Mutable because the resolve is const and the latch is
+        // not part of the renderer's observable state.
+        mutable Bool m_pipelineCsoFallbackWarned = false;
         // The memo key's STATE-HASH half, for a draw that has no CSO handle to key on: the
         // pre-handle arm, and the fallback of D12.1's handle arm. Cached on the pipeline-state
         // version plus the two render-pass facts the hash's inputs depend on, so an unchanged
@@ -1407,25 +1432,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // fixed table also makes every VaoDrawMemo/ResolvedVertexBindings pointer
         // stable for the duration of a draw, which the EBO memo handoff
         // (m_currentDrawResolvedEntry) relies on.
-        // [deviation from D12.4] The brief asks for a grow-on-demand Vector. The table is
-        // FIXED, and under the handle arm it is sized to - and is a BIJECTION with - the
-        // identity table that mints the slots (MagmaPipeVaoIdentity), so entry i is slot
-        // i + kMGPipeFirstAllocatableSlot and no two live VAOs can ever share it. Growing on
-        // demand only makes sense against an allocator that frees, and nothing in P2 frees a
-        // VertexElementsCso slot; the eviction that has to happen somewhere happens once, in
-        // the identity table's LRU, instead of twice in two tables that could disagree.
+        //
+        // [deviation from D12.4, deliberate and narrow] The brief asks for a grow-on-demand
+        // Vector. This one stays FIXED at exactly the capacity and exactly the 2-way victim
+        // rule it has on the base ref, and only its KEY changes (a {slot, gen} handle instead
+        // of a hashed heap address plus a lifetime id). Two reasons, and the second is the
+        // whole of review v2's MAJOR 1:
+        //   * a VaoDrawMemo is ~450 B (ResolvedVertexBindings dominates), so growing this
+        //     table with the live VAO set is megabytes on a platform with an LMK, where the
+        //     other two memos are 48 B and can afford it;
+        //   * this is the ONLY one of the three memos that had a capacity before this package.
+        //     Losing an entry here costs a vertex-binding re-resolve, exactly what losing it
+        //     cost on the base ref, so at any working-set size this table is no worse than what
+        //     it replaces - and strictly better below capacity, where the handle is a bijection
+        //     with the slot and the two-way probe never collides at all. The other two memos
+        //     (VertexInputStateFactory::m_vaoMemos) had NO capacity, so they keep having none.
         static constexpr Uint32 kVaoDrawMemoSlotCount = 2048; // power of two
         Vector<VaoDrawMemo> m_vaoDrawMemoTable;
 #if MOBILEGL_PIPE_PUSH
-        static_assert(kVaoDrawMemoSlotCount == kMagmaVaoIdentityEntries,
-                      "the VAO draw memo table is indexed directly by MagmaPipeSlotIndex, so it has "
-                      "to hold exactly one entry per slot the VAO identity table can mint");
-        // The VAO's {slot, gen}. An array probe (one mask, at most two Uint64 compares), so
-        // there is no memo in front of it: the address multiply plus two-way probe it replaces
-        // cost more than this does, and a cached handle could go stale behind the identity
-        // table's own eviction, which is a class of bug worth not having.
+        // The renderer's {slot, gen} mint, shared with its VertexInputStateFactory so both
+        // derive the same handle for the same VAO. Per renderer, never a process-global: a
+        // global would share one table and one reclamation clock across two live contexts and
+        // outlive every one of them (review v2 minor 4).
+        MagmaPipeIdentityTables m_pipeIdentity;
+        // The VAO's {slot, gen}. A one-entry memo hit for every acquisition after a draw's
+        // first, so there is no second memo in front of it here.
         MG_Pipe::MGPipeHandle ResolveVaoHandle(const MG_State::GLState::VertexArrayObject& vao) {
-            return MagmaPipeHandleOf(MG_Pipe::MGPipeKind::VertexElementsCso, vao.GetLifetimeId());
+            return m_pipeIdentity.HandleOf(MG_Pipe::MGPipeKind::VertexElementsCso,
+                                           vao.GetLifetimeId());
         }
 #endif
         // "Is this VAO's content hash already memoized?", asked of whichever side owns the
