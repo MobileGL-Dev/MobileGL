@@ -42,6 +42,7 @@
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
+#include <csignal>
 #include <limits>
 #include <set>
 
@@ -3534,6 +3535,82 @@ TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
               0ull);
 }
 
+// The gate on MAJOR 1 of the round-3 review. Commit d89fb684 raised
+// Fatal{PipeLegacyMemosDisabled} from inside InitDisplayAndContext(), i.e. from inside EGL
+// bring-up - and the integration harness pre-flights EGL bring-up in a FORKED CHILD, converting
+// any child that dies on a signal into "no usable GPU/display/ICD" and SKIPPING every scenario.
+// So `MOBILEGL_PIPE_PUSH=0 MOBILEGL_PIPE_LEGACY_MEMOS=0 ctest -L integration-gpu -R DirectGLES`
+// reported 100% tests passed while running nothing at all, on the exact pair of env vars the
+// D14/D18 A/B is driven with. ROADMAP.md:7 forbids a gate that cannot go red for the reason it
+// exists, and a lane that goes green by skipping is the worst version of that.
+//
+// The split this case pins: bring-up DIAGNOSES (and returns), first twin lookup STOPS. It
+// checks the message and not only the signal, because an operator who is handed a bare
+// "Subprocess aborted" has been told nothing about which two knobs they set.
+TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane) {
+#if !MOBILEGL_PIPE_LEGACY_MEMOS
+    GTEST_SKIP() << "this build compiles no legacy twin registry, so no knob combination can "
+                    "leave the process without an arm";
+#else
+    using namespace MobileGL;
+    namespace fs = std::filesystem;
+    using MG_Backend::DirectGLES::EsprytSlotArmVerdict;
+
+    // The pure half: all four knob combinations, no process required.
+    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(true, true), EsprytSlotArmVerdict::Handles);
+    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(true, false), EsprytSlotArmVerdict::Handles);
+    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, true), EsprytSlotArmVerdict::Legacy);
+    EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, false), EsprytSlotArmVerdict::NoArm);
+
+    const Uint64 savedPush = MG_Config::Features.PipePush;
+    const Bool savedLegacy = MG_Config::Features.PipeLegacyMemos;
+    MG_Config::Features.PipePush = savedPush & ~MG_Pipe::kMGPipeSubsystemEsprytSlots;
+    MG_Config::Features.PipeLegacyMemos = false;
+    ASSERT_EQ(MG_Backend::DirectGLES::CurrentEsprytSlotArmVerdict(), EsprytSlotArmVerdict::NoArm);
+
+    const fs::path logPath = fs::temp_directory_path() / "mobilegl-espryt-armless-knobs.log";
+    fs::remove(logPath);
+    MG_Util::Debug::Close();
+    SetEnvVar("MOBILEGL_LOG_FILE_PATH", logPath.string().c_str());
+
+    // Bring-up's half of the split. It must NAME the knobs and it must RETURN: this call is the
+    // one InitDisplayAndContext() makes, and it runs inside the harness's forked pre-flight
+    // child. If it ever stops again, this line takes the whole binary down and the case is red.
+    MG_Backend::DirectGLES::DiagnoseEsprytSlotArm();
+
+#if !defined(_WIN32)
+    // First-use's half: the stop, raised in a forked child so it is a datum rather than the end
+    // of this process. In production the caller is a twin lookup inside a scenario body, where
+    // ctest reports the crash as a FAILING test rather than as a missing GPU.
+    EXPECT_EXIT((void)MG_Backend::DirectGLES::ResolveEsprytSlotTablesArm(),
+                ::testing::KilledBySignal(SIGABRT), "");
+#endif
+
+    MG_Util::Debug::Close();
+    UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
+    MG_Config::Features.PipePush = savedPush;
+    MG_Config::Features.PipeLegacyMemos = savedLegacy;
+
+    std::string contents;
+    {
+        std::ifstream logFile(logPath);
+        ASSERT_TRUE(logFile.good()) << "neither the diagnosis nor the fatal wrote a line an "
+                                       "operator could read";
+        contents.assign(std::istreambuf_iterator<char>(logFile), std::istreambuf_iterator<char>());
+    }
+    fs::remove(logPath);
+
+    EXPECT_NE(contents.find("PipeLegacyMemosDisabled"), std::string::npos) << contents;
+    EXPECT_NE(contents.find("MOBILEGL_PIPE_PUSH"), std::string::npos) << contents;
+    EXPECT_NE(contents.find("MOBILEGL_PIPE_LEGACY_MEMOS=0"), std::string::npos) << contents;
+    EXPECT_NE(contents.find("kMGPipeSubsystemEsprytSlots"), std::string::npos) << contents;
+#if !defined(_WIN32)
+    EXPECT_NE(contents.find("Fatal{"), std::string::npos)
+        << "the diagnosis was logged but the first-use stop was not: " << contents;
+#endif
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
+}
+
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
 // exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
@@ -3579,6 +3656,10 @@ TEST(DirectGLESSlotTable, AProgramAndARenderbufferAnnounceTheirOwnDeath) {
 }
 
 TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH

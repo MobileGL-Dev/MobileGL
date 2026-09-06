@@ -10223,12 +10223,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DestroyEGLContext();
 
 #if MOBILEGL_PIPE_PUSH
-        // Resolve the twin-table arm HERE, at backend startup, rather than leaving it to the
-        // first twin lookup deep inside the first draw: Fatal{PipeLegacyMemosDisabled} has to
-        // reach an operator who set MOBILEGL_PIPE_PUSH and MOBILEGL_PIPE_LEGACY_MEMOS into a
-        // combination that leaves no arm at all, including in a process that goes on to twin
-        // nothing. The call is idempotent and latched.
-        (void)EsprytSlotTablesEnabled();
+        // DIAGNOSE the twin-table arm here, at backend startup, so an operator who set
+        // MOBILEGL_PIPE_PUSH and MOBILEGL_PIPE_LEGACY_MEMOS into a combination that leaves no
+        // arm at all is told so by name, in the log, before the first draw.
+        //
+        // Diagnose, and deliberately NOT resolve: resolving raises
+        // Fatal{PipeLegacyMemosDisabled}, and this function runs inside eglMakeCurrent, which
+        // the integration harness pre-flights in a FORKED CHILD
+        // (MG_IntegrationTest/Harness/HeadlessGL.cpp). A child that dies on a signal is reported
+        // to the parent as "no usable GPU/display/ICD" and every scenario in the lane is
+        // SKIPPED - so the stop became a green lane that ran nothing, on exactly the two env
+        // vars the D14/D18 A/B is driven with (ROADMAP.md:7). The stop now belongs to the first
+        // twin lookup, which happens in a scenario body where a crash IS a test failure.
+        DiagnoseEsprytSlotArm();
 #endif
 
         g_Display = g_EGLFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);

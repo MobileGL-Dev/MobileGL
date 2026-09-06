@@ -68,8 +68,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
 #if MOBILEGL_PIPE_PUSH
 
-    // Reads the config, logs, and traps when the operator left no arm at all. Cold: called
-    // exactly once per process, from the latch below and from backend context creation.
+    // What the two knobs add up to. Split out as a PURE function of them so a test can drive
+    // every combination without needing a process per combination.
+    enum class EsprytSlotArmVerdict {
+        Handles, // kMGPipeSubsystemEsprytSlots is set: the {slot, gen} tables run.
+        Legacy,  // the bit is clear and the legacy address-keyed registry is reachable.
+        NoArm,   // the bit is clear AND MOBILEGL_PIPE_LEGACY_MEMOS=0 made the legacy arm
+                 // unreachable, so the operator asked for a configuration with no arm at all.
+    };
+
+    EsprytSlotArmVerdict ClassifyEsprytSlotArm(Bool subsystemBitSet, Bool legacyMemosEnabled);
+
+    // This process's verdict, read off MG_Config::Features. Latches nothing and stops nothing.
+    EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict();
+
+    // Says, at backend bring-up, that the knobs leave no arm - and does NOT stop.
+    //
+    // The stop cannot live here, and that is the whole point of the split. Backend context
+    // creation runs inside eglMakeCurrent, and the integration harness pre-flights exactly that
+    // sequence in a FORKED CHILD (MG_IntegrationTest/Harness/HeadlessGL.cpp): a child that dies
+    // on a signal is reported as "no usable GPU/display/ICD" and every scenario in the lane is
+    // SKIPPED - i.e. the lane goes green having run nothing, on the very pair of env vars the
+    // D14/D18 A/B is driven with, which is what ROADMAP.md:7 forbids. So bring-up only
+    // DIAGNOSES; the stop is raised by ResolveEsprytSlotTablesArm() at the first twin lookup,
+    // which happens in the test body where the harness reports it as a failure.
+    void DiagnoseEsprytSlotArm();
+
+    // Reads the config, logs, installs the death-notice consumer, and STOPS when the operator
+    // left no arm at all. Cold: called exactly once per process, from the latch below - i.e. at
+    // the first twin lookup, which is the first moment an arm is actually needed. A process
+    // that never twins anything needs no arm and is not stopped.
     Bool ResolveEsprytSlotTablesArm();
 
     // True when this process runs the {slot, gen} arm. Fixed for the life of the process: the

@@ -214,49 +214,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
     } // namespace
 
+    // The one sentence that decides the arm, written once so that a test can drive every
+    // combination of the two knobs and so that bring-up and first-use cannot disagree.
+    EsprytSlotArmVerdict ClassifyEsprytSlotArm(Bool subsystemBitSet, Bool legacyMemosEnabled) {
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+        if (subsystemBitSet) return EsprytSlotArmVerdict::Handles;
+        return legacyMemosEnabled ? EsprytSlotArmVerdict::Legacy : EsprytSlotArmVerdict::NoArm;
+#else
+        // The legacy arm is not compiled, so the handle arm is the only arm and neither knob
+        // can produce an armless configuration.
+        (void)subsystemBitSet;
+        (void)legacyMemosEnabled;
+        return EsprytSlotArmVerdict::Handles;
+#endif
+    }
+
+    EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict() {
+        return ClassifyEsprytSlotArm(
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0,
+            MG_Config::Features.PipeLegacyMemos);
+    }
+
+    void DiagnoseEsprytSlotArm() {
+        if (CurrentEsprytSlotArmVerdict() != EsprytSlotArmVerdict::NoArm) return;
+        // Loud, named, and NOT a stop - see the comment on this function in SlotTables.h for
+        // why a stop raised from inside EGL bring-up is swallowed into a skipped lane.
+        MGLOG_E("MGPipe: PipeLegacyMemosDisabled - MOBILEGL_PIPE_PUSH leaves "
+                "kMGPipeSubsystemEsprytSlots (bit 5) clear and MOBILEGL_PIPE_LEGACY_MEMOS=0 "
+                "makes the legacy twin registry unreachable, so this context has no twin table "
+                "arm at all; the first twin lookup will stop the process");
+    }
+
     Bool ResolveEsprytSlotTablesArm() {
         // Resolved once and latched by the inline EsprytSlotTablesEnabled() in SlotTables.h:
         // the two arms of StateBackendObjectRegistry keep their twins in different containers,
         // so an answer that changed mid-run would strand every twin already built (and, for
-        // the driver ids those twins own, leak them). InitDisplayAndContext() forces the
-        // resolution at backend context creation, so the trap below fires before the first
-        // draw rather than on the first twin lookup - a short-lived process that never twins
-        // anything used to never learn its knobs left it with no arm at all.
-        {
-            const Bool bitSet =
-                (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0;
-#if MOBILEGL_PIPE_LEGACY_MEMOS
-            if (!bitSet && !MG_Config::Features.PipeLegacyMemos) {
-                // The operator asked for the handle arm to be OFF and the legacy arm to be
-                // unreachable at the same time, which leaves no arm at all. This is a Fatal{},
-                // and a Fatal{} in this codebase STOPS (MG_Impl/Pipe/PipeFill.cpp's BadKnob and
-                // its verify trap are both MGLOG_F + abort). Returning here instead would run
-                // the very arm the operator disabled and hand back a green result measured on
-                // it - which is exactly the lever HandleRecycleScenario's arms are selected
-                // with, so a mis-set A/B would be scored silently against the wrong arm
-                // (ARCHITECTURE.md 9.6).
-                MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled, \"kMGPipeSubsystemEsprytSlots "
-                        "is clear but MOBILEGL_PIPE_LEGACY_MEMOS=0\"}");
-                std::abort();
-            }
-            if (bitSet) {
-                // The notice is only consumable on the handle arm (the legacy registry keys on
-                // the frontend ADDRESS, which is gone by the time a destructor speaks), so it is
-                // installed exactly where it can be answered. Once per process, cold.
-                MG_State::GLState::SetStateObjectDeathOps(&g_glesStateObjectDeathOps);
-            }
-            return bitSet;
-#else
-            // The legacy arm is not compiled, so the handle arm is the only arm. The bit still
-            // decides nothing here; it is recorded so a log reader sees the mismatch.
-            if (!bitSet) {
-                MGLOG_D("MGPipe: kMGPipeSubsystemEsprytSlots is clear but this build has no "
-                        "legacy twin registry; running the handle arm anyway");
-            }
-            MG_State::GLState::SetStateObjectDeathOps(&g_glesStateObjectDeathOps);
-            return true;
-#endif
+        // the driver ids those twins own, leak them).
+        //
+        // This runs at the FIRST TWIN LOOKUP, not at backend bring-up. That is deliberate and
+        // it is the fix for a lane that went green by skipping: bring-up runs inside
+        // eglMakeCurrent, which the integration harness pre-flights in a forked child, and a
+        // child that aborts is reported as "no usable GPU" and skips every scenario. Here the
+        // stop lands in the caller of the twin lookup - a scenario body, a sync path, a test -
+        // where ctest reports it as a failure. A process that never looks a twin up never needs
+        // an arm and is never stopped by this.
+        const EsprytSlotArmVerdict verdict = CurrentEsprytSlotArmVerdict();
+        if (verdict == EsprytSlotArmVerdict::NoArm) {
+            // The operator asked for the handle arm to be OFF and the legacy arm to be
+            // unreachable at the same time, which leaves no arm at all. This is a Fatal{},
+            // and a Fatal{} in this codebase STOPS (MG_Impl/Pipe/PipeFill.cpp's BadKnob and
+            // its verify trap are both MGLOG_F + abort). Returning here instead would run
+            // the very arm the operator disabled and hand back a green result measured on
+            // it - which is exactly the lever HandleRecycleScenario's arms are selected
+            // with, so a mis-set A/B would be scored silently against the wrong arm
+            // (ARCHITECTURE.md 9.6).
+            MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled, \"MOBILEGL_PIPE_PUSH leaves "
+                    "kMGPipeSubsystemEsprytSlots (bit 5) clear and MOBILEGL_PIPE_LEGACY_MEMOS=0 "
+                    "makes the legacy twin registry unreachable, so there is no twin table arm "
+                    "to run\"}");
+            std::abort();
         }
+        if (verdict == EsprytSlotArmVerdict::Legacy) {
+            return false;
+        }
+#if !MOBILEGL_PIPE_LEGACY_MEMOS
+        if ((MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) == 0) {
+            // The bit is clear but this build has no legacy twin registry to fall back to, so
+            // the bit decides nothing. Recorded so a log reader sees the mismatch.
+            MGLOG_D("MGPipe: kMGPipeSubsystemEsprytSlots is clear but this build has no "
+                    "legacy twin registry; running the handle arm anyway");
+        }
+#endif
+        // The notice is only consumable on the handle arm (the legacy registry keys on the
+        // frontend ADDRESS, which is gone by the time a destructor speaks), so it is installed
+        // exactly where it can be answered. Once per process, cold.
+        MG_State::GLState::SetStateObjectDeathOps(&g_glesStateObjectDeathOps);
+        return true;
     }
 #endif
 
