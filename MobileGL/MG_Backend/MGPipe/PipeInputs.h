@@ -572,10 +572,23 @@ namespace MobileGL::MG_Pipe {
                 return false;
             }
         }
+        template <class Fn>
+        static Bool VisitStorage(MGPipeInputField field, const PipeInputs& a, const PipeInputs& b, Fn&& fn) {
+            switch (field) {
+#define MGP_INPUT_VISIT(Field, Member)                                                                                 \
+    case MGPipeInputField::Field:                                                                                      \
+        return fn(a.Member, b.Member);
+                MGP_INPUT_STORAGE_LIST(MGP_INPUT_VISIT)
+#undef MGP_INPUT_VISIT
+            default:
+                return false;
+            }
+        }
 
     private:
-        friend void MGPipeFillForVerb(MGPipeVerb verb);
-        friend void SnapshotFromGLContext(PipeInputs& snapshot, const MGPipeFieldMask& mask);
+        // The one door into the storage from the client side (MG_Impl/Pipe/PipeFill.cpp):
+        // the filler's per-field copies and stamps, and the verify snapshot.
+        friend struct MGPipeFillAccess;
 
         // ---- identity ----
         const void* m_contextIdentity = nullptr;

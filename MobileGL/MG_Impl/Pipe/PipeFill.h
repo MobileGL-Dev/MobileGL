@@ -16,10 +16,19 @@
 #if MOBILEGL_PIPE_PUSH
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
-    // PipeFill.cpp. Bumps the per-verb serial, records the verb, and (from c2 on) copies
-    // every field in the verb class's may-read mask out of the live GLContext, stamping each
-    // with the new serial.
+    // PipeFill.cpp. Bumps the per-verb serial, records the verb and the context identity,
+    // and copies every field in the verb class's may-read mask (kMGPipeClassFieldMask) out
+    // of the live GLContext, stamping each with the new serial. In a verify build it then
+    // runs the entry compare against a second snapshot (P1 brief D8).
     void MGPipeFillForVerb(MGPipeVerb verb);
+
+    // PipeFill.cpp. Negative control B (P1 brief D6): the filler withholds the STAMP - never
+    // the value - of `field` at `verb`, so that verb's read of it is
+    // Fatal{UnmigratedPipeInput, "Field@Verb"} while every other verb is unaffected. The
+    // MOBILEGL_PIPE_POISON_OMIT knob ("<Verb>:<FieldName>") calls this once, on the first
+    // fill; tests call it directly. Both null clears the omission. An unknown name is
+    // Fatal{PipeVerifyBadKnob}.
+    void MGPipeSetPoisonOmission(const char* verb, const char* field);
 } // namespace MobileGL::MG_Pipe
 #define MGP_FILL(Verb) ::MobileGL::MG_Pipe::MGPipeFillForVerb(::MobileGL::MG_Pipe::MGPipeVerb::Verb)
 #else
