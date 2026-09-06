@@ -129,7 +129,10 @@ namespace MobileGL::MG_Util::PipeStats {
     inline constexpr Uint32 kPayloadHistogramBuckets = 24;
 
     // Frames between two summary lines when MOBILEGL_PIPE_STATS=1.
-    inline constexpr Uint64 kSummaryFramePeriod = 120;
+    inline constexpr Uint64 kDefaultSummaryFramePeriod = 120;
+    // The period Init() latched from MOBILEGL_PIPE_STATS_PERIOD (kDefaultSummaryFramePeriod
+    // when unset); never 0.
+    Uint64 SummaryFramePeriod();
 
     // The latch. Read directly by Enabled() so the off path is a global load and a
     // predicted branch - do not turn this into a function call.

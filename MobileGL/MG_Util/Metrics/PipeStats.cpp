@@ -130,6 +130,8 @@ namespace MobileGL::MG_Util::PipeStats {
         Uint64 g_windowBaseFrames = 0;
         Bool g_shutdownDone = false;
 
+        // Frames per summary line, latched by Init() from MOBILEGL_PIPE_STATS_PERIOD.
+        Uint64 g_summaryPeriod = kDefaultSummaryFramePeriod;
         inline void Bump(Counter& counter, Uint64 amount) {
             counter.fetch_add(amount, std::memory_order_relaxed);
         }
@@ -253,13 +255,18 @@ namespace MobileGL::MG_Util::PipeStats {
         ResetCounters();
         g_shutdownDone = false;
         g_pipeStatsEnabled = MG_Config::Features.PipeStats;
+        g_summaryPeriod = MG_Config::Features.PipeStatsPeriod == 0
+                              ? kDefaultSummaryFramePeriod
+                              : static_cast<Uint64>(MG_Config::Features.PipeStatsPeriod);
         if (g_pipeStatsEnabled) {
             MGLOG_I("MGPipe stats: counters ON (MOBILEGL_PIPE_STATS), summary every %llu frames%s%s",
-                    static_cast<unsigned long long>(kSummaryFramePeriod),
+                    static_cast<unsigned long long>(g_summaryPeriod),
                     MG_Config::Features.PipeStatsFile.empty() ? "" : ", JSON dump to ",
                     MG_Config::Features.PipeStatsFile.c_str());
         }
     }
+
+    Uint64 SummaryFramePeriod() { return g_summaryPeriod; }
 
     void Shutdown() {
         if (!g_pipeStatsEnabled || g_shutdownDone) {
@@ -336,7 +343,7 @@ namespace MobileGL::MG_Util::PipeStats {
 #endif
         }
         const Uint64 frames = g_frameCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (frames % kSummaryFramePeriod == 0) {
+        if (frames % g_summaryPeriod == 0) {
             EmitSummaryLine();
         }
     }

@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <Config.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
 #include <cstdio>
@@ -75,6 +76,21 @@ namespace {
         EXPECT_EQ(PS::TotalCalls(PS::CallClass::Draws), 3u);
         EXPECT_EQ(PS::TotalGateHits(PS::Gate::EsprytRenderState), 1u);
         EXPECT_EQ(PS::FrameCount(), 1u);
+    }
+
+    TEST_F(PipeStatsTest, InitLatchesTheSummaryPeriodFromTheConfigAndNeverKeepsZero) {
+        // The device retrace harness never reaches the teardown dump, so the summary
+        // cadence is the only way a short fixture yields numbers at all: it must follow
+        // MOBILEGL_PIPE_STATS_PERIOD, and a zero must fall back rather than divide.
+        const Uint32 saved = MobileGL::MG_Config::Features.PipeStatsPeriod;
+        MobileGL::MG_Config::Features.PipeStatsPeriod = 7;
+        PS::Init();
+        EXPECT_EQ(PS::SummaryFramePeriod(), 7u);
+        MobileGL::MG_Config::Features.PipeStatsPeriod = 0;
+        PS::Init();
+        EXPECT_EQ(PS::SummaryFramePeriod(), PS::kDefaultSummaryFramePeriod);
+        MobileGL::MG_Config::Features.PipeStatsPeriod = saved;
+        PS::Init();
     }
 
     TEST_F(PipeStatsTest, GateHitsAndMissesAreSeparateCounters) {
@@ -262,10 +278,10 @@ namespace {
     // A summary is emitted every kSummaryFramePeriod presents. The period is a constant the
     // smoke check depends on, so a change to it has to break a test.
     TEST_F(PipeStatsTest, SummaryPeriodIsOneHundredAndTwentyFrames) {
-        EXPECT_EQ(PS::kSummaryFramePeriod, 120u);
-        for (Uint64 i = 0; i < PS::kSummaryFramePeriod; ++i) {
+        EXPECT_EQ(PS::SummaryFramePeriod(), 120u);
+        for (Uint64 i = 0; i < PS::SummaryFramePeriod(); ++i) {
             PS::OnPresent();
         }
-        EXPECT_EQ(PS::FrameCount(), PS::kSummaryFramePeriod);
+        EXPECT_EQ(PS::FrameCount(), PS::SummaryFramePeriod());
     }
 } // namespace
