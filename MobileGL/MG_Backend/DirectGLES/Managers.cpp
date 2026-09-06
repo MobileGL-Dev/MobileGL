@@ -12,6 +12,7 @@
 #include "DirectGLES.h"
 #include "BackendObject_DirectGLES.h"
 #include <Config.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
 #include <MG_Util/ShaderTranspiler/TranslationCache.h>
 
@@ -171,6 +172,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_PIPE_PUSH
+    namespace {
+        // P2 step e2's dispatcher: the frontend told us an object died, so free its slot and
+        // drop its twin NOW. One entry point for all six kinds, because the answer is the same
+        // for all six - which is why the notice carries the kind rather than there being six
+        // ops tables.
+        //
+        // A notice that arrives after exit() has begun is dropped: past that point the twin's
+        // destructor must not call into the driver (see InProcessTeardown()), and the process
+        // is about to hand every GPU object back anyway.
+        void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            if (InProcessTeardown()) return;
+            switch (kind) {
+            case MG_Pipe::MGPipeKind::Texture:
+                TextureImpl::g_backendTextureObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            case MG_Pipe::MGPipeKind::Framebuffer:
+                FramebufferImpl::g_backendFramebufferObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            case MG_Pipe::MGPipeKind::Renderbuffer:
+                RenderbufferImpl::g_backendRenderbufferObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            case MG_Pipe::MGPipeKind::SamplerCso:
+                SamplerImpl::g_backendSamplerObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            case MG_Pipe::MGPipeKind::ShaderCso:
+                PrgramImpl::g_backendProgramObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            case MG_Pipe::MGPipeKind::VertexElementsCso:
+                VertexArrayImpl::g_backendVertexArrayObjects.DestroyByLifetimeId(lifetimeId);
+                break;
+            default:
+                // Buffer already has its own death signal (BufferBackendOps::OnDestroy) and
+                // every other kind has no backend twin table here.
+                break;
+            }
+        }
+
+        const MG_State::GLState::StateObjectDeathOps g_glesStateObjectDeathOps = {
+            .OnDestroyed = OnFrontendStateObjectDestroyed,
+        };
+    } // namespace
+
     Bool ResolveEsprytSlotTablesArm() {
         // Resolved once and latched by the inline EsprytSlotTablesEnabled() in SlotTables.h:
         // the two arms of StateBackendObjectRegistry keep their twins in different containers,
@@ -196,6 +239,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         "is clear but MOBILEGL_PIPE_LEGACY_MEMOS=0\"}");
                 std::abort();
             }
+            if (bitSet) {
+                // The notice is only consumable on the handle arm (the legacy registry keys on
+                // the frontend ADDRESS, which is gone by the time a destructor speaks), so it is
+                // installed exactly where it can be answered. Once per process, cold.
+                MG_State::GLState::SetStateObjectDeathOps(&g_glesStateObjectDeathOps);
+            }
             return bitSet;
 #else
             // The legacy arm is not compiled, so the handle arm is the only arm. The bit still
@@ -204,6 +253,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_D("MGPipe: kMGPipeSubsystemEsprytSlots is clear but this build has no "
                         "legacy twin registry; running the handle arm anyway");
             }
+            MG_State::GLState::SetStateObjectDeathOps(&g_glesStateObjectDeathOps);
             return true;
 #endif
         }

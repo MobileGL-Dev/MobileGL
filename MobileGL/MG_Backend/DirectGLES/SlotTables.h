@@ -33,17 +33,19 @@
 //  * Slots are dense per kind, which is what lets the server side (ARCHITECTURE.md 10.1,
 //    MG_Remote/Server/PipeObjectTables) be an array rather than an object graph.
 //
-// What has NOT changed, deliberately, and is this file's one departure from the P2 brief
-// (recorded in the package result file): a frontend object's death is still discovered rather
-// than announced. The brief's step e2 - a BufferBackendOps-shaped OnDestroy for the other six
-// kinds - has to be installed in MG_State/GLState/{Texture,Framebuffer,Renderbuffer,Sampler,
-// Program,VertexArray}State/*, and the P2 file-ownership table gives every one of those files
-// to another package. So the table keeps ONE weak_ptr per entry and uses it for exactly one
-// thing: ReclaimDeadSlots() frees the slot - and the twin, and the driver storage it owns -
-// once the frontend object is gone. That is a liveness sweep, not an identity test, and it is
-// what bumps Gen, which is precisely the ABA defence: a slot is only ever handed out again
-// after it was freed. When e2 lands, ReclaimDeadSlots() becomes the fallback path of an
-// explicit Destroy(handle) and the sweep call sites go away.
+// Death: announced where the package may announce it, discovered everywhere else.
+// DestroyByLifetimeId() below is step e2's backend half and it is complete - it drops the twin
+// and returns the slot the moment the frontend object's last SharedPtr goes - and the notice
+// that drives it (MG_State/GLState/StateObjectDeathNotice.h, BufferBackendOps' shape) is
+// registered for all six kinds. What is only PARTLY wired is the firing side: a destructor has
+// to raise the notice, and of the six object classes the P2 file-ownership table gives
+// {Texture,Framebuffer,Sampler,VertexArray}State/* to other packages, so only ProgramObject
+// and RenderbufferObject fire it here. The four that do not still rely on the sweep, which is
+// why the table keeps ONE weak_ptr per entry and uses it for exactly one thing:
+// ReclaimDeadSlots() frees the slot - and the twin, and the driver storage it owns - once the
+// frontend object is gone. That is a liveness sweep, not an identity test, and it is what
+// bumps Gen, which is precisely the ABA defence: a slot is only ever handed out again after it
+// was freed. The four remaining one-line destructor calls retire the sweep entirely.
 //
 // Because the sweep is still the only death signal, this table carries BOTH of the drivers
 // the registry it replaces carries, and for the same reasons:
@@ -219,6 +221,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 dead.reset();
             }
             m_isCollecting = false;
+        }
+
+        // P2 step e2's backend half: the frontend object with this lifetime id has just been
+        // DESTROYED, so drop its twin and return its slot now rather than waiting for a sweep
+        // to notice the weak_ptr expired. Announced death is what the sweep is a stand-in for;
+        // it frees the driver storage the twin owns at the moment the application let go of
+        // the object, which is what Managers.h's "dead gigabytes" note is about.
+        //
+        // Returns whether this table held the slot. The slot goes back to the allocator ONLY
+        // then, and this is not defensive: two holders of one kind already exist (the
+        // ScopedDirectGLESTextureBindings fixture's saved copy is a second live table of kind
+        // Texture; Magma's subsystem-4 table shares the VertexElementsCso kind), and a table
+        // that never twinned the object must not free a slot the other one still names.
+        Bool DestroyByLifetimeId(Uint64 lifetimeId) {
+            const MG_Pipe::MGPipeHandle handle =
+                MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, lifetimeId);
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
+            if (handle.Slot >= m_slots.size()) return false;
+            // Same ordering rule as ReclaimDeadSlots(): the twin's destructor is a driver call
+            // and could re-enter GetOrCreate and resize m_slots, so nothing that outlives it
+            // may be a reference into the vector.
+            BackendPtr dead;
+            {
+                Entry& entry = m_slots[handle.Slot];
+                if (!entry.Live || entry.Gen != handle.Gen) return false;
+                dead = std::move(entry.backend);
+                entry.backend.reset();
+                entry.stateRef.reset();
+                entry.Live = false;
+            }
+            if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
+            MG_Pipe::MGPipeSlots().Free(kKind, handle);
+            dead.reset();
+            return true;
         }
 
         void CollectGarbageIfNeeded() {

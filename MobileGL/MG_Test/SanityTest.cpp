@@ -39,6 +39,9 @@
 #include <MG_Util/Types.h>
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
+#include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <limits>
 #include <set>
 
@@ -3396,6 +3399,95 @@ TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
     EXPECT_EQ(table.Find(nullptr), nullptr);
     EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(nullptr)));
 }
+// P2 step e2, the backend half. A sweep is a stand-in for a death notice; this is the notice.
+// Nothing below calls CollectGarbage*: the slot comes back, and the twin goes, at the moment
+// the frontend says the object is gone - which for a texture atlas or a renderbuffer is the
+// difference between freeing a driver allocation now and freeing it 64 creations from now.
+TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
+    using namespace MobileGL;
+
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
+
+    FakeSlotTable table;
+    auto object = MakeShared<FakeStateObject>(0x1E2A0001ull);
+    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u);
+
+    // The object is STILL ALIVE here, which is the point: the sweep's weak_ptr test cannot
+    // fire, so anything that changes is the notice's doing and nothing else's.
+    EXPECT_TRUE(table.DestroyByLifetimeId(object->GetLifetimeId()));
+    EXPECT_EQ(table.LiveCount(), 0u) << "the twin survived its own destroy notice";
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ(table.Find(object.get()), nullptr);
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
+        << "the slot was not returned to the allocator";
+
+    // Idempotent, and a table that does not hold the slot says so rather than freeing it out
+    // from under whoever does. Both matter once two holders of one kind exist.
+    EXPECT_FALSE(table.DestroyByLifetimeId(object->GetLifetimeId()));
+    FakeSlotTable other;
+    EXPECT_FALSE(other.DestroyByLifetimeId(object->GetLifetimeId()));
+}
+
+// The firing side of e2, on the two of the six object classes whose files this package owns.
+// The notice has to arrive when the LAST SharedPtr drops - not when glDeleteProgram marks the
+// name, because a still-bound object goes on living - so the object is simply dropped here.
+TEST(DirectGLESSlotTable, AProgramAndARenderbufferAnnounceTheirOwnDeath) {
+    using namespace MobileGL;
+
+    struct Notice {
+        MG_Pipe::MGPipeKind kind = MG_Pipe::MGPipeKind::None;
+        Uint64 lifetimeId = 0;
+    };
+    static Vector<Notice> notices;
+    notices.clear();
+    const MG_State::GLState::StateObjectDeathOps recording = {
+        .OnDestroyed = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            notices.push_back(Notice{kind, lifetimeId});
+        },
+    };
+    const MG_State::GLState::StateObjectDeathOps* previous =
+        MG_State::GLState::GetStateObjectDeathOps();
+    MG_State::GLState::SetStateObjectDeathOps(&recording);
+
+    Uint64 programId = 0;
+    Uint64 renderbufferId = 0;
+    {
+        auto program = MakeShared<MG_State::GLState::ProgramObject>(0u);
+        programId = program->GetLifetimeId();
+        auto renderbuffer = MakeShared<MG_State::GLState::RenderbufferObject>(0u);
+        renderbufferId = renderbuffer->GetLifetimeId();
+        EXPECT_TRUE(notices.empty()) << "a live object announced its own death";
+    }
+
+    MG_State::GLState::SetStateObjectDeathOps(previous);
+
+    ASSERT_EQ(notices.size(), 2u);
+    // Destruction is reverse of construction, so the renderbuffer speaks first.
+    EXPECT_EQ(notices[0].kind, MG_Pipe::MGPipeKind::Renderbuffer);
+    EXPECT_EQ(notices[0].lifetimeId, renderbufferId);
+    EXPECT_EQ(notices[1].kind, MG_Pipe::MGPipeKind::ShaderCso);
+    EXPECT_EQ(notices[1].lifetimeId, programId);
+}
+
+// ... and that the backend actually installs a consumer for it, rather than the two halves
+// each being fine on their own. Registered from ResolveEsprytSlotTablesArm(), i.e. exactly
+// when the arm that can answer a notice is the arm that runs.
+TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
+    using namespace MobileGL;
+
+    if (!MG_Backend::DirectGLES::EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys on the frontend address and cannot answer a notice";
+    }
+    ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+        << "the handle arm runs but nothing consumes a death notice, so every twin still waits "
+           "for a garbage sweep";
+    EXPECT_NE(MG_State::GLState::GetStateObjectDeathOps()->OnDestroyed, nullptr);
+}
+
 // The gate on MAJOR 1 of the round-2 review: this binary's OTHER 82 cases - among them every
 // D13 "must not break" item - are only evidence about this package if they run on the arm this
 // package wrote. Before EsprytSlotArmEnvironment existed they did not, in any build directory
@@ -3449,6 +3541,18 @@ TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
 }
 
 TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, AProgramAndARenderbufferAnnounceTheirOwnDeath) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, TheHandleArmInstallsTheDeathNoticeConsumer) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH

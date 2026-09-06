@@ -14,6 +14,7 @@
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 
 const char* kDefaultFragmentShaderSource = R"(#version 460 core
 layout(location = 0) out vec4 FragColor;
@@ -28,7 +29,20 @@ namespace MobileGL::MG_State::GLState {
         return s_nextProgramLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
 
-    ProgramObject::~ProgramObject() { CancelLink(); }
+    ProgramObject::~ProgramObject() {
+        CancelLink();
+#if MOBILEGL_PIPE_PUSH
+        // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
+        // garbage sweep. This is the last SharedPtr to this object dropping - not
+        // glDeleteProgram, which only marks the name and leaves a still-bound object very much
+        // alive - so it is the exact moment the backend's twin, and the driver storage that
+        // twin owns, stop being reachable. The notice carries the lifetime id because the
+        // object no longer exists to be passed, and because the lifetime id is what the client
+        // slot allocator resolves the handle from. No-op unless a backend registered the ops
+        // (a pull build declares none at all).
+        NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::ShaderCso, m_lifetimeId);
+#endif
+    }
 
     // EnsureLinkJoined() is defined inline in ProgramObject.h (see the comment there for
     // why: ~1200 call sites, no LTO). Only its blocking half lives here.

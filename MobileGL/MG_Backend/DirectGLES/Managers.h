@@ -417,6 +417,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return nullptr;
         }
 
+        // P2 step e2. The legacy arm cannot answer this at all - its key is the frontend heap
+        // ADDRESS and the object is already gone by the time the notice arrives - so there it
+        // is a no-op and the garbage sweep stays its only death signal. That asymmetry is not
+        // an oversight: it is the A/B the compile-time arm exists to make measurable
+        // (ARCHITECTURE.md 9.6), and announced-versus-discovered death is one of the things
+        // being measured.
+        Bool DestroyByLifetimeId(Uint64 lifetimeId) {
+            if (EsprytSlotTablesEnabled()) {
+                return m_slotTable.DestroyByLifetimeId(lifetimeId);
+            }
+            return false;
+        }
+
         // fn(const StatePtr& state, const BackendPtr& twin) over every live entry. The legacy
         // begin()/end() handed out the map key, i.e. the raw frontend address - exactly the
         // identity the backend must stop reading - and handed it out for entries whose state

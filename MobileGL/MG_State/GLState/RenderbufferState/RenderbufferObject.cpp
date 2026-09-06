@@ -8,6 +8,7 @@
 
 #include "RenderbufferObject.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 
 #include <atomic>
 
@@ -25,6 +26,20 @@ namespace MobileGL {
             }
 
             RenderbufferObject::RenderbufferObject(Uint externalIndex) : m_externalIndex(externalIndex) {}
+
+#if MOBILEGL_PIPE_PUSH
+            RenderbufferObject::~RenderbufferObject() {
+                // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
+                // garbage sweep. This is the last SharedPtr to this object dropping - not
+                // glDeleteRenderbuffers, which only marks the name and leaves a still-bound object very much
+                // alive - so it is the exact moment the backend's twin, and the driver storage that
+                // twin owns, stop being reachable. The notice carries the lifetime id because the
+                // object no longer exists to be passed, and because the lifetime id is what the client
+                // slot allocator resolves the handle from. No-op unless a backend registered the ops
+                // (a pull build declares none at all).
+                NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::Renderbuffer, m_lifetimeId);
+            }
+#endif
 
             Uint RenderbufferObject::GetExternalIndex() const {
                 return m_externalIndex;

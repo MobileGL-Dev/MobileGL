@@ -25,6 +25,12 @@ namespace MobileGL {
                 using TargetEnum = RenderbufferTarget;
 
                 RenderbufferObject(Uint externalIndex);
+#if MOBILEGL_PIPE_PUSH
+                // P2 step e2. Out of line, and declared only where there is a notice to raise:
+                // in a pull build this class stays trivially destructible, which is what keeps
+                // the pull build's symbol set byte-for-byte the pre-P2 one (G1).
+                ~RenderbufferObject();
+#endif
 
                 Uint GetExternalIndex() const;
                 void SetInternalFormat(TextureInternalFormat format);
