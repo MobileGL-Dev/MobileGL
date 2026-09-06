@@ -30,9 +30,17 @@ GUARD RAILS - the comparison is meaningless unless both .so files were built wit
 The header of every report prints both paths and their byte sizes so a mismatched pair is
 visible in the output rather than only in the reader's assumptions.
 
-This tool is informational (ARCHITECTURE.md:507, job name `monolith-symbol-report`
-ARCHITECTURE.md:568) and always exits 0; `--fail-on-added-bytes` is reserved for the day
-it becomes a hard gate.
+This tool is informational by default (ARCHITECTURE.md:507, job name `monolith-symbol-report`
+ARCHITECTURE.md:568): with no gate flag it prints its report and exits 0, whatever it found.
+Two flags turn it into a hard gate, and P1's G1 uses both - the strangler's pull build has to
+stay byte-identical, so `--fail-on-symbol-set-change --fail-on-added-bytes 0` is the spelling of
+"nothing was added, removed or grown":
+
+    python3 scripts/symbol_report.py --before base.so --after head.so \
+        --threshold 0 --fail-on-symbol-set-change --fail-on-added-bytes 0
+
+A gate that fires still writes its Markdown and JSON first: the report IS the diagnosis, and a
+CI job that failed before uploading its artifact is a job nobody can act on.
 """
 
 import argparse
@@ -233,6 +241,24 @@ Total          1600
 """)
 
 
+def gate_failures(added, removed, text_delta, fail_on_added_bytes, fail_on_symbol_set_change):
+    """The reasons this run should fail, in the order they are reported. Empty means green.
+
+    Pure, and takes the buckets rather than the file paths, so the self-test can drive it from the
+    canned transcripts: a gate whose only test is a real build is a gate nobody re-tests.
+    """
+    reasons = []
+    if fail_on_symbol_set_change and (added or removed):
+        reasons.append(
+            "--fail-on-symbol-set-change: {} symbol(s) added, {} removed. The defined-symbol set "
+            "is not a property of the build machine, so any change here is a source change - name "
+            "each one in the commit message or fix it.".format(len(added), len(removed)))
+    if fail_on_added_bytes is not None and text_delta > fail_on_added_bytes:
+        reasons.append(
+            "--fail-on-added-bytes {}: .text grew by {} bytes.".format(fail_on_added_bytes, text_delta))
+    return reasons
+
+
 def self_test():
     strip = ["MobileGL::MG_State::GLState::ProgramObject::"]
     before, before_sections, before_count = build_side(None, None, None, None, strip, [],
@@ -257,9 +283,23 @@ def self_test():
         problems.append("unchanged count: {} (expected 2)".format(unchanged))
     if before_sections.get(".text") != 1000 or after_sections.get("Total") != 1600:
         problems.append("size --format=sysv parse: {} / {}".format(before_sections, after_sections))
+    # The two gates, driven from the same canned transcripts: the after side adds one symbol,
+    # removes one and grows .text by 100, so each flag must fire, each must stay quiet when it is
+    # not asked for, and --fail-on-added-bytes must accept a delta it was told to tolerate.
+    text_delta = after_sections.get(".text", 0) - before_sections.get(".text", 0)
+    if gate_failures(added, removed, text_delta, None, False):
+        problems.append("gates fired with no flag set")
+    if len(gate_failures(added, removed, text_delta, None, True)) != 1:
+        problems.append("--fail-on-symbol-set-change did not fire on 1 added + 1 removed")
+    if len(gate_failures(added, removed, text_delta, 0, False)) != 1:
+        problems.append("--fail-on-added-bytes 0 did not fire on a +100 .text delta")
+    if gate_failures(added, removed, text_delta, 100, False):
+        problems.append("--fail-on-added-bytes 100 fired on a +100 .text delta")
+    if len(gate_failures([], [], text_delta, 0, True)) != 1:
+        problems.append("an unchanged symbol set still tripped --fail-on-symbol-set-change")
     for problem in problems:
         say("self-test: " + problem)
-    say("self-test: " + ("OK (2 canned transcripts, 5 buckets)" if not problems else "FAILED"))
+    say("self-test: " + ("OK (2 canned transcripts, 5 buckets, 2 gates)" if not problems else "FAILED"))
     return 0 if not problems else 1
 
 
@@ -285,7 +325,11 @@ def main():
     parser.add_argument("--threshold", type=int, default=0,
                         help="ignore size deltas of at most this many bytes")
     parser.add_argument("--fail-on-added-bytes", type=int, default=None,
-                        help="reserved for a future hard gate; currently informational only")
+                        help="exit non-zero when .text grew by more than this many bytes "
+                             "(0 = the pull build must not grow at all)")
+    parser.add_argument("--fail-on-symbol-set-change", action="store_true",
+                        help="exit non-zero when any defined symbol was added or removed "
+                             "(renamed-only folds, see --strip-scope, do not count)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -338,8 +382,10 @@ def main():
         len(before), len(after), unchanged))
     if only_names:
         say("listing restricted to names containing: " + ", ".join(only_names))
-    if args.fail_on_added_bytes is not None:
-        say("--fail-on-added-bytes is reserved; this run stays informational")
+    gates = gate_failures(added, removed, delta, args.fail_on_added_bytes,
+                          args.fail_on_symbol_set_change)
+    if args.fail_on_added_bytes is None and not args.fail_on_symbol_set_change:
+        say("no gate flag: informational run")
 
     lines = ["# MobileGL symbol report", "",
              "| side | path | file bytes | .text |",
@@ -379,7 +425,11 @@ def main():
             handle.write("\n")
         say("json written to " + args.json)
 
-    return 0
+    # After the report is written, never before: a gate that fired is exactly when someone needs
+    # the Markdown and the JSON.
+    for reason in gates:
+        say("FAIL " + reason)
+    return 1 if gates else 0
 
 
 if __name__ == "__main__":
