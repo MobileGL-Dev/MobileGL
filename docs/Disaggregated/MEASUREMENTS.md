@@ -78,7 +78,7 @@ python3 tools/trace_replay/run_android_retrace_local.py \
 ## 4. 桌面数据点与语料事实
 
 - **llvmpipe / lavapipe 动态 accessor**（`GuiBatchScenario`，14 帧 / 26 draw，memo 冷）：Espryt 20.65 / Magma 15.54 次/draw——落在预测区间内，且因场景太短偏高；真机稳态数字见 §3。
-- **dirty-surface 面**（`python3 scripts/gen_pipe_dirty_surface.py --summary`，本树）：`MG_Impl/GLImpl` 41 个文件，926 次 mutator 调用，73 个不同 mutator；92 次（36 个即时发布点、7 个 mutator，836 次里绝大多数是 `RecordError`）位于同函数内也到达后端的入口，其余 834 次由紧随的 verb 发布。映射表是 73 条目的问题。
+- **dirty-surface 面**（`python3 scripts/gen_pipe_dirty_surface.py --summary`，本树）：`MG_Impl/GLImpl` 41 个文件，926 次 mutator 调用，73 个不同 mutator（`RecordError` 一项就占 836 次）；92 次（36 个即时发布点、7 个 mutator，绝大多数是 `RecordError`）位于同函数内也到达后端的入口，其余 834 次由紧随的 verb 发布。映射表是 73 条目的问题。
 - **读点覆盖**（`python3 scripts/gen_pipe.py`）：71 条调用（11 screen / 60 context）、63 个 verify payload、61 个 `PipeInputs` 字段；477 行后端读点清单 → 299 调用、5 client 自答、6 反向通道、167 结构性句柄、**0 UNMAPPED**。
 - **OOM 探测惯用法**：41 个 trace fixture 中 0 例——全部语料只有 9 次 `glRenderbufferStorage` 调用散在 5 个 fixture，无一在其后 3 个调用内跟 `glGetError`；语料里真实的成功性检查是 `glCheckFramebufferStatus`。→ `glRenderbufferStorage*` 不 ack。
 - **`FramebufferSrgb` / `DepthClamp`**：`FramebufferSrgb` 的六个后端读点全部消费一个编译期常量 `false`，`DepthClamp` 零读点；两者的 `glEnable` 落到 `RenderState.cpp` 的 `default:` 分支既不存储也不报 `GL_INVALID_ENUM`；41 个 fixture 无一开启任一项（补真存储不会改动任何既有 fixture 的输出）。
