@@ -225,6 +225,12 @@ TEST(PipeCatalogue, CoverageAccountsForEveryInventoryRow) {
 TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
     EXPECT_EQ(kMGPipeInputFieldCount, 63u);
     MGPipeFilledState state{};
+    // Before the first fill the serial is 0 as well: 0 == 0 must not read as fresh, on the
+    // sticky branch either (the window D6 names "<Field>@<none>").
+    EXPECT_EQ(state.CurrentVerbSerial, 0u);
+    for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
+        EXPECT_FALSE(MGPipeInputFieldIsFresh(state, static_cast<MGPipeInputField>(f))) << kMGPipeInputFieldNames[f];
+    }
     state.CurrentVerbSerial = 1;
     EXPECT_FALSE(MGPipeInputFieldIsFresh(state, MGPipeInputField::GetRenderStateParameters));
     state.FilledGen[static_cast<SizeT>(MGPipeInputField::GetRenderStateParameters)] = 1;

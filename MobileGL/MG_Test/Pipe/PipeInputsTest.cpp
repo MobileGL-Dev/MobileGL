@@ -143,6 +143,9 @@ TEST(PipeInputsTest,ReadingAnOmittedFieldAbortsNamingTheVerb) {
 TEST(PipeInputsTest,ReadingAFilledFieldCompletes) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
+TEST(PipeInputsTest,ReadingBeforeAnyFillAbortsNamingNoVerb) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
 TEST(PipeInputsTest,CorruptedSnapshotFieldIsNamedWithItsSerial) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
@@ -254,6 +257,36 @@ TEST_F(PipeInputsTest, ReadingAFilledFieldCompletes) {
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+#endif
+}
+
+// The window before the first verb (P1 brief D6: "<Field>@<none>"). Nothing has filled this
+// process's block, so a backend-style read of a value field is Fatal naming no verb: the
+// serial and every stamp are 0, and 0 == 0 is not fresh. In a verify build the child also
+// sets the lane's knob first, the shape of a read reached from initialisation: the poison
+// fires at MGP_INPUT_CHECK, before the read hook (armed only by the first fill) could matter.
+TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    if (gPipeInputs.FilledState().CurrentVerbSerial != 0) {
+        GTEST_SKIP() << "another case already filled in this process; gtest_discover_tests runs each case alone";
+    }
+    MG_State::pGLContext->SetLineWidth(7.0f); // a live value the default storage (0) does not hold
+    const ChildResult r = RunInChild([] {
+#if MOBILEGL_PIPE_VERIFY
+        MG_Config::Features.PipeVerify = true;
+#endif
+        (void)gPipeInputs.GetLineWidth(); // Fatal{UnmigratedPipeInput, "GetLineWidth@<none>"}
+        ::_exit(3);                        // reached only if the pre-fill window read as fresh
+    });
+    ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetLineWidth@<none>\"}"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("verify armed"), std::string::npos) << r.Log;
 #endif
 }
 
@@ -427,7 +460,9 @@ TEST_F(PipeInputsTest, BadVerifyCorruptKnobIsFatalNamingTheKnob) {
 }
 
 // MOBILEGL_PIPE_VERIFY_FATAL=0: the divergence is logged with its field and serial and the
-// process goes on (the fill returns, the next fill's compare runs again).
+// process goes on (the fill returns, the next fill's compare runs again), and the teardown
+// summary counts both. The child leaves through std::exit so the comparator's static
+// destructor runs (a _exit would skip the summary line).
 TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
 #if !MOBILEGL_PIPE_VERIFY
     GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
@@ -443,10 +478,13 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
         MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
         MGPipeFillForVerb(MGPipeVerb::DrawArrays);
         MGPipeFillForVerb(MGPipeVerb::DrawElements);
-        ::_exit(0);
+        std::exit(0);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 69 verbs, fatal=0"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify summary - 2 divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0"),
+              std::string::npos)
+        << r.Log;
     const std::string first = "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" +
                               std::to_string(serial) + ", where=entry}";
     const std::string second = "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawElements\", verb=" +
