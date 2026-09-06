@@ -88,6 +88,9 @@ add_subdirectory(Pipeline)
 # The MGPipe catalogue arithmetic: no GL context and no driver, just the .def, the seven
 # generated files and the payload layouts.
 add_subdirectory(Pipe)
+# The P0.5 interface-purity gate: a python walk of #include lines, so it registers with no
+# MobileGL build, no GL context and no submodules (scripts/check_include_closure.py).
+add_subdirectory(Purity)
 add_subdirectory(ShaderTranspiler)
 add_subdirectory(Util)
 add_subdirectory(SelfTest)

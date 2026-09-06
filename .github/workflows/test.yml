@@ -322,6 +322,32 @@ jobs:
       - name: Fail if the committed header is stale
         run: git diff --exit-code -- MobileGL/MG_Remote/Protocol/generated/protocol_generated.h
 
+  # P0.5 interface-purity gate A (ARCHITECTURE.md:501): the two extracted headers' include closure,
+  # asserted on `-H` output because `nm --undefined-only` is blind to "included but not called" -
+  # a header whose types are never named leaves no symbol behind, and "included at all" is exactly
+  # the coupling P1 and P7 have to sever. Needs a preprocessor and three header submodules, no
+  # CMake configure and no glslang sources, so like pipe-gates it does not depend on build-linux.
+  # The script's own --self-test is always on: a negative control that stopped tripping fails the
+  # job, because a gate that cannot go red is not a gate (ROADMAP.md:7).
+  include-graph-check:
+    name: Include-closure purity gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Check out the three header submodules the closure needs
+        # ska/flat_hash_map.hpp, xxhash.h and vulkan/vulkan.h are the only submodule headers
+        # Includes.h reaches; glslang and spirv_cross are vendored under include/.
+        run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang-20
+
+      - name: Include-closure assertions and negative control
+        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test
+
   benchmark:
     runs-on: ubuntu-latest
     needs: build-linux
