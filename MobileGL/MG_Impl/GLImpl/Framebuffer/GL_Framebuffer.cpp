@@ -15,6 +15,7 @@
 #include <MG_Impl/GLImpl/Texture/Validators.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/ErrorState/Error.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
@@ -616,6 +617,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void BlitFramebuffer_Backend(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                  GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+        MGP_FILL(BlitFramebuffer);
         MG_Backend::gBackendFunctionsTable.GL.BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
                                                               mask, filter);
     }
@@ -629,6 +631,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glBlitNamedFramebuffer skipped: backend does not implement explicit framebuffer blit.");
             return;
         }
+        MGP_FILL(BlitNamedFramebuffer);
         blitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
                              dstY1, mask, filter);
     }
@@ -640,6 +643,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferfv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+        MGP_FILL(ClearNamedFramebufferfv);
         clearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
     }
 
@@ -650,6 +654,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferfi skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+        MGP_FILL(ClearNamedFramebufferfi);
         clearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
     }
 
@@ -660,6 +665,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+        MGP_FILL(ClearNamedFramebufferiv);
         clearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
     }
 
@@ -670,6 +676,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferuiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+        MGP_FILL(ClearNamedFramebufferuiv);
         clearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
     }
 
@@ -2729,24 +2736,28 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ClearBufferfi_Backend(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
         if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
+        MGP_FILL(ClearBufferfi);
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv_Backend(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
         // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
         if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
+        MGP_FILL(ClearBufferfv);
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferfv(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv_Backend(GLenum buffer, GLint drawbuffer, const GLuint* value) {
         // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
         if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
+        MGP_FILL(ClearBufferuiv);
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferuiv(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv_Backend(GLenum buffer, GLint drawbuffer, const GLint* value) {
         // GL 4.6 core 10.9 makes ClearBuffer* conditional alongside the drawing commands.
         if (MG_State::pGLContext->ConditionalRenderDiscardsCommands()) return;
+        MGP_FILL(ClearBufferiv);
         MG_Backend::gBackendFunctionsTable.GL.ClearBufferiv(buffer, drawbuffer, value);
     }
 
@@ -2994,6 +3005,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ReadPixels_Backend(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
+        MGP_FILL(ReadPixels);
         MG_Backend::gBackendFunctionsTable.GL.ReadPixels(x, y, width, height, format, type, pixels);
     }
 

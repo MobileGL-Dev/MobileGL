@@ -30,6 +30,7 @@
 #include <MG_Impl/GLImpl/Sampler/Validators.h>
 #include <MG_Util/Math/FixedPointConversion.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
@@ -1076,6 +1077,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             Vector<Uint8> scratch(static_cast<SizeT>(width) * static_cast<SizeT>(height) * bytesPerTexel);
             {
                 ScopedNeutralPackState neutralPack;
+                MGP_FILL(ReadPixels);
                 MG_Backend::gBackendFunctionsTable.GL.ReadPixels(x, y, width, height, format, type, scratch.data());
             }
 
@@ -1619,6 +1621,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GenerateMipmap_Backend(GLenum target) {
+        MGP_FILL(GenerateMipmap);
         MG_Backend::gBackendFunctionsTable.GL.GenerateMipmap(target);
     }
 
@@ -4024,6 +4027,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void CopyTexSubImage2D_Backend(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                    GLsizei width, GLsizei height) {
+        MGP_FILL(CopyTexSubImage2D);
         MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
 
@@ -4040,6 +4044,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support image-to-image copies."));
             return;
         }
+        MGP_FILL(CopyImageSubData);
         copyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX,
                          dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
@@ -4461,6 +4466,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void CopyTexImage2D_Backend(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                                 GLsizei height, GLint border) {
+        MGP_FILL(CopyTexImage2D);
         MG_Backend::gBackendFunctionsTable.GL.CopyTexImage2D(target, level, internalformat, x, y, width, height,
                                                              border);
     }
@@ -5071,6 +5077,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void GetTexImage_Backend(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels) {
+        MGP_FILL(GetTexImage);
         MG_Backend::gBackendFunctionsTable.GL.GetTexImage(target, level, format, type, pixels);
     }
 
@@ -6453,6 +6460,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (MG_Backend::pActiveBackendObject != nullptr &&
             MG_Backend::pActiveBackendObject->GetBackendType() == BackendType::DirectVulkan &&
             MG_Backend::gBackendFunctionsTable.GL.GetTextureImage != nullptr) {
+            MGP_FILL(GetTextureImage);
             MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
                                                                   bufSize, pixels);
             return;
@@ -6657,6 +6665,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_State::pGLContext->GetImageTextureBinding(static_cast<Int>(unit))
             .Bind(textureObject, level, layered, layer, access, format);
         MG_State::pGLContext->NoteTextureUnitTouched(static_cast<Int>(unit));
+        MGP_FILL(BindImageTexture);
         bindImageTexture(unit, texture, level, layered, layer, access, format);
     }
 

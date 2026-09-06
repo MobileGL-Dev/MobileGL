@@ -9,6 +9,7 @@
 #include "GL_Sync.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -56,6 +57,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         syncObject->condition = condition;
         syncObject->flags = flags;
         if (const auto backendFenceSync = MG_Backend::gBackendFunctionsTable.GL.FenceSync) {
+            MGP_FILL(FenceSync);
             syncObject->backendHandle = backendFenceSync();
         }
         const GLsync handle = reinterpret_cast<GLsync>(syncObject);
@@ -94,6 +96,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!backendClientWaitSync || !syncObject->backendHandle) {
             return GL_ALREADY_SIGNALED; // legacy always-signaled fallback
         }
+        MGP_FILL(ClientWaitSync);
         return backendClientWaitSync(syncObject->backendHandle, flags, timeout);
     }
 
@@ -119,6 +122,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto backendWaitSync = MG_Backend::gBackendFunctionsTable.GL.WaitSync;
         if (backendWaitSync && syncObject->backendHandle) {
+            MGP_FILL(WaitSync);
             backendWaitSync(syncObject->backendHandle, flags, timeout);
         }
     }
@@ -139,6 +143,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         if (backendDeleteSync && syncObject->backendHandle) {
+            MGP_FILL(DeleteSync);
             backendDeleteSync(syncObject->backendHandle);
         }
         delete syncObject;
@@ -174,6 +179,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_SYNC_STATUS: {
             const auto backendGetSyncStatus = MG_Backend::gBackendFunctionsTable.GL.GetSyncStatus;
+            MGP_FILL(GetSyncStatus);
             const Bool signaled = !backendGetSyncStatus || !syncObject->backendHandle ||
                                   backendGetSyncStatus(syncObject->backendHandle);
             value = signaled ? GL_SIGNALED : GL_UNSIGNALED;
@@ -226,6 +232,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the function table itself is cleared.
         const auto backendDeleteSync = MG_Backend::gBackendFunctionsTable.GL.DeleteSync;
         for (const auto& [_, syncObject] : orphans) {
+            MGP_FILL(DeleteSync);
             if (backendDeleteSync && syncObject->backendHandle) {
                 backendDeleteSync(syncObject->backendHandle);
             }

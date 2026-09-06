@@ -21,6 +21,7 @@
 #include <MG_Util/Converters/SPIRVCrossToGL/SpvcTypeConverter.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     // The flattened uniform type these helpers used to take as a raw glslang::TType*
@@ -3398,6 +3399,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support shader storage block binding."));
             return;
         }
+        MGP_FILL(ShaderStorageBlockBinding);
         shaderStorageBlockBinding(program, blockName.c_str(), storageBlockBinding);
     }
 

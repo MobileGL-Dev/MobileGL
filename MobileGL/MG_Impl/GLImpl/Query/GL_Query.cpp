@@ -12,6 +12,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ErrorState/ErrorInfo.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     namespace {
@@ -164,6 +165,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         void ResetQueryObjectLocked(QueryObject* queryObject) {
             if (queryObject->backendHandle) {
                 if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                    MGP_FILL(DeleteBackendQuery);
                     deleteBackendQuery(queryObject->backendHandle);
                 }
                 queryObject->backendHandle = nullptr;
@@ -178,6 +180,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         void EndTimeElapsedQueryLocked(QueryObject* queryObject) {
             const auto endTimeElapsedQuery = MG_Backend::gBackendFunctionsTable.GL.EndTimeElapsedQuery;
             if (endTimeElapsedQuery && queryObject->backendHandle) {
+                MGP_FILL(EndTimeElapsedQuery);
                 endTimeElapsedQuery(queryObject->backendHandle);
             }
             queryObject->active = false;
@@ -257,6 +260,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 Uint64 result = 0;
                 const auto getQueryResult64 = MG_Backend::gBackendFunctionsTable.GL.GetQueryResult64;
+                MGP_FILL(GetQueryResult64);
                 if (queryObject->backendHandle && getQueryResult64 &&
                     !getQueryResult64(queryObject->backendHandle, /*wait=*/false, &result)) {
                     // Not ready. The whole point of the no-wait form is that the caller's
@@ -271,6 +275,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 if (queryObject->backendHandle) {
                     if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                        MGP_FILL(DeleteBackendQuery);
                         deleteBackendQuery(queryObject->backendHandle);
                     }
                     queryObject->backendHandle = nullptr;
@@ -286,6 +291,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     return true;
                 }
                 const auto isQueryResultAvailable = MG_Backend::gBackendFunctionsTable.GL.IsQueryResultAvailable;
+                MGP_FILL(IsQueryResultAvailable);
                 outValue = (!isQueryResultAvailable || isQueryResultAvailable(queryObject->backendHandle)) ? 1 : 0;
                 return true;
             }
@@ -297,6 +303,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 Uint64 result = 0;
                 if (queryObject->backendHandle) {
                     const auto getQueryResult64 = MG_Backend::gBackendFunctionsTable.GL.GetQueryResult64;
+                    MGP_FILL(GetQueryResult64);
                     if (getQueryResult64 &&
                         !getQueryResult64(queryObject->backendHandle, /*wait=*/true, &result)) {
                         // The backend could not produce the result YET (e.g. a
@@ -317,6 +324,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     // query degrades to a zero result); the backend handle is
                     // consumed and the value cached for later reads.
                     if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                        MGP_FILL(DeleteBackendQuery);
                         deleteBackendQuery(queryObject->backendHandle);
                     }
                     queryObject->backendHandle = nullptr;
@@ -422,6 +430,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                     queryObject->target == GL_ANY_SAMPLES_PASSED_CONSERVATIVE) {
                     if (const auto endOcclusionQuery = MG_Backend::gBackendFunctionsTable.GL.EndOcclusionQuery;
                         endOcclusionQuery && queryObject->backendHandle) {
+                        MGP_FILL(EndOcclusionQuery);
                         endOcclusionQuery(queryObject->backendHandle);
                     }
                     queryObject->active = false;
@@ -441,6 +450,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             if (queryObject->backendHandle) {
                 if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                    MGP_FILL(DeleteBackendQuery);
                     deleteBackendQuery(queryObject->backendHandle);
                 }
                 queryObject->backendHandle = nullptr;
@@ -519,6 +529,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // Prefer real GPU transform-feedback queries (exact with geometry shaders);
             // the CPU accounting delta stays as the fallback when the backend lacks them.
             const auto beginXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.BeginXfbPrimitivesQuery;
+            MGP_FILL(BeginXfbPrimitivesQuery);
             queryObject->backendHandle =
                 beginXfbPrimitivesQuery ? beginXfbPrimitivesQuery(target == GL_PRIMITIVES_GENERATED) : nullptr;
             queryObject->counterSnapshot = TransformFeedbackCounterForTarget(target);
@@ -527,9 +538,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             queryObject->geometryCaptureDrawSnapshot =
                 MG_State::pGLContext->GetTransformFeedbackGeometryCaptureDraws();
         } else if (isOcclusionQuery) {
+            MGP_FILL(BeginOcclusionQuery);
             queryObject->backendHandle = MG_Backend::gBackendFunctionsTable.GL.BeginOcclusionQuery();
         } else {
             const auto beginTimeElapsedQuery = MG_Backend::gBackendFunctionsTable.GL.BeginTimeElapsedQuery;
+            MGP_FILL(BeginTimeElapsedQuery);
             queryObject->backendHandle =
                 (!TimerQueryDisabled() && beginTimeElapsedQuery) ? beginTimeElapsedQuery() : nullptr;
         }
@@ -579,6 +592,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (isTransformFeedbackQuery) {
             if (queryObject->backendHandle) {
                 if (const auto endXfbPrimitivesQuery = MG_Backend::gBackendFunctionsTable.GL.EndXfbPrimitivesQuery) {
+                    MGP_FILL(EndXfbPrimitivesQuery);
                     endXfbPrimitivesQuery(queryObject->backendHandle);
                 }
             }
@@ -588,6 +602,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!queryObject->backendHandle || PrefersCpuTransformFeedbackResult(queryObject)) {
                 if (queryObject->backendHandle) {
                     if (const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery) {
+                        MGP_FILL(DeleteBackendQuery);
                         deleteBackendQuery(queryObject->backendHandle);
                     }
                     queryObject->backendHandle = nullptr;
@@ -604,6 +619,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (isOcclusionQuery) {
             if (const auto endOcclusionQuery = MG_Backend::gBackendFunctionsTable.GL.EndOcclusionQuery;
                 endOcclusionQuery && queryObject->backendHandle) {
+                MGP_FILL(EndOcclusionQuery);
                 endOcclusionQuery(queryObject->backendHandle);
             }
             queryObject->active = false;
@@ -642,6 +658,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ResetQueryObjectLocked(queryObject); // discard any previous result
         queryObject->target = target;
         const auto queryCounterTimestamp = MG_Backend::gBackendFunctionsTable.GL.QueryCounterTimestamp;
+        MGP_FILL(QueryCounterTimestamp);
         queryObject->backendHandle =
             (!TimerQueryDisabled() && queryCounterTimestamp) ? queryCounterTimestamp() : nullptr;
         queryObject->ended = true;
@@ -771,6 +788,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             const Bool timerTarget = target == GL_TIME_ELAPSED || target == GL_TIMESTAMP;
             const auto isTimerQuerySupported = MG_Backend::gBackendFunctionsTable.GL.IsTimerQuerySupported;
+            MGP_FILL(IsTimerQuerySupported);
             const Bool supported =
                 timerTarget && !TimerQueryDisabled() && isTimerQuerySupported && isTimerQuerySupported();
             *params = supported ? 64 : 0;
@@ -912,6 +930,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto deleteBackendQuery = MG_Backend::gBackendFunctionsTable.GL.DeleteBackendQuery;
         for (const auto& [_, queryObject] : orphans) {
             if (deleteBackendQuery && queryObject->backendHandle) {
+                MGP_FILL(DeleteBackendQuery);
                 deleteBackendQuery(queryObject->backendHandle);
             }
             delete queryObject;

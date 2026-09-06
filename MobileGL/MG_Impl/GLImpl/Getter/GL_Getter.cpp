@@ -30,6 +30,7 @@
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/Types.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     // Declared rather than #included from GL_RenderState.h on purpose: that header also declares
@@ -1173,6 +1174,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 : GetMinComputeWorkGroupSize(index);
             GLint backendValue = 0;
             if (getIntegeri) {
+                MGP_FILL(GetIntegeri_v);
                 getIntegeri(target, index, &backendValue);
             }
             *data = std::max(backendValue, minimum);
@@ -1353,6 +1355,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
                 if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                    MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }
             }
@@ -2263,6 +2266,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             Int64 timestamp = 0;
             if (!MG_Config::Features.DisableTimerQuery) {
                 if (const auto getGpuTimestampNs = MG_Backend::gBackendFunctionsTable.GL.GetGpuTimestampNs) {
+                    MGP_FILL(GetGpuTimestampNs);
                     timestamp = getGpuTimestampNs();
                 }
             }

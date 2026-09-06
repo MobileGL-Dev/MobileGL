@@ -11,6 +11,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/Pipe/PipeFill.h>
 #include "../Getter/GL_Getter.h"
 
 namespace MobileGL::MG_Impl::GLImpl {
@@ -527,6 +528,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(Clear);
         MG_Backend::gBackendFunctionsTable.GL.Clear(mask);
     }
 
@@ -535,6 +537,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElements);
         MG_Backend::gBackendFunctionsTable.GL.DrawElements(mode, count, type, indices);
     }
 
@@ -544,6 +547,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawElements);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElements(mode, count, type, indices, drawcount);
     }
 
@@ -553,6 +557,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawElementsBaseVertex);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsBaseVertex(mode, count, type, indices, drawcount,
                                                                           basevertex);
     }
@@ -562,6 +567,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawArrays);
         MG_Backend::gBackendFunctionsTable.GL.DrawArrays(mode, first, count);
     }
 
@@ -570,6 +576,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawArrays);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArrays(mode, first, count, drawcount);
     }
 
@@ -579,6 +586,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsBaseVertex);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsBaseVertex(mode, count, type, indices, basevertex);
     }
 
@@ -588,6 +596,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawElementsIndirect);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirect(mode, type, indirect, drawcount, stride);
     }
 
@@ -596,6 +605,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawArraysIndirect);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirect(mode, indirect, drawcount, stride);
     }
 
@@ -605,6 +615,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawElementsIndirectCount);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawElementsIndirectCount(mode, type, indirect, drawcount,
                                                                              maxdrawcount, stride);
     }
@@ -615,6 +626,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(MultiDrawArraysIndirectCount);
         MG_Backend::gBackendFunctionsTable.GL.MultiDrawArraysIndirectCount(mode, indirect, drawcount, maxdrawcount,
                                                                            stride);
     }
@@ -625,6 +637,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawRangeElementsBaseVertex);
         MG_Backend::gBackendFunctionsTable.GL.DrawRangeElementsBaseVertex(mode, start, end, count, type, indices,
                                                                           basevertex);
     }
@@ -635,6 +648,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawRangeElements);
         MG_Backend::gBackendFunctionsTable.GL.DrawRangeElements(mode, start, end, count, type, indices);
     }
 
@@ -645,6 +659,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsInstancedBaseVertexBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertexBaseInstance(
             mode, count, type, indices, instancecount, basevertex, baseinstance);
     }
@@ -655,6 +670,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsInstancedBaseVertex);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseVertex(mode, count, type, indices, instancecount,
                                                                               basevertex);
     }
@@ -665,6 +681,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsInstancedBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstancedBaseInstance(mode, count, type, indices,
                                                                                 instancecount, baseinstance);
     }
@@ -675,6 +692,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsInstanced);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsInstanced(mode, count, type, indices, instancecount);
     }
 
@@ -683,6 +701,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawElementsIndirect);
         MG_Backend::gBackendFunctionsTable.GL.DrawElementsIndirect(mode, type, indirect);
     }
     void DrawArraysInstancedBaseInstance_Backend(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
@@ -691,6 +710,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawArraysInstancedBaseInstance);
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstancedBaseInstance(mode, first, count, instancecount,
                                                                               baseinstance);
     }
@@ -700,6 +720,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawArraysInstanced);
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysInstanced(mode, first, count, instancecount);
     }
 
@@ -708,6 +729,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DrawArraysIndirect);
         MG_Backend::gBackendFunctionsTable.GL.DrawArraysIndirect(mode, indirect);
     }
 
@@ -739,6 +761,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // GL 4.3 added both dispatches to the conditional-render set (GL 4.6 core 10.9), which is
         // exactly what KHR-GL43.compute_shader.conditional-dispatching checks.
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DispatchCompute);
         dispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -791,6 +814,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (!ValidateCurrentProgramForCompute(__func__)) return;
         if (ConditionalRenderDiscardsCommand()) return;
+        MGP_FILL(DispatchComputeIndirect);
         dispatchComputeIndirect(indirect);
     }
 
@@ -812,6 +836,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->SetPatchVertices(static_cast<Uint>(value));
         if (const auto patchParameteri = MG_Backend::gBackendFunctionsTable.GL.PatchParameteri) {
+            MGP_FILL(PatchParameteri);
             patchParameteri(pname, value);
         }
     }
@@ -882,6 +907,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Backend does not support memory barriers."));
             return;
         }
+        MGP_FILL(MemoryBarrier);
         memoryBarrier(barriers);
     }
 
@@ -903,6 +929,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Backend does not support memory barriers."));
             return;
         }
+        MGP_FILL(MemoryBarrier);
         memoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
     }
 
@@ -916,6 +943,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "Backend does not support regional memory barriers."));
             return;
         }
+        MGP_FILL(MemoryBarrierByRegion);
         memoryBarrierByRegion(barriers);
     }
 
@@ -1238,6 +1266,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->BeginTransformFeedback(primitiveMode, program);
         if (const auto beginXfb = MG_Backend::gBackendFunctionsTable.GL.BeginTransformFeedback) {
+            MGP_FILL(BeginTransformFeedback);
             beginXfb(primitiveMode);
         }
     }
@@ -1320,6 +1349,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Closed while the capture state is still active: a backend that captures
         // through its own driver reads the capture program and buffer bindings here.
         if (const auto endXfb = MG_Backend::gBackendFunctionsTable.GL.EndTransformFeedback) {
+            MGP_FILL(EndTransformFeedback);
             endXfb();
         }
         MG_State::pGLContext->EndTransformFeedback();
@@ -1328,9 +1358,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the GPU work is all that is required.
         auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
         if (backendGL.FenceSync && backendGL.ClientWaitSync) {
+            MGP_FILL(FenceSync);
             if (auto sync = backendGL.FenceSync()) {
+                MGP_FILL(ClientWaitSync);
                 backendGL.ClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, ~0ull);
                 if (backendGL.DeleteSync) {
+                    MGP_FILL(DeleteSync);
                     backendGL.DeleteSync(sync);
                 }
             }
@@ -1349,6 +1382,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->SetTransformFeedbackPaused(true);
         if (const auto pauseXfb = MG_Backend::gBackendFunctionsTable.GL.PauseTransformFeedback) {
+            MGP_FILL(PauseTransformFeedback);
             pauseXfb();
         }
     }
@@ -1363,6 +1397,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->SetTransformFeedbackPaused(false);
         if (const auto resumeXfb = MG_Backend::gBackendFunctionsTable.GL.ResumeTransformFeedback) {
+            MGP_FILL(ResumeTransformFeedback);
             resumeXfb();
         }
     }
@@ -1568,6 +1603,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 continue;
             }
             if (const auto deleteXfb = MG_Backend::gBackendFunctionsTable.GL.DeleteTransformFeedback) {
+                MGP_FILL(DeleteTransformFeedback);
                 deleteXfb(id);
             }
             MG_State::pGLContext->MarkTransformFeedbackObjectForDeletion(id);
@@ -1599,6 +1635,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MG_State::pGLContext->BindTransformFeedbackObject(id);
         if (const auto bindXfb = MG_Backend::gBackendFunctionsTable.GL.BindTransformFeedback) {
+            MGP_FILL(BindTransformFeedback);
             bindXfb(id);
         }
     }
