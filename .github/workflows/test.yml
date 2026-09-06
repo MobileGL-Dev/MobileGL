@@ -342,8 +342,11 @@ jobs:
         # Includes.h reaches; glslang and spirv_cross are vendored under include/.
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
-      - name: Install clang
-        run: sudo apt-get update && sudo apt-get install -y clang-20
+      - name: Install clang and the X11 headers vulkan.h pulls on Linux
+        # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
+        # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
+        # preprocessor and the gate reports 5 problems that have nothing to do with purity.
+        run: sudo apt-get update && sudo apt-get install -y clang-20 libx11-dev
 
       - name: Include-closure assertions and negative control
         run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test --require-all
