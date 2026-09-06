@@ -32,6 +32,7 @@ Usage:
     [--avoid-angle-llvmpipe-explicit-lod-bias] \
     [--coherent-as-flush] \
     [--dump-texture-2d CALL,TEXTURE,LEVEL,DIR] \
+    [--env "K=V;K=V"] \
     [--benchmark] \
     [--benchmark-tail-frames N] \
     [--benchmark-finish 0|1] \
@@ -60,6 +61,11 @@ copies benchmark.json (per-frame times plus mean/median/p95) out of the app, and
 "passed" only means the replay reached the end of the trace without an error.
 Pass --reuse-fixture to skip re-extracting and re-pushing the trace, for repeat
 runs of a case whose fixture is already in /data/local/tmp.
+Pass --env "K=V;K=V" (or set MOBILEGL_TRACE_ENV) to hand arbitrary environment
+variables to the replay process. They are applied last, immediately before
+libMobileGL.so is loaded, so they override every flag above; an entry with no "="
+unsets the variable instead. This is the generic passthrough: a MOBILEGL_* knob
+that has no flag of its own needs no plumbing to be forwarded.
 EOF
 }
 
@@ -119,6 +125,7 @@ avoid_angle_llvmpipe_sampler_mipmap_min_filter=0
 avoid_angle_llvmpipe_explicit_lod_bias=0
 coherent_as_flush=0
 texture_2d_dumps=""
+env_overrides="${MOBILEGL_TRACE_ENV:-}"
 benchmark=0
 benchmark_tail_frames=200
 benchmark_finish=1
@@ -164,6 +171,7 @@ while [ "$#" -gt 0 ]; do
       ;;
     --coherent-as-flush) coherent_as_flush=1; shift 1 ;;
     --dump-texture-2d) texture_2d_dumps="$(next_arg "$@")"; shift 2 ;;
+    --env) env_overrides="$(next_arg "$@")"; shift 2 ;;
     --benchmark) benchmark=1; shift 1 ;;
     --benchmark-tail-frames) benchmark_tail_frames="$(next_arg "$@")"; shift 2 ;;
     --benchmark-finish) benchmark_finish="$(next_arg "$@")"; shift 2 ;;
@@ -399,6 +407,12 @@ run_retrace() {
   fi
   if [ -n "${texture_2d_dumps}" ]; then
     set -- "$@" --es texture_2d_dumps "${texture_2d_dumps}"
+  fi
+  if [ -n "${env_overrides}" ]; then
+    # adb joins the argv with spaces and hands the result to the device shell, so a value
+    # holding the ';' that separates entries would otherwise be read there as a command
+    # separator. The single quotes make it one token again.
+    set -- "$@" --es mobilegl_env "'${env_overrides}'"
   fi
   if [ "${benchmark}" -eq 1 ]; then
     set -- "$@" --ez benchmark true

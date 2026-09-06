@@ -131,7 +131,8 @@ public final class TraceReplayActivity extends Activity {
                 request.benchmark,
                 request.benchmarkTailFrames,
                 request.benchmarkFinish,
-                request.benchmarkResultPath
+                request.benchmarkResultPath,
+                request.envOverrides
         );
         Log.i(TAG, result.toString());
         TraceReplayResult finalResult = result;
@@ -171,7 +172,8 @@ public final class TraceReplayActivity extends Activity {
             boolean benchmark,
             int benchmarkTailFrames,
             boolean benchmarkFinish,
-            String benchmarkResultPath
+            String benchmarkResultPath,
+            String envOverrides
     );
 
 
@@ -254,6 +256,9 @@ public final class TraceReplayActivity extends Activity {
         final int benchmarkTailFrames;
         final boolean benchmarkFinish;
         final String benchmarkResultPath;
+        // Generic environment passthrough, `K=V;K=V`. A future MOBILEGL_* knob needs no
+        // new intent extra, no new JNI parameter and no new field beside this one.
+        final String envOverrides;
 
         private TraceReplayRequest(
                 String tracePath,
@@ -284,7 +289,8 @@ public final class TraceReplayActivity extends Activity {
                 boolean benchmark,
                 int benchmarkTailFrames,
                 boolean benchmarkFinish,
-                String benchmarkResultPath
+                String benchmarkResultPath,
+                String envOverrides
         ) {
             this.tracePath = tracePath;
             this.goldenPath = goldenPath;
@@ -315,6 +321,7 @@ public final class TraceReplayActivity extends Activity {
             this.benchmarkTailFrames = benchmarkTailFrames;
             this.benchmarkFinish = benchmarkFinish;
             this.benchmarkResultPath = benchmarkResultPath;
+            this.envOverrides = envOverrides;
         }
 
         static TraceReplayRequest from(Intent intent, File filesDir, String defaultBackend) {
@@ -351,7 +358,8 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("benchmark", false),
                     intent.getIntExtra("benchmark_tail_frames", 200),
                     intent.getBooleanExtra("benchmark_finish", true),
-                    benchmarkResultPath
+                    benchmarkResultPath,
+                    readString(intent, "mobilegl_env", "")
             );
         }
 

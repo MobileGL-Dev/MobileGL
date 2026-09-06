@@ -63,6 +63,11 @@ struct Request {
     bool deriveNumSubgroups = false;
     bool iterationRPFixBarrier = false;
     int holdMs = 0;
+    // Generic environment passthrough, each entry `KEY=VALUE` (an entry with no '='
+    // unsets KEY). Applied last, right before libMobileGL.so is loaded, so a knob that
+    // has no dedicated field above can still be forwarded from the CI script without
+    // touching this struct again.
+    std::vector<std::string> envOverrides;
 };
 
 struct Result {

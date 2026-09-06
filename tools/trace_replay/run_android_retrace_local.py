@@ -119,7 +119,7 @@ def render_summary():
     shutil.copyfile(SUMMARY_DIR / SUMMARY_HTML, SUMMARY_DIR / "index.html")
 
 
-def run_case(case, backend, extra_args=None, timeout_seconds=None):
+def run_case(case, backend, extra_args=None, timeout_seconds=None, env_overrides=None):
     backend_info = BACKENDS[backend]
     apk = find_trace_apk()
     trace_archive = FIXTURES / case["trace_archive"]
@@ -189,6 +189,11 @@ def run_case(case, backend, extra_args=None, timeout_seconds=None):
         command.append("--avoid-angle-llvmpipe-explicit-lod-bias")
     if case.get("coherent_as_flush"):
         command.append("--coherent-as-flush")
+    # Generic environment passthrough: --env MOBILEGL_FOO=1 needs no per-knob plumbing in
+    # this script, in trace-replay-ci.sh, in the Activity, in the JNI marshalling or in the
+    # runner - one extra carries them all.
+    if env_overrides:
+        command.extend(["--env", ";".join(env_overrides)])
     env = dict(**__import__("os").environ)
     env["PYTHON"] = "python"
     env["MSYS2_ARG_CONV_EXCL"] = "/data/*"
@@ -255,7 +260,13 @@ def run_benchmark_case(case, backend, args):
         stale = RESULT_ROOT / f"{safe_case(case['name'])}-{backend}" / "benchmark.json"
         if stale.exists():
             stale.unlink()
-        rc = run_case(case, backend, extra_args=extra_args, timeout_seconds=args.benchmark_timeout_seconds)
+        rc = run_case(
+            case,
+            backend,
+            extra_args=extra_args,
+            timeout_seconds=args.benchmark_timeout_seconds,
+            env_overrides=args.env,
+        )
         report = read_benchmark(case, backend, run_index)
         if rc != 0 or report is None:
             print(f"{label} run {run_index}/{args.benchmark_repeats}: FAILED (exit {rc})", flush=True)
@@ -287,6 +298,15 @@ def parse_args():
     parser.add_argument("--backend", action="append", choices=sorted(BACKENDS), help="Backend to run; may be repeated.")
     parser.add_argument("--all", action="store_true", help="Run every case in the APK workflow matrix.")
     parser.add_argument("--keep-results", action="store_true", help="Do not clear the previous result root.")
+    parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable to set in the replay process, applied just before "
+             "libMobileGL.so is loaded; may be repeated. A KEY with no '=' unsets it. This "
+             "is the generic passthrough for MOBILEGL_* knobs that have no flag of their own.",
+    )
     parser.add_argument(
         "--benchmark",
         action="store_true",
@@ -343,7 +363,7 @@ def main():
                 failures += run_benchmark_case(case, backend, args)
                 continue
             print(f"=== Android retrace: {case['name']} / {backend} ===", flush=True)
-            rc = run_case(case, backend)
+            rc = run_case(case, backend, env_overrides=args.env)
             try:
                 render_summary()
             except Exception as error:

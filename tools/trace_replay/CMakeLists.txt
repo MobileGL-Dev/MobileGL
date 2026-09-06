@@ -281,6 +281,25 @@ else()
             "-Wl,--end-group")
 endif()
 
+# The `K=V;K=V` environment passthrough is the only hand-rolled parse between a CI flag
+# and setenv(), and the lane that exercises it end to end is an on-device retrace, which
+# would report a splitting bug as "the knob had no effect". This pins it instead, in the
+# cheapest place that no configuration can skip: the check is built and RUN at build time,
+# and mobilegl_trace_replay depends on it, so `cmake --build ... --target
+# mobilegl_trace_replay` - the exact command of test.yml's "Build trace replay" - runs it
+# even though that job never invokes ctest.
+if(NOT CMAKE_CROSSCOMPILING)
+    add_executable(mobilegl_trace_env_overrides_test
+            "${MOBILEGL_TRACE_ROOT}/trace_env_overrides_test.cpp")
+    target_compile_features(mobilegl_trace_env_overrides_test PRIVATE cxx_std_17)
+    target_include_directories(mobilegl_trace_env_overrides_test PRIVATE
+            "${MOBILEGL_TRACE_SHARED_CPP_DIR}")
+    add_custom_command(TARGET mobilegl_trace_env_overrides_test POST_BUILD
+            COMMAND mobilegl_trace_env_overrides_test
+            COMMENT "Checking the retrace env passthrough parser")
+    add_dependencies(mobilegl_trace_replay mobilegl_trace_env_overrides_test)
+endif()
+
 if(MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY)
     set(mobilegl_trace_replay_mobilegl_library "${MOBILEGL_TRACE_REPLAY_MOBILEGL_LIBRARY}")
 else()

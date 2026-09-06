@@ -1,6 +1,7 @@
 #include "trace_replay_core.hpp"
 
 #include "spawn_spike.hpp"
+#include "trace_env_overrides.hpp"
 
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
@@ -28,22 +29,7 @@ std::string ToString(JNIEnv* env, jstring value) {
     return out;
 }
 
-std::vector<std::string> SplitSemicolonList(const std::string& value) {
-    std::vector<std::string> values;
-    std::size_t begin = 0;
-    while (begin < value.size()) {
-        const std::size_t end = value.find(';', begin);
-        const std::string entry = value.substr(begin, end - begin);
-        if (!entry.empty()) {
-            values.push_back(entry);
-        }
-        if (end == std::string::npos) {
-            break;
-        }
-        begin = end + 1;
-    }
-    return values;
-}
+using mobilegl_trace::SplitSemicolonList;
 
 jobject MakeResult(JNIEnv* env, const mobilegl_trace::Result& result) {
     jclass clazz = env->FindClass("top/mobilegl/plugin/trace/TraceReplayActivity$TraceReplayResult");
@@ -131,7 +117,8 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                                                         jboolean benchmarkMode,
                                                                         jint benchmarkTailFrames,
                                                                         jboolean benchmarkFinish,
-                                                                        jstring benchmarkResultPath) {
+                                                                        jstring benchmarkResultPath,
+                                                                        jstring envOverrides) {
     mobilegl_trace::Request request;
     request.tracePath = ToString(env, tracePath);
     request.goldenPath = ToString(env, goldenPath);
@@ -168,6 +155,7 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
                                           : mobilegl_trace::kDefaultBenchmarkTailFrames;
     request.benchmarkFinish = benchmarkFinish == JNI_TRUE;
     request.benchmarkResultPath = ToString(env, benchmarkResultPath);
+    request.envOverrides = SplitSemicolonList(ToString(env, envOverrides));
 
     ScopedTraceReplayState replayState;
     mobilegl_trace_set_requested_size(request.width, request.height);

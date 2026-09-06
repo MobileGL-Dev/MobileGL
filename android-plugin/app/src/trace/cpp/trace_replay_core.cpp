@@ -4,6 +4,7 @@
 #include "apitrace_exit.hpp"
 #include "png.h"
 #include "trace_benchmark.hpp"
+#include "trace_env_overrides.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -130,6 +131,32 @@ std::string JsonEscape(const std::string& value) {
     return out.str();
 }
 
+// Generic environment passthrough. One intent extra carries `K=V;K=V`, so a new
+// MOBILEGL_* knob costs nothing in the five files between the CI script and this
+// setenv - the per-knob plumbing above is what this replaces going forward
+// (PLAN-B.md §11 P0, which adds a batch of MOBILEGL_PIPE_* switches).
+//
+// Applied last, immediately before the library is loaded: it is the escape hatch, so it
+// has to be able to override the fields marshalled above, and MobileGL's ConfigLoader
+// reads the environment during dlopen. The decision of what each entry means lives in
+// trace_env_overrides.hpp so a host-side test can pin it; this is only the setenv.
+void ApplyEnvOverrides(const std::vector<std::string>& entries) {
+    for (const std::string& entry : entries) {
+        std::string key;
+        std::string value;
+        switch (ParseEnvOverride(entry, &key, &value)) {
+            case EnvOverrideAction::Set:
+                setenv(key.c_str(), value.c_str(), 1);
+                break;
+            case EnvOverrideAction::Unset:
+                unsetenv(key.c_str());
+                break;
+            case EnvOverrideAction::Ignore:
+                break;
+        }
+    }
+}
+
 bool LoadMobileGL(const Request& request, std::string& error) {
     setenv("MOBILEGL_BACKEND_TYPE", request.backend.c_str(), 1);
     setenv("MOBILEGL_TRACE_LIBRARY", request.mobileGlLibrary.c_str(), 1);
@@ -206,6 +233,8 @@ bool LoadMobileGL(const Request& request, std::string& error) {
         }
         setenv("MOBILEGL_TRACE_DUMP_TEXTURE_2D", dumpPoints.c_str(), 1);
     }
+
+    ApplyEnvOverrides(request.envOverrides);
 
     void* handle = dlopen(request.mobileGlLibrary.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (handle == nullptr) {
