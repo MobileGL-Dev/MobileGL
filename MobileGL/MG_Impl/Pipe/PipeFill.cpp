@@ -296,11 +296,18 @@ namespace MobileGL::MG_Pipe {
         };
         PoisonOmission g_omission;
         Bool g_omissionKnobParsed = false;
+        String g_omissionKnobValue; // the value the last parse saw
 
+        // Parsed on the first fill and again only when the value changes. A lane loads
+        // Features once, before any fill, so that is one parse per process there; a forked
+        // test child that sets Features after its parent already filled gets its own parse,
+        // which is what puts the parser and its Fatal{PipeVerifyBadKnob} under a unit test.
+        // An empty value never clears an omission a test armed through MGPipeSetPoisonOmission.
         void ParsePoisonOmissionKnob() {
-            if (g_omissionKnobParsed) return;
-            g_omissionKnobParsed = true;
             const String& knob = MG_Config::Features.PipePoisonOmit;
+            if (g_omissionKnobParsed && knob == g_omissionKnobValue) return;
+            g_omissionKnobParsed = true;
+            g_omissionKnobValue = knob;
             if (knob.empty()) return;
             const auto colon = knob.find(':');
             if (colon == String::npos || colon == 0 || colon + 1 >= knob.size()) {
@@ -348,10 +355,14 @@ namespace MobileGL::MG_Pipe {
         };
         VerifyState g_verify;
 
+        // Armed on the first fill and re-armed only when Features.PipeVerify changes (the
+        // same reason as ParsePoisonOmissionKnob: one arm per lane process, a fresh arm for a
+        // forked test child that turns the knob on after its parent filled unarmed).
         void ArmVerify() {
-            if (g_verify.Parsed) return;
+            if (g_verify.Parsed && g_verify.Enabled == MG_Config::Features.PipeVerify) return;
             g_verify.Parsed = true;
             g_verify.Enabled = MG_Config::Features.PipeVerify;
+            g_verify.Corrupt = Optional<MGPipeInputField>{};
             if (!g_verify.Enabled) return;
             g_verify.Fatal = MG_Config::Features.PipeVerifyFatal;
             const String& corrupt = MG_Config::Features.PipeVerifyCorrupt;
