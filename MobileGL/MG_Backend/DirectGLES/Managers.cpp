@@ -171,20 +171,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_PIPE_PUSH
-    Bool EsprytSlotTablesEnabled() {
-        // Latched once, not read per call: the two arms of StateBackendObjectRegistry keep
-        // their twins in different containers, so an answer that changed mid-run would strand
-        // every twin already built (and, for the driver ids those twins own, leak them).
-        static const Bool enabled = [] {
+    Bool ResolveEsprytSlotTablesArm() {
+        // Resolved once and latched by the inline EsprytSlotTablesEnabled() in SlotTables.h:
+        // the two arms of StateBackendObjectRegistry keep their twins in different containers,
+        // so an answer that changed mid-run would strand every twin already built (and, for
+        // the driver ids those twins own, leak them). InitDisplayAndContext() forces the
+        // resolution at backend context creation, so the trap below fires before the first
+        // draw rather than on the first twin lookup - a short-lived process that never twins
+        // anything used to never learn its knobs left it with no arm at all.
+        {
             const Bool bitSet =
                 (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0;
 #if MOBILEGL_PIPE_LEGACY_MEMOS
             if (!bitSet && !MG_Config::Features.PipeLegacyMemos) {
                 // The operator asked for the handle arm to be OFF and the legacy arm to be
-                // unreachable at the same time, which leaves no arm at all. Say so at startup
-                // rather than silently running the thing they turned off (ARCHITECTURE.md 9.6).
+                // unreachable at the same time, which leaves no arm at all. This is a Fatal{},
+                // and a Fatal{} in this codebase STOPS (MG_Impl/Pipe/PipeFill.cpp's BadKnob and
+                // its verify trap are both MGLOG_F + abort). Returning here instead would run
+                // the very arm the operator disabled and hand back a green result measured on
+                // it - which is exactly the lever HandleRecycleScenario's arms are selected
+                // with, so a mis-set A/B would be scored silently against the wrong arm
+                // (ARCHITECTURE.md 9.6).
                 MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled, \"kMGPipeSubsystemEsprytSlots "
                         "is clear but MOBILEGL_PIPE_LEGACY_MEMOS=0\"}");
+                std::abort();
             }
             return bitSet;
 #else
@@ -196,8 +206,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             return true;
 #endif
-        }();
-        return enabled;
+        }
     }
 #endif
 
@@ -2775,7 +2784,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::VertexElementsCso)>
+        TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
     } // namespace VertexArrayImpl
 
@@ -5103,7 +5112,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Array<Array<BackendTextureObject*, (SizeT)TextureTarget::TextureTargetCount>,
               MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundTexturesCache;
-        StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Texture)> g_backendTextureObjects;
+        TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture> g_backendTextureObjects;
     } // namespace TextureImpl
 
     namespace FramebufferImpl {
@@ -5856,7 +5865,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_backendColorSlots[index];
         }
 
-        StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Framebuffer)>
+        TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject, MG_Pipe::MGPipeKind::Framebuffer>
             g_backendFramebufferObjects;
         Array<Uint16, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fboSyncedSlotVersions = {0};
         // Tracks the bound FBO's object version (bumped on any attachment/drawbuffer change)
@@ -6167,7 +6176,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // context never answers GL_NO_ERROR, and the build runs on the thread that would
         // then spin forever.
         constexpr Int kMaxDrainedProgramErrors = 32;
-        StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::ShaderCso)> g_backendProgramObjects;
+        TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso> g_backendProgramObjects;
 
         BackendProgramObjectImpl::BackendProgramObjectImpl() {
 #ifdef TRACY_ENABLE
@@ -8685,7 +8694,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS> g_boundSamplersCache;
-        StateBackendObjectRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::SamplerCso)> g_backendSamplerObjects;
+        TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso> g_backendSamplerObjects;
     } // namespace SamplerImpl
 
     namespace RenderbufferImpl {
@@ -8797,7 +8806,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("RBO %u sync completed. backend ID %u", stateRBOObject->GetExternalIndex(), m_backendRBOId);
         }
 
-        StateBackendObjectRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Renderbuffer)>
+        TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

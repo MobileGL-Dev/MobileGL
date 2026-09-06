@@ -44,13 +44,44 @@
 // what bumps Gen, which is precisely the ABA defence: a slot is only ever handed out again
 // after it was freed. When e2 lands, ReclaimDeadSlots() becomes the fallback path of an
 // explicit Destroy(handle) and the sweep call sites go away.
+//
+// Because the sweep is still the only death signal, this table carries BOTH of the drivers
+// the registry it replaces carries, and for the same reasons:
+//   * the draw-path tick (kGCInterval = 1024 CollectGarbageIfNeeded calls), and
+//   * the CREATION tick (kCreationGCInterval = 64 first-time insertions), because object CHURN
+//     rather than draw count is what makes the sweep urgent - a CTS-shaped case runs ~10
+//     per-draw ticks, so 1024 of them span ~100 cases' worth of dead, gigabyte-sized objects.
+// Dropping the second one would have made this table's memory behaviour strictly WORSE than
+// the map it replaces, which is the opposite of what the slice is for.
+//
+// P3+ DEBT, recorded rather than hidden: this header is under MG_Backend/ and it MINTS
+// handles (MGPipeSlots().Acquire below) off a frontend SharedPtr's GetLifetimeId().
+// MGPipeHandles.h:13-16 says a handle is minted by the CLIENT and never by the server, and
+// under a real split neither the frontend object nor its lifetime id exists on this side of
+// the wire. This is monolith glue: the minting and the lifetimeId -> handle resolution both
+// belong on the client, and the backend should receive the handle in the verb payload. It is
+// NOT part of "Track H done" and check_include_closure.py does not probe MG_Backend headers,
+// so nothing catches it automatically.
 namespace MobileGL::MG_Backend::DirectGLES {
 
 #if MOBILEGL_PIPE_PUSH
 
+    // Reads the config, logs, and traps when the operator left no arm at all. Cold: called
+    // exactly once per process, from the latch below and from backend context creation.
+    Bool ResolveEsprytSlotTablesArm();
+
     // True when this process runs the {slot, gen} arm. Fixed for the life of the process: the
     // two arms hold their twins in different containers, so flipping mid-run would strand them.
-    Bool EsprytSlotTablesEnabled();
+    //
+    // INLINE on purpose. Every Find / GetOrCreate / HandleOf / ForEachLive / CollectGarbage*
+    // on the twin tables consults it, i.e. it is on the per-draw path several times per draw.
+    // As an out-of-line function in Managers.cpp (no LTO in any shipped configuration) that was
+    // a call through the PLT per lookup; here the caller sees a guard-variable load and a
+    // perfectly-predicted branch, and the arm dispatch folds into the caller.
+    inline Bool EsprytSlotTablesEnabled() {
+        static const Bool enabled = ResolveEsprytSlotTablesArm();
+        return enabled;
+    }
 
     template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
     class BackendSlotTable {
@@ -75,13 +106,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // object's lifetime id, so two calls for the same live object always land on the same
         // slot, and a successor object at the same heap address never does.
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
-            MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
+            // No assert on null here, unlike the map arm: null is TOLERATED, so a DEBUG build
+            // must not trap where the release build quietly does the documented thing.
+            if (stateObj == nullptr) {
+                // The registry this replaces inserted a null key and handed back ITS twin slot
+                // (DirectGLES.cpp's SyncTextureObjectToBackend documents relying on exactly
+                // that tolerance), so a release build never dereferenced null here. Keep the
+                // shape: one per-table parking slot, never live, never swept, never handed a
+                // handle. A null object has no identity and therefore cannot have a twin.
+                m_nullTwin.reset();
+                return m_nullTwin;
+            }
+
+            // Sweep BEFORE the entry reference below exists, for the same reason the map arm
+            // does it here: EntryAt may grow m_slots and move every element, so a reference
+            // taken first would not survive it. The sweep is owed from an earlier creation
+            // rather than triggered by this one.
+            if (m_creationTick >= kCreationGCInterval) {
+                m_creationTick = 0;
+                ReclaimDeadSlots();
+            }
+
             const MG_Pipe::MGPipeHandle handle =
                 MG_Pipe::MGPipeSlots().Acquire(kKind, stateObj->GetLifetimeId());
             MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
                             "MGPipe slot space of kind %u is exhausted",
                             static_cast<Uint32>(kKind));
             Entry& entry = EntryAt(handle.Slot);
+            const Bool firstInsertion = !entry.Live || entry.Gen != handle.Gen;
             if (entry.Live && entry.Gen != handle.Gen) {
                 // The slot was reclaimed and handed to a new object: the twin at it describes
                 // driver ids the new state object never made.
@@ -90,6 +142,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             entry.Gen = handle.Gen;
             entry.Live = true;
             entry.stateRef = stateObj;
+            if (firstInsertion) {
+                // A slot this table has never held (or held for a previous owner). Nothing
+                // tells the backend that a texture or renderbuffer was DELETED - the twin, and
+                // the driver storage it owns, lives until a collection - and
+                // CollectGarbageIfNeeded is ticked only from the per-draw sync paths, which a
+                // CTS-shaped workload runs about ten times per case. 1024 of those ticks then
+                // span ~100 cases, so ~100 cases' worth of dead (and, for this suite,
+                // gigabyte-sized) objects would stay allocated at once. Object CHURN rather
+                // than draw count is what makes the sweep urgent, so a twin the table has
+                // never seen ticks it too - and it does so on the path that is about to
+                // allocate, which is exactly when the memory is needed.
+                ++m_creationTick;
+            }
+            RememberHandle(stateObj->GetLifetimeId(), handle);
             return entry.backend;
         }
 
@@ -118,7 +184,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // memo stores instead of a raw pointer, a GL name or a bare lifetime id.
         MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
             if (stateObj == nullptr) return MG_Pipe::kMGPipeNullHandle;
-            return MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, stateObj->GetLifetimeId());
+            const Uint64 lifetimeId = stateObj->GetLifetimeId();
+            if (lifetimeId == m_memoLifetimeId) return m_memoHandle;
+            const MG_Pipe::MGPipeHandle handle =
+                MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, lifetimeId);
+            RememberHandle(lifetimeId, handle);
+            return handle;
         }
 
         // Drop the twin of every slot whose frontend object is gone and return the slot to the
@@ -127,13 +198,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (m_isCollecting) return;
             m_isCollecting = true;
             for (SizeT slot = 0; slot < m_slots.size(); ++slot) {
-                Entry& entry = m_slots[slot];
-                if (!entry.Live || !entry.stateRef.expired()) continue;
-                entry.backend.reset();
-                entry.stateRef.reset();
-                entry.Live = false;
+                Uint32 gen = 0;
+                // The twin's destructor is a driver call and could, in principle, re-enter
+                // GetOrCreate on this table and resize m_slots. So NOTHING that outlives the
+                // destructor may be a reference into m_slots: the twin is moved out into a
+                // local, the entry is finished with, and only then is the local released.
+                BackendPtr dead;
+                {
+                    Entry& entry = m_slots[slot];
+                    if (!entry.Live || !entry.stateRef.expired()) continue;
+                    gen = entry.Gen;
+                    dead = std::move(entry.backend);
+                    entry.backend.reset();
+                    entry.stateRef.reset();
+                    entry.Live = false;
+                }
                 MG_Pipe::MGPipeSlots().Free(
-                    kKind, MG_Pipe::MGPipeHandle{static_cast<Uint32>(slot), entry.Gen});
+                    kKind, MG_Pipe::MGPipeHandle{static_cast<Uint32>(slot), gen});
+                if (m_memoHandle.Slot == static_cast<Uint32>(slot)) ForgetHandle();
+                dead.reset();
             }
             m_isCollecting = false;
         }
@@ -142,10 +225,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ++m_gcTick;
             if (m_gcTick < kGCInterval) return;
             m_gcTick = 0;
+            m_creationTick = 0;
             ReclaimDeadSlots();
         }
 
-        void CollectGarbageNow() { ReclaimDeadSlots(); }
+        void CollectGarbageNow() {
+            m_creationTick = 0;
+            ReclaimDeadSlots();
+        }
+
+        // Test-only introspection: how many first-time insertions are owed before the
+        // creation-driven sweep fires. Reading it is what lets a test pin the CADENCE rather
+        // than only the effect of an explicit CollectGarbageNow().
+        Uint32 CreationTickForTest() const { return m_creationTick; }
+        static constexpr Uint32 CreationGCIntervalForTest() { return kCreationGCInterval; }
 
         // fn(const StatePtr& state, const BackendPtr& twin) over every live, still-owned entry.
         // Replaces the registry's begin()/end(), whose iterator exposed the raw frontend
@@ -176,12 +269,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_slots[slot];
         }
 
+        void RememberHandle(Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) const {
+            m_memoLifetimeId = lifetimeId;
+            m_memoHandle = handle;
+        }
+        void ForgetHandle() const {
+            m_memoLifetimeId = 0;
+            m_memoHandle = MG_Pipe::kMGPipeNullHandle;
+        }
+
         static constexpr Uint32 kGCInterval = 1024;
+        // Creations are far rarer than draws, so this counts in a much smaller unit than
+        // kGCInterval does. Same value the map arm uses, so the two arms sweep at the same
+        // cadence under the same workload.
+        static constexpr Uint32 kCreationGCInterval = 64;
 
         // Indexed by MGPipeHandle::Slot; [0] is the reserved slot and is never live.
         Vector<Entry> m_slots;
         Uint32 m_gcTick = 0;
+        Uint32 m_creationTick = 0;
         Bool m_isCollecting = false;
+        // Handed back by GetOrCreate for a null state object. Never live, never swept.
+        BackendPtr m_nullTwin;
+
+        // ONE-entry resolution memo, lifetimeId -> handle. The three per-draw resolution paths
+        // (ResolveVaoTwin, SyncCurrentProgram, BindCurrentFBO) ask the SAME table for the SAME
+        // object every draw, so this turns the steady state back into an integer compare plus
+        // one array index - which is what the deleted TwinLookupMemos bought and what D13
+        // promises ("direct slot indexing - the memo existed only to avoid the hash probe").
+        // Without it every resolution went through the allocator's ByLifetimeId hash.
+        //
+        // It cannot serve a stale answer, by two independent arguments:
+        //   * the key is a lifetime id, which MG_State never hands out twice, so a recycled
+        //     heap address cannot hit this memo the way it could hit an address-keyed one; and
+        //   * even a hit for a slot that has since been freed and re-handed is caught, because
+        //     the caller resolves the handle through FindByHandle, which compares Gen.
+        // Cleared anyway when the sweep frees the memoised slot. 0 is never a live lifetime id
+        // (MG_State's counters start at 1), so a zeroed memo is a guaranteed miss.
+        mutable Uint64 m_memoLifetimeId = 0;
+        mutable MG_Pipe::MGPipeHandle m_memoHandle = MG_Pipe::kMGPipeNullHandle;
     };
 
 #endif // MOBILEGL_PIPE_PUSH

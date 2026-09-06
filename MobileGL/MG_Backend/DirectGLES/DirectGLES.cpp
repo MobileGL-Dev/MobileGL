@@ -148,23 +148,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // exactly the pointer compare below.
     using FbBindingSlot =
         std::remove_reference_t<decltype(MGB_CTX->GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
-#if !MOBILEGL_PIPE_PUSH
+#if !MOBILEGL_PIPE_PUSH || MOBILEGL_PIPE_LEGACY_MEMOS
     static const void* g_fbSlotCacheContext = nullptr;
     static Array<FbBindingSlot*, SizeT(FramebufferTarget::FramebufferTargetCount)> g_fbSlotCache = {};
 #endif
-    // P2 step e4. Under push this is an ORDINARY read of pushed state and the cache above does
-    // not exist, which closes the P1 accessor bypass: the cached raw pointer ran the checked
-    // accessor once per context change and then handed out the pointee forever, so at all five
-    // call sites the per-verb poison stamp (MGP_INPUT_CHECK) and the verify read-hook
-    // (MGP_INPUT_VERIFY_READ) were skipped. A verb that legitimately never fills
+    // P2 step e4. On the {slot, gen} arm this is an ORDINARY read of pushed state and the cache
+    // above is not consulted, which closes the P1 accessor bypass: the cached raw pointer ran
+    // the checked accessor once per context change and then handed out the pointee forever, so
+    // at all five call sites the per-verb poison stamp (MGP_INPUT_CHECK) and the verify
+    // read-hook (MGP_INPUT_VERIFY_READ) were skipped. A verb that legitimately never fills
     // GetFramebufferBindingSlot could not be caught here, and a verify build compared the field
-    // only where the slow accessor was used. In the pull build MGB_CTX is the live GLContext,
-    // there is no poison to bypass and the frontend getter still linear-scans, so the cache is
-    // exactly the code it was.
+    // only where the slow accessor was used.
+    //
+    // The cache stays on the LEGACY arm, gated on the same subsystem bit as the rest of this
+    // slice, so that MOBILEGL_PIPE_PUSH=0 keeps being the faithful all-subsystems-pull control
+    // ConfigLoader.cpp documents - "reproduces P1's behaviour exactly" has to include this
+    // path, or the integrator's A/B measures e4 on both arms and attributes it to neither. In
+    // the pull build MGB_CTX is the live GLContext, there is no poison to bypass and the
+    // frontend getter still linear-scans, so the cache is exactly the code it was.
     static inline FbBindingSlot& GetFramebufferBindingSlotChecked(FramebufferTarget target) {
 #if MOBILEGL_PIPE_PUSH
-        return MGB_CTX->GetFramebufferBindingSlot(target);
-#else
+        if (EsprytSlotTablesEnabled()) {
+            return MGB_CTX->GetFramebufferBindingSlot(target);
+        }
+#endif
+#if !MOBILEGL_PIPE_PUSH || MOBILEGL_PIPE_LEGACY_MEMOS
         const void* ctx = MGB_CTX_IDENTITY;
         if (ctx != g_fbSlotCacheContext) {
             auto& live = *MGB_CTX;
@@ -174,6 +182,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_fbSlotCacheContext = ctx;
         }
         return *g_fbSlotCache[SizeT(target)];
+#else
+        // No legacy arm compiled: EsprytSlotTablesEnabled() is unconditionally true above.
+        return MGB_CTX->GetFramebufferBindingSlot(target);
 #endif
     }
 
@@ -3007,9 +3018,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FramebufferImpl::BackendFramebufferObject* twin = nullptr;
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
-                auto* slot = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
-                if (slot && *slot) {
-                    twin = slot->get();
+                // Not "slot": the enclosing scope's `slot` is the framebuffer BINDING slot,
+                // and this one is the twin table's entry.
+                auto* twinEntry = FramebufferImpl::g_backendFramebufferObjects.Find(currentFBO.get());
+                if (twinEntry && *twinEntry) {
+                    twin = twinEntry->get();
                 }
             } else
 #endif
@@ -10155,6 +10168,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static Bool InitDisplayAndContext(EGLint surfaceBit, NativeWindowType window = static_cast<NativeWindowType>(0)) {
         DestroyEGLContext();
+
+#if MOBILEGL_PIPE_PUSH
+        // Resolve the twin-table arm HERE, at backend startup, rather than leaving it to the
+        // first twin lookup deep inside the first draw: Fatal{PipeLegacyMemosDisabled} has to
+        // reach an operator who set MOBILEGL_PIPE_PUSH and MOBILEGL_PIPE_LEGACY_MEMOS into a
+        // combination that leaves no arm at all, including in a process that goes on to twin
+        // nothing. The call is idempotent and latched.
+        (void)EsprytSlotTablesEnabled();
+#endif
 
         g_Display = g_EGLFuncs.eglGetDisplay(EGL_DEFAULT_DISPLAY);
         if (g_Display == EGL_NO_DISPLAY) return false;

@@ -285,14 +285,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The kind is a template parameter ONLY in the push build. G1 requires the pull build's
     // symbol set to be byte-for-byte the pre-P2 one, and a third template argument changes
     // every instantiation's mangled name - so in the pull build the parameter, like the arm it
-    // selects, does not exist. MGB_TWIN_KIND_ARG spells the same thing at the six declarations
-    // and six definitions.
+    // selects, does not exist. The macro below spells that one difference; it is #undef'd
+    // straight after the class, and the twelve declaration and definition sites name the
+    // registry through the TwinRegistry alias instead, which swallows the kind in the pull
+    // build. (An alias template may have a parameter it does not use, and an alias emits no
+    // symbol of its own, so the pull build's mangled names are unchanged.)
 #if MOBILEGL_PIPE_PUSH
 #define MGB_TWIN_KIND_PARAM , MG_Pipe::MGPipeKind kKind
-#define MGB_TWIN_KIND_ARG(kind) , kind
 #else
 #define MGB_TWIN_KIND_PARAM
-#define MGB_TWIN_KIND_ARG(kind)
 #endif
 
     template <typename StateObject, typename BackendObject MGB_TWIN_KIND_PARAM>
@@ -498,6 +499,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BackendSlotTable<StateObject, BackendObject, kKind> m_slotTable;
 #endif
     };
+
+#undef MGB_TWIN_KIND_PARAM
+
+    // One spelling for the twin registry at every declaration and definition site. In the push
+    // build the kind is the registry's third template argument; in the pull build the alias
+    // drops it, so the mangled name is the pre-P2 two-argument one.
+#if MOBILEGL_PIPE_PUSH
+    template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
+    using TwinRegistry = StateBackendObjectRegistry<StateObject, BackendObject, kKind>;
+#else
+    template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
+    using TwinRegistry = StateBackendObjectRegistry<StateObject, BackendObject>;
+#endif
 
     namespace BufferImpl {
         const GLenum TempBufferTarget = GL_ARRAY_BUFFER;
@@ -902,7 +916,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedBufferIdGeneration = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::VertexElementsCso)>
+        extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
 
         // Shadowed glBindVertexArray: every backend VAO bind goes through here so a
@@ -1223,7 +1237,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void ActivateTextureUnit(Uint unit);
         void UnbindTexture(Uint unit, GLenum target);
-        extern StateBackendObjectRegistry<MG_State::GLState::ITextureObject, BackendTextureObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Texture)>
+        extern TwinRegistry<MG_State::GLState::ITextureObject, BackendTextureObject, MG_Pipe::MGPipeKind::Texture>
             g_backendTextureObjects;
         SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -1314,7 +1328,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedBackendIdGeneration = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Framebuffer)>
+        extern TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject, MG_Pipe::MGPipeKind::Framebuffer>
             g_backendFramebufferObjects;
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
@@ -1832,7 +1846,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // skip redundant rebinds. Reset to 0 wherever glUseProgram(0) is issued or the
         // ES context is recreated.
         extern Uint g_lastUsedBackendProgramId;
-        extern StateBackendObjectRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::ShaderCso)>
+        extern TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso>
             g_backendProgramObjects;
 
         // Points one shader storage block of an ALREADY-LINKED backend program at
@@ -1932,7 +1946,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         extern Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
             g_boundSamplersCache;
-        extern StateBackendObjectRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::SamplerCso)>
+        extern TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso>
             g_backendSamplerObjects;
     } // namespace SamplerImpl
 
@@ -1959,7 +1973,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_cacheSamples = 0;
         };
 
-        extern StateBackendObjectRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject MGB_TWIN_KIND_ARG(MG_Pipe::MGPipeKind::Renderbuffer)>
+        extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 } // namespace MobileGL::MG_Backend::DirectGLES
