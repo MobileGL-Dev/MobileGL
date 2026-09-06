@@ -27,6 +27,14 @@ fires on only some paths through the setter (or omits one that always fires) is 
 it a row could be wrong in exactly the direction ARCHITECTURE.md 13.2 calls dangerous while
 --check stayed green, which is how two rows in this mapping were wrong for a whole review.
 
+Every other bit answer is derived too, one-directionally, against the shutter Tracker.h
+builds for that bit. That half makes an ABSENCE claim ("this mutator writes nothing that
+shutter reads"), so it is only as good as the code it reads, and it once was not: it missed
+every write through a member's field and every write the preprocessor pastes together, and
+reported their absence as a fact about RenderState.cpp. It now expands MG_State's
+function-like macros, records the member as well as the field, and DECLINES - prints the row
+and the site, and does not fail it - wherever it cannot say it read every writer.
+
     python3 scripts/gen_pipe_dirty_surface.py             # human-readable report
     python3 scripts/gen_pipe_dirty_surface.py --summary   # counts only
     python3 scripts/gen_pipe_dirty_surface.py --check     # THE GATE: rc 1 on any hole
@@ -157,7 +165,16 @@ DIRTY_NAME_RE = re.compile(r'^\s*"(NEW_[A-Z0-9_]+)",\s*$', re.M)
 # header; a row that uses anything else is a typo, and a typo that read as "mapped" would be
 # exactly the silent hole this gate exists to close.
 NON_BIT_ANSWERS = ("kImmediate", "kReverseChannel", "kNoBackendRead", "kExplicitDestroy",
-                   "kUnpublishedDestroy", "kPulledEveryVerb")
+                   "kUnpublishedDestroy", "kPulledEveryVerb", "kPulledPartialShutter")
+
+# The one non-bit answer that must NOT stand alone. kPulledEveryVerb says "no shutter exists";
+# kPulledPartialShutter says "the pull is what holds on every mutating path, and these bits DO
+# move on some of them" - so it carries those bits, and the derivation below checks that each
+# one really is movable by that mutator. Without the distinction, a reader of this file (P3a
+# builds its shutters from it) is told that the mutator behind a bit P2 already emits a call
+# for has no shutter at all, which is exactly what X(SetPixelStoreParam, kPulledEveryVerb)
+# said about NEW_PIXEL_PACK.
+PARTIAL_ANSWERS = ("kPulledPartialShutter",)
 
 # ---- the render-state answers, DERIVED rather than believed -----------------------------
 # The two RenderState counters are the one place in the mapping where "what publishes this"
@@ -246,15 +263,47 @@ def render_state_publishers():
 #      MGPipeNoteAggregate's own switch rather than assumed;
 #   4. a row claiming bit B for mutator M is UNDER-FIRING when M writes nothing B reads.
 #
-# It is deliberately ONE-DIRECTIONAL. Step 3 is an over-approximation (a call name resolves
-# to every body of that name, and a write inside an `if` counts), so "M does write something
-# B reads" is not proof that it does so on every path and cannot be turned into a MISSING
-# check without false reds. "M writes NOTHING B reads" needs no such assumption, and it is
-# the under-firing direction ARCHITECTURE.md 13.2 calls the dangerous one - which is what
-# was wrong in this file: X(SetNamedTransformFeedbackBinding, NEW_SO_TARGETS) named a
-# shutter that moves on NO path through that mutator.
+# STEP 4 IS AN ABSENCE CLAIM, so step 3 must not MISS a write, and that is an obligation this
+# script violated rather than a slogan: until this commit a write through a member's FIELD
+# (`m_foo.bar = v`) recorded FIELD:bar and never MEM:m_foo, while the reader side resolves an
+# accessor to MEM:m_foo - so the two halves could not meet for any struct-valued member, and
+# the gate printed "SetPixelStoreParam writes nothing NEW_PIXEL_PACK's shutter reads" about a
+# setter whose entire body is sixteen writes to exactly that member. It could not see them
+# twice over, because those writes are spelled with the token-pasting operator
+# (RenderState.cpp's SET_PIXEL_STORE_PARAM) and the file was read raw, so the "field" it
+# recorded was the MACRO PARAMETER NAME. What step 3 models is therefore written down here,
+# and what it does not model is DECLINED rather than answered:
+#
+#   modelled  ++m_x / m_x = / m_x op=; a write through a member-rooted lvalue (m_x.f,
+#             m_x[i].f, m_x->f, nested), which records BOTH MEM:m_x and FIELD:f; a bare
+#             `.f =` write (FIELD:f alone - the FIELD tokens are coarse, and coarse only
+#             ever WIDENS what a mutator is credited with writing, which is the safe
+#             direction for an absence claim); MGP_NOTE_AGGREGATE; a call to any function
+#             whose body is under the two roots; and any function-like macro defined under
+#             the two roots, which is EXPANDED first, token pasting performed.
+#   declined  a body that still contains `##` after expansion, or that invokes a macro this
+#             script can see but could not expand and whose body pastes tokens. The taint is
+#             a token like every other, so it travels the same call-graph fixed point the
+#             writes do: a mutator that REACHES an unreadable body gets no verdict either.
+#             A shutter member with a write-shaped occurrence OUTSIDE the two roots is
+#             declined the same way - the analysis has not read every writer, so it cannot
+#             say there is none. --check prints every decline with the site that caused it.
+#
+# What remains one-directional is the OTHER direction: a call name resolves to every body of
+# that name, a write inside an `if` counts, and a reader that resolves through a ternary
+# yields both members - so "M does write something B reads" is not proof that it does so on
+# every path and cannot become a MISSING check without false reds. That is why a mutator
+# whose bit moves on half its arms answers kPulledPartialShutter rather than the bit. "M
+# writes NOTHING B reads" is the direction the gate fails on, and it is the under-firing one
+# ARCHITECTURE.md 13.2 calls dangerous - which is what was wrong in this file:
+# X(SetNamedTransformFeedbackBinding, NEW_SO_TARGETS) named a shutter that moves on NO path
+# through that mutator.
 STATE_ROOTS = (os.path.join(REPO_ROOT, "MobileGL", "MG_State", "GLState"),
                os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "Pipe"))
+# Everything the absence claim has to be checked against, which is wider than what it reads:
+# a write to a shutter member from outside STATE_ROOTS is a writer this analysis never looks
+# at, and the only honest answer to a row whose shutter has one is "declined".
+MOBILEGL_ROOT = os.path.join(REPO_ROOT, "MobileGL")
 UPDATE_RE = re.compile(r"Uint32\s+Update\s*\(")
 NOW_RE = re.compile(r"now\[Index\(MGPipeDirty::(\w+)\)\]\s*=\s*([^;]*);")
 DIRTY_OR_RE = re.compile(r"dirty\s*\|=\s*MGPipeDirtyBit\(MGPipeDirty::(\w+)\)")
@@ -269,38 +318,283 @@ MEMBER_CALL_RE = re.compile(r"\b(m_\w+)\s*\.\s*(\w+)\s*\(")
 CALL_RE = re.compile(r"\b(\w+)\s*\(")
 WORD_RE = re.compile(r"\b(\w+)\b")
 AGGREGATE_RE = re.compile(r"MGP_NOTE_AGGREGATE\(\s*(\w+)\s*\)")
-MEMBER_WRITE_RE = re.compile(r"\+\+\s*(m_\w+)|\b(m_\w+)\s*(?:\+\+|\+=|=(?!=))")
-FIELD_WRITE_RE = re.compile(r"\.\s*(\w+)\s*(?:\[[^\]]*\])?\s*(?:\+\+|\+=|=(?!=))")
 AGGREGATE_CASE_RE = re.compile(r"case\s+MGPipeAggregate::(\w+)\s*:\s*([^;]*);")
+
+# The assignment operators, as a suffix every write pattern below shares. `=(?!=)` keeps ==
+# out; !=, <= and >= cannot match at all, because the character where the operator must start
+# is then `!`, `<` or `>` and no alternative here begins with one except <<= / >>=.
+ASSIGN = r"(?:\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|<<=|>>=|=(?!=))"
+# A write to the member itself: ++m_x, m_x = v, m_x += v.
+MEMBER_WRITE_RE = re.compile(r"\+\+\s*(m_\w+)|\b(m_\w+)\s*%s" % ASSIGN)
+# A write THROUGH a member: m_x.f = v, m_x[i].f = v, m_x->f = v, and nested. This is the one
+# that was missing, and its absence is why the reader side (which resolves an accessor to
+# MEM:m_x) and the writer side could never meet for a struct-valued member.
+MEMBER_ROOTED_WRITE_RE = re.compile(
+    r"\b(m_\w+)\s*(?:\[[^;\n]*?\]|\.\s*\w+|->\s*\w+)+\s*%s" % ASSIGN)
+# A write to a field whose base this script did not resolve to a member. Coarse on purpose:
+# a FIELD token only ever widens what a mutator is credited with writing.
+FIELD_WRITE_RE = re.compile(r"\.\s*(\w+)\s*(?:\[[^\]]*\])?\s*%s" % ASSIGN)
+
+# ---- the preprocessor's half of the write analysis --------------------------------------
+# Sixteen of RenderState.cpp's writes exist only after the preprocessor has run: SET_PIXEL_
+# STORE_PARAM (:829) pastes `m_pixelStore##paramNameHead##Parameters`, and SET_CAPABILITY
+# (:309) pastes `m_parameters.capability##Enabled`. Read raw, neither is a write to any token
+# this script can name, so it saw none of them and reported their absence as a fact. So the
+# function-like macros defined under the two roots are expanded first, and the ones that
+# cannot be expanded are recorded so that a body reaching one is declined rather than
+# answered.
+MACRO_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*#[ \t]*(define|undef)[ \t]+(\w+)(\([^()\n]*\))?((?:\\\n|[^\n])*)", re.M)
+# MGP_NOTE_AGGREGATE is modelled directly (its hop is read out of MGPipeNoteAggregate's own
+# switch), so expanding it would delete the very token AGGREGATE_RE looks for.
+NEVER_EXPAND = frozenset(("MGP_NOTE_AGGREGATE", "MGP_NOTE_MUTATION"))
+MACRO_BODY_LIMIT = 4000
+PASTE_RE = re.compile(r"##")
+# A member DECLARATION - a type, then the name, then the end of the statement. Used to keep
+# the containment check below from confusing two classes that spell a member the same way:
+# MG_Backend/MGPipe/PipeInputs.h has its own m_transformFeedbackGeneration, and a write to
+# THAT one says nothing about who writes GLContext's.
+MEMBER_DECL_RE = re.compile(
+    r"^[ \t]*[A-Za-z_][\w:<>,&*\s]*?[\s&*](m_\w+)\s*(?:\[[^\]\n]*\])?"
+    r"\s*(?:=[^;\n]*|\{[^}\n]*\})?;", re.M)
+
+
+def source_files(root):
+    """Every .h/.cpp under `root`, in a stable order."""
+    out = []
+    for directory, _, files in os.walk(root):
+        for name in sorted(files):
+            if name.endswith((".h", ".cpp")):
+                out.append(os.path.join(directory, name))
+    return sorted(out)
+
+
+def macro_definitions(masked):
+    """(kind, name, params-or-None, body, start, end) for every #define / #undef, with line
+    continuations joined."""
+    for match in MACRO_DIRECTIVE_RE.finditer(masked):
+        yield (match.group(1), match.group(2), match.group(3),
+               match.group(4).replace("\\\n", " "), match.start(), match.end())
+
+
+def blank_directives(masked):
+    """`masked` with every #define / #undef blanked (newlines kept), so a macro BODY is never
+    read as code belonging to whatever function encloses the directive - RenderState.cpp
+    defines SET_PIXEL_STORE_PARAM *inside* SetPixelStoreParam, and read raw its body
+    contributed a field literally named `paramNameTail`."""
+    out = list(masked)
+    for _, _, _, _, start, end in macro_definitions(masked):
+        for index in range(start, end):
+            if out[index] != "\n":
+                out[index] = " "
+    return "".join(out)
+
+
+def balanced(text):
+    counts = {"(": 0, "[": 0, "{": 0}
+    closing = {")": "(", "]": "[", "}": "{"}
+    for char in text:
+        if char in counts:
+            counts[char] += 1
+        elif char in closing:
+            counts[closing[char]] -= 1
+            if counts[closing[char]] < 0:
+                return False
+    return not any(counts.values())
+
+
+def macro_table(paths):
+    """({name: (params, body)} this script will expand, {name: body} it saw and refused).
+
+    Function-like macros only - an object-like macro is a constant and expanding it buys the
+    write analysis nothing. A macro is REFUSED when expanding it could corrupt the brace
+    matching every function body here is found by (an unbalanced body), when it is variadic,
+    over-long or defined more than once with different bodies, or when the analysis models it
+    directly. A refused macro is not silently ignored: if its body pastes tokens, every body
+    that invokes it is declined."""
+    seen = {}
+    for path in paths:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            masked = mask_comments_and_strings(handle.read())
+        for kind, name, params, body, _, _ in macro_definitions(masked):
+            if kind == "undef" or params is None:
+                continue
+            seen.setdefault(name, []).append((params, body))
+    expandable = {}
+    refused = {}
+    for name, definitions in seen.items():
+        bodies = set(body for _, body in definitions)
+        params = [part.strip() for part in definitions[0][0][1:-1].split(",") if part.strip()]
+        body = definitions[0][1]
+        if (name in NEVER_EXPAND or len(bodies) > 1 or len(body) > MACRO_BODY_LIMIT
+                or not balanced(body) or any(not part.isidentifier() for part in params)):
+            refused[name] = " ".join(sorted(bodies))
+            continue
+        expandable[name] = (params, body)
+    return expandable, refused
+
+
+def matching_paren(text, open_index):
+    depth = 0
+    for index in range(open_index, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def split_arguments(text):
+    args = []
+    current = []
+    depth = 0
+    for char in text:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == "," and depth == 0:
+            args.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    if current or args:
+        args.append("".join(current))
+    return args
+
+
+def substitute(body, params, args):
+    """One macro expansion: parameters replaced, then `##` pasted away - which is the step
+    that turns `m_pixelStore##paramNameHead##Parameters` into a member this script can name."""
+    text = body
+    for param, arg in sorted(zip(params, args), key=lambda pair: -len(pair[0])):
+        text = re.sub(r"\b%s\b" % re.escape(param), lambda _match, value=arg: value, text)
+    return re.sub(r"\s*##\s*", "", text)
+
+
+def expand_macros(masked, expandable, rounds=4):
+    """`masked` with its directives blanked and every invocation of an expandable
+    function-like macro replaced by its expansion."""
+    text = blank_directives(masked)
+    if not expandable:
+        return text
+    pattern = re.compile(r"\b(%s)\s*\(" % "|".join(sorted((re.escape(name) for name in expandable),
+                                                          key=len, reverse=True)))
+    for _ in range(rounds):
+        out = []
+        index = 0
+        changed = False
+        while True:
+            match = pattern.search(text, index)
+            if match is None:
+                out.append(text[index:])
+                break
+            close = matching_paren(text, match.end() - 1)
+            params, body = expandable[match.group(1)]
+            args = split_arguments(text[match.end():close]) if close is not None else None
+            if args is None or len(args) != len(params):
+                out.append(text[index:match.end()])
+                index = match.end()
+                continue
+            out.append(text[index:match.start()])
+            out.append(" %s " % substitute(body, params, args))
+            index = close + 1
+            changed = True
+        text = "".join(out)
+        if not changed:
+            break
+    return text
+
+
+def unmodelled_sites(body, relative, pasting):
+    """The constructs in `body` this script does NOT model, as decline reasons. Today there
+    is exactly one class of them, and it is the one that produced a false verdict: a token
+    paste it could not expand."""
+    sites = set()
+    if PASTE_RE.search(body):
+        sites.add("%s: a `##` token paste no visible macro definition expands" % relative)
+    for match in CALL_RE.finditer(body):
+        if match.group(1) in pasting:
+            sites.add("%s: %s(), a token-pasting macro this script refused to expand"
+                      % (relative, match.group(1)))
+    return sites
 
 
 def state_bodies():
-    """{function name: [body text]} over MG_State/GLState and MG_Impl/Pipe."""
-    bodies = {}
+    """({function name: [body text]}, {function name: {decline reason}}, [analysed paths])
+    over MG_State/GLState and MG_Impl/Pipe, macros expanded first."""
+    paths = []
     for root in STATE_ROOTS:
-        for directory, _, files in os.walk(root):
-            for name in sorted(files):
-                if not name.endswith((".h", ".cpp")):
-                    continue
-                path = os.path.join(directory, name)
-                with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                    masked = mask_comments_and_strings(handle.read())
-                for fn, start, end in function_bodies(masked):
-                    bodies.setdefault(fn, []).append(masked[start:end])
-    return bodies
+        paths += source_files(root)
+    expandable, refused = macro_table(paths)
+    # A macro this script MODELS is not an unread construct even though it is not expanded.
+    pasting = frozenset(name for name, body in refused.items()
+                        if name not in NEVER_EXPAND and PASTE_RE.search(body))
+    bodies = {}
+    taints = {}
+    for path in paths:
+        relative = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            expanded = expand_macros(mask_comments_and_strings(handle.read()), expandable)
+        for fn, start, end in function_bodies(expanded):
+            body = expanded[start:end]
+            bodies.setdefault(fn, []).append(body)
+            sites = unmodelled_sites(body, relative, pasting)
+            if sites:
+                taints.setdefault(fn, set())
+                taints[fn] |= sites
+    return bodies, taints, paths
 
 
-def written_tokens(bodies):
+def writers_outside(analysed):
+    """{MEM token: a file OUTSIDE the analysed roots that writes it}.
+
+    The absence claim is only as good as the set of writers the analysis reads. Every .h/.cpp
+    under MobileGL/ that is not one of the analysed files is scanned with the same write
+    patterns, and a shutter member that turns up here is declined rather than answered.
+
+    A file that DECLARES a member of that name is writing its own, not the frontend's - the
+    backend's PipeInputs mirrors half of GLState's member names - so its writes do not count.
+    That is the one judgement here, and it is the conservative way round only for names the
+    two sides share; a genuine outside writer of a frontend member does not declare it."""
+    seen = set(analysed)
+    out = {}
+    for path in source_files(MOBILEGL_ROOT):
+        if path in seen:
+            continue
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            masked = mask_comments_and_strings(handle.read())
+        relative = os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
+        own = set(MEMBER_DECL_RE.findall(masked))
+        written = set(match.group(1) or match.group(2) for match in MEMBER_WRITE_RE.finditer(masked))
+        written |= set(match.group(1) for match in MEMBER_ROOTED_WRITE_RE.finditer(masked))
+        for member in written - own:
+            out.setdefault("MEM:" + member, relative)
+    return out
+
+
+def written_tokens(bodies, taints=None):
     """{function name: set of tokens it transitively WRITES}, a fixed point over call names.
 
-    A token is MEM:<member>, FIELD:<struct field> or AGG:<MGPipeAggregate enumerator>."""
+    A token is MEM:<member>, FIELD:<struct field>, AGG:<MGPipeAggregate enumerator> or
+    TAINT:<site>. The last is not a write: it is "this body contains something the analysis
+    does not model", and it rides the same fixed point so that a mutator which REACHES an
+    unreadable body inherits it and is declined rather than answered."""
+    taints = taints or {}
     reach = {}
     for name, bodylist in bodies.items():
-        tokens = set()
+        tokens = set("TAINT:" + site for site in taints.get(name, ()))
         for body in bodylist:
             tokens |= set("AGG:" + m.group(1) for m in AGGREGATE_RE.finditer(body))
             for match in MEMBER_WRITE_RE.finditer(body):
                 tokens.add("MEM:" + (match.group(1) or match.group(2)))
+            # A write THROUGH a member records the member AND the field: the reader side
+            # resolves an accessor to the member, so recording only the field is what kept
+            # the two halves from ever meeting.
+            for match in MEMBER_ROOTED_WRITE_RE.finditer(body):
+                tokens.add("MEM:" + match.group(1))
             tokens |= set("FIELD:" + m.group(1) for m in FIELD_WRITE_RE.finditer(body))
         reach[name] = tokens
     changed = True
@@ -407,11 +701,16 @@ def shutter_readers():
     # builds the value being compared.
     for match in DIRTY_OR_RE.finditer(body):
         # Since the previous `dirty |=` of ANY form - the counter loop's included, or the
-        # window would start at the top of the walk and inherit every other bit's readers.
+        # window would start at the top of the walk and inherit every other bit's readers -
+        # AND since the last `}` before this one, whichever is later. The second boundary is
+        # what keeps the pack block's trailing `m_pack = pack;` out of the PATCH bit's
+        # window: `pack` is a local of the walk, so it expands to ctx.GetPixelStore
+        # Parameters and the patch shutter would read as though it compared the pixel store.
         previous = 0
         for boundary in DIRTY_ANY_RE.finditer(body, 0, match.start()):
             previous = boundary.end()
-        window = body[previous:match.start()]
+        closing = body.rfind("}", 0, match.start())
+        window = body[max(previous, closing + 1):match.start()]
         out.setdefault(match.group(1), set())
         out[match.group(1)] |= readers_of(window)
     return out
@@ -488,41 +787,59 @@ def answer_set(answer):
     return {part.strip() for part in answer.split("|") if part.strip()}
 
 
-def object_class_problems(mapping, bits, movers, moved):
+def object_class_problems(mapping, bits, movers, moved, outside=None):
     """The under-firing check for every answer the RenderState derivation cannot reach.
 
-    Returns (problems, verified, unverified) - `unverified` names the rows the derivation
-    had to decline, with the reason, so --check reports its own coverage instead of letting
-    a row it never looked at read as checked."""
+    Returns (problems, verified, declined) - `declined` names the rows the derivation REFUSED
+    to answer, with the reason. Every branch below that does not end in a verdict ends here
+    instead, because the alternative is what this gate did to NEW_PIXEL_PACK: turn "this
+    script cannot read that construct" into "that mutator writes nothing"."""
+    outside = outside or {}
     problems = []
     verified = 0
-    unverified = []
+    declined = []
     render_bits = {RENDER_STATE_BIT, PIPELINE_STATE_BIT}
     for mutator in sorted(mapping):
         claimed = (answer_set(mapping[mutator]) & bits) - render_bits
         if not claimed:
             continue
         if mutator not in moved:
-            unverified.append("%s (no body found under MG_State/GLState or MG_Impl/Pipe to "
-                              "derive from)" % mutator)
+            declined.append("%s (no body found under MG_State/GLState or MG_Impl/Pipe to "
+                            "derive from)" % mutator)
             continue
+        blind = sorted(token[6:] for token in moved[mutator] if token.startswith("TAINT:"))
         for bit in sorted(claimed):
             shutter, resolved = movers.get(bit, (set(), False))
             if not resolved:
-                unverified.append("%s <- %s (Tracker.h's shutter for that bit reads something "
-                                  "this script cannot resolve to a member)" % (mutator, bit))
+                declined.append("%s <- %s (Tracker.h's shutter for that bit reads something "
+                                "this script cannot resolve to a member)" % (mutator, bit))
                 continue
             if moved[mutator] & shutter:
                 verified += 1
+                continue
+            # Everything past here would be an ABSENCE claim, so the gate first has to be
+            # able to say it read every writer of that shutter. Two things stop it, and each
+            # is a decline rather than a verdict.
+            unread = sorted(set(outside[token] for token in shutter if token in outside))
+            if unread:
+                declined.append("%s <- %s (that shutter's members are written outside the "
+                                "analysed roots too, e.g. %s, so 'it writes nothing that "
+                                "shutter reads' is not a fact this script has)"
+                                % (mutator, bit, unread[0]))
+                continue
+            if blind:
+                declined.append("%s <- %s (it reaches %s, so the write analysis is not "
+                                "complete for this mutator)" % (mutator, bit, blind[0]))
                 continue
             problems.append(
                 "UNDER-FIRING answer %s for %s - it writes nothing %s's shutter reads "
                 "(shutter: %s), so a mutation through it publishes nothing"
                 % (bit, mutator, bit, ", ".join(sorted(t.split(":", 1)[1] for t in shutter))))
-    return problems, verified, unverified
+    return problems, verified, declined
 
 
-def check_mapping(mapping, duplicates, scanned, bits, publishers=None, movers=None, moved=None):
+def check_mapping(mapping, duplicates, scanned, bits, publishers=None, movers=None, moved=None,
+                  outside=None):
     """Every problem the gate fails on, as a list of human-readable lines. BOTH directions:
     an unmapped mutator renders stale, and a row naming a mutator the scan no longer finds is
     a stale row that would keep a real hole looking covered. `publishers` is
@@ -546,12 +863,17 @@ def check_mapping(mapping, duplicates, scanned, bits, publishers=None, movers=No
                 continue
             problems.append("BAD answer %s for %s - not a MGPipeDirty bit name and not one of %s"
                             % (answer, mutator, ", ".join(NON_BIT_ANSWERS)))
-        if len(answers) > 1 and answers & set(NON_BIT_ANSWERS):
+        partial = answers & set(PARTIAL_ANSWERS)
+        if len(answers) > 1 and (answers & set(NON_BIT_ANSWERS)) - partial:
             problems.append("BAD answer %s for %s - a non-bit answer stands alone"
                             % (mapping[mutator], mutator))
+        if partial and not answers & bits:
+            problems.append("BAD answer %s for %s - %s has to NAME the bits that move on some "
+                            "of the paths that mutate; kPulledEveryVerb is the answer when "
+                            "none does" % (mapping[mutator], mutator, "|".join(sorted(partial))))
 
     if movers is not None and moved is not None:
-        object_problems, _, _ = object_class_problems(mapping, bits, movers, moved)
+        object_problems, _, _ = object_class_problems(mapping, bits, movers, moved, outside)
         problems += object_problems
 
     if publishers is None:
@@ -615,7 +937,7 @@ def scan_all():
     return sources, per_file, distinct_all
 
 
-def self_test(scanned, bits, publishers, movers, moved):
+def self_test(scanned, bits, publishers, movers, moved, outside=None):
     """Canned negative controls. Each MUST trip; trips == 0 is an error, which is the shape
     check_include_closure.py and gen_pipe.py --self-test already use."""
     trips = 0
@@ -679,7 +1001,7 @@ def self_test(scanned, bits, publishers, movers, moved):
     with_dead_shutter = dict(real)
     with_dead_shutter["SetNamedTransformFeedbackBinding"] = "NEW_SO_TARGETS"
     problems = check_mapping(with_dead_shutter, real_duplicates, scanned, bits, publishers,
-                             movers, moved)
+                             movers, moved, outside)
     if any("UNDER-FIRING answer NEW_SO_TARGETS" in p for p in problems):
         trips += 1
     else:
@@ -691,12 +1013,68 @@ def self_test(scanned, bits, publishers, movers, moved):
     with_wrong_bit = dict(real)
     with_wrong_bit["SetCurrentVertexAttributeInt"] = "NEW_PIXEL_PACK"
     problems = check_mapping(with_wrong_bit, real_duplicates, scanned, bits, publishers,
-                             movers, moved)
+                             movers, moved, outside)
     if any("UNDER-FIRING answer NEW_PIXEL_PACK" in p for p in problems):
         trips += 1
     else:
         failures.append("negative control 7 (a value-class answer whose shutter the mutator "
                         "never moves) did NOT trip")
+
+    # 8. A row that says kPulledPartialShutter and names no bit. The whole point of that
+    #    answer is to carry the bits that DO move, so an empty one is kPulledEveryVerb with
+    #    a different spelling - and kPulledEveryVerb is the claim that got NEW_PIXEL_PACK
+    #    wrong in the first place.
+    with_empty_partial = dict(real)
+    with_empty_partial["SetPixelStoreParam"] = "kPulledPartialShutter"
+    problems = check_mapping(with_empty_partial, real_duplicates, scanned, bits)
+    if any("has to NAME the bits" in p for p in problems):
+        trips += 1
+    else:
+        failures.append("negative control 8 (kPulledPartialShutter naming no bit) did NOT trip")
+
+    # 9. THE CONTROL FOR THE DECLINE PATH, and it is the shape of the defect this round fixed.
+    #    The gate did not merely miss a check: it turned "this script cannot read that
+    #    construct" into "that mutator writes nothing", and printed a verdict about
+    #    RenderState.cpp that was false. So a mutator whose reachable text contains something
+    #    the analysis does not model has to come out DECLINED and must NOT appear as a
+    #    problem, whatever else is true of it.
+    blinded = dict(moved)
+    blinded["SetCurrentVertexAttributeInt"] = {"TAINT:a canned unexpandable token paste"}
+    problems, _, declined = object_class_problems(with_wrong_bit, bits, movers, blinded, outside)
+    if (not any("SetCurrentVertexAttributeInt" in p for p in problems)
+            and any(d.startswith("SetCurrentVertexAttributeInt <- NEW_PIXEL_PACK") for d in declined)):
+        trips += 1
+    else:
+        failures.append("negative control 9 (a mutator whose write analysis is incomplete) did "
+                        "NOT decline - the gate answered a question it cannot answer")
+
+    # 10. The other decline reason, and the other half of the same principle: a shutter whose
+    #     members have a writer OUTSIDE the roots this analysis reads. "Nobody writes it" is
+    #     not a claim about code the script never opened.
+    hidden = dict(outside or {})
+    for token in movers.get("NEW_PIXEL_PACK", (set(), False))[0]:
+        hidden[token] = "MobileGL/MG_Backend/a-file-this-analysis-never-reads.cpp"
+    problems, _, declined = object_class_problems(with_wrong_bit, bits, movers, moved, hidden)
+    if (not any("SetCurrentVertexAttributeInt" in p for p in problems)
+            and any("outside the analysed roots" in d for d in declined)):
+        trips += 1
+    else:
+        failures.append("negative control 10 (a shutter member written outside the analysed "
+                        "roots) did NOT decline - the gate claimed an absence over code it "
+                        "never read")
+
+    # THE POSITIVE CONTROL, and it is the row that was wrong: RenderState::SetPixelStoreParam
+    # writes NEW_PIXEL_PACK's shutter member sixteen times, through a token-pasting macro. If
+    # this ever reads as UNDER-FIRING again, the write analysis has lost the preprocessor and
+    # every absence claim in this gate is worthless.
+    with_the_bit = dict(real)
+    with_the_bit["SetPixelStoreParam"] = "NEW_PIXEL_PACK"
+    problems, _, declined = object_class_problems(with_the_bit, bits, movers, moved, outside)
+    if any("SetPixelStoreParam" in line for line in problems + declined):
+        failures.append("the positive control (SetPixelStoreParam DOES write "
+                        "NEW_PIXEL_PACK's shutter) did not pass: %s"
+                        % "; ".join(line for line in problems + declined
+                                    if "SetPixelStoreParam" in line))
 
     for failure in failures:
         print("dirty-surface self-test: %s" % failure)
@@ -706,7 +1084,8 @@ def self_test(scanned, bits, publishers, movers, moved):
         return 1
     if failures:
         return 1
-    print("dirty-surface self-test: %d negative controls, all tripped" % trips)
+    print("dirty-surface self-test: %d negative controls, all tripped; positive control OK "
+          "(SetPixelStoreParam's sixteen token-pasted writes are read)" % trips)
     return 0
 
 
@@ -734,8 +1113,9 @@ def main():
     publishers = render_state_publishers()
     if not publishers:
         sys.exit("could not derive any RenderState setter out of %s" % RENDER_STATE_PATH)
-    bodies = state_bodies()
-    reach = written_tokens(bodies)
+    bodies, taints, analysed = state_bodies()
+    reach = written_tokens(bodies, taints)
+    outside = writers_outside(analysed)
     aggregates = aggregate_tokens(bodies, reach)
     moved = {name: expand_aggregates(tokens, aggregates) for name, tokens in reach.items()}
     readers = shutter_readers()
@@ -749,13 +1129,13 @@ def main():
     movers = shutter_movers(readers, bodies, aliases)
 
     if args.self_test:
-        return self_test(distinct_all, bits, publishers, movers, moved)
+        return self_test(distinct_all, bits, publishers, movers, moved, outside)
 
     mapping, duplicates = load_mapping()
 
     if args.check:
         problems = check_mapping(mapping, duplicates, distinct_all, bits, publishers, movers,
-                                 moved)
+                                 moved, outside)
         for problem in problems:
             print("dirty-surface: %s" % problem)
         if problems:
@@ -764,7 +1144,7 @@ def main():
                   "RenderState.cpp actually publishes" % len(problems))
             return 1
         derived = sum(1 for m in mapping if m in publishers)
-        _, verified, unverified = object_class_problems(mapping, bits, movers, moved)
+        _, verified, declined = object_class_problems(mapping, bits, movers, moved, outside)
         prose = sorted(m for m in mapping if not (answer_set(mapping[m]) & bits))
         print("dirty-surface: %d mutators, all mapped, no stale rows; %d render-state answers "
               "derived from RenderState.cpp and matching" % (len(mapping), derived))
@@ -773,10 +1153,22 @@ def main():
         print("dirty-surface: %d other bit answers derived from their shutter in Tracker.h "
               "(under-firing only); %d declined; %d rows carry a prose answer (%s) that no "
               "derivation checks"
-              % (verified, len(unverified), len(prose),
+              % (verified, len(declined), len(prose),
                  ", ".join(sorted(set(a for m in prose for a in answer_set(mapping[m]))))))
-        for row in unverified:
-            print("dirty-surface:   not derived: %s" % row)
+        for row in declined:
+            print("dirty-surface:   DECLINED, no verdict: %s" % row)
+        # The absence claim's own footprint, printed rather than assumed: what the write
+        # analysis read, and the one place it is still coarse.
+        print("dirty-surface: the under-firing half read %d function bodies across %d files "
+              "under %s, macros expanded first; %d of those bodies carry a construct it does "
+              "not model and taint whatever reaches them; %d members are written outside "
+              "those roots and any shutter that names one is declined; a FIELD token is "
+              "matched by name and not scoped to a type, so it only ever WIDENS what a "
+              "mutator is credited with writing"
+              % (sum(len(v) for v in bodies.values()), len(analysed),
+                 " + ".join(os.path.relpath(root, REPO_ROOT).replace(os.sep, "/")
+                            for root in STATE_ROOTS),
+                 len(taints), len(outside)))
         return 0
 
     total_functions = 0

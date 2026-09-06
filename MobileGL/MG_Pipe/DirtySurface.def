@@ -21,7 +21,10 @@
 // ANSWERS. A row lists EVERY publisher that fires on EVERY path through that mutator,
 // and only those; several are joined with '|'. A publisher that fires on some paths but
 // not all must not appear, because a shutter built from this file would then UNDER-fire,
-// and ARCHITECTURE.md 13.2 names under-firing as the dangerous direction.
+// and ARCHITECTURE.md 13.2 names under-firing as the dangerous direction. The one row that
+// carries a bit which fires on only some paths says so in its answer - kPulledPartialShutter
+// joined with that bit - because the alternative, dropping the bit, tells a reader of this
+// file that a bit P2 already emits a call for has no shutter at all.
 //
 // "EVERY PATH" MEANS EVERY PATH THAT MUTATES. A setter that returns early because the value
 // did not change publishes nothing and needs to publish nothing - there is no mutation to
@@ -36,13 +39,31 @@
 // below. Every other NEW_* answer is checked against the shutter Tracker.h builds for that
 // bit: gen_pipe_dirty_surface.py resolves what the shutter READS to the members behind it,
 // computes what each mutator transitively WRITES (through MGP_NOTE_AGGREGATE too, whose hop
-// it reads out of MGPipeNoteAggregate's own switch), and fails a row that names a bit whose
-// shutter its mutator moves on no path at all. That half is one-directional on purpose -
-// "it does write something the shutter reads" cannot prove it does so on EVERY path - so it
-// catches under-firing and not over-claiming. The prose answers (kImmediate, kExplicitDestroy,
-// kUnpublishedDestroy, kNoBackendRead, kPulledEveryVerb, kReverseChannel) are statements no
-// derivation checks; --check prints how many rows carry one, and prints every row it had to
-// decline, so "all mapped" can never be read as "all verified".
+// it reads out of MGPipeNoteAggregate's own switch, and through the function-like macros of
+// MG_State, which it EXPANDS - sixteen of RenderState.cpp's writes exist only after the
+// preprocessor has pasted them together), and fails a row that names a bit whose shutter its
+// mutator moves on no path at all. That half is one-directional on purpose - "it does write
+// something the shutter reads" cannot prove it does so on EVERY path - so it catches
+// under-firing and not over-claiming.
+//
+// AN ABSENCE CLAIM IS ONLY WORTH THE READING BEHIND IT, and this gate learned that the
+// expensive way: its write analysis used to record a write through a member's field
+// (m_foo.bar = v) as the FIELD alone and never as the member, while the shutter side
+// resolves an accessor to the MEMBER - so the two halves could not meet for any
+// struct-valued member, and --check printed, as a fact about RenderState.cpp, that
+// SetPixelStoreParam "writes nothing NEW_PIXEL_PACK's shutter reads" about a setter whose
+// whole body is sixteen writes to exactly that member. The answer below is what that put in
+// this file. So the derivation now DECLINES rather than answers whenever it cannot say it
+// read every writer: a body carrying a construct it does not model (an unexpandable token
+// paste), anything that reaches such a body, and any shutter member written outside
+// MG_State/GLState + MG_Impl/Pipe at all. --check prints every decline with the site that
+// caused it, and prints how many bodies and files the claim rests on.
+//
+// The prose answers (kImmediate, kExplicitDestroy, kUnpublishedDestroy, kNoBackendRead,
+// kPulledEveryVerb, kPulledPartialShutter, kReverseChannel) are statements no derivation
+// checks - except the bits a kPulledPartialShutter row names, which are checked like any
+// other bit answer. --check prints how many rows carry a prose answer, so "all mapped" can
+// never be read as "all verified".
 //
 // For the RenderState family that answer is not a matter of taste and it is CHECKED
 // rather than asserted: scripts/gen_pipe_dirty_surface.py reads RenderState.cpp and
@@ -79,10 +100,25 @@
 //                    stakes. (D13's prose says 'six kinds' while the Core.cpp ranges it
 //                    cites also cover MarkProgram/MarkShaderForDeletion; the tree
 //                    decides, and the tree has no wire object for those three.)
-//   kPulledEveryVerb no shutter exists, and none is needed yet: the PipeInputs field this
-//                    writes is in its verb class's may-read mask, so the residual fill copies
-//                    it at EVERY verb of that class. A shutter here is a P3/P4 optimisation,
-//                    not a correctness gap.
+//   kPulledEveryVerb no shutter exists at all - no MGPipeDirty bit moves on any path through
+//                    this mutator - and none is needed yet: the PipeInputs field it writes is
+//                    in its verb class's may-read mask, so the residual fill copies it at
+//                    EVERY verb of that class. A shutter here is a P3/P4 optimisation, not a
+//                    correctness gap.
+//   kPulledPartialShutter
+//                    the same pull, but a bit DOES move - on some of the paths that mutate,
+//                    not all of them - so this row must never be read as "no shutter exists".
+//                    The bits that move are named after the '|', which is the one place this
+//                    file joins a prose answer with a bit, and the reason is exactly that a
+//                    P3a shutter builder has to be able to tell "no bit covers this" from "a
+//                    bit covers half of it". The named bits are checked the same way every
+//                    other bit answer is - a dead one is a red gate - but they are NOT a
+//                    licence to narrow: what holds on every mutating path is the pull.
+//                    Which rows need this answer is a human judgement and stays one: the
+//                    derivation's "it does move that shutter" direction over-approximates
+//                    (a call name resolves to every body of that name, a write inside an
+//                    `if` counts), so it can refute a named bit but cannot find the rows
+//                    that should have named one.
 //
 // KNOWN BLIND SPOTS OF THE SCANNER, recorded here rather than left implicit
 // (gen_pipe_dirty_surface.py's own notes plus its scan root):
@@ -160,16 +196,21 @@
     X(SetViewport,                        NEW_RENDER_STATE)                                     \
     X(SetViewportIndexed,                 NEW_RENDER_STATE)                                     \
     /* ---- the other value-class bits ---- */                                                  \
-    /* NOT NEW_PIXEL_PACK, though half of it does move that bit: RenderState::SetPixelStore */  \
-    /* Param writes BOTH halves - eight Pack arms and eight Unpack arms - while the         */  \
-    /* tracker's bit 2 is a byte compare of the PACK half alone (Tracker.h), because        */  \
-    /* set_pixel_pack_state deliberately has no unpack counterpart (ARCHITECTURE.md 4.6).   */  \
-    /* So glPixelStorei(GL_UNPACK_ALIGNMENT, 8) and its seven siblings move NOTHING that     */ \
-    /* bit reads, and naming it here would be an under-firing shutter for eight of the       */ \
-    /* sixteen arms. What is true on every path is the pull: GetPixelStoreParameters is one  */ \
-    /* of the two Coverage.def rows an emitted call does not supply completely (PipeFill.    */ \
-    /* cpp), so the residual fill copies both halves at every verb of the class.            */  \
-    X(SetPixelStoreParam,                 kPulledEveryVerb)                                     \
+    /* kPulledPartialShutter, NOT kPulledEveryVerb, and NOT a bare NEW_PIXEL_PACK:          */  \
+    /* RenderState::SetPixelStoreParam writes BOTH halves - eight Pack arms and eight       */  \
+    /* Unpack arms - while the tracker's bit 2 is a byte compare of the PACK half alone     */  \
+    /* (Tracker.h), because set_pixel_pack_state deliberately has no unpack counterpart     */  \
+    /* (ARCHITECTURE.md 4.6). So glPixelStorei(GL_PACK_ALIGNMENT, 8) DOES move bit 2 and    */  \
+    /* glPixelStorei(GL_UNPACK_ALIGNMENT, 8) moves nothing at all, and a shutter narrowed   */  \
+    /* to bit 2 would under-fire for eight of the sixteen arms. What is true on every path  */  \
+    /* is the pull: GetPixelStoreParameters is one of the two Coverage.def rows an emitted  */  \
+    /* call does not supply completely (PipeFill.cpp), so the residual fill copies both     */  \
+    /* halves at every verb of the class. The bit is named anyway because P2 already EMITS  */  \
+    /* set_pixel_pack_state off it: a row that said "no shutter exists" about the only      */  \
+    /* mutator behind a shipped call would be a false answer to the one question D16 hands  */  \
+    /* P3a. Splitting this setter into a pack half and an unpack half is what would let the */  \
+    /* pack half answer NEW_PIXEL_PACK outright; that is P3's move, not P2's.               */  \
+    X(SetPixelStoreParam,                 kPulledPartialShutter|NEW_PIXEL_PACK)                 \
     X(SetPatchDefaultInnerLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
     X(SetPatchDefaultOuterLevel,          NEW_PATCH_STATE|NEW_RENDER_STATE|NEW_PIPELINE_STATE)  \
     /* Also an immediate publish point, but it has a real bit and the bit is   */               \
