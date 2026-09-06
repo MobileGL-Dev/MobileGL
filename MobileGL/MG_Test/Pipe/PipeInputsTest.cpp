@@ -170,6 +170,15 @@ TEST(PipeInputsTest,BadVerifyCorruptKnobIsFatalNamingTheKnob) {
 TEST(PipeInputsTest,VerifyFatalOffLogsTheDivergenceAndContinues) {
     GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
 }
+TEST(PipeInputsTest,AFrontendMutationInsideAVerbRefreshesThePushedField) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
+TEST(PipeInputsTest,TheMutationNoticeRefreshesTheValueButNotTheStamp) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
+TEST(PipeInputsTest,AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
+    GTEST_SKIP() << "push not compiled in (MOBILEGL_PIPE_PUSH=OFF)";
+}
 
 #else // MOBILEGL_PIPE_PUSH
 
@@ -512,6 +521,102 @@ TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
     }
     EXPECT_EQ(gPipeInputs.ContextIdentity(), static_cast<const void*>(MG_State::pGLContext.get()));
     EXPECT_TRUE(gPipeInputs.IsLive());
+#endif
+}
+
+// Push on mutation (P1 lane finding F2, MG_Pipe/PipeMutation.h). The backends write into
+// frontend objects inside their own verb - Magma synthesises a fallback texture for an
+// unbound sampler and overrides a unit's sampler filter (VulkanRenderer/UniformManager) -
+// and every such write moves a counter the verb boundary already copied. The frontend
+// mutator refreshes that field, so the block still equals the live context at every read.
+// Without the notice the two reads below differ and the pushed value is the stale one.
+TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
+    auto& ctx = *MG_State::pGLContext;
+    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    ASSERT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+    ASSERT_EQ(gPipeInputs.GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    ASSERT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+
+    // What UniformManager's fallback path does mid-draw: change a sampler object's filter,
+    // which bumps the context-wide sampling-resolution generation (SamplerObject.cpp).
+    const Uint64 samplingBefore = ctx.GetSamplingResolutionGeneration();
+    auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+    sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
+                                                                               : SamplerFilterMode::Nearest);
+    ASSERT_NE(ctx.GetSamplingResolutionGeneration(), samplingBefore) << "the mutation did not move the counter";
+    EXPECT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+
+    // And a bind reached from inside a verb moves both the bind generation and the
+    // high-water mark of touched units (TextureState::NoteUnitTouched).
+    const Uint64 bindBefore = ctx.GetTextureBindGeneration();
+    const Int unit = ctx.GetMaxTouchedTextureUnit() + 1;
+    ctx.NoteTextureUnitTouched(unit);
+    ASSERT_NE(ctx.GetTextureBindGeneration(), bindBefore) << "the bind did not move the counter";
+    ASSERT_EQ(ctx.GetMaxTouchedTextureUnit(), unit);
+    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+}
+
+// The notice refreshes the VALUE and never the stamp: a field this verb withheld the stamp
+// of (negative control B) must stay stale, and a field outside the verb class's mask must
+// stay unfilled rather than be healed by an unrelated frontend write.
+TEST_F(PipeInputsTest, TheMutationNoticeRefreshesTheValueButNotTheStamp) {
+#if !MOBILEGL_PIPE_POISON
+    GTEST_SKIP() << "poison not compiled in (MOBILEGL_PIPE_POISON=0)";
+#else
+    auto& ctx = *MG_State::pGLContext;
+    MGPipeSetPoisonOmission("DrawArrays", "GetSamplingResolutionGeneration");
+    MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+    ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
+    ctx.BumpSamplingResolutionGeneration();
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
+        << "the notice restamped a field whose stamp the fill withheld";
+
+    // FenceSync is a kQuery verb: its mask holds no texture field at all, so the notice must
+    // leave the generation unfilled and a read of it Fatal{UnmigratedPipeInput}.
+    MGPipeSetPoisonOmission(nullptr, nullptr);
+    MGPipeFillForVerb(MGPipeVerb::FenceSync);
+    ASSERT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration));
+    ctx.BumpSamplingResolutionGeneration();
+    EXPECT_FALSE(Fresh(MGPipeInputField::GetSamplingResolutionGeneration))
+        << "the notice stamped a field the verb class never fills";
+#endif
+}
+
+// The lane failure itself (six DirectVulkan.Verify.UnboundImageDescriptorScenario entries,
+// two SampledSetStalenessScenario, two retrace cases): a frontend write made inside a draw
+// used to make the very next read of the pushed block differ from the live context. The
+// child reproduces it end to end under the armed comparator and must survive; without the
+// notice it dies of Fatal{PipeVerifyDiffer, "GetSamplingResolutionGeneration@DrawArrays",
+// where=read}.
+TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
+#if !MOBILEGL_PIPE_VERIFY
+    GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
+#elif !MGTEST_HAVE_FORK
+    GTEST_SKIP() << "no fork() on this platform";
+#else
+    ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
+    const ChildResult r = RunInChild([] {
+        MG_Config::Features.PipeVerify = true;
+        MGPipeFillForVerb(MGPipeVerb::DrawArrays);
+        (void)gPipeInputs.GetSamplingResolutionGeneration(); // boundary == live: completes
+        auto& ctx = *MG_State::pGLContext;
+        const Uint64 before = ctx.GetSamplingResolutionGeneration();
+        auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
+        sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
+                                                                                    : SamplerFilterMode::Nearest);
+        if (ctx.GetSamplingResolutionGeneration() == before) {
+            ::_exit(7); // the mutation did not take: the case would pass for the wrong reason
+        }
+        (void)gPipeInputs.GetSamplingResolutionGeneration(); // Fatal{PipeVerifyDiffer} without the notice
+        ctx.NoteTextureUnitTouched(ctx.GetMaxTouchedTextureUnit() + 1);
+        (void)gPipeInputs.GetTextureBindGeneration();
+        (void)gPipeInputs.GetMaxTouchedTextureUnit();
+    });
+    ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
+    EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
 #endif
 }
 
