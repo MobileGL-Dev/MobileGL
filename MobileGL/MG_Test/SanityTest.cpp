@@ -37,8 +37,53 @@
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Util/Types.h>
+#include <Config.h>
+#include <MG_Pipe/MGPipe.h>
 #include <limits>
 #include <set>
+
+#if MOBILEGL_PIPE_PUSH
+namespace {
+    // Which arm of the twin table this binary runs on.
+    //
+    // SanityTest never calls MG_ConfigLoader::Init, so MG_Config::Features keeps its static
+    // defaults - and Features.PipePush's static default is 0 ("pull everything", Config.h),
+    // which is the value a PULL build ships. Without this the D13 "must not break" cases
+    // (the scratch-FBO scrub, the three context-generation guards on the texture /
+    // framebuffer / renderbuffer twins, the sampled-set staleness walk and the whole-registry
+    // ScopedDirectGLESTextureBindings fixture) exercised the legacy UnorderedMap arm in EVERY
+    // build directory - so a push build's 82 sanity cases said nothing about the code this
+    // package actually changed.
+    //
+    // The default here is therefore ConfigLoader's own push-build default
+    // (kMGPipeSubsystemsMigratedAtP2, ConfigLoader.cpp), i.e. this binary runs the arm that
+    // SHIPS in the build it was compiled for: legacy in build-linux (where the handle arm is
+    // not compiled at all and every DirectGLESSlotTable case skips), handles in build-push and
+    // build-verify. MOBILEGL_PIPE_PUSH in the environment overrides it with the same
+    // decimal/0x contract ConfigLoader.cpp:172-192 gives it, so `MOBILEGL_PIPE_PUSH=0
+    // ctest -R Sanity` is the legacy-arm run of the same binary and the A/B is one env var.
+    //
+    // It runs as a gtest Environment rather than a static initializer on purpose:
+    // MG_Config::Features has a String member, so it is dynamically initialised, and writing
+    // to it from another TU's static initializer would be an initialisation-order race.
+    // SetUp() runs inside RUN_ALL_TESTS, long after every static initializer, and before the
+    // first test - hence before anything can latch EsprytSlotTablesEnabled().
+    class EsprytSlotArmEnvironment final : public ::testing::Environment {
+    public:
+        void SetUp() override {
+            MobileGL::Uint64 bits = MobileGL::MG_Pipe::kMGPipeSubsystemsMigratedAtP2;
+            const char* knob = std::getenv("MOBILEGL_PIPE_PUSH");
+            if (knob != nullptr && *knob != '\0') {
+                bits = std::strtoull(knob, nullptr, 0);
+            }
+            MobileGL::MG_Config::Features.PipePush = bits;
+        }
+    };
+
+    const ::testing::Environment* g_esprytSlotArmEnvironment =
+        ::testing::AddGlobalTestEnvironment(new EsprytSlotArmEnvironment());
+} // namespace
+#endif // MOBILEGL_PIPE_PUSH
 
 namespace {
     class DynamicParameterBackend final : public MobileGL::MG_Backend::BackendObject {
@@ -3351,6 +3396,26 @@ TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
     EXPECT_EQ(table.Find(nullptr), nullptr);
     EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(nullptr)));
 }
+// The gate on MAJOR 1 of the round-2 review: this binary's OTHER 82 cases - among them every
+// D13 "must not break" item - are only evidence about this package if they run on the arm this
+// package wrote. Before EsprytSlotArmEnvironment existed they did not, in any build directory
+// the P2 brief defines, and nothing said so; a gdb breakpoint on MGPipeSlotAllocator::Acquire
+// was the only way to find out. This case is that breakpoint, made falsifiable: delete the
+// environment and it goes red, and it goes red naming the arm rather than the symptom.
+TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
+    const char* knob = std::getenv("MOBILEGL_PIPE_PUSH");
+    if (knob != nullptr && *knob != '\0') {
+        GTEST_SKIP() << "the operator pinned the arm with MOBILEGL_PIPE_PUSH=" << knob;
+    }
+    EXPECT_TRUE(MobileGL::MG_Backend::DirectGLES::EsprytSlotTablesEnabled())
+        << "a push build of SanityTest resolved the LEGACY twin registry, so every case in this "
+           "binary that builds a twin - the scratch-FBO scrub, the three context-generation "
+           "guards, the sampled-set staleness walk, ScopedDirectGLESTextureBindings - is "
+           "exercising code this package did not change";
+    EXPECT_NE(MobileGL::MG_Config::Features.PipePush & MobileGL::MG_Pipe::kMGPipeSubsystemEsprytSlots,
+              0ull);
+}
+
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
 // exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
@@ -3380,6 +3445,10 @@ TEST(DirectGLESSlotTable, ObjectChurnAloneDrivesTheSweep) {
 }
 
 TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, TheTwinRegistryCasesInThisBinaryRunOnTheHandleArm) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
