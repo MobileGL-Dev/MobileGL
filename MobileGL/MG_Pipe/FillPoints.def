@@ -26,6 +26,44 @@
 // Fatal{UnmigratedPipeInput, "Field@Verb"} found there is fixed by adding the (class, field)
 // row, never by marking the field sticky.
 //
+// ---------------------------------------------------------------------------------------
+// THE VERDICT ON THE EIGHT STATICALLY OVER-APPROXIMATED ROWS (P2 brief C.1, MEASUREMENTS.md
+// section 4). Every one of them is KEPT, and the reason is the same in all three groups: the
+// row is not a guess, it names a concrete backend path, and the only evidence that could
+// retire it is DYNAMIC - a corpus that never reaches the path proves nothing, because a row
+// removed on that basis turns a rare path into Fatal{UnmigratedPipeInput} in a shipped build.
+//
+//   kReadback + IsTransformFeedbackActive / IsTransformFeedbackPaused
+//     KEPT. The depth/stencil read emulation draws (ScopedEmulationDrawState, DirectGLES.cpp)
+//     and pauses an active capture around its own draw, so a glReadPixels of a depth or
+//     stencil attachment reads the transform-feedback state exactly as a draw does. Reached
+//     only when the emulation is armed, which is a driver-shaped decision, so no desktop
+//     corpus can decide it.
+//
+//   kTextureOp + IsCapabilityEnabled, kDispatch + IsCapabilityEnabled
+//     KEPT. Magma's GenerateMipmap materialises a texture's queued clear before it blits and
+//     PrepareStorageImageTextures does the same for every storage image a dispatch writes;
+//     both go through VkClearManager::PreCompensateSrgbClearColor, which reads
+//     GL_FRAMEBUFFER_SRGB. The P2 contract gave that capability real storage for the first
+//     time, so this row went from reading a compile-time constant to reading real state -
+//     which is the opposite of a row that could be dropped.
+//
+//   kBlitOrCopy / kTextureOp + the shader blit's viewport and vertex/buffer bindings
+//     (GetViewportIndexed, GetDepthRangeIndexed, GetProvokingVertexMode, GetBufferBindingPoint)
+//     KEPT. TryBlitToDefaultFramebufferWithShader is a real draw of a backend-owned helper
+//     program: ApplyGLViewportState -> ComputeGLViewport reads viewport 0 and its depth range,
+//     GetOrCreateBlitPipeline -> SelectProvokingVertexMode reads the provoking vertex, and
+//     BindProgramUniformBuffers' block resolvers read the frontend binding points. It is taken
+//     when a blit's destination is the default framebuffer and the driver cannot do it
+//     natively - again a driver-shaped decision.
+//
+// What WOULD retire a row: the poison build already answers "was this field read at this
+// verb" exactly (MOBILEGL_PIPE_POISON_OMIT withholds one field's stamp for one verb and a
+// read of it aborts naming the pair). Turning that into a retirement gate means running the
+// omission across the full CTS caselist on both devices, not the desktop corpus, and that is
+// recorded as P3a work rather than done here on evidence that cannot support it.
+// ---------------------------------------------------------------------------------------
+//
 // gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.
 //
 // clang-format off
