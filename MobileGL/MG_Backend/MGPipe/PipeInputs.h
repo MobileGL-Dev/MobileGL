@@ -560,6 +560,12 @@ namespace MobileGL::MG_Pipe {
         // i.e. it is a lookup or a reverse-channel write, not a state read; there is no value
         // the filler could copy and no verb whose fill could make it stale. Phase C replaces
         // them with handle tables and callbacks.
+        // They carry no MGP_INPUT_CHECK / MGP_INPUT_VERIFY_READ (the declared exception to
+        // P1 brief D4's "every accessor body"): a forward is a live call, not a stored value,
+        // and InvalidateCompileEnv is reached from backend initialisation before any verb has
+        // filled, where a check would be Fatal{...@<none>} on every start. Their sticky stamp
+        // is therefore consulted by no accessor; the tests pin it through
+        // MGPipeInputFieldIsFresh directly.
         SizeT GetBufferBindingPointCount(BufferTarget target) const;
         const SharedPtr<ProgramObject>& GetProgramObject(Uint index);
         const SharedPtr<ITextureObject>& GetTextureObject(Uint index);

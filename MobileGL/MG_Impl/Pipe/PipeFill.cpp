@@ -61,8 +61,11 @@ namespace MobileGL::MG_Pipe {
                 dst.m_boundVertexArray = ctx.GetBoundVertexArray();
                 break;
             case F::GetBufferBindingSlot:
-                // Every global target has a slot; the others (Index) stay null and a read
-                // of one is the poison Fatal in the accessor.
+                // Every global target has a slot; Index stays null - GLContext resolves it
+                // through the bound VAO's element-buffer slot (Core.cpp), a derivation no
+                // FillPoints.def row can copy - and a read of it is the poison Fatal in the
+                // accessor. No backend reads it today (every slot read is DrawIndirect,
+                // DispatchIndirect, Parameter or PixelPack).
                 for (const auto target : GlobalBufferTargets) {
                     dst.m_bufferBindingSlot[static_cast<SizeT>(target)] = &ctx.GetBufferBindingSlot(target);
                 }
@@ -440,7 +443,14 @@ namespace MobileGL::MG_Pipe {
         if (ctx == nullptr) return;
         // The whole field is re-read and compared - a superset of "the same indices", so a
         // divergence in an index the backend did not ask for is still a divergence between
-        // the boundary value and the live value. The indices only decorate the report.
+        // the boundary value and the live value. The indices only decorate the report. The
+        // cost is per backend read (GetRenderStateParameters re-copies and compares the whole
+        // struct; GetProgramForDraw re-joins the pending link), inside the verify budget and
+        // to be kept in mind when reading the verify lane's wall time.
+        // InHook: the re-read calls the same GLContext accessor the filler calls, and
+        // GetProgramForDraw's join can re-enter a backend and with it another gPipeInputs
+        // accessor; that inner read is a plain load rather than a second hook, so the hook
+        // never recurses (and never reports the inner read against a half-copied scratch).
         g_verify.InHook = true;
         MGPipeFillAccess::CopyField(g_readScratch, *ctx, field);
         const Bool equal = MGPipeInputsFieldEqual(field, self, g_readScratch);
