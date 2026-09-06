@@ -15,8 +15,11 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/BufferState/BufferState.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
+#include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Pipe/MGPipeRenderStateSpans.h>
+#include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeMutation.h>
 #include <Config.h>
 
@@ -34,6 +37,12 @@ namespace MobileGL::MG_Pipe {
         // accessor of the same name (P1 brief D4: no derivation logic is re-implemented
         // here, which is what keeps the copy semantically identical by construction).
         // A forwarded field has no storage and copies nothing.
+        // The two doors the P2 emission step needs into PipeInputs' storage. They exist
+        // only for ApplierDerivesRenderStateFields' one-shot probe below; nothing on the hot
+        // path writes through them.
+        static RenderStateParameters& RenderStateOf(PipeInputs& inputs) { return inputs.m_renderState; }
+        static Uint32& ClearStencilOf(PipeInputs& inputs) { return inputs.m_clearStencil; }
+
         static void CopyField(PipeInputs& dst, GLContext& ctx, MGPipeInputField field) {
             using F = MGPipeInputField;
             using MG_State::GLState::BufferBindPointTargets;
@@ -596,6 +605,150 @@ namespace MobileGL::MG_Pipe {
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
     }
 
+
+    // ================================================================================
+    // The emission step (P2 brief D1 step 3, D5, D6, D7)
+    // ================================================================================
+    namespace {
+        // Which runtime MOBILEGL_PIPE_PUSH subsystem owns a field, through the call that now
+        // supplies it. Zero means "still pulled".
+        constexpr Uint64 SubsystemForEmitter(MGPipeFieldEmitter emitter) {
+            switch (emitter) {
+            case MGPipeFieldEmitter::BindRenderState:
+            case MGPipeFieldEmitter::CreateRenderState:
+            case MGPipeFieldEmitter::SetDynamicState:
+                return kMGPipeSubsystemRenderState;
+            case MGPipeFieldEmitter::SetPixelPackState:
+                return kMGPipeSubsystemPixelPack;
+            case MGPipeFieldEmitter::SetPatchState:
+                return kMGPipeSubsystemPatchState;
+            case MGPipeFieldEmitter::SetVertexAttribDefaults:
+                return kMGPipeSubsystemVertexAttribDefaults;
+            case MGPipeFieldEmitter::kNone:
+                break;
+            }
+            return 0;
+        }
+
+        // Which of those subsystems THIS BUILD actually emits for. It grows one commit at a
+        // time, and a field whose emitter is not wired here keeps being pulled - so adding a
+        // row to Coverage.def can never silently drop a field on the floor before the call
+        // that carries it exists.
+        constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState;
+
+        // The fields the applier writes DIRECTLY, out of the chunk bytes it scattered. Every
+        // other emitted field reaches PipeInputs only through
+        // MGPipeDeriveRenderStateFields, which is why the probe below exists.
+        constexpr Bool AppliedWithoutDerivation(MGPipeInputField field) {
+            switch (field) {
+            case MGPipeInputField::GetRenderStateParameters:
+            case MGPipeInputField::GetRenderStateParametersVersion:
+            case MGPipeInputField::GetPipelineStateVersion:
+            case MGPipeInputField::GetPixelStoreParameters:
+            case MGPipeInputField::GetPatchVertices:
+            case MGPipeInputField::GetPatchDefaultOuterLevel:
+            case MGPipeInputField::GetPatchDefaultInnerLevel:
+            case MGPipeInputField::GetCurrentVertexAttribute:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // DOES THIS TREE'S APPLIER ACTUALLY DERIVE?
+        //
+        // MGPipeDeriveRenderStateFields is package A's, and on the P2 contract tag it is a
+        // declared stub whose body lands in A's follow-on commit. A field that reaches
+        // PipeInputs only through that derivation must NOT be skipped by the residual fill
+        // while the derivation is a stub: skipping it would leave the mirror unwritten and
+        // the backend reading a default.
+        //
+        // Rather than hard-code which branch this is, the filler asks once: it puts a
+        // sentinel in a scratch block's working RenderStateParameters, clears the mirror the
+        // derivation is supposed to recompute, runs the derivation, and looks. The answer is
+        // latched for the process and costs one compare, once.
+        //
+        // It stays useful after A lands: if the derivation is ever deleted or gated off, the
+        // filler degrades to PULLING those fields instead of rendering a default, which is
+        // the safe direction. The verify lane and RenderStateSpansTest are what say the
+        // derivation is CORRECT; this only says it is THERE.
+        Bool ApplierDerivesRenderStateFields() {
+            static const Bool answer = [] {
+                static PipeInputs probe;
+                constexpr Uint32 kSentinel = 0x5a5a5a5au;
+                MGPipeFillAccess::RenderStateOf(probe).ClearStencil = kSentinel;
+                MGPipeFillAccess::ClearStencilOf(probe) = 0u;
+                MGPipeDeriveRenderStateFields(probe);
+                const Bool derives = MGPipeFillAccess::ClearStencilOf(probe) == kSentinel;
+                if (!derives) {
+                    MGLOG_W_ONCE("MGPipe: MGPipeDeriveRenderStateFields does not derive on this "
+                                 "build - the render-state mirrors stay on the pull path");
+                }
+                return derives;
+            }();
+            return answer;
+        }
+
+        constexpr Uint32 kAllDynamicChunks =
+            static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+
+        // create/bind_render_state and set_dynamic_state. Returns the bytes that went on the
+        // wire, for the payload histogram.
+        Uint64 EmitRenderState(GLContext& ctx, Uint32 dirty, Bool freshlyPrimed) {
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            const RenderStateParameters& live = ctx.GetRenderStateParameters();
+            const auto version = static_cast<Uint16>(ctx.GetRenderStateParametersVersion());
+            const auto pipelineVersion = static_cast<Uint16>(ctx.GetPipelineStateVersion());
+            Uint64 payloadBytes = 0;
+
+            if (freshlyPrimed) {
+                // A fresh context is a fresh server: the cache's handles name slots this
+                // client's allocator is about to hand out again, so both sides start over
+                // together rather than one of them remembering the other's objects.
+                MGPipeCsoCacheInstance().Reset();
+                MGPipeApplierReset();
+            }
+
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) {
+                const MGPipeHandle cso = MGPipeCsoCacheInstance().Acquire(live, payloadBytes);
+                MGPBindRenderState bind{};
+                bind.Cso = cso;
+                bind.Version = version;
+                bind.PipelineVersion = pipelineVersion;
+                MGPipeApplyBindRenderState(bind);
+                payloadBytes += sizeof(MGPBindRenderState);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::RenderStateCsoBinds, 1);
+                }
+            }
+
+            if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
+                // The chunk-level suppressor: only the dynamic chunks that differ from what
+                // the server has. A glViewport sends chunk D0 and nothing else; a
+                // glClearColor sends D2. An EMPTY mask still sends the 32-byte header,
+                // because the VERSION is what Magma's dynamic tail gates on and it moved.
+                const Uint32 chunkMask =
+                    freshlyPrimed ? kAllDynamicChunks
+                                  : MGPipeDynamicChunksThatMoved(live, tracker.Staged());
+                Array<Uint8, kMGPipeDynamicChunkBytes> blob;
+                const SizeT blobBytes = MGPipeDynamicChunkBlobBytes(chunkMask);
+                MGPipeGatherDynamicChunks(live, chunkMask, blob.data());
+                MGPDynamicState dyn{};
+                dyn.ChunkMask = chunkMask;
+                dyn.Version = version;
+                dyn.Blob.Size = blobBytes;
+                MGPipeApplySetDynamicState(dyn, blob.data());
+                payloadBytes += sizeof(MGPDynamicState) + blobBytes;
+            }
+
+            if (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
+                         MGPipeDirtyBit(MGPipeDirty::NewRenderState))) {
+                tracker.Staged() = live;
+            }
+            return payloadBytes;
+        }
+    } // namespace
+
     // ---- the validate point (P2 brief D1) ----
     void MGPipeValidateForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
@@ -628,10 +781,27 @@ namespace MobileGL::MG_Pipe {
         // The mask is computed, latched and counted here and nothing is emitted from it
         // yet: this commit is the safety net that says the walk is semantically free
         // before any field stops being pulled. The emission steps land on top of it.
-        const Uint32 dirty = MGPipeTrackerInstance().Update(*ctx, verbClass);
-        (void)dirty;
+        MGPipeTracker& tracker = MGPipeTrackerInstance();
+        const Uint32 dirty = tracker.Update(*ctx, verbClass);
 
-        // ---- step 4: the residual fill ----
+        // ---- step 3: emission ----
+        const Uint64 pushMask = MG_Config::Features.PipePush;
+        Uint64 payloadBytes = 0;
+        if ((pushMask & kMGPipeSubsystemRenderState) != 0 &&
+            (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
+                      MGPipeDirtyBit(MGPipeDirty::NewRenderState))) != 0) {
+            payloadBytes += EmitRenderState(*ctx, dirty, tracker.FreshlyPrimed());
+        }
+        if (payloadBytes != 0 && MG_Util::PipeStats::Enabled()) {
+            // PipeStats::RecordDrawPayloadBytes has been implemented and unit-tested since
+            // P0 and called by nothing; this is its first emitter, and the 24-bucket
+            // histogram is what answers ROADMAP.md open question 4's chunk-granularity
+            // retune with data instead of a guess.
+            MG_Util::PipeStats::RecordDrawPayloadBytes(payloadBytes);
+        }
+
+        // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
+        const Bool applierDerives = ApplierDerivesRenderStateFields();
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
             if (!MGPipeFieldMaskHas(mask, field)) continue;
@@ -645,7 +815,17 @@ namespace MobileGL::MG_Pipe {
 #else
             if (kMGPipeInputFieldSticky[i]) continue;
 #endif
-            MGPipeFillAccess::CopyField(inputs, *ctx, field);
+            // A field a P2 call now supplies is not pulled again - that second pull is
+            // exactly the cost P2 exists to remove. THE STAMP IS UNCHANGED either way: a
+            // stamp says "this verb published this field", which is as true of an emitted
+            // field as of a copied one, and withholding it would abort every backend read of
+            // the very fields the migration just took over.
+            const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
+            const Uint64 subsystem = SubsystemForEmitter(emitter);
+            const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
+                                  (pushMask & subsystem) != 0 &&
+                                  (applierDerives || AppliedWithoutDerivation(field));
+            if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);
 #if MOBILEGL_PIPE_POISON
             // The value is copied either way; only the stamp is withheld for the omitted pair.
             if (!IsOmitted(verb, field)) filled.FilledGen[i] = filled.CurrentVerbSerial;

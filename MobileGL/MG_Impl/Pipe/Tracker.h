@@ -186,6 +186,7 @@ namespace MobileGL::MG_Pipe {
                 Reset();
                 m_context = &ctx;
             }
+            const Bool wasPrimed = m_primed;
 
             Uint64 now[kMGPipeDirtyCount];
             const RenderStateParameters& render = ctx.GetRenderStateParameters();
@@ -285,6 +286,7 @@ namespace MobileGL::MG_Pipe {
             }
 
             m_primed = true;
+            m_freshlyPrimed = !wasPrimed;
             m_lastDirty = dirty;
 
             if (MG_Util::PipeStats::Enabled()) {
@@ -308,9 +310,11 @@ namespace MobileGL::MG_Pipe {
             m_framebufferBind.Reset();
             m_pack = PixelStoreParameters{};
             m_patch = PatchTrio{};
+            m_staged = RenderStateParameters{};
             m_context = nullptr;
             m_lastDirty = 0;
             m_primed = false;
+            m_freshlyPrimed = false;
         }
 
         void ResetCounters() {
@@ -337,6 +341,16 @@ namespace MobileGL::MG_Pipe {
 
         Uint32 LastDirty() const { return m_lastDirty; }
         Bool Primed() const { return m_primed; }
+        // True when the LAST Update was the first one after a Reset - a fresh context, or a
+        // server reset. The emission step reads it to send a COMPLETE state rather than an
+        // increment against a staging mirror that describes a context that is gone.
+        Bool FreshlyPrimed() const { return m_freshlyPrimed; }
+
+        // "What the server has" (P2 brief D8). set_dynamic_state sends the dynamic chunks
+        // that differ from this, which is the chunk-level suppressor; a chunk that
+        // memcmp-matches is not sent at all.
+        RenderStateParameters& Staged() { return m_staged; }
+        const RenderStateParameters& Staged() const { return m_staged; }
 
     private:
         static constexpr SizeT Index(MGPipeDirty bit) { return static_cast<SizeT>(bit); }
@@ -357,9 +371,12 @@ namespace MobileGL::MG_Pipe {
         PixelStoreParameters m_pack{};
         PatchTrio m_patch{};
 
+        RenderStateParameters m_staged{};
+
         const void* m_context = nullptr;
         Uint32 m_lastDirty = 0;
         Bool m_primed = false;
+        Bool m_freshlyPrimed = false;
 
         Uint64 m_fires[kMGPipeDirtyCount][kMGPipeVerbClassCount]{};
         Uint64 m_walks[kMGPipeVerbClassCount]{};
