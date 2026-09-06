@@ -476,6 +476,28 @@ int main(int argc, char** argv) {
     if (getenv("DRIVERBENCH_FRAMES")) g_frames = atoi(getenv("DRIVERBENCH_FRAMES"));
     if (getenv("DRIVERBENCH_SPRITES")) g_mixSprites = atol(getenv("DRIVERBENCH_SPRITES"));
 
+    /* A requested case name that matches nothing used to select nothing, print the header row and
+     * exit 0 - so a caller that names a case (run_driver_bench.sh, and the two ctest entries in
+     * CMakeLists.txt) could not tell "the case ran" from "the case has been renamed or deleted".
+     * Refuse it here, before any GL work, so the refusal reaches a caller that has no display
+     * either, and name what does exist so the fix is obvious. */
+    int unknownCases = 0;
+    for (int j = 1; j < argc; ++j) {
+        int known = 0;
+        for (int i = 0; i < kBenchCaseCount; ++i)
+            if (strcmp(argv[j], kBenchCases[i].name) == 0) known = 1;
+        if (!known) {
+            fprintf(stderr, "DriverBench: no case named '%s'\n", argv[j]);
+            unknownCases = 1;
+        }
+    }
+    if (unknownCases) {
+        fprintf(stderr, "DriverBench: the %d cases in kBenchCases are:\n", kBenchCaseCount);
+        for (int i = 0; i < kBenchCaseCount; ++i)
+            fprintf(stderr, "  %s\n", kBenchCases[i].name);
+        return 2;
+    }
+
     if (boot_egl()) return 1;
     build_resources();
 
