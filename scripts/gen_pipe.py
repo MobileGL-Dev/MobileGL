@@ -25,11 +25,15 @@ and writes MobileGL/MG_Pipe/generated/*.inc. The outputs are COMMITTED; CI regen
 them and fails on a diff, which is what keeps the seven generators from drifting apart
 from the catalogue (they all consume the same .def).
 
-    python3 scripts/gen_pipe.py            # write the generated files, print the summary
-    python3 scripts/gen_pipe.py --check    # fail if regenerating would change anything
+    python3 scripts/gen_pipe.py              # write the generated files, print the summary
+    python3 scripts/gen_pipe.py --check      # fail if regenerating would change anything
+    python3 scripts/gen_pipe.py --self-test  # the negative controls: each gate below must trip
 
 Both modes refuse a catalogue whose call payload has no field list in PipeFields.def: a
-payload the G4 comparator cannot see is a payload MOBILEGL_PIPE_VERIFY is blind to.
+payload the G4 comparator cannot see is a payload MOBILEGL_PIPE_VERIFY is blind to. Both
+also refuse a field list that does not name every data member of its struct (or names one
+that is not a member), and a backend accessor read through MGB_CTX-> / pGLContext-> that
+has no Coverage.def row (P1 brief D8, D12).
 """
 
 import argparse
@@ -164,16 +168,23 @@ def parse_calls():
     return calls
 
 
-# The member types the G4 comparator falls back to memcmp for (see gen_verify): the
-# MG_Pipe / MG_Backend value structs and MGHostSpan. They are not call payloads and get
-# field lists of their own in P1 (P0.5 moved the types). Nothing else may be missing from
-# PipeFields.def.
-MEMCMP_FALLBACK_TYPES = {
-    "RenderStateParameters",
-    "PixelStoreParameters",
-    "DynamicBackendParameters",
-    "MGHostSpan",
-}
+# Types the G4 comparator may fall back to memcmp for: NONE since P1. The value structs and
+# MGHostSpan have field lists of their own, and the fallback branch of MGPipeFieldEqual is a
+# static_assert, so a future struct without a field list is a compile error rather than a
+# padding false positive. Kept as a (deliberately empty) set so the check below keeps its
+# shape.
+MEMCMP_FALLBACK_TYPES = set()
+
+# Where the structs named in PipeFields.def are declared: the payload header, the value
+# header, the host-span header and - for DynamicBackendParameters, the caps block - the
+# backend object header.
+FIELD_LIST_STRUCT_HEADERS = [
+    os.path.join(PIPE_DIR, "MGPipeTypes.h"),
+    os.path.join(PIPE_DIR, "MGPipeValueTypes.h"),
+    os.path.join(PIPE_DIR, "MGPipeHostSpan.h"),
+    FUNCTION_TABLE_HEADER,
+]
+BACKEND_DIR = os.path.join(REPO_ROOT, "MobileGL", "MG_Backend")
 
 
 def parse_verify_payloads():
@@ -186,6 +197,253 @@ def parse_verify_payloads():
         if ("#define MGP_FIELDS_%s(F)" % payload) not in text:
             sys.exit("PipeFields.def: %s is in the payload list with no field macro" % payload)
     return payloads
+
+
+FIELD_LIST_RE = re.compile(r"#define MGP_FIELDS_(\w+)\(F\)")
+
+
+def parse_field_lists(text=None):
+    """PipeFields.def -> {payload: [field, ...]} for every MGP_FIELDS_<Payload>(F) macro; the
+    macro ends at the first line without a continuation backslash."""
+    if text is None:
+        text = read(os.path.join(PIPE_DIR, "PipeFields.def"))
+    lists = {}
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        match = FIELD_LIST_RE.match(lines[i])
+        if not match:
+            i += 1
+            continue
+        name = match.group(1)
+        body = []
+        while i < len(lines):
+            body.append(lines[i])
+            if not lines[i].rstrip().endswith("\\"):
+                break
+            i += 1
+        i += 1
+        fields = re.findall(r"\bF\((\w+)\)", "\n".join(body))
+        if name in lists:
+            sys.exit("PipeFields.def: MGP_FIELDS_%s is defined twice" % name)
+        lists[name] = fields
+    return lists
+
+
+def mask_comments_and_strings(text):
+    """Replace comment and string-literal bodies with spaces, keeping every offset and
+    newline, so the regexes below cannot match inside a comment or a literal
+    (gen_pipe_dirty_surface.py's shape)."""
+    out = list(text)
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out[i] = " "
+                i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            out[i] = out[i + 1] = " "
+            i += 2
+            while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
+                if text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            if i < n:
+                out[i] = " "
+                if i + 1 < n:
+                    out[i + 1] = " "
+                i += 2
+        elif c in "\"'":
+            quote = c
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\":
+                    out[i] = " "
+                    i += 1
+                if i < n and text[i] != "\n":
+                    out[i] = " "
+                i += 1
+            if i < n:
+                out[i] = " "
+                i += 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+PADDING_MEMBER_RE = re.compile(r"^Pad\d*$")
+NESTED_TYPE_RE = re.compile(r"^\s*(?:struct|class|union|enum)\b")
+FUNCTION_HEAD_RE = re.compile(r"\)\s*(?:const\s*)?(?:noexcept\s*)?(?:override\s*)?(?:=\s*(?:default|delete|0)\s*)?$")
+NON_MEMBER_RE = re.compile(r"^\s*(?:static|using|typedef|friend|template|explicit|virtual|operator)\b")
+
+
+def find_struct_body(masked, name):
+    """The text between the braces of `struct <name> {` (an optional base list allowed), or
+    None. Comments and strings must already be masked."""
+    match = re.search(r"\bstruct\s+%s\s*(?::[^{;]*)?\{" % re.escape(name), masked)
+    if not match:
+        return None
+    i = match.end()
+    depth = 1
+    start = i
+    while i < len(masked) and depth:
+        if masked[i] == "{":
+            depth += 1
+        elif masked[i] == "}":
+            depth -= 1
+        i += 1
+    return masked[start:i - 1]
+
+
+def matching_brace(text, open_index):
+    depth = 0
+    j = open_index
+    while j < len(text):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    return len(text) - 1
+
+
+def strip_balanced(text, open_char, close_char):
+    out = []
+    depth = 0
+    for c in text:
+        if c == open_char:
+            depth += 1
+        elif c == close_char:
+            depth -= 1
+        elif depth == 0:
+            out.append(c)
+    return "".join(out)
+
+
+def member_names(statement):
+    """The data-member names declared by one struct-body statement, or [] for anything
+    that is not a data member (a function, a static, a using, an access label...)."""
+    statement = re.sub(r"^\s*(?:public|private|protected)\s*:", "", statement).strip()
+    if not statement or NON_MEMBER_RE.match(statement):
+        return []
+    # The declarator part is what precedes the default initializer.
+    left = re.split(r"=|\{\.\.\.\}", statement, maxsplit=1)[0]
+    if "(" in left:
+        return []  # a function declaration
+    left = strip_balanced(left, "<", ">")
+    left = strip_balanced(left, "[", "]")
+    names = []
+    for k, chunk in enumerate(left.split(",")):
+        tokens = re.findall(r"[A-Za-z_]\w*", chunk)
+        if k == 0 and len(tokens) < 2:
+            return []  # no type: not a declaration
+        if not tokens:
+            return []
+        names.append(tokens[-1])
+    return [n for n in names if not PADDING_MEMBER_RE.match(n)]
+
+
+def struct_data_members(body):
+    """Direct data members of a struct body, in declaration order: statics, member
+    functions, nested types and Pad-named members excluded."""
+    members = []
+    statement = []
+    i = 0
+    n = len(body)
+    while i < n:
+        c = body[i]
+        if c == "{":
+            head = "".join(statement)
+            close = matching_brace(body, i)
+            if NESTED_TYPE_RE.match(head.strip()) or FUNCTION_HEAD_RE.search(head.rstrip()):
+                # A nested type or a member-function body: not a data member. Swallow the
+                # nested type's trailing semicolon too.
+                statement = []
+                i = close + 1
+                if NESTED_TYPE_RE.match(head.strip()):
+                    while i < n and body[i] in " \t\n":
+                        i += 1
+                    if i < n and body[i] == ";":
+                        i += 1
+                continue
+            statement.append("{...}")  # a brace default initializer
+            i = close + 1
+            continue
+        if c == ";":
+            members.extend(member_names("".join(statement)))
+            statement = []
+            i += 1
+            continue
+        statement.append(c)
+        i += 1
+    return members
+
+
+def check_field_lists_cover_struct_members(field_lists, payloads, header_texts=None):
+    """Every payload in MGP_VERIFY_PAYLOAD_LIST: its MGP_FIELDS_ list must name every direct
+    data member of `struct <Payload> {` (Pad-named members are padding and excluded) and
+    nothing that is not a member. A member without an F(...) is a field MOBILEGL_PIPE_VERIFY
+    is blind to; an F(...) that is not a member is a list that stopped describing its
+    struct. Runs in both modes, --check included, so it is part of pipe-gates."""
+    if header_texts is None:
+        header_texts = [read(path) for path in FIELD_LIST_STRUCT_HEADERS]
+    masked = [mask_comments_and_strings(t) for t in header_texts]
+    problems = []
+    for payload in payloads:
+        body = None
+        for m in masked:
+            body = find_struct_body(m, payload)
+            if body is not None:
+                break
+        if body is None:
+            problems.append("%s: struct not found in %s" % (payload, ", ".join(os.path.basename(p) for p in FIELD_LIST_STRUCT_HEADERS)))
+            continue
+        members = struct_data_members(body)
+        listed = field_lists.get(payload, [])
+        missing = [m for m in members if m not in listed]
+        extra = [f for f in listed if f not in members]
+        if missing:
+            problems.append("%s: member(s) with no F(...) in PipeFields.def: %s" % (payload, ", ".join(missing)))
+        if extra:
+            problems.append("%s: F(...) name(s) that are not members: %s" % (payload, ", ".join(extra)))
+        if not members:
+            problems.append("%s: no data members parsed" % payload)
+    if problems:
+        sys.exit("PipeFields.def does not cover its structs:\n  " + "\n  ".join(problems))
+
+
+ACCESSOR_READ_RE = re.compile(r"\b(?:MGB_CTX|pGLContext)\s*->\s*(\w+)")
+
+
+def scan_live_accessors(accessors, backend_dir=None, verbose=True):
+    """Every accessor a backend reads through MGB_CTX-> or pGLContext-> (comments and
+    strings masked) must have a Coverage.def row - a read without a row is a PipeInputs
+    field that does not exist. Rows no backend reads are printed, not refused (the dead
+    GetBoundTransformFeedbackName row is deliberate). Returns the set of names read."""
+    if backend_dir is None:
+        backend_dir = BACKEND_DIR
+    known = set(name for name, _ in accessors)
+    read_names = {}
+    for root, _, files in os.walk(backend_dir):
+        for name in sorted(files):
+            if not name.endswith((".cpp", ".h")):
+                continue
+            path = os.path.join(root, name)
+            masked = mask_comments_and_strings(read(path))
+            for match in ACCESSOR_READ_RE.finditer(masked):
+                read_names.setdefault(match.group(1), set()).add(os.path.relpath(path, REPO_ROOT))
+    unknown = sorted(n for n in read_names if n not in known)
+    if unknown:
+        sys.exit("Coverage.def: accessor(s) read by a backend with no row: %s"
+                 % ", ".join("%s (%s)" % (n, ", ".join(sorted(read_names[n]))) for n in unknown))
+    unread = sorted(known - set(read_names))
+    if verbose and unread:
+        print("gen_pipe: %d accessor row(s) no backend reads: %s" % (len(unread), ", ".join(unread)))
+    return set(read_names)
 
 
 def check_call_payloads_have_field_lists(calls, payloads):
@@ -403,6 +661,23 @@ def gen_verify(payloads):
 """)
     out.append("template <class T>")
     out.append("struct MGPipeHasFieldVerifier : std::false_type {};\n")
+    out.append("""// A vector type (FloatVec4, IntVec4, BoolVec4...) is detected through its VecBase and
+// compared BITWISE over its data: VecBase::operator== is IEEE ==, under which a NaN patch
+// level would differ from itself. The probe rather than an overload because a
+// derived-to-base conversion loses overload resolution to the exact-match generic template.
+template <class Derived, class T, SizeT N>
+std::true_type MGPipeVecBaseProbe(const VecBase<Derived, T, N>*);
+std::false_type MGPipeVecBaseProbe(const void*);
+template <class T>
+inline constexpr Bool kMGPipeIsVecBase = decltype(MGPipeVecBaseProbe(static_cast<const T*>(nullptr)))::value;
+
+template <class T>
+inline Bool MGPipeFieldEqual(const T& a, const T& b);
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const Array<T, N>& a, const Array<T, N>& b);
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const T (&a)[N], const T (&b)[N]);
+""")
     for payload in payloads:
         out.append("inline Bool MGPipeVerify(const %s& a, const %s& b, const char** outField);"
                    % (payload, payload))
@@ -416,6 +691,8 @@ inline Bool MGPipeFieldEqual(const T& a, const T& b) {
     if constexpr (MGPipeHasFieldVerifier<T>::value) {
         const char* unusedField = nullptr;
         return MGPipeVerify(a, b, &unusedField);
+    } else if constexpr (kMGPipeIsVecBase<T>) {
+        return std::memcmp(a.data.data(), b.data.data(), sizeof(a.data)) == 0;
     } else if constexpr (std::is_floating_point_v<T>) {
         return std::memcmp(&a, &b, sizeof(T)) == 0;
     } else if constexpr (std::is_scalar_v<T> || std::is_enum_v<T>) {
@@ -423,13 +700,21 @@ inline Bool MGPipeFieldEqual(const T& a, const T& b) {
     } else if constexpr (requires(const T& x, const T& y) { x == y; }) {
         return a == b;
     } else {
-        // MEMCMP FALLBACK. Only reached by the payload members that are still value structs
-        // without a field list (RenderStateParameters, PixelStoreParameters,
-        // DynamicBackendParameters) and by MGHostSpan. P0.5 moved the first two into
-        // MGPipeValueTypes.h; P1 gives them field lists of their own, at which point this
-        // branch stops being reachable from any payload.
-        return std::memcmp(&a, &b, sizeof(T)) == 0;
+        // NO MEMCMP FALLBACK. Every value struct has a field list in PipeFields.def since P1
+        // (and gen_pipe.py asserts each list covers its struct's members); a type reaching
+        // this branch is one nobody gave a field list, and a memcmp would false-differ on
+        // its padding. A compile error is the honest answer.
+        static_assert(sizeof(T) == 0, "no field list in PipeFields.def for this type");
+        return false;
     }
+}
+
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const Array<T, N>& a, const Array<T, N>& b) {
+    for (SizeT i = 0; i < N; ++i) {
+        if (!MGPipeFieldEqual(a[i], b[i])) return false;
+    }
+    return true;
 }
 
 template <class T, SizeT N>
@@ -553,13 +838,14 @@ def parse_function_table():
     return members
 
 
-def parse_fill_points(accessors, table_members=None):
+def parse_fill_points(accessors, table_members=None, text=None):
     """FillPoints.def -> (verbs, classes, fields): verbs is [(verb, class)] in file order,
     classes is [class], fields is {class: [field]}. Refuses a verb set that is not exactly
     GLFunctionsTable's function-pointer members in declaration order, a verb in two
     classes, a class with no verbs, a field that is not an accessor, a duplicate
     (class, field) row, and a class row that names no class."""
-    text = read(os.path.join(PIPE_DIR, "FillPoints.def"))
+    if text is None:
+        text = read(os.path.join(PIPE_DIR, "FillPoints.def"))
     if table_members is None:
         table_members = parse_function_table()
 
@@ -793,16 +1079,70 @@ def write(path, text, check, changed):
             handle.write(text)
 
 
+def expect_trip(name, fn):
+    """Runs one negative control; a gate that lets it through is the failure."""
+    try:
+        fn()
+    except SystemExit as trip:
+        print("gen_pipe: self-test %s: tripped as expected (%s)" % (name, str(trip).splitlines()[0][:100]))
+        return 1
+    print("gen_pipe: self-test %s: DID NOT TRIP" % name, file=sys.stderr)
+    return 0
+
+
+def self_test(accessors):
+    """The negative controls (check_include_closure.py's shape): each gate must go red for
+    its reason, and zero trips is itself an error."""
+    canned_struct = "struct Canned {\n    Uint32 A;\n    Uint32 B, C;\n    Uint8 Pad0[3];\n    void F() { return; }\n};\n"
+    controls = [
+        ("struct member without F(...)",
+         lambda: check_field_lists_cover_struct_members({"Canned": ["A", "B"]}, ["Canned"], [canned_struct])),
+        ("F(...) that is not a member",
+         lambda: check_field_lists_cover_struct_members({"Canned": ["A", "B", "C", "D"]}, ["Canned"], [canned_struct])),
+        ("payload with no struct",
+         lambda: check_field_lists_cover_struct_members({"Nowhere": ["A"]}, ["Nowhere"], [canned_struct])),
+    ]
+    fill_text = read(os.path.join(PIPE_DIR, "FillPoints.def"))
+    verb_row = re.compile(r"X\(\s*DrawArrays\s*,\s*kDraw\s*\)")
+    field_row = re.compile(r"X\(\s*kDraw\s*,\s*GetBoundVertexArray\s*\)")
+    if not verb_row.search(fill_text) or not field_row.search(fill_text):
+        sys.exit("gen_pipe: self-test: FillPoints.def lost the rows the controls edit")
+    controls.append(("verb missing from FillPoints.def", lambda: parse_fill_points(
+        accessors, text=verb_row.sub("", fill_text, count=1))))
+    controls.append(("verb that is not a GLFunctionsTable member", lambda: parse_fill_points(
+        accessors, text=verb_row.sub("X(DrawArrays, kDraw) X(NotAVerb, kDraw)", fill_text, count=1))))
+    controls.append(("field row naming a non-accessor", lambda: parse_fill_points(
+        accessors, text=field_row.sub("X(kDraw, NotAnAccessor)", fill_text, count=1))))
+    trips = 0
+    for name, fn in controls:
+        trips += expect_trip(name, fn)
+    # The positive control: the canned struct's exact list passes, and the parser sees the
+    # padding member as padding and the function as not a member.
+    check_field_lists_cover_struct_members({"Canned": ["A", "B", "C"]}, ["Canned"], [canned_struct])
+    if trips == 0:
+        sys.exit("gen_pipe: self-test: no negative control tripped - the gates are not checking anything")
+    if trips != len(controls):
+        sys.exit("gen_pipe: self-test: %d of %d negative controls did not trip" % (len(controls) - trips, len(controls)))
+    print("gen_pipe: self-test: %d negative-control trip(s), positive control OK" % trips)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
                         help="do not write; exit 1 if regenerating would change anything")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the negative controls (each gate must trip) and exit")
     args = parser.parse_args()
 
     calls = parse_calls()
     payloads = parse_verify_payloads()
     check_call_payloads_have_field_lists(calls, payloads)
+    check_field_lists_cover_struct_members(parse_field_lists(), payloads)
     accessors, deltas, sticky = parse_coverage()
+    if args.self_test:
+        return self_test(accessors)
+    scan_live_accessors(accessors)
     verbs, classes, fields = parse_fill_points(accessors)
     rows = parse_inventory()
 

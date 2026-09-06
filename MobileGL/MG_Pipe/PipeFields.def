@@ -12,9 +12,11 @@
 // exactly what makes a memcmp of RenderStateParameters false-DIFFER
 // (DirectGLES.cpp documents that behaviour where it does the same comparison itself).
 //
-// Hand maintained alongside MGPipeTypes.h. Adding a field to a payload without adding it
-// here makes the comparator blind to it; that gap closes in P1, when the verify harness
-// goes live and the comparator's coverage is itself asserted.
+// Hand maintained alongside MGPipeTypes.h, MGPipeValueTypes.h, MGPipeHostSpan.h and
+// MG_Backend/BackendObject.h. Adding a member to one of these structs without adding it here
+// would make the comparator blind to it, so gen_pipe.py asserts - in both modes, hence in
+// pipe-gates - that every list below names exactly the direct data members of its struct
+// (P1 brief D8; a member named Pad<n> is padding and is not listed).
 //
 // clang-format off
 
@@ -218,6 +220,77 @@
 #define MGP_FIELDS_MGPSurfaceInfo(F) \
     F(Width) F(Height) F(InternalFormat) F(Samples) F(Layers) F(IsDefault)
 
+// ---- the value structs and the host span (P1 brief D8). Not call payloads themselves, but
+// members of ones (ResidualValueBlock, MGPPixelPackState, MGPCaps) and of PipeInputs, so the
+// comparator has to see INTO them: with these lists the memcmp fallback of MGPipeFieldEqual is
+// gone (a struct without a list is a compile error), and gen_pipe.py asserts every list names
+// every direct data member of its struct - Pad-named members are padding and excluded - so a
+// member added to RenderStateParameters without a row here fails pipe-gates.
+
+#define MGP_FIELDS_RenderStateParameters(F) \
+    F(Viewports) F(LineWidth) F(PointSize) F(PatchVertices) F(PatchDefaultOuterLevel) \
+    F(PatchDefaultInnerLevel) F(PolygonOffsetFactor) F(PolygonOffsetUnits) F(PolygonOffsetClamp) \
+    F(ClipOrigin) F(ClipDepthMode) F(BlendStates) F(LogicOp) F(DepthTestEnabled) F(DepthFunc) \
+    F(DepthMask) F(ColorMasks) F(ClearColor) F(ClearDepth) F(ClearStencil) F(BlendColor) \
+    F(DepthRanges) F(SampleCoverageValue) F(SampleCoverageInvert) F(SampleMaskValue) \
+    F(MinSampleShadingValue) F(StencilStates) F(CullFaceEnabled) F(CullFaceModeSetting) \
+    F(FrontFaceModeSetting) F(ProvokingVertexModeSetting) F(LineSmoothHint) F(PolygonSmoothHint) \
+    F(TextureCompressionHint) F(FragmentShaderDerivativeHint) F(PointFadeThresholdSize) \
+    F(PointSpriteCoordOrigin) F(ClampReadColor) F(PolygonModeFront) F(PolygonModeBack) \
+    F(PrimitiveRestartIndex) F(ColorLogicOpEnabled) F(DebugOutputEnabled) \
+    F(DebugOutputSynchronousEnabled) F(DitherEnabled) F(LineSmoothEnabled) F(MultisampleEnabled) \
+    F(PolygonOffsetFillEnabled) F(PolygonOffsetLineEnabled) F(PolygonOffsetPointEnabled) \
+    F(PolygonSmoothEnabled) F(PrimitiveRestartEnabled) F(PrimitiveRestartFixedIndexEnabled) \
+    F(RasterizerDiscardEnabled) F(SampleAlphaToCoverageEnabled) F(SampleAlphaToOneEnabled) \
+    F(SampleCoverageEnabled) F(SampleMaskEnabled) F(SampleShadingEnabled) F(StencilTestEnabled) \
+    F(ProgramPointSizeEnabled) F(ScissorTestEnabledMask) F(ScissorBoxes) F(ScissorBoxWrittenMask) \
+    F(ClipDistanceEnabledMask)
+
+#define MGP_FIELDS_PixelStoreParameters(F) \
+    F(SwapBytes) F(LSBFirst) F(RowLength) F(ImageHeight) F(SkipPixels) F(SkipRows) F(SkipImages) \
+    F(Alignment)
+
+#define MGP_FIELDS_PerBufferBlendState(F) \
+    F(Enabled) F(SrcFactorRGB) F(DstFactorRGB) F(SrcFactorAlpha) F(DstFactorAlpha) F(ColorEquation) \
+    F(AlphaEquation)
+
+#define MGP_FIELDS_StencilFaceState(F) \
+    F(Func) F(Ref) F(ValueMask) F(WriteMask) F(FailOp) F(PassDepthFailOp) F(PassDepthPassOp)
+
+#define MGP_FIELDS_DynamicBackendParameters(F) \
+    F(UniformBufferOffsetAlignment) F(ShaderStorageBufferOffsetAlignment) F(MaxTextureMaxAnisotropy) \
+    F(AliasedLineWidthRangeMin) F(AliasedLineWidthRangeMax) F(SmoothLineWidthRangeMin) \
+    F(SmoothLineWidthRangeMax) F(SmoothLineWidthGranularity) F(PointSizeRangeMin) \
+    F(PointSizeRangeMax) F(PointSizeGranularity) F(Max3DTextureSize) F(MaxArrayTextureLayers) \
+    F(MaxCubeMapTextureSize) F(MaxFramebufferWidth) F(MaxFramebufferHeight) F(MaxFramebufferLayers) \
+    F(MaxRenderbufferSize) F(MaxTextureSize) F(MaxColorTextureSamples) F(MaxDepthTextureSamples) \
+    F(MaxFramebufferSamples) F(MaxIntegerSamples) F(MaxSamples) F(MaxSampleMaskWords) \
+    F(MaxPatchVertices) F(MaxTessGenLevel) F(MinProgramTextureGatherOffset) \
+    F(MaxProgramTextureGatherOffset) F(MaxTextureImageUnits) F(MaxVertexTextureImageUnits) \
+    F(MaxComputeTextureImageUnits) F(MaxCombinedTextureImageUnits) F(MaxVertexAttribs) \
+    F(MaxComputeShaderStorageBlocks) F(MaxCombinedShaderStorageBlocks) \
+    F(MaxVertexShaderStorageBlocks) F(MaxTessControlShaderStorageBlocks) \
+    F(MaxTessEvaluationShaderStorageBlocks) F(MaxGeometryShaderStorageBlocks) \
+    F(MaxFragmentShaderStorageBlocks) F(MaxComputeUniformBlocks) F(MaxComputeWorkGroupInvocations) \
+    F(MaxComputeWorkGroupCount) F(MaxComputeWorkGroupSize) F(MaxShaderStorageBufferBindings) \
+    F(MaxTextureBufferSize) F(TextureBufferOffsetAlignment) F(MaxUniformBufferBindings) \
+    F(MaxUniformBlockSize) F(MaxImageUnits) F(MaxCombinedImageUniforms) F(MaxVertexImageUniforms) \
+    F(MaxGeometryImageUniforms) F(MaxFragmentImageUniforms) F(MaxComputeImageUniforms) \
+    F(MaxDrawBuffers) F(MaxColorAttachments) F(MaxClipDistances) F(MaxCullDistances) \
+    F(MaxCombinedClipAndCullDistances) F(MaxViewports) F(LayerProvokingVertex) \
+    F(ViewportIndexProvokingVertex) F(MaxViewportWidth) F(MaxViewportHeight) \
+    F(ViewportBoundsRangeMin) F(ViewportBoundsRangeMax) F(ViewportSubpixelBits) \
+    F(MinFragmentInterpolationOffset) F(MaxFragmentInterpolationOffset) \
+    F(FragmentInterpolationOffsetBits) F(SupportsWideLines) \
+    F(SupportsDistinctDepthStencilAttachments) F(PerLayerFramebufferAttachmentTargets) \
+    F(SupportsShaderFloat64) F(SupportsFloat64VertexAttributes) F(SupportsTessellationPointSize) \
+    F(SupportsGeometryPointSize) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
+    F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SubgroupQuadOperationsInAllStages) \
+    F(GpuVendor)
+
+#define MGP_FIELDS_MGHostSpan(F) \
+    F(Ptr) F(Seg) F(Size) F(Offset)
+
 // Every payload above, in the order the comparator is generated. Keep in sync with the
 // macros; gen_pipe.py reads THIS list to know what to emit.
 #define MGP_VERIFY_PAYLOAD_LIST(P) \
@@ -233,6 +306,8 @@
     P(MGPCopyRegion) P(MGPBlit) P(MGPClear) P(MGPMipPlan) P(MGPReadbackInfo) P(MGPDrawInfo) \
     P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
     P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
-    P(MGPSurfaceInfo)
+    P(MGPSurfaceInfo) \
+    P(RenderStateParameters) P(PixelStoreParameters) P(PerBufferBlendState) P(StencilFaceState) \
+    P(DynamicBackendParameters) P(MGHostSpan)
 
 // clang-format on

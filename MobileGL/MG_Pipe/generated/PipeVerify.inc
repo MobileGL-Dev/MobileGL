@@ -27,6 +27,23 @@
 template <class T>
 struct MGPipeHasFieldVerifier : std::false_type {};
 
+// A vector type (FloatVec4, IntVec4, BoolVec4...) is detected through its VecBase and
+// compared BITWISE over its data: VecBase::operator== is IEEE ==, under which a NaN patch
+// level would differ from itself. The probe rather than an overload because a
+// derived-to-base conversion loses overload resolution to the exact-match generic template.
+template <class Derived, class T, SizeT N>
+std::true_type MGPipeVecBaseProbe(const VecBase<Derived, T, N>*);
+std::false_type MGPipeVecBaseProbe(const void*);
+template <class T>
+inline constexpr Bool kMGPipeIsVecBase = decltype(MGPipeVecBaseProbe(static_cast<const T*>(nullptr)))::value;
+
+template <class T>
+inline Bool MGPipeFieldEqual(const T& a, const T& b);
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const Array<T, N>& a, const Array<T, N>& b);
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const T (&a)[N], const T (&b)[N]);
+
 inline Bool MGPipeVerify(const MGPBlobRef& a, const MGPBlobRef& b, const char** outField);
 inline Bool MGPipeVerify(const MGPRange& a, const MGPRange& b, const char** outField);
 inline Bool MGPipeVerify(const MGPBox& a, const MGPBox& b, const char** outField);
@@ -90,6 +107,12 @@ inline Bool MGPipeVerify(const MGPFlush& a, const MGPFlush& b, const char** outF
 inline Bool MGPipeVerify(const MGPPresent& a, const MGPPresent& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSwapInterval& a, const MGPSwapInterval& b, const char** outField);
 inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const char** outField);
+inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField);
+inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParameters& b, const char** outField);
+inline Bool MGPipeVerify(const PerBufferBlendState& a, const PerBufferBlendState& b, const char** outField);
+inline Bool MGPipeVerify(const StencilFaceState& a, const StencilFaceState& b, const char** outField);
+inline Bool MGPipeVerify(const DynamicBackendParameters& a, const DynamicBackendParameters& b, const char** outField);
+inline Bool MGPipeVerify(const MGHostSpan& a, const MGHostSpan& b, const char** outField);
 
 template <>
 struct MGPipeHasFieldVerifier<MGPBlobRef> : std::true_type {};
@@ -217,12 +240,26 @@ template <>
 struct MGPipeHasFieldVerifier<MGPSwapInterval> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<MGPSurfaceInfo> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<RenderStateParameters> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<PixelStoreParameters> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<PerBufferBlendState> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<StencilFaceState> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<DynamicBackendParameters> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<MGHostSpan> : std::true_type {};
 
 template <class T>
 inline Bool MGPipeFieldEqual(const T& a, const T& b) {
     if constexpr (MGPipeHasFieldVerifier<T>::value) {
         const char* unusedField = nullptr;
         return MGPipeVerify(a, b, &unusedField);
+    } else if constexpr (kMGPipeIsVecBase<T>) {
+        return std::memcmp(a.data.data(), b.data.data(), sizeof(a.data)) == 0;
     } else if constexpr (std::is_floating_point_v<T>) {
         return std::memcmp(&a, &b, sizeof(T)) == 0;
     } else if constexpr (std::is_scalar_v<T> || std::is_enum_v<T>) {
@@ -230,13 +267,21 @@ inline Bool MGPipeFieldEqual(const T& a, const T& b) {
     } else if constexpr (requires(const T& x, const T& y) { x == y; }) {
         return a == b;
     } else {
-        // MEMCMP FALLBACK. Only reached by the payload members that are still value structs
-        // without a field list (RenderStateParameters, PixelStoreParameters,
-        // DynamicBackendParameters) and by MGHostSpan. P0.5 moved the first two into
-        // MGPipeValueTypes.h; P1 gives them field lists of their own, at which point this
-        // branch stops being reachable from any payload.
-        return std::memcmp(&a, &b, sizeof(T)) == 0;
+        // NO MEMCMP FALLBACK. Every value struct has a field list in PipeFields.def since P1
+        // (and gen_pipe.py asserts each list covers its struct's members); a type reaching
+        // this branch is one nobody gave a field list, and a memcmp would false-differ on
+        // its padding. A compile error is the honest answer.
+        static_assert(sizeof(T) == 0, "no field list in PipeFields.def for this type");
+        return false;
     }
+}
+
+template <class T, SizeT N>
+inline Bool MGPipeFieldEqual(const Array<T, N>& a, const Array<T, N>& b) {
+    for (SizeT i = 0; i < N; ++i) {
+        if (!MGPipeFieldEqual(a[i], b[i])) return false;
+    }
+    return true;
 }
 
 template <class T, SizeT N>
@@ -568,6 +613,36 @@ inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const
     return true;
 }
 
+inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField) {
+    MGP_FIELDS_RenderStateParameters(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParameters& b, const char** outField) {
+    MGP_FIELDS_PixelStoreParameters(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const PerBufferBlendState& a, const PerBufferBlendState& b, const char** outField) {
+    MGP_FIELDS_PerBufferBlendState(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const StencilFaceState& a, const StencilFaceState& b, const char** outField) {
+    MGP_FIELDS_StencilFaceState(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const DynamicBackendParameters& a, const DynamicBackendParameters& b, const char** outField) {
+    MGP_FIELDS_DynamicBackendParameters(MGP_VERIFY_FIELD)
+    return true;
+}
+
+inline Bool MGPipeVerify(const MGHostSpan& a, const MGHostSpan& b, const char** outField) {
+    MGP_FIELDS_MGHostSpan(MGP_VERIFY_FIELD)
+    return true;
+}
+
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 63;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 69;
