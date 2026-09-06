@@ -24,6 +24,15 @@ namespace MobileGL::MG_Pipe {
     // runs the entry compare against a second snapshot (P1 brief D8).
     void MGPipeFillForVerb(MGPipeVerb verb);
 
+    // Ends the verb in flight without starting another: bumps the serial, so every field the
+    // verb stamped goes stale, and puts the current verb back to "none", so a read made after
+    // it aborts as Fatal{UnmigratedPipeInput, "<Field>@<none>"} - which is what such a read
+    // is - instead of naming whichever verb happened to be filled last. Nothing in the GL
+    // entry points calls this: a real verb is always followed by the next verb's fill. It
+    // exists for a caller that drives a backend helper directly and wants its declaration to
+    // stop where it says it stops (MG_Test/ScopedPipeVerb.h).
+    void MGPipeLeaveVerb();
+
     // PipeFill.cpp. Negative control B (P1 brief D6): the filler withholds the STAMP - never
     // the value - of `field` at `verb`, so that verb's read of it is
     // Fatal{UnmigratedPipeInput, "Field@Verb"} while every other verb is unaffected. The

@@ -107,6 +107,25 @@ PROBES = [
                "depend on the compiler front end that produced them.",
     },
     {
+        "Name": "mutation-header",
+        "Header": "MobileGL/MG_Pipe/PipeMutation.h",
+        "Tu": "#include <MG_Pipe/PipeMutation.h>\n",
+        "Forbidden": [
+            "MobileGL/MG_Impl/",
+            "MobileGL/MG_State/GLState/Core.h",
+            "MobileGL/MG_Remote/",
+        ],
+        "Allow": [],
+        "TextLimits": {},
+        "Why": "P1 finding F2 put MGP_NOTE_MUTATION in frontend mutators, so MG_State now "
+               "includes this header (TextureState.h, SamplerObject.h). It may only DECLARE "
+               "the notice: reaching MG_Impl would pull the fill implementation into the "
+               "state machine that calls it, and reaching GLState/Core.h would close the "
+               "cycle back onto the context. The MGPipeTypes -> BackendObject -> TextureEnum "
+               "reach it inherits from MGPipe.h is D1's known exception, which is why gate A "
+               "asserts MGPipeValueTypes.h rather than MGPipeTypes.h.",
+    },
+    {
         "Name": "wire-header",
         "Header": "MobileGL/MG_Remote/Transport/ITransport.h",
         "Tu": "#include <MG_Remote/Transport/ITransport.h>\n",

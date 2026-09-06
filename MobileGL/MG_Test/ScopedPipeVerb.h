@@ -65,13 +65,14 @@ namespace MobileGL::MG_Test {
         }
 
 #if MOBILEGL_PIPE_PUSH
-        ~ScopedPipeVerb() { MG_Pipe::MGPipeFillForVerb(kLeaveVerb); }
+        // Leaving bumps the serial and puts the current verb back to "none": every field
+        // this scope stamped goes stale, and a later test that forgets its own declaration
+        // aborts with "<Field>@<none>" rather than with the name of a verb it never issued.
+        // That matters when the suite runs as one process (a developer running the test
+        // binary directly, rather than one ctest entry per case).
+        ~ScopedPipeVerb() { MG_Pipe::MGPipeLeaveVerb(); }
 
     private:
-        // Leaving is a fill of the narrowest verb class there is: kQuery names one field, so
-        // the serial bump lands and every field this scope stamped falls behind it. The one
-        // field is a transform-feedback counter read - no side effect, and nothing to undo.
-        static constexpr MG_Pipe::MGPipeVerb kLeaveVerb = MG_Pipe::MGPipeVerb::GetGpuTimestampNs;
         MG_Pipe::MGPipeVerb m_verb;
 #endif
     };

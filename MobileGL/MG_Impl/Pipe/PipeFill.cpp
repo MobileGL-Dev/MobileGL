@@ -552,6 +552,16 @@ namespace MobileGL::MG_Pipe {
         ctx->RecordError(code, Move(info));
     }
 
+    void MGPipeLeaveVerb() {
+        PipeInputs& inputs = gPipeInputs;
+#if MOBILEGL_PIPE_POISON
+        // Same bump the next fill would make, without a verb to fill from: no field is
+        // stamped, so every stamp this verb made falls behind the serial.
+        ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
+#endif
+        MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
+    }
+
     // ---- the filler ----
     void MGPipeFillForVerb(MGPipeVerb verb) {
         PipeInputs& inputs = gPipeInputs;
