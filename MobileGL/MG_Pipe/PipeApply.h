@@ -55,6 +55,35 @@ namespace MobileGL::MG_Pipe {
         // set_residual_value_state; a disagreement is the D9 trip wire.
         ResidualValueBlock Residual{};
         Bool HasResidual = false;
+
+        // The GLOBAL chunk bits (MGPipeRenderStateSpans.h's numbering) this applier has
+        // itself scattered into the working block since the last reset - its own ledger of
+        // which bytes of PipeInputs::m_renderState are the APPLIER'S rather than the per-verb
+        // fill loop's. Both trip wires arm off it, and that is the whole of their contract:
+        //
+        //   - with the render-state subsystem OFF (MOBILEGL_PIPE_PUSH bit 0 clear - the
+        //     per-subsystem A/B of D14) nothing is ever scattered, the ledger stays empty and
+        //     the wires say nothing. The working block is then the fill loop's, published per
+        //     VERB CLASS (MG_Pipe/FillPoints.def), so at a kDispatch or kTextureOp verb - the
+        //     two classes that publish IsCapabilityEnabled but NOT GetRenderStateParameters -
+        //     it still holds the previous draw's bytes and is an oracle for nothing;
+        //   - with it ON the applier is the block's only writer (D5 takes an emitted field
+        //     out of the fill loop), so the bytes it has scattered are current at every verb
+        //     of every class and comparing against them is honest.
+        //
+        // set_patch_state's own write to the working block deliberately does NOT enter the
+        // ledger: that is the OTHER carrier, and a wire comparing against bytes it had just
+        // written itself would be a tautology.
+        Uint32 ScatteredChunkBits = 0;
+
+        // What the two trip wires last did. A wire nothing can observe is a gate that cannot
+        // go red for the reason it exists (ROADMAP.md), and only a poison or verify build
+        // aborts: the shipped push build counts and logs, so these counters are how a unit
+        // case sees the wire fire in EVERY build rather than in one.
+        Uint32 ResidualCapabilitiesCompared = 0; // of the 35, at the last set_residual_value_state
+        Uint32 ResidualDivergences = 0;          // cumulative
+        Uint32 PatchCarrierComparisons = 0;      // cumulative, armed set_patch_state calls only
+        Uint32 PatchCarrierDivergences = 0;      // cumulative
     };
 
     // The monolith's single applier. Under split there is one per served context.

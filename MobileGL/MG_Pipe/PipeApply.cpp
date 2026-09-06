@@ -20,6 +20,25 @@
 #include <cstdlib>
 #include <cstring>
 
+// THE VERDICT OF EVERY TRIP WIRE IN THIS FILE, IN ONE PLACE.
+//
+// MOBILEGL_ASSERT is inert at INFO (Defines.h), which is the level every P2 gate builds at,
+// so nothing below is left to an assertion. A poison or verify build stops the process; a
+// shipped push build logs at error level and carries on from a DEFINED state, and the
+// applier counts the divergence so a unit case can see the wire fire there too. Only the
+// poison/verify arm writes the "Fatal{...}" marker G4 greps the retrace logs for.
+#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
+#define MGP_TRIP_WIRE_TAG(name) "Fatal{" name "}"
+#define MGP_TRIP_WIRE_REPORT(...)                                                                                      \
+    do {                                                                                                               \
+        MGLOG_F(__VA_ARGS__);                                                                                          \
+        std::abort();                                                                                                  \
+    } while (0)
+#else
+#define MGP_TRIP_WIRE_TAG(name) name
+#define MGP_TRIP_WIRE_REPORT(...) MGLOG_E(__VA_ARGS__)
+#endif
+
 // The 25 capabilities whose storage is a plain `<Name>Enabled` bool. Written ONCE and used
 // twice - once for the switch arms of DeriveCapability and once for the chunk set that guards
 // the capability walk - so the two cannot drift apart. The three P2 gave storage to
@@ -87,6 +106,48 @@ namespace MobileGL::MG_Pipe {
                                                  MGP_CHUNKS_OF(ClipDistanceEnabledMask)
                                                      MGP_PLAIN_CAPABILITY_LIST(MGP_CAPABILITY_CHUNKS);
 #undef MGP_CAPABILITY_CHUNKS
+
+        // The patch trio's chunk, which is what arms the set_patch_state trip wire: the
+        // question that wire asks is whether the chunk-P0 bytes in the working block are the
+        // APPLIER'S, and only a scatter puts them there.
+        constexpr Uint32 kChunksPatchTrio = MGP_CHUNKS_OF(PatchVertices) |
+                                            MGP_CHUNKS_OF(PatchDefaultOuterLevel) |
+                                            MGP_CHUNKS_OF(PatchDefaultInnerLevel);
+
+        // Which chunks ONE capability's answer is read out of - the same sources
+        // DeriveCapability reads, written from the same list so the two cannot drift. This is
+        // what arms the residual trip wire PER CAPABILITY: a bind alone owns the pipeline
+        // half, and the eight ClipDistances are answered from ClipDistanceEnabledMask in
+        // DYNAMIC chunk D7, so between a bind and the first set_dynamic_state exactly those
+        // eight are unanswerable and the other 27 are not.
+        constexpr Uint32 CapabilitySourceChunks(CapabilityInput cap) {
+#define MGP_CAPABILITY_SOURCE(capability)                                                                              \
+    case CapabilityInput::capability:                                                                                  \
+        return MGP_CHUNKS_OF(capability##Enabled);
+            switch (cap) {
+                MGP_PLAIN_CAPABILITY_LIST(MGP_CAPABILITY_SOURCE)
+            case CapabilityInput::Blend:
+                return MGP_CHUNKS_OF(BlendStates);
+            case CapabilityInput::ScissorTest:
+                return MGP_CHUNKS_OF(ScissorTestEnabledMask);
+            case CapabilityInput::ClipDistance0:
+            case CapabilityInput::ClipDistance1:
+            case CapabilityInput::ClipDistance2:
+            case CapabilityInput::ClipDistance3:
+            case CapabilityInput::ClipDistance4:
+            case CapabilityInput::ClipDistance5:
+            case CapabilityInput::ClipDistance6:
+            case CapabilityInput::ClipDistance7:
+                return MGP_CHUNKS_OF(ClipDistanceEnabledMask);
+            // A capability with no storage cannot be answered from any byte, and
+            // DeriveCapability says so with a compile-time false. Demanding the whole table
+            // keeps such a value out of the comparison until every chunk is owned, which is
+            // the conservative direction: a wire that cannot be answered must not fire.
+            default:
+                return kMGPipeAllGlobalChunks;
+            }
+#undef MGP_CAPABILITY_SOURCE
+        }
 
         // The scalar copies are left unguarded on purpose: they are ~20 stores and two
         // 28-byte struct copies, so guarding each would cost more branches than it saves
@@ -336,6 +397,11 @@ namespace MobileGL::MG_Pipe {
         g_applier.BoundRenderStateCso = kMGPipeNullHandle;
         g_applier.Residual = ResidualValueBlock{};
         g_applier.HasResidual = false;
+        g_applier.ScatteredChunkBits = 0;
+        g_applier.ResidualCapabilitiesCompared = 0;
+        g_applier.ResidualDivergences = 0;
+        g_applier.PatchCarrierComparisons = 0;
+        g_applier.PatchCarrierDivergences = 0;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
@@ -346,20 +412,35 @@ namespace MobileGL::MG_Pipe {
         }
         MGPipeRenderStateCsoRecord& record = g_applier.RenderStateCsos[desc.Cso.Slot];
 
+        // NEITHER BRANCH MAY LEAVE ITS BAD CASE TO MOBILEGL_ASSERT. The slot the client is
+        // naming may be a RECYCLED one whose record still holds the previous occupant's 396
+        // bytes; in an INFO build - which is what every gate and every shipped build is - an
+        // assertion is a no-op, so inheriting nothing onto those bytes and then scattering
+        // the delta chunks on top would hand out a record that is half one CSO and half
+        // another, with no gate able to see it. Both arms therefore start from a DEFINED
+        // base and report through this file's trip-wire verdict.
         if (MGPipeHandleIsNull(desc.BaseCso)) {
             // A brand-new CSO carries its whole content; there is no earlier record to
             // inherit the unnamed chunks from.
-            MOBILEGL_ASSERT((desc.ChunkMask & kAllPipelineChunks) == kAllPipelineChunks,
-                            "create_render_state with no BaseCso must name every pipeline chunk "
-                            "(mask=0x%x, expected 0x%x)",
-                            desc.ChunkMask, kAllPipelineChunks);
             record.PipelineBytes = {};
+            if ((desc.ChunkMask & kAllPipelineChunks) != kAllPipelineChunks) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeIncompleteCso")
+                                     " create_render_state {slot=%u, gen=%u} with no BaseCso named chunks "
+                                     "0x%x, not the whole pipeline half 0x%x; the rest is zeroed",
+                                     desc.Cso.Slot, desc.Cso.Gen, desc.ChunkMask,
+                                     static_cast<Uint32>(kAllPipelineChunks));
+            }
         } else {
             const MGPipeRenderStateCsoRecord* base = FindCso(desc.BaseCso);
-            MOBILEGL_ASSERT(base != nullptr,
-                            "create_render_state named a dead BaseCso {slot=%u, gen=%u}",
-                            desc.BaseCso.Slot, desc.BaseCso.Gen);
-            if (base != nullptr) record.PipelineBytes = base->PipelineBytes;
+            record.PipelineBytes =
+                base != nullptr ? base->PipelineBytes : Array<Uint8, kMGPipePipelineChunkBytes>{};
+            if (base == nullptr) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeDeadBaseCso")
+                                     " create_render_state {slot=%u, gen=%u} named a dead BaseCso "
+                                     "{slot=%u, gen=%u}; the delta chunks land on zeroed bytes, not on "
+                                     "the recycled slot's previous occupant",
+                                     desc.Cso.Slot, desc.Cso.Gen, desc.BaseCso.Slot, desc.BaseCso.Gen);
+            }
         }
 
         // The chunk bytes land in the record's own gathered order, so the record is always a
@@ -385,9 +466,11 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplyAccess::SetRenderStateVersions(inputs, bind.Version, bind.PipelineVersion);
         g_applier.BoundRenderStateCso = bind.Cso;
         // A bind scatters the WHOLE pipeline half - the record is always a complete one,
-        // whatever mask minted it - so the pipeline chunks are all "moved" here.
-        MGPipeDeriveRenderStateFieldsForChunks(
-            inputs, MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineChunks));
+        // whatever mask minted it - so the pipeline chunks are all "moved" here, and all
+        // enter the applier's ledger of the bytes it owns.
+        const Uint32 moved = MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineChunks);
+        g_applier.ScatteredChunkBits |= moved;
+        MGPipeDeriveRenderStateFieldsForChunks(inputs, moved);
     }
 
     void MGPipeApplyDeleteRenderState(const MGPHandleOnly& handle) {
@@ -408,7 +491,9 @@ namespace MobileGL::MG_Pipe {
         PipeInputs& inputs = gPipeInputs;
         MGPipeScatterDynamicChunks(chunkBytes, dyn.ChunkMask, MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateParametersVersion(inputs, dyn.Version);
-        MGPipeDeriveRenderStateFieldsForChunks(inputs, MGPipeGlobalChunkBitsOfDynamicMask(dyn.ChunkMask));
+        const Uint32 moved = MGPipeGlobalChunkBitsOfDynamicMask(dyn.ChunkMask);
+        g_applier.ScatteredChunkBits |= moved;
+        MGPipeDeriveRenderStateFieldsForChunks(inputs, moved);
     }
 
     void MGPipeApplySetPixelPackState(const MGPPixelPackState& pack) {
@@ -421,7 +506,6 @@ namespace MobileGL::MG_Pipe {
         const FloatVec4 outer(patch.Outer[0], patch.Outer[1], patch.Outer[2], patch.Outer[3]);
         const FloatVec2 inner(patch.Inner[0], patch.Inner[1]);
 
-#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
         // THE SECOND TRIP WIRE (D6, D10). The patch trio travels TWICE - once in pipeline
         // chunk P0, because it is pipeline state, and once as set_patch_state, because both
         // backends bake it into the synthesized control stage from a shader-build path. The
@@ -432,32 +516,40 @@ namespace MobileGL::MG_Pipe {
         // Compared BITWISE, because a NaN outer level is a legal glPatchParameterfv value
         // (ARCHITECTURE.md 5.2) and must compare equal to itself.
         //
-        // Only once a CSO has delivered chunk P0: before the first bind_render_state of a
-        // context the working block still holds its defaults, and a set_patch_state that
-        // legitimately precedes the first bind has nothing to agree with yet. That is the
-        // ordering contract this trip wire places on the tracker - within a validate, the
-        // bind comes first.
-        if (!MGPipeHandleIsNull(g_applier.BoundRenderStateCso)) {
+        // ARMED BY THE APPLIER'S OWN SCATTER LEDGER, not by "some CSO has been bound"
+        // (PipeApply.h, MGPipeApplierState::ScatteredChunkBits). The question is whether the
+        // chunk-P0 bytes in the working block are the applier's, and that single condition
+        // covers both contracts this wire needs: the ORDERING one - a set_patch_state that
+        // legitimately precedes the first bind of a context has nothing to agree with yet -
+        // and the VERB-CLASS one - with the render-state subsystem off those bytes are the
+        // per-verb fill loop's, and FillPoints.def does not publish GetRenderStateParameters
+        // at kDispatch or kTextureOp, so they go stale there.
+        //
+        // It runs in the shipped push build too, because a wire that is compiled out of
+        // every build a device runs is not a wire. The cost is a 24-byte memcmp on a call
+        // that is emitted when the tessellation state CHANGES, i.e. about once per program.
+        if ((g_applier.ScatteredChunkBits & kChunksPatchTrio) == kChunksPatchTrio) {
+            ++g_applier.PatchCarrierComparisons;
             const Bool agrees = working.PatchVertices == patch.Vertices &&
                                 std::memcmp(&working.PatchDefaultOuterLevel, &outer, sizeof(outer)) == 0 &&
                                 std::memcmp(&working.PatchDefaultInnerLevel, &inner, sizeof(inner)) == 0;
             if (!agrees) {
-                MGLOG_F("MGPipe: Fatal{PipePatchCarriersDiffer} set_patch_state says vertices=%u "
-                        "outer=(%g,%g,%g,%g) inner=(%g,%g); chunk P0 delivered vertices=%u "
-                        "outer=(%g,%g,%g,%g) inner=(%g,%g)",
-                        patch.Vertices, static_cast<double>(outer.x()), static_cast<double>(outer.y()),
-                        static_cast<double>(outer.z()), static_cast<double>(outer.w()),
-                        static_cast<double>(inner.x()), static_cast<double>(inner.y()), working.PatchVertices,
-                        static_cast<double>(working.PatchDefaultOuterLevel.x()),
-                        static_cast<double>(working.PatchDefaultOuterLevel.y()),
-                        static_cast<double>(working.PatchDefaultOuterLevel.z()),
-                        static_cast<double>(working.PatchDefaultOuterLevel.w()),
-                        static_cast<double>(working.PatchDefaultInnerLevel.x()),
-                        static_cast<double>(working.PatchDefaultInnerLevel.y()));
-                std::abort();
+                ++g_applier.PatchCarrierDivergences;
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipePatchCarriersDiffer")
+                                     " set_patch_state says vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g); "
+                                     "chunk P0 delivered vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g)",
+                                     patch.Vertices, static_cast<double>(outer.x()),
+                                     static_cast<double>(outer.y()), static_cast<double>(outer.z()),
+                                     static_cast<double>(outer.w()), static_cast<double>(inner.x()),
+                                     static_cast<double>(inner.y()), working.PatchVertices,
+                                     static_cast<double>(working.PatchDefaultOuterLevel.x()),
+                                     static_cast<double>(working.PatchDefaultOuterLevel.y()),
+                                     static_cast<double>(working.PatchDefaultOuterLevel.z()),
+                                     static_cast<double>(working.PatchDefaultOuterLevel.w()),
+                                     static_cast<double>(working.PatchDefaultInnerLevel.x()),
+                                     static_cast<double>(working.PatchDefaultInnerLevel.y()));
             }
         }
-#endif
 
         working.PatchVertices = patch.Vertices;
         working.PatchDefaultOuterLevel = outer;
@@ -470,17 +562,31 @@ namespace MobileGL::MG_Pipe {
                                             const MGPAttribValue* tail) {
         PipeInputs& inputs = gPipeInputs;
         PipeInputs::CurrentVertexAttributeValue* slots = MGPipeApplyAccess::VertexAttribDefaults(inputs);
+        // The loop walks the MASK's 32 bits, not the slot array, and every named bit consumes
+        // its tail entry even when there is no slot to write it to: a named-but-unstorable
+        // attribute that did not consume would write every attribute after it from the wrong
+        // entry. PipeInputs::kMaxVertexAttribs is VertexArrayObject's 32 today, so the
+        // out-of-range arm is unreachable - the guard is what keeps that true if the two ever
+        // stop agreeing. None of the three consistency checks may be left to MOBILEGL_ASSERT,
+        // which is inert at INFO: a malformed tail would then desynchronise the attribute
+        // writes without a word in exactly the builds that ship.
         Uint32 consumed = 0;
-        for (Uint32 location = 0; location < PipeInputs::kMaxVertexAttribs; ++location) {
-            if ((hdr.Mask & (1u << location)) == 0) continue;
-            MOBILEGL_ASSERT(consumed < hdr.Count,
-                            "set_vertex_attrib_defaults: Mask names more attributes than Count");
-            if (consumed >= hdr.Count) break;
+        const char* fault = nullptr;
+        for (Uint32 location = 0; location < 32 && fault == nullptr; ++location) {
+            if ((hdr.Mask & (Uint32{1} << location)) == 0) continue;
+            if (consumed >= hdr.Count) {
+                fault = "Mask names more attributes than Count";
+                break;
+            }
             const MGPAttribValue& value = tail[consumed++];
-            MOBILEGL_ASSERT(value.Location == location,
-                            "set_vertex_attrib_defaults: tail out of ascending location order "
-                            "(%u where %u was expected)",
-                            value.Location, location);
+            if (value.Location != location) {
+                fault = "tail out of ascending location order";
+                break;
+            }
+            if (location >= PipeInputs::kMaxVertexAttribs) {
+                fault = "Mask names a location the block has no slot for";
+                continue;
+            }
             PipeInputs::CurrentVertexAttributeValue& slot = slots[location];
             // The three views are always populated; which one a shader input consumes is
             // ClassifyVertexAttribType's answer, not the carrier's, so all three cross.
@@ -488,15 +594,20 @@ namespace MobileGL::MG_Pipe {
             std::memcpy(slot.intValue.data(), value.Data, sizeof(slot.intValue));
             std::memcpy(slot.uintValue.data(), value.Data, sizeof(slot.uintValue));
         }
-        MOBILEGL_ASSERT(consumed == hdr.Count,
-                        "set_vertex_attrib_defaults: Count %u does not match the %u attributes Mask "
-                        "names",
-                        hdr.Count, consumed);
+        if (fault == nullptr && consumed != hdr.Count) {
+            fault = "Count does not match the attributes Mask names";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeAttribTailMalformed")
+                                 " set_vertex_attrib_defaults: %s (Mask=0x%x, Count=%u, consumed=%u)",
+                                 fault, hdr.Mask, hdr.Count, consumed);
+        }
     }
 
     void MGPipeApplySetResidualValueState(const ResidualValueBlock& block) {
         g_applier.Residual = block;
         g_applier.HasResidual = true;
+        g_applier.ResidualCapabilitiesCompared = 0;
 
         // THE TRIP WIRE (ARCHITECTURE.md 9.4, P2 brief D9). CapabilityBits is redundant with
         // the assembled working block by design: every one of the 35 capabilities is
@@ -505,29 +616,41 @@ namespace MobileGL::MG_Pipe {
         // answers part and this says so on the next draw - which is what a migration carrier
         // is for.
         //
-        // The comparison reads the WORKING BLOCK, not PipeInputs::m_capability. Those two
-        // agree after any scatter - the derivation is what puts the block's answer there -
-        // but m_capability is written ONLY by the derivation, so comparing against it would
-        // make this trip wire depend on a bind_render_state or a set_dynamic_state having
-        // already been applied to this context. The residual block is emitted ONCE PER
-        // CONTEXT (D9) and may legitimately be the first call of all, at which point
-        // m_capability is still all-false while the block's own defaults have Dither and
-        // Multisample true - the trip wire would fire on a context that is perfectly correct.
-        // Asking DeriveCapability the same question the derivation asks removes that ordering
-        // contract without weakening the check by one bit.
+        // THE ORACLE IS THE WORKING BLOCK, AND THE WIRE IS ARMED PER CAPABILITY by the
+        // applier's own scatter ledger: capability i is compared only once every chunk its
+        // answer is read out of has been scattered by this applier. That is not a weakening,
+        // it is the wire's whole precondition:
+        //
+        //   - with the render-state subsystem off (MOBILEGL_PIPE_PUSH=0x10 is a legal
+        //     configuration - D14's per-subsystem A/B) the ledger is empty and the wire says
+        //     nothing at all, which is right: the working block is then the per-verb fill
+        //     loop's, published per verb CLASS, so at a kDispatch or kTextureOp verb it holds
+        //     the previous draw's bytes and disagreeing with it means nothing;
+        //   - with it on, the applier is the block's only writer and its bytes are current at
+        //     every verb of every class - including the two above, which is the case a
+        //     RenderStateSpansTest case drives on purpose.
+        //
+        // NOT PipeInputs::m_capability, which the earlier form compared against and which
+        // FillPoints.def does publish at seven classes rather than five: where that
+        // publication is what makes m_capability fresh, the fill loop filled it out of the
+        // same GLContext the client built CapabilityBits from, so the comparison is a
+        // tautology. The redundancy this wire exists to check is between the CARRIED bits and
+        // the ASSEMBLED block.
         const RenderStateParameters& working = MGPipeApplyAccess::RenderState(gPipeInputs);
+        const Uint32 owned = g_applier.ScatteredChunkBits;
         for (SizeT i = 0; i < kCapabilityCount; ++i) {
+            const CapabilityInput cap = static_cast<CapabilityInput>(i);
+            const Uint32 sources = CapabilitySourceChunks(cap);
+            if ((owned & sources) != sources) continue;
+            ++g_applier.ResidualCapabilitiesCompared;
             const Bool carried = ((block.CapabilityBits >> i) & 1ull) != 0;
-            const Bool assembledBit = MGPipeApplyAccess::DeriveCapability(working, static_cast<CapabilityInput>(i));
+            const Bool assembledBit = MGPipeApplyAccess::DeriveCapability(working, cap);
             if (carried == assembledBit) continue;
-#if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
-            MGLOG_F("MGPipe: Fatal{PipeResidualDiverged, \"%s\"} carried=%d assembled=%d",
-                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembledBit));
-            std::abort();
-#else
-            MGLOG_E("MGPipe: residual value block diverged on %s (carried=%d assembled=%d)",
-                    kCapabilityNames[i], static_cast<int>(carried), static_cast<int>(assembledBit));
-#endif
+            ++g_applier.ResidualDivergences;
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeResidualDiverged, \"%s\"")
+                                 " carried=%d assembled=%d",
+                                 kCapabilityNames[i], static_cast<int>(carried),
+                                 static_cast<int>(assembledBit));
         }
     }
 
