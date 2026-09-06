@@ -169,11 +169,16 @@ namespace MobileGL {
                 // not evict a cached pipeline. Keeping one counter for both made a glViewport call
                 // knock the next draw off the pipeline memo AND the draw fast path.
                 Uint16 m_pipelineStateVersion = 0;
-                RenderStateParameters m_parameters;
+                // Value-initialised, PADDING INCLUDED. The MGPipe CSO key is a byte-range
+                // hash over RenderStateParameters and the residual block's trip wire is a
+                // byte-level compare, so indeterminate padding would make a CSO handle
+                // reproducible only within one context and would make the trip wire
+                // meaningless. Costs one .text resize of this constructor.
+                RenderStateParameters m_parameters{};
 
                 // Pixel Store
-                PixelStoreParameters m_pixelStorePackParameters;
-                PixelStoreParameters m_pixelStoreUnpackParameters;
+                PixelStoreParameters m_pixelStorePackParameters{};
+                PixelStoreParameters m_pixelStoreUnpackParameters{};
             };
         } // namespace GLState
     } // namespace MG_State

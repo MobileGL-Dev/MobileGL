@@ -231,8 +231,13 @@ namespace MobileGL::MG_Pipe {
 
     // The half of the render state that must NOT mint a CSO: viewport, scissor, depth
     // range, blend colour, line width, polygon offset, stencil ref/write mask, clear
-    // values, sample coverage, hints and the point-size family. This is what keeps
-    // glViewport from evicting Magma's pipeline memo (D-B1).
+    // values, hints, the point-size family and the primitive-restart index. This is what
+    // keeps glViewport from evicting Magma's pipeline memo (D-B1).
+    //
+    // SAMPLE COVERAGE IS NOT IN IT, and this comment used to say it was. P2's rule is that
+    // a byte is pipeline state if and only if a public RenderState setter that calls
+    // BumpVersions() writes it, and SetSampleCoverage does - so SampleCoverageValue and
+    // SampleCoverageInvert are in pipeline chunk P2 (MGPipeRenderStateSpans.h).
     struct MGPDynamicState {
         Uint32 ChunkMask;
         Uint16 Version;
@@ -514,14 +519,17 @@ namespace MobileGL::MG_Pipe {
     // to it because both sides are the same translation unit. G3 emits the offsetof
     // assertions; under split the block is serialized field-wise rather than memcpy'd.
     struct ResidualValueBlock {
-        RenderStateParameters RenderState; // until create/bind_render_state + set_dynamic_state land
-        PixelStoreParameters Pack;         // until set_pixel_pack_state lands
+        // The 35 CapabilityInput bits, packed in enum order. P2 retired everything else:
+        // RenderStateParameters to create/bind_render_state + set_dynamic_state, Pack to
+        // set_pixel_pack_state, and the patch quintet to set_patch_state.
+        //
+        // What is left is deliberately REDUNDANT. Every one of the 35 capabilities is
+        // answerable from the assembled working block now that P2 gave FramebufferSrgb,
+        // DepthClamp and TextureCubeMapSeamless real storage - which is the point: the
+        // applier compares the two answers bit by bit, so the day a later call takes a
+        // capability over and forgets to carry it, the block says so on the next draw
+        // (Fatal{PipeResidualDiverged, "<Cap>"}, MG_Pipe/PipeApply.cpp).
         Uint64 CapabilityBits;
-        Uint32 PatchVertices;
-        Uint32 Pad0;
-        Float PatchOuter[4];
-        Float PatchInner[2];
-        Uint32 Pad1[2];
     };
     static_assert(std::is_trivially_copyable_v<ResidualValueBlock>);
 // The retirement ratchet. This number only ever goes DOWN: every stage that lands a real
@@ -530,10 +538,12 @@ namespace MobileGL::MG_Pipe {
 // gone. Shrinking the block without lowering the number, or growing it at all, is a build
 // break - which is the point.
 //
-// Stable across the ABIs MobileGL ships on: every member of RenderStateParameters and
-// PixelStoreParameters is a fixed-width scalar or an array of one, with no pointer and no
-// SizeT.
-#define MGL_RESIDUAL_BLOCK_SIZE 1248
+// Stable across the ABIs MobileGL ships on: the one member is a fixed-width scalar.
+//
+// P2: 1248 -> 8. RenderStateParameters (1168) retired to create/bind_render_state and
+// set_dynamic_state, PixelStoreParameters (28) to set_pixel_pack_state, and the patch
+// quintet (52 with its padding) to set_patch_state.
+#define MGL_RESIDUAL_BLOCK_SIZE 8
     static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE,
                   "the residual value block changed size; lower MGL_RESIDUAL_BLOCK_SIZE if a field "
                   "retired, and do not raise it");

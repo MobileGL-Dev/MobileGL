@@ -609,6 +609,13 @@ namespace MobileGL::MG_Pipe {
         // The one door into the storage from the client side (MG_Impl/Pipe/PipeFill.cpp):
         // the filler's per-field copies and stamps, and the verify snapshot.
         friend struct MGPipeFillAccess;
+        // The other door, and the one that exists because of what this block IS after P2:
+        // the server's working RenderStateParameters. MG_Pipe/PipeApply.cpp scatters
+        // bind_render_state's and set_dynamic_state's chunks straight into m_renderState,
+        // which is why DirectGLES' SyncRenderState is not one line changed. It deliberately
+        // does NOT stamp the poison generations - a stamp says "the filler published this
+        // for THIS verb", which is the walk's statement, not the applier's.
+        friend struct MGPipeApplyAccess;
 
         // ---- identity ----
         const void* m_contextIdentity = nullptr;

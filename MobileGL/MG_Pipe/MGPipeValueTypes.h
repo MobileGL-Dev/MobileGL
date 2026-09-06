@@ -289,6 +289,21 @@ namespace MobileGL {
         // Every entry is initialized to all-true in RenderState's constructor.
         Array<BoolVec4, kMGMaxDrawBuffers> ColorMasks;
 
+        // GL_FRAMEBUFFER_SRGB / GL_DEPTH_CLAMP / GL_TEXTURE_CUBE_MAP_SEAMLESS. Until P2 these
+        // three fell to SetCapability's "not supported currently" arm - glEnable was swallowed
+        // and IsCapabilityEnabled answered a compile-time false, so DirectGLES' sRGB block and
+        // the DirectVulkan read points consumed a constant while glIsEnabled lied about it.
+        // Placed HERE, in the three alignment bytes between ColorMasks (32 bytes, align 1) and
+        // ClearColor (align 4), so sizeof(RenderStateParameters) stays 1168 and no existing
+        // offset moves: the Espryt span constants and the P2 chunk table both depend on that.
+        // All three are PIPELINE state (their setters call BumpVersions): FramebufferSrgb is
+        // what ARCHITECTURE.md 5.3 asks for, DepthClamp is
+        // VkPipelineRasterizationStateCreateInfo::depthClampEnable, and TextureCubeMapSeamless
+        // changes sampler interpretation.
+        Bool FramebufferSrgbEnabled = false;
+        Bool DepthClampEnabled = false;
+        Bool TextureCubeMapSeamlessEnabled = false;
+
         // Clear State
         FloatVec4 ClearColor = FloatVec4(0.0f, 0.0f, 0.0f, 1.0f);
         Float ClearDepth = 1.0f;

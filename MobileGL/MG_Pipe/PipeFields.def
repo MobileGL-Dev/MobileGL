@@ -144,8 +144,11 @@
 #define MGP_FIELDS_MGPPatchState(F) \
     F(Vertices) F(Outer) F(Inner)
 
+// P2 ratcheted this block from six rows to one: RenderStateParameters retired to
+// create/bind_render_state + set_dynamic_state, Pack to set_pixel_pack_state and the
+// patch trio to set_patch_state. What is left is the redundant capability trip wire.
 #define MGP_FIELDS_ResidualValueBlock(F) \
-    F(RenderState) F(Pack) F(CapabilityBits) F(PatchVertices) F(PatchOuter) F(PatchInner)
+    F(CapabilityBits)
 
 #define MGP_FIELDS_MGPResidualValueState(F) \
     F(Version) F(Blob)
@@ -231,7 +234,8 @@
     F(Viewports) F(LineWidth) F(PointSize) F(PatchVertices) F(PatchDefaultOuterLevel) \
     F(PatchDefaultInnerLevel) F(PolygonOffsetFactor) F(PolygonOffsetUnits) F(PolygonOffsetClamp) \
     F(ClipOrigin) F(ClipDepthMode) F(BlendStates) F(LogicOp) F(DepthTestEnabled) F(DepthFunc) \
-    F(DepthMask) F(ColorMasks) F(ClearColor) F(ClearDepth) F(ClearStencil) F(BlendColor) \
+    F(DepthMask) F(ColorMasks) F(FramebufferSrgbEnabled) F(DepthClampEnabled) \
+    F(TextureCubeMapSeamlessEnabled) F(ClearColor) F(ClearDepth) F(ClearStencil) F(BlendColor) \
     F(DepthRanges) F(SampleCoverageValue) F(SampleCoverageInvert) F(SampleMaskValue) \
     F(MinSampleShadingValue) F(StencilStates) F(CullFaceEnabled) F(CullFaceModeSetting) \
     F(FrontFaceModeSetting) F(ProvokingVertexModeSetting) F(LineSmoothHint) F(PolygonSmoothHint) \

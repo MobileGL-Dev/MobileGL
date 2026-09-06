@@ -110,8 +110,13 @@ TEST(PipeCatalogue, UninstalledTablesAreAllNull) {
 TEST(PipeCatalogue, ResidualBlockSizeIsPinned) {
     static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE);
     EXPECT_EQ(sizeof(ResidualValueBlock), static_cast<SizeT>(MGL_RESIDUAL_BLOCK_SIZE));
-    // It carries the whole of both value structs today; that is what the later stages eat.
-    EXPECT_GE(sizeof(ResidualValueBlock), sizeof(RenderStateParameters) + sizeof(PixelStoreParameters));
+    // P2 ate 1240 of the 1248: RenderStateParameters retired to create/bind_render_state and
+    // set_dynamic_state, PixelStoreParameters to set_pixel_pack_state, the patch quintet to
+    // set_patch_state. What is left is one Uint64 of capability bits, and it is redundant on
+    // purpose - the applier's trip wire compares it against the assembled block.
+    EXPECT_EQ(sizeof(ResidualValueBlock), 8u);
+    EXPECT_LT(sizeof(ResidualValueBlock), sizeof(RenderStateParameters));
+    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 0u);
 }
 
 // P0.5 moved the value structs into MG_Pipe/MGPipeValueTypes.h. These are the runtime twins
@@ -138,13 +143,18 @@ TEST(PipeCatalogue, ValueTypeLayoutsArePinned) {
     EXPECT_EQ(kMGMaxDrawBuffers, 8u);
 }
 
-// The move did not alter the carrier: the residual block is still the render-state struct,
-// then the pack struct, then the 8-aligned capability word, at the offsets it had before.
+// P2 ATE THE TWO VALUE STRUCTS AND THE PATCH TAIL the name still remembers, and the name
+// stays because a removed test name is a gate failure of its own (G14, additions only).
+// What it now pins is the other half of the same statement: the carrier is one capability
+// word, at offset 0, and the members it used to carry are gone rather than merely moved -
+// which is exactly what "MGL_RESIDUAL_BLOCK_SIZE only ever goes down" has to mean.
 TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
-    EXPECT_EQ(offsetof(ResidualValueBlock, RenderState), 0u);
-    EXPECT_EQ(offsetof(ResidualValueBlock, Pack), sizeof(RenderStateParameters));
-    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 1200u);
-    EXPECT_EQ(offsetof(ResidualValueBlock, PatchVertices), 1208u);
+    EXPECT_EQ(offsetof(ResidualValueBlock, CapabilityBits), 0u);
+    EXPECT_EQ(sizeof(ResidualValueBlock), sizeof(Uint64));
+    // The three carriers that took the retired members over.
+    EXPECT_EQ(sizeof(MGPPixelPackState), sizeof(PixelStoreParameters));
+    EXPECT_EQ(sizeof(MGPPatchState), 40u);
+    EXPECT_EQ(sizeof(MGPBindRenderState), 12u);
 }
 
 // G3's opcode numbering is the wire protocol. Position in PipeCalls.def, 1-based, no holes.
@@ -307,21 +317,35 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
     EXPECT_TRUE(MGPipeFieldEqual(1.5f, 1.5f));
     EXPECT_FALSE(MGPipeFieldEqual(-0.f, 0.f));
 
+    // The residual carrier is one field since P2, so the nested-struct case it used to
+    // demonstrate is demonstrated on RenderStateParameters directly - which is where it
+    // actually matters now that the block travels as create/bind_render_state chunks.
     ResidualValueBlock left{};
     ResidualValueBlock right{};
     const char* field = nullptr;
     EXPECT_TRUE(MGPipeVerify(left, right, &field));
-    right.RenderState.BlendStates[3].SrcFactorRGB = BlendFactor::DstColor;
+    right.CapabilityBits = 1ull << static_cast<Uint64>(CapabilityInput::FramebufferSrgb);
     EXPECT_FALSE(MGPipeVerify(left, right, &field));
-    EXPECT_STREQ(field, "RenderState");
+    EXPECT_STREQ(field, "CapabilityBits");
+
+    RenderStateParameters leftState{};
+    RenderStateParameters rightState{};
     const char* inner = nullptr;
-    EXPECT_FALSE(MGPipeVerify(left.RenderState, right.RenderState, &inner));
+    EXPECT_TRUE(MGPipeVerify(leftState, rightState, &inner));
+    rightState.BlendStates[3].SrcFactorRGB = BlendFactor::DstColor;
+    EXPECT_FALSE(MGPipeVerify(leftState, rightState, &inner));
     EXPECT_STREQ(inner, "BlendStates");
-    // A NaN patch level in the render state equals itself too.
-    right = left;
-    left.RenderState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
-    right.RenderState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
-    EXPECT_TRUE(MGPipeVerify(left, right, &field));
+    // P2's three new capability bools are members like any other, so the comparator names
+    // them rather than folding them into a neighbour's padding.
+    rightState = leftState;
+    rightState.FramebufferSrgbEnabled = true;
+    EXPECT_FALSE(MGPipeVerify(leftState, rightState, &inner));
+    EXPECT_STREQ(inner, "FramebufferSrgbEnabled");
+    // A NaN patch level equals itself too.
+    rightState = leftState;
+    leftState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
+    rightState.PatchDefaultOuterLevel = FloatVec4{nan, 1.f, 1.f, 1.f};
+    EXPECT_TRUE(MGPipeVerify(leftState, rightState, &inner));
 }
 
 // The six value structs have field lists of their own (P1 brief D8): 63 + 6 payloads, and
@@ -352,9 +376,16 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
 
 // G7 pins the member list the pipeline/dynamic split is derived from.
 TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
-    EXPECT_EQ(kMGPipePipelineStateMemberCount, 24u);
-    EXPECT_STREQ(kMGPipePipelineStateMembers[0], "CullFaceEnabled");
-    EXPECT_STREQ(kMGPipePipelineStateMembers[kMGPipePipelineStateMemberCount - 1], "ColorMasks");
+    // 44 as of P2, in DECLARATION order. It grew from the 24 members
+    // ComputePipelineStateHash used to hash because the chunk table's rule is "a byte is
+    // pipeline state iff a setter that calls BumpVersions() writes it", and that is a strict
+    // superset: sample coverage, front face, provoking vertex, the scissor-test mask, the
+    // back polygon mode, eleven capability bools the hash never read, and the three
+    // capabilities P2 gave storage to.
+    EXPECT_EQ(kMGPipePipelineStateMemberCount, 44u);
+    EXPECT_STREQ(kMGPipePipelineStateMembers[0], "PatchVertices");
+    EXPECT_STREQ(kMGPipePipelineStateMembers[kMGPipePipelineStateMemberCount - 1],
+                 "ScissorTestEnabledMask");
 }
 
 // The reverse channel is exactly ten callbacks (section 7.1).

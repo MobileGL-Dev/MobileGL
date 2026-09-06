@@ -98,6 +98,22 @@ namespace MobileGL::MG_Util::PipeStats {
         // Driver upload jobs issued by those emissions: 1 per box emission, N per rect-list
         // emission.
         TextureUploadJobs,
+#if MOBILEGL_PIPE_PUSH
+        // P2's two, and they are PUSH-ONLY on purpose: a render-state CSO exists only in a
+        // push build, and the pull build has to stay symbol-identical (G1) - growing this
+        // enum there would resize the counter arrays, the name table and FormatWindowLine
+        // for a pair of counters that could never leave zero.
+        //
+        // Render-state CSOs MINTED: a pipeline-subset hash that missed the CsoCache and had
+        // to be created. The Blaze3D blend toggle is the shape this exists to answer for -
+        // enable/draw/disable/draw forever must mint 2 and then never mint again - and it is
+        // half of what a P13 retune of the 64-entry capacity reads.
+        RenderStateCsoMints,
+        // Render-state CSOs BOUND: one per bind_render_state, mint or reuse. mints/binds is
+        // the cache's hit rate, and it is the number the CSO content-addressing negative
+        // control moves.
+        RenderStateCsoBinds,
+#endif
         Count
     };
 

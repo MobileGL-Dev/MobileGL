@@ -62,41 +62,71 @@ GENERATED_BANNER = """// MobileGL - MobileGL/MG_Pipe/generated/{name}
 // This file is included from MG_Pipe/MGPipe.h inside namespace MobileGL::MG_Pipe.
 """
 
-# G7. The pipeline subset of RenderStateParameters, BY MEMBER NAME, taken from the fields
-# VulkanRenderer::ComputePipelineStateHash hashes today
-# (MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp:4805-4906 at dev@81b17c0b,
-# including ResolveEffectiveSampleMask, which the hash folds in twice - once as the
-# effective enable bit and once as the mask word).
+# G7. The pipeline subset of RenderStateParameters, BY MEMBER NAME, in DECLARATION order.
+#
+# P0 took this list from what VulkanRenderer::ComputePipelineStateHash hashed. P2 replaced
+# that provenance with a RULE, and the rule is the only thing that decides membership:
+#
+#     A member is in the pipeline subset if and only if some public RenderState setter that
+#     calls BumpVersions() writes it. Everything else is dynamic. There is no third set.
+#
+# That makes G7's invariant - the pipeline-subset hash moves IFF m_pipelineStateVersion
+# moves - true by construction, and it makes the subset a strict SUPERSET of the 24 members
+# the Vulkan hash read: it adds sample coverage, the front face, the provoking vertex, the
+# scissor-test mask, the back polygon mode, the eleven capability bools the hash never read,
+# and the three capabilities P2 gave storage to. The alternative - demoting those setters to
+# ++m_version - would change MG_State semantics in the PULL build for the push path's sake.
 #
 # Names only: offsets are NOT computed here. The chunk table with real offsets is
 # MGPipeRenderStateSpans.cpp, built in C++ with offsetof, because a python guess at the
 # layout of a struct it cannot see is exactly the kind of drift the G7 setter-consistency
-# test exists to catch (plan B section 4.5.2).
+# test exists to catch (plan B section 4.5.2). StencilStates is named once and straddles:
+# per face, Func and the three ops are pipeline, Ref/ValueMask/WriteMask are dynamic.
 PIPELINE_STATE_MEMBERS = [
-    "CullFaceEnabled",
-    "DepthTestEnabled",
-    "PolygonOffsetFillEnabled",
-    "RasterizerDiscardEnabled",
-    "ColorLogicOpEnabled",
-    "StencilTestEnabled",
-    "PrimitiveRestartEnabled",
-    "PrimitiveRestartFixedIndexEnabled",
-    "DepthMask",
-    "SampleShadingEnabled",
-    "MultisampleEnabled",
-    "SampleMaskEnabled",
-    "SampleMaskValue",
-    "MinSampleShadingValue",
     "PatchVertices",
     "PatchDefaultOuterLevel",
     "PatchDefaultInnerLevel",
-    "PolygonModeFront",
-    "CullFaceModeSetting",
-    "DepthFunc",
-    "LogicOp",
-    "StencilStates",
     "BlendStates",
+    "LogicOp",
+    "DepthTestEnabled",
+    "DepthFunc",
+    "DepthMask",
     "ColorMasks",
+    "FramebufferSrgbEnabled",
+    "DepthClampEnabled",
+    "TextureCubeMapSeamlessEnabled",
+    "SampleCoverageValue",
+    "SampleCoverageInvert",
+    "SampleMaskValue",
+    "MinSampleShadingValue",
+    "StencilStates",
+    "CullFaceEnabled",
+    "CullFaceModeSetting",
+    "FrontFaceModeSetting",
+    "ProvokingVertexModeSetting",
+    "PolygonModeFront",
+    "PolygonModeBack",
+    "ColorLogicOpEnabled",
+    "DebugOutputEnabled",
+    "DebugOutputSynchronousEnabled",
+    "DitherEnabled",
+    "LineSmoothEnabled",
+    "MultisampleEnabled",
+    "PolygonOffsetFillEnabled",
+    "PolygonOffsetLineEnabled",
+    "PolygonOffsetPointEnabled",
+    "PolygonSmoothEnabled",
+    "PrimitiveRestartEnabled",
+    "PrimitiveRestartFixedIndexEnabled",
+    "RasterizerDiscardEnabled",
+    "SampleAlphaToCoverageEnabled",
+    "SampleAlphaToOneEnabled",
+    "SampleCoverageEnabled",
+    "SampleMaskEnabled",
+    "SampleShadingEnabled",
+    "StencilTestEnabled",
+    "ProgramPointSizeEnabled",
+    "ScissorTestEnabledMask",
 ]
 
 
@@ -482,7 +512,20 @@ def parse_coverage():
         if name in dict(sticky):
             sys.exit("Coverage.def: sticky field %s is listed twice" % name)
         sticky.append((name, reason))
-    return accessors, deltas, sticky
+    emitted = []
+    block = re.search(r"#define MGP_COVERAGE_EMITTED_LIST\(X\)(.*?)\n\n", text, re.S)
+    if not block:
+        sys.exit("Coverage.def: MGP_COVERAGE_EMITTED_LIST is missing")
+    seen = set()
+    for name, call in re.findall(r"X\((\w+)\s*,\s*(\w+)\)", block.group(1)):
+        if name not in accessor_names:
+            sys.exit("Coverage.def: emitted field %s is not an accessor in "
+                     "MGP_COVERAGE_ACCESSOR_LIST" % name)
+        if name in seen:
+            sys.exit("Coverage.def: emitted field %s is listed twice" % name)
+        seen.add(name)
+        emitted.append((name, call))
+    return accessors, deltas, sticky, emitted
 
 
 INVENTORY_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|")
@@ -559,7 +602,7 @@ def gen_thunks(calls):
     return "\n".join(out)
 
 
-def gen_wire(calls):
+def gen_wire(calls, residual_fields=None):
     out = [banner("PipeWire.inc", "G3: wire records, size assertions and the applier's bounds gate.",
                   "PipeCalls.def")]
     out.append("""// Every record is a fixed header plus its payload, padded to the stream's 8-byte
@@ -641,6 +684,25 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
 }
 
 #undef MGP_WIRE_CHECK_BOUNDS""")
+    # The migration carrier's layout, asserted MEMBER BY MEMBER and not only by sizeof
+    # (plan 6.3): a heterogeneous POD is where padding differs across ABIs, and the monolith
+    # verify harness is blind to it because both sides are the same translation unit. The
+    # first member is pinned at 0 and the rest are pinned to ascend, which is the strongest
+    # statement a generator that cannot see the layout can make; sizeof plus
+    # MGL_RESIDUAL_BLOCK_SIZE pins the rest, and the ratchet only ever goes DOWN.
+    if residual_fields:
+        out.append("")
+        out.append("// The ResidualValueBlock layout, from PipeFields.def's")
+        out.append("// MGP_FIELDS_ResidualValueBlock. Retiring a field without lowering")
+        out.append("// MGL_RESIDUAL_BLOCK_SIZE is a build break, which is the point.")
+        out.append("static_assert(offsetof(ResidualValueBlock, %s) == 0," % residual_fields[0])
+        out.append("              \"the residual block's first member must sit at offset 0\");")
+        for previous, member in zip(residual_fields, residual_fields[1:]):
+            out.append("static_assert(offsetof(ResidualValueBlock, %s) >" % member)
+            out.append("                  offsetof(ResidualValueBlock, %s)," % previous)
+            out.append("              \"the residual block's members must stay in declaration order\");")
+        out.append("static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE,")
+        out.append("              \"the residual ratchet only ever goes down\");")
     return "\n".join(out) + "\n"
 
 
@@ -744,7 +806,48 @@ inline Bool MGPipeFieldEqual(const T (&a)[N], const T (&b)[N]) {
     return "\n".join(out) + "\n"
 
 
-def gen_filled(accessors, calls, sticky):
+def gen_emitted_by(accessors, calls, emitted):
+    """P2 brief D5: which P2 call SUPPLIES each PipeInputs field, so the per-verb residual
+    fill loop can skip it. Emitters are the distinct calls named in MGP_COVERAGE_EMITTED_LIST,
+    sorted so the enum is stable against the order rows are written in."""
+    call_names = set(c.Name for c in calls)
+    emitted_map = dict(emitted)
+    for name, call in emitted:
+        if call not in call_names:
+            sys.exit("Coverage.def: MGP_COVERAGE_EMITTED_LIST names %s for %s, which is not a "
+                     "call in PipeCalls.def" % (call, name))
+    emitters = sorted(set(call for _, call in emitted))
+    out = []
+    out.append("// P2 brief D5: the call that now SUPPLIES a field, so the residual fill loop no")
+    out.append("// longer pulls it out of GLContext. kNone means the field is still pulled - which")
+    out.append("// is what makes MOBILEGL_PIPE_PUSH a true per-subsystem A/B instead of a single")
+    out.append("// switch. Rows come from Coverage.def's MGP_COVERAGE_EMITTED_LIST.")
+    out.append("enum class MGPipeFieldEmitter : Uint8 {")
+    out.append("    kNone = 0,")
+    for emitter in emitters:
+        out.append("    %s," % emitter)
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr const char* kMGPipeFieldEmitterNames[] = {")
+    out.append("    \"kNone\",")
+    for emitter in emitters:
+        out.append("    \"%s\"," % emitter)
+    out.append("};")
+    out.append("")
+    out.append("inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount] = {")
+    for name, _ in accessors:
+        emitter = emitted_map.get(name)
+        if emitter is None:
+            out.append("    MGPipeFieldEmitter::kNone, // %s" % name)
+        else:
+            out.append("    MGPipeFieldEmitter::%s, // %s" % (emitter, name))
+    out.append("};")
+    out.append("inline constexpr SizeT kMGPipeEmittedFieldCount = %d;" % len(emitted))
+    out.append("")
+    return "\n".join(out)
+
+
+def gen_filled(accessors, calls, sticky, emitted):
     call_names = set(c.Name for c in calls)
     sticky_map = dict(sticky)
     out = [banner("PipeFilled.inc", "G5: PipeInputs field ids and the per-verb poison generations.",
@@ -796,6 +899,7 @@ def gen_filled(accessors, calls, sticky):
         out.append("    \"%s\",%s" % (call, marker))
     out.append("};")
     out.append("")
+    out.append(gen_emitted_by(accessors, calls, emitted))
     out.append("""struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;
     Uint64 FilledGen[kMGPipeInputFieldCount];
@@ -1041,19 +1145,23 @@ def gen_span_table():
                   "the field list in scripts/gen_pipe.py")]
     out.append("""// D-B1 rejected three CSOs and demanded this table instead, so the table needs its own
 // completeness trip wire: MG_Test walks every public RenderState setter and asserts that
-// the pipeline-subset hash moves IF AND ONLY IF m_pipelineStateVersion moves. That test
-// and MGPipeRenderStateSpans.cpp land with P2; what P0 pins is the MEMBER LIST, taken from
-// what VulkanRenderer::ComputePipelineStateHash hashes today, so the later offsets are
-// derived from a list that was reviewed rather than invented.
+// the pipeline-subset hash moves IF AND ONLY IF m_pipelineStateVersion moves
+// (MG_Test/Pipe/RenderStateSpansTest.cpp).
 //
-// Deliberately absent, and each absence is a question P2 has to answer before the chunk
-// table freezes:
-//   - FramebufferSrgb and DepthClamp have NO STORAGE at all (RenderState.cpp's SetCapability
-//     falls to "not supported currently" and IsCapabilityEnabled returns false), so six
-//     backend read points are constant false today. Pipeline state or dead capability?
-//   - ProvokingVertexModeSetting is Vulkan pipeline state but is not hashed today.
-//   - FrontFaceModeSetting, ClipOrigin and ClipDepthMode are pipeline state on Vulkan and
-//     are handled elsewhere in the payload path rather than in the memo word.
+// P2 replaced P0's provenance with a RULE, and the rule is the only thing that decides
+// membership: a member is pipeline state IF AND ONLY IF some public RenderState setter that
+// calls BumpVersions() writes it. That is what makes the G7 invariant true by construction
+// rather than by inspection, and it turns the subset into a strict SUPERSET of the 24
+// members VulkanRenderer::ComputePipelineStateHash used to hash.
+//
+// The three questions P0 left open are ANSWERED here, and the answers are in this list:
+//   - FramebufferSrgb, DepthClamp and TextureCubeMapSeamless had NO STORAGE at all -
+//     SetCapability fell to "not supported currently" and IsCapabilityEnabled answered a
+//     compile-time false. P2 gave all three real storage in the three padding bytes between
+//     ColorMasks and ClearColor, and their setters call BumpVersions(), so: pipeline state.
+//   - ProvokingVertexModeSetting: SetProvokingVertexMode calls BumpVersions(), so pipeline.
+//   - FrontFaceModeSetting likewise. ClipOrigin and ClipDepthMode do NOT (SetClipControl is
+//     ++m_version only), so they are dynamic, in chunk D1.
 //
 // The complement of this list is the DYNAMIC subset - the half whose whole purpose is that
 // glViewport must not mint a new CSO.
@@ -1066,8 +1174,10 @@ inline constexpr const char* const kMGPipePipelineStateMembers[] = {""")
     out.append("static_assert(kMGPipePipelineStateMemberCount ==")
     out.append("                  sizeof(kMGPipePipelineStateMembers) / sizeof(kMGPipePipelineStateMembers[0]));")
     out.append("")
-    out.append("// Filled in by MG_Pipe/MGPipeRenderStateSpans.cpp (P2), which computes the offsets")
-    out.append("// in C++ with offsetof rather than guessing them in python.")
+    out.append("// Defined by MG_Pipe/MGPipeRenderStateSpans.cpp (P2), which computes every")
+    out.append("// boundary in C++ with offsetof rather than guessing it in python. 7 pipeline")
+    out.append("// chunks / 396 bytes and 8 dynamic chunks / 772 bytes, and the two halves")
+    out.append("// partition [0, sizeof(RenderStateParameters)) exactly - asserted there.")
     out.append("extern const MGPStateChunk kMGPipePipelineChunks[];")
     out.append("extern const MGPStateChunk kMGPipeDynamicChunks[];")
     return "\n".join(out) + "\n"
@@ -1117,6 +1227,11 @@ def self_test(accessors):
         accessors, text=verb_row.sub("X(DrawArrays, kDraw) X(NotAVerb, kDraw)", fill_text, count=1))))
     controls.append(("field row naming a non-accessor", lambda: parse_fill_points(
         accessors, text=field_row.sub("X(kDraw, NotAnAccessor)", fill_text, count=1))))
+    # The EMITTED list's own gate: a row naming a call that is not in PipeCalls.def would
+    # generate an enumerator nothing can dispatch on.
+    calls_for_control = parse_calls()
+    controls.append(("emitted row naming a call that does not exist", lambda: gen_emitted_by(
+        [("GetViewport", "SetDynamicState")], calls_for_control, [("GetViewport", "NotACall")])))
     trips = 0
     for name, fn in controls:
         trips += expect_trip(name, fn)
@@ -1143,7 +1258,7 @@ def main():
     payloads = parse_verify_payloads()
     check_call_payloads_have_field_lists(calls, payloads)
     check_field_lists_cover_struct_members(parse_field_lists(), payloads)
-    accessors, deltas, sticky = parse_coverage()
+    accessors, deltas, sticky, emitted = parse_coverage()
     if args.self_test:
         return self_test(accessors)
     scan_live_accessors(accessors)
@@ -1157,9 +1272,11 @@ def main():
     changed = []
     write(os.path.join(GENERATED_DIR, "PipeTables.inc"), gen_tables(calls), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeThunks.inc"), gen_thunks(calls), args.check, changed)
-    write(os.path.join(GENERATED_DIR, "PipeWire.inc"), gen_wire(calls), args.check, changed)
+    write(os.path.join(GENERATED_DIR, "PipeWire.inc"),
+          gen_wire(calls, parse_field_lists().get("ResidualValueBlock")), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeVerify.inc"), gen_verify(payloads), args.check, changed)
-    write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls, sticky), args.check, changed)
+    write(os.path.join(GENERATED_DIR, "PipeFilled.inc"), gen_filled(accessors, calls, sticky, emitted),
+          args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeFillPoints.inc"),
           gen_fill_points(accessors, sticky, verbs, classes, fields), args.check, changed)
     write(os.path.join(GENERATED_DIR, "PipeCoverage.inc"), coverage_text, args.check, changed)
@@ -1167,9 +1284,9 @@ def main():
 
     screen = sum(1 for c in calls if c.IsScreen)
     print("gen_pipe: %d calls (%d screen, %d context), %d verify payloads, %d PipeInputs fields "
-          "(%d sticky), %d verbs, %d classes"
+          "(%d sticky, %d emitted by a P2 call), %d verbs, %d classes"
           % (len(calls), screen, len(calls) - screen, len(payloads), len(accessors), len(sticky),
-             len(verbs), len(classes)))
+             len(emitted), len(verbs), len(classes)))
     print("gen_pipe: inventory %d rows: %d -> call, %d client-resolved, %d reverse-channel, "
           "%d structural handle, %d UNMAPPED"
           % (len(rows), mapped, pseudo["kClientResolved"], pseudo["kReverseChannel"],

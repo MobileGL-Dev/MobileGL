@@ -317,9 +317,11 @@ namespace MobileGL {
                     SET_CAPABILITY(ColorLogicOp, enabled);
                     SET_CAPABILITY(DebugOutput, enabled);
                     SET_CAPABILITY(DebugOutputSynchronous, enabled);
+                    SET_CAPABILITY(DepthClamp, enabled);
                     SET_CAPABILITY(DepthTest, enabled);
                     SET_CAPABILITY(CullFace, enabled);
                     SET_CAPABILITY(Dither, enabled);
+                    SET_CAPABILITY(FramebufferSrgb, enabled);
                     SET_CAPABILITY(LineSmooth, enabled);
                     SET_CAPABILITY(Multisample, enabled);
                     SET_CAPABILITY(PolygonOffsetFill, enabled);
@@ -335,6 +337,7 @@ namespace MobileGL {
                     SET_CAPABILITY(SampleMask, enabled);
                     SET_CAPABILITY(SampleShading, enabled);
                     SET_CAPABILITY(StencilTest, enabled);
+                    SET_CAPABILITY(TextureCubeMapSeamless, enabled);
                     SET_CAPABILITY(ProgramPointSize, enabled);
                 case CapabilityInput::Blend: {
                     Bool stateChanged = false;
@@ -378,7 +381,9 @@ namespace MobileGL {
                     ++m_version;
                     break;
                 }
-                default: // not supported currently
+                // Every CapabilityInput now has storage; the arm is a backstop for a value
+                // outside the enum, not a silent swallow of a real glEnable.
+                default:
                     break;
                 }
 #undef SET_CAPABILITY
@@ -392,9 +397,11 @@ namespace MobileGL {
                     RETURN_CAPABILITY(ColorLogicOp);
                     RETURN_CAPABILITY(DebugOutput);
                     RETURN_CAPABILITY(DebugOutputSynchronous);
+                    RETURN_CAPABILITY(DepthClamp);
                     RETURN_CAPABILITY(DepthTest);
                     RETURN_CAPABILITY(CullFace);
                     RETURN_CAPABILITY(Dither);
+                    RETURN_CAPABILITY(FramebufferSrgb);
                     RETURN_CAPABILITY(LineSmooth);
                     RETURN_CAPABILITY(Multisample);
                     RETURN_CAPABILITY(PolygonOffsetFill);
@@ -410,6 +417,7 @@ namespace MobileGL {
                     RETURN_CAPABILITY(SampleMask);
                     RETURN_CAPABILITY(SampleShading);
                     RETURN_CAPABILITY(StencilTest);
+                    RETURN_CAPABILITY(TextureCubeMapSeamless);
                     RETURN_CAPABILITY(ProgramPointSize);
                 case CapabilityInput::Blend:
                     return m_parameters.BlendStates[0].Enabled;

@@ -27,6 +27,13 @@ option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery
 # MGPipe/PipeInputs source is compiled, every MGP_FILL is ((void)0).
 option(MOBILEGL_PIPE_PUSH "Backends read frontend state through the MGPipe PipeInputs block instead of MG_State::pGLContext (ARCHITECTURE.md 9.2 phase A)" OFF)
 option(MOBILEGL_PIPE_VERIFY "Compile SnapshotFromGLContext() and the G4 per-verb shadow comparator; implies MOBILEGL_PIPE_PUSH; never shipped" OFF)
+# Track H's old-versus-new arm (ARCHITECTURE.md 9.6). With a MOBILEGL_PIPE_PUSH bit clear
+# the backend would still run the RE-KEYED memo code, so the bitmask alone stops being a
+# valid A/B the moment a handle wave lands: this option compiles the pre-handle arm - the
+# registries, OwnerEquals, the TwinLookupMemos, g_fbSlotCache, ComputePipelineStateHash,
+# the address-keyed VaoDrawMemo - beside it, behind the same PipeInputs interface. ON for
+# the whole migration window; it retires with the pull path itself at P13.
+option(MOBILEGL_PIPE_LEGACY_MEMOS "Compile the pre-handle memo arm beside the {slot, gen} arm so Track H has a real A/B (ARCHITECTURE.md 9.6)" ON)
 set(MOBILEGL_LOG_ACTIVE_LEVEL "MOBILEGL_LOG_LEVEL_INFO" CACHE STRING "MobileGL active log level macro")
 set(MOBILEGL_VULKAN_LIBRARY "" CACHE FILEPATH "Vulkan loader/MoltenVK library to link for iOS builds")
 
@@ -464,11 +471,25 @@ if (MOBILEGL_PIPE_VERIFY AND NOT MOBILEGL_PIPE_PUSH)
     set(MOBILEGL_PIPE_PUSH ON)
 endif()
 
+# In a pull build the legacy arm is the ONLY arm, so the option cannot be off there.
+# A normal variable, not a forced cache write, for the same reason as the two above.
+if (NOT MOBILEGL_PIPE_PUSH AND NOT MOBILEGL_PIPE_LEGACY_MEMOS)
+    message(STATUS "MobileGL: MOBILEGL_PIPE_PUSH=OFF forces MOBILEGL_PIPE_LEGACY_MEMOS ON for this "
+                   "configure: with nothing pushed it is the only arm there is")
+    set(MOBILEGL_PIPE_LEGACY_MEMOS ON)
+endif()
+
 if (MOBILEGL_PIPE_PUSH)
     message(STATUS "MobileGL: PipeInputs push ON, appending the MGPipe fill sources")
     list(APPEND SOURCE_FILES
         MobileGL/MG_Backend/MGPipe/PipeInputs.cpp
         MobileGL/MG_Impl/Pipe/PipeFill.cpp
+        # P2's contract: the chunk table and its subset hash, the in-process applier, and
+        # the client's {slot, gen} allocator. All three are push-only, which is how the
+        # pull build gains no symbol from P2 (G1) - a declaration emits nothing.
+        MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
+        MobileGL/MG_Pipe/PipeApply.cpp
+        MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
     )
 endif()
 
@@ -550,6 +571,9 @@ if (MOBILEGL_PIPE_PUSH)
 endif()
 if (MOBILEGL_PIPE_VERIFY)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
+endif()
+if (MOBILEGL_PIPE_LEGACY_MEMOS)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_LEGACY_MEMOS=1)
 endif()
 
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")

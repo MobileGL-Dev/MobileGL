@@ -71,9 +71,10 @@
     X(GetProgramForDispatch,                    SetDispatchProgram)      \
     X(GetProgramForDraw,                        SetDrawProgram)          \
     X(GetProgramObject,                         CreateShaderState)       \
-    /* Not in ComputePipelineStateHash today even though Vulkan makes it pipeline   */  \
-    /* state; recorded here so the G7 chunk table has to answer for it before it    */  \
-    /* freezes (section 10.3-5).                                                    */  \
+    /* ANSWERED by P2: it is in the pipeline half. SetProvokingVertexMode calls      */  \
+    /* BumpVersions(), and the chunk table's rule is exactly that, so it rides       */  \
+    /* pipeline chunk P4 - a strict superset of what ComputePipelineStateHash used   */  \
+    /* to hash (MGPipeRenderStateSpans.cpp records the provenance).                  */  \
     X(GetProvokingVertexMode,                   CreateRenderState)       \
     X(GetRenderStateParameters,                 CreateRenderState)       \
     X(GetRenderStateParametersVersion,          BindRenderState)         \
@@ -127,5 +128,53 @@
 #define MGP_COVERAGE_DELTA_LIST(X)                                       \
     X(handle-ify (wire handle),                 kStructuralHandle)       \
     X(Buffer ops delta,                         ResourceRespecify)
+
+// X(Accessor, PipeCall) - the EMITTED list (P2 brief D5): which P2 call now SUPPLIES this
+// PipeInputs field, so the per-verb residual fill loop no longer has to pull it out of
+// GLContext. gen_pipe.py turns it into kMGPipeFieldEmittedBy[] (generated/PipeFilled.inc);
+// a field with no row here keeps going through the fill loop, which is what makes the
+// MOBILEGL_PIPE_PUSH bitmask a true per-subsystem A/B rather than an all-or-nothing switch.
+//
+// Every name must be an accessor in MGP_COVERAGE_ACCESSOR_LIST and every call must be a
+// real call in PipeCalls.def; gen_pipe.py refuses anything else.
+//
+// The one row whose call differs from the accessor list's is GetPrimitiveRestartIndex:
+// coverage maps it onto draw_vbo because that is where a backend reads it, but the VALUE
+// travels in dynamic chunk D6, so set_dynamic_state is what supplies it.
+#define MGP_COVERAGE_EMITTED_LIST(X)                                     \
+    X(GetBlendColor,                            SetDynamicState)         \
+    X(GetBlendEquationIndexed,                  CreateRenderState)       \
+    X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    X(GetClampReadColor,                        SetDynamicState)         \
+    X(GetClearColor,                            SetDynamicState)         \
+    X(GetClearDepth,                            SetDynamicState)         \
+    X(GetClearStencil,                          SetDynamicState)         \
+    X(GetColorMaskIndexed,                      CreateRenderState)       \
+    X(GetCullFaceMode,                          CreateRenderState)       \
+    X(GetCurrentVertexAttribute,                SetVertexAttribDefaults) \
+    X(GetDepthFunc,                             CreateRenderState)       \
+    X(GetDepthMask,                             CreateRenderState)       \
+    X(GetDepthRangeIndexed,                     SetDynamicState)         \
+    X(GetLineWidth,                             SetDynamicState)         \
+    X(GetLogicOp,                               CreateRenderState)       \
+    X(GetMinSampleShadingValue,                 CreateRenderState)       \
+    X(GetPatchDefaultInnerLevel,                SetPatchState)           \
+    X(GetPatchDefaultOuterLevel,                SetPatchState)           \
+    X(GetPatchVertices,                         SetPatchState)           \
+    X(GetPipelineStateVersion,                  BindRenderState)         \
+    X(GetPixelStoreParameters,                  SetPixelPackState)       \
+    X(GetPolygonModeFront,                      CreateRenderState)       \
+    X(GetPolygonOffsetFactor,                   SetDynamicState)         \
+    X(GetPolygonOffsetUnits,                    SetDynamicState)         \
+    X(GetPrimitiveRestartIndex,                 SetDynamicState)         \
+    X(GetProvokingVertexMode,                   CreateRenderState)       \
+    X(GetRenderStateParameters,                 CreateRenderState)       \
+    X(GetRenderStateParametersVersion,          BindRenderState)         \
+    X(GetScissorBox,                            SetDynamicState)         \
+    X(GetStencilState,                          CreateRenderState)       \
+    X(GetViewport,                              SetDynamicState)         \
+    X(GetViewportIndexed,                       SetDynamicState)         \
+    X(IsCapabilityEnabled,                      CreateRenderState)       \
+    X(IsCapabilityEnabledIndexed,               CreateRenderState)
 
 // clang-format on

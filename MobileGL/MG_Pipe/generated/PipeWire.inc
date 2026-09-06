@@ -929,3 +929,11 @@ inline Bool MGPipeApplyWireRecord(MGPWireOp op, const void* record, Uint64 size,
 }
 
 #undef MGP_WIRE_CHECK_BOUNDS
+
+// The ResidualValueBlock layout, from PipeFields.def's
+// MGP_FIELDS_ResidualValueBlock. Retiring a field without lowering
+// MGL_RESIDUAL_BLOCK_SIZE is a build break, which is the point.
+static_assert(offsetof(ResidualValueBlock, CapabilityBits) == 0,
+              "the residual block's first member must sit at offset 0");
+static_assert(sizeof(ResidualValueBlock) == MGL_RESIDUAL_BLOCK_SIZE,
+              "the residual ratchet only ever goes down");

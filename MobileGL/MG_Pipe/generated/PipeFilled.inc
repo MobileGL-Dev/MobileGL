@@ -299,6 +299,97 @@ inline constexpr const char* kMGPipeInputFieldFilledBy[kMGPipeInputFieldCount] =
     "SetStreamOutputTargets",
 };
 
+// P2 brief D5: the call that now SUPPLIES a field, so the residual fill loop no
+// longer pulls it out of GLContext. kNone means the field is still pulled - which
+// is what makes MOBILEGL_PIPE_PUSH a true per-subsystem A/B instead of a single
+// switch. Rows come from Coverage.def's MGP_COVERAGE_EMITTED_LIST.
+enum class MGPipeFieldEmitter : Uint8 {
+    kNone = 0,
+    BindRenderState,
+    CreateRenderState,
+    SetDynamicState,
+    SetPatchState,
+    SetPixelPackState,
+    SetVertexAttribDefaults,
+};
+
+inline constexpr const char* kMGPipeFieldEmitterNames[] = {
+    "kNone",
+    "BindRenderState",
+    "CreateRenderState",
+    "SetDynamicState",
+    "SetPatchState",
+    "SetPixelPackState",
+    "SetVertexAttribDefaults",
+};
+
+inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount] = {
+    MGPipeFieldEmitter::kNone, // GetActiveTextureUnit
+    MGPipeFieldEmitter::SetDynamicState, // GetBlendColor
+    MGPipeFieldEmitter::CreateRenderState, // GetBlendEquationIndexed
+    MGPipeFieldEmitter::CreateRenderState, // GetBlendFuncIndexed
+    MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackName
+    MGPipeFieldEmitter::kNone, // GetBoundVertexArray
+    MGPipeFieldEmitter::kNone, // GetBufferBindingSlot
+    MGPipeFieldEmitter::kNone, // GetBufferBindingPoint
+    MGPipeFieldEmitter::kNone, // GetBufferBindingPointCount
+    MGPipeFieldEmitter::kNone, // GetTouchedBufferBindingPointCount
+    MGPipeFieldEmitter::SetDynamicState, // GetClampReadColor
+    MGPipeFieldEmitter::SetDynamicState, // GetClearColor
+    MGPipeFieldEmitter::SetDynamicState, // GetClearDepth
+    MGPipeFieldEmitter::SetDynamicState, // GetClearStencil
+    MGPipeFieldEmitter::CreateRenderState, // GetColorMaskIndexed
+    MGPipeFieldEmitter::CreateRenderState, // GetCullFaceMode
+    MGPipeFieldEmitter::SetVertexAttribDefaults, // GetCurrentVertexAttribute
+    MGPipeFieldEmitter::CreateRenderState, // GetDepthFunc
+    MGPipeFieldEmitter::CreateRenderState, // GetDepthMask
+    MGPipeFieldEmitter::SetDynamicState, // GetDepthRangeIndexed
+    MGPipeFieldEmitter::kNone, // GetFramebufferBindingSlot
+    MGPipeFieldEmitter::kNone, // GetImageTextureBinding
+    MGPipeFieldEmitter::SetDynamicState, // GetLineWidth
+    MGPipeFieldEmitter::CreateRenderState, // GetLogicOp
+    MGPipeFieldEmitter::kNone, // GetMaxTouchedTextureUnit
+    MGPipeFieldEmitter::CreateRenderState, // GetMinSampleShadingValue
+    MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultInnerLevel
+    MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultOuterLevel
+    MGPipeFieldEmitter::SetPatchState, // GetPatchVertices
+    MGPipeFieldEmitter::BindRenderState, // GetPipelineStateVersion
+    MGPipeFieldEmitter::SetPixelPackState, // GetPixelStoreParameters
+    MGPipeFieldEmitter::CreateRenderState, // GetPolygonModeFront
+    MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetFactor
+    MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetUnits
+    MGPipeFieldEmitter::SetDynamicState, // GetPrimitiveRestartIndex
+    MGPipeFieldEmitter::kNone, // GetProgramForDispatch
+    MGPipeFieldEmitter::kNone, // GetProgramForDraw
+    MGPipeFieldEmitter::kNone, // GetProgramObject
+    MGPipeFieldEmitter::CreateRenderState, // GetProvokingVertexMode
+    MGPipeFieldEmitter::CreateRenderState, // GetRenderStateParameters
+    MGPipeFieldEmitter::BindRenderState, // GetRenderStateParametersVersion
+    MGPipeFieldEmitter::kNone, // GetSamplingResolutionGeneration
+    MGPipeFieldEmitter::SetDynamicState, // GetScissorBox
+    MGPipeFieldEmitter::CreateRenderState, // GetStencilState
+    MGPipeFieldEmitter::kNone, // GetTextureBindGeneration
+    MGPipeFieldEmitter::kNone, // GetTextureContextId
+    MGPipeFieldEmitter::kNone, // GetTextureObject
+    MGPipeFieldEmitter::kNone, // GetTextureUnitObject
+    MGPipeFieldEmitter::kNone, // GetTransformFeedbackCapturedVertices
+    MGPipeFieldEmitter::kNone, // GetTransformFeedbackGeneration
+    MGPipeFieldEmitter::kNone, // GetTransformFeedbackPausedPrimitiveCounter
+    MGPipeFieldEmitter::kNone, // GetTransformFeedbackProgram
+    MGPipeFieldEmitter::SetDynamicState, // GetViewport
+    MGPipeFieldEmitter::SetDynamicState, // GetViewportIndexed
+    MGPipeFieldEmitter::CreateRenderState, // IsCapabilityEnabled
+    MGPipeFieldEmitter::CreateRenderState, // IsCapabilityEnabledIndexed
+    MGPipeFieldEmitter::kNone, // IsTransformFeedbackActive
+    MGPipeFieldEmitter::kNone, // IsTransformFeedbackPaused
+    MGPipeFieldEmitter::kNone, // InvalidateCompileEnv
+    MGPipeFieldEmitter::kNone, // ValidateProgramName
+    MGPipeFieldEmitter::kNone, // RecordError
+    MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackLifetimeId
+    MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
+};
+inline constexpr SizeT kMGPipeEmittedFieldCount = 34;
+
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;
     Uint64 FilledGen[kMGPipeInputFieldCount];

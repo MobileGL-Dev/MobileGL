@@ -319,10 +319,18 @@ namespace MobileGL::MG_Config {
         // --- MGPipe (the disaggregation plan's explicit frontend/backend boundary) ---
         // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
         // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.
-        // 0 - the default and the only shipped value until the migration lands - is "pull
-        // everything", i.e. exactly today's behaviour. One bit of it also turns OFF
-        // client-side content addressing of CSOs, which is the negative control the CSO
-        // design is measured against. Accepts decimal or 0x-prefixed hex.
+        // 0 - the only shipped value until the migration lands - is "pull everything",
+        // i.e. exactly today's behaviour, and is the default of a PULL build, where the
+        // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
+        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP2), so MOBILEGL_PIPE_PUSH=0 in the
+        // environment is the all-pull control. Accepts decimal or 0x-prefixed hex, and
+        // operators pass it as hex, so the bits are listed here (MG_Pipe/MGPipe.h owns them):
+        //   0x01 render state (create/bind_render_state + set_dynamic_state)
+        //   0x02 pixel pack        0x04 patch state      0x08 vertex attrib defaults
+        //   0x10 residual values   0x20 Espryt slots     0x40 Magma vertex input
+        //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
+        //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
+        //         never probed. The negative control the CSO design is measured against.
         Uint64 PipePush = 0;
         // MOBILEGL_PIPE_VERIFY: per-draw, per-FIELD shadow comparison of the pushed state
         // against a snapshot taken from GLContext the old way, printing the first field
@@ -349,6 +357,13 @@ namespace MobileGL::MG_Config {
         // Fatal{UnmigratedPipeInput} (negative control B). Unknown name is
         // Fatal{PipeVerifyBadKnob}.
         String PipePoisonOmit;
+        // MOBILEGL_PIPE_HANDLE_ABA_CONTROL (negative control C, P2 brief D18): defeat the
+        // two guards the {slot, gen} re-key replaces - hash the raw BufferObject* instead
+        // of its lifetime id, and skip the VAO lifetime-id compare - so
+        // HandleRecycleScenario.AbaControl reproduces the ABA and asserts the WRONG pixels.
+        // That is what proves the reproducer still reproduces. Under MOBILEGL_PIPE_PUSH
+        // only, so it cannot exist in a shipping pull build.
+        Bool PipeHandleAbaControl = false;
 #endif
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,
         // texture pulls, upload shapes, residual-block bytes, index mirror bytes).

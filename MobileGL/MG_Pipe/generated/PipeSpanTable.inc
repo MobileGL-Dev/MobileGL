@@ -14,54 +14,80 @@
 
 // D-B1 rejected three CSOs and demanded this table instead, so the table needs its own
 // completeness trip wire: MG_Test walks every public RenderState setter and asserts that
-// the pipeline-subset hash moves IF AND ONLY IF m_pipelineStateVersion moves. That test
-// and MGPipeRenderStateSpans.cpp land with P2; what P0 pins is the MEMBER LIST, taken from
-// what VulkanRenderer::ComputePipelineStateHash hashes today, so the later offsets are
-// derived from a list that was reviewed rather than invented.
+// the pipeline-subset hash moves IF AND ONLY IF m_pipelineStateVersion moves
+// (MG_Test/Pipe/RenderStateSpansTest.cpp).
 //
-// Deliberately absent, and each absence is a question P2 has to answer before the chunk
-// table freezes:
-//   - FramebufferSrgb and DepthClamp have NO STORAGE at all (RenderState.cpp's SetCapability
-//     falls to "not supported currently" and IsCapabilityEnabled returns false), so six
-//     backend read points are constant false today. Pipeline state or dead capability?
-//   - ProvokingVertexModeSetting is Vulkan pipeline state but is not hashed today.
-//   - FrontFaceModeSetting, ClipOrigin and ClipDepthMode are pipeline state on Vulkan and
-//     are handled elsewhere in the payload path rather than in the memo word.
+// P2 replaced P0's provenance with a RULE, and the rule is the only thing that decides
+// membership: a member is pipeline state IF AND ONLY IF some public RenderState setter that
+// calls BumpVersions() writes it. That is what makes the G7 invariant true by construction
+// rather than by inspection, and it turns the subset into a strict SUPERSET of the 24
+// members VulkanRenderer::ComputePipelineStateHash used to hash.
+//
+// The three questions P0 left open are ANSWERED here, and the answers are in this list:
+//   - FramebufferSrgb, DepthClamp and TextureCubeMapSeamless had NO STORAGE at all -
+//     SetCapability fell to "not supported currently" and IsCapabilityEnabled answered a
+//     compile-time false. P2 gave all three real storage in the three padding bytes between
+//     ColorMasks and ClearColor, and their setters call BumpVersions(), so: pipeline state.
+//   - ProvokingVertexModeSetting: SetProvokingVertexMode calls BumpVersions(), so pipeline.
+//   - FrontFaceModeSetting likewise. ClipOrigin and ClipDepthMode do NOT (SetClipControl is
+//     ++m_version only), so they are dynamic, in chunk D1.
 //
 // The complement of this list is the DYNAMIC subset - the half whose whole purpose is that
 // glViewport must not mint a new CSO.
 
 inline constexpr const char* const kMGPipePipelineStateMembers[] = {
-    "CullFaceEnabled",
-    "DepthTestEnabled",
-    "PolygonOffsetFillEnabled",
-    "RasterizerDiscardEnabled",
-    "ColorLogicOpEnabled",
-    "StencilTestEnabled",
-    "PrimitiveRestartEnabled",
-    "PrimitiveRestartFixedIndexEnabled",
-    "DepthMask",
-    "SampleShadingEnabled",
-    "MultisampleEnabled",
-    "SampleMaskEnabled",
-    "SampleMaskValue",
-    "MinSampleShadingValue",
     "PatchVertices",
     "PatchDefaultOuterLevel",
     "PatchDefaultInnerLevel",
-    "PolygonModeFront",
-    "CullFaceModeSetting",
-    "DepthFunc",
-    "LogicOp",
-    "StencilStates",
     "BlendStates",
+    "LogicOp",
+    "DepthTestEnabled",
+    "DepthFunc",
+    "DepthMask",
     "ColorMasks",
+    "FramebufferSrgbEnabled",
+    "DepthClampEnabled",
+    "TextureCubeMapSeamlessEnabled",
+    "SampleCoverageValue",
+    "SampleCoverageInvert",
+    "SampleMaskValue",
+    "MinSampleShadingValue",
+    "StencilStates",
+    "CullFaceEnabled",
+    "CullFaceModeSetting",
+    "FrontFaceModeSetting",
+    "ProvokingVertexModeSetting",
+    "PolygonModeFront",
+    "PolygonModeBack",
+    "ColorLogicOpEnabled",
+    "DebugOutputEnabled",
+    "DebugOutputSynchronousEnabled",
+    "DitherEnabled",
+    "LineSmoothEnabled",
+    "MultisampleEnabled",
+    "PolygonOffsetFillEnabled",
+    "PolygonOffsetLineEnabled",
+    "PolygonOffsetPointEnabled",
+    "PolygonSmoothEnabled",
+    "PrimitiveRestartEnabled",
+    "PrimitiveRestartFixedIndexEnabled",
+    "RasterizerDiscardEnabled",
+    "SampleAlphaToCoverageEnabled",
+    "SampleAlphaToOneEnabled",
+    "SampleCoverageEnabled",
+    "SampleMaskEnabled",
+    "SampleShadingEnabled",
+    "StencilTestEnabled",
+    "ProgramPointSizeEnabled",
+    "ScissorTestEnabledMask",
 };
-inline constexpr SizeT kMGPipePipelineStateMemberCount = 24;
+inline constexpr SizeT kMGPipePipelineStateMemberCount = 44;
 static_assert(kMGPipePipelineStateMemberCount ==
                   sizeof(kMGPipePipelineStateMembers) / sizeof(kMGPipePipelineStateMembers[0]));
 
-// Filled in by MG_Pipe/MGPipeRenderStateSpans.cpp (P2), which computes the offsets
-// in C++ with offsetof rather than guessing them in python.
+// Defined by MG_Pipe/MGPipeRenderStateSpans.cpp (P2), which computes every
+// boundary in C++ with offsetof rather than guessing it in python. 7 pipeline
+// chunks / 396 bytes and 8 dynamic chunks / 772 bytes, and the two halves
+// partition [0, sizeof(RenderStateParameters)) exactly - asserted there.
 extern const MGPStateChunk kMGPipePipelineChunks[];
 extern const MGPStateChunk kMGPipeDynamicChunks[];

@@ -151,6 +151,12 @@ namespace {
         }
         EXPECT_NE(line.find("gates["), String::npos) << line;
         EXPECT_NE(line.find("tex[emit="), String::npos) << line;
+#if MOBILEGL_PIPE_PUSH
+        // P2's two render-state CSO counters ride the same line, short-named. Push-only:
+        // the pull build has no CSO to mint and must stay symbol-identical.
+        EXPECT_NE(line.find("cso[csom="), String::npos) << line;
+        EXPECT_NE(line.find("csob="), String::npos) << line;
+#endif
     }
 
     // Per-frame fields carry two decimals for the same reason acc/draw does: they are small
@@ -267,6 +273,10 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageIndirectCmd), "stage-indirect-cmd");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::PersistentMapPush), "persistent-map-push");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::ResidualValueBlock), "residual-value-block");
+#if MOBILEGL_PIPE_PUSH
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoMints), "render-state-cso-mints");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoBinds), "render-state-cso-binds");
+#endif
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytUnitBindingsEpoch), "espryt-unit-bindings-epoch");

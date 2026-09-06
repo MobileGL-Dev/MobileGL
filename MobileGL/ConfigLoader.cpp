@@ -7,6 +7,11 @@
 // End of Source File Header
 
 #include "Config.h"
+#if MOBILEGL_PIPE_PUSH
+// For kMGPipeSubsystemsMigratedAtP2, the push build's PipePush default. Push-only, so
+// the pull build's translation unit is unchanged.
+#include <MG_Pipe/MGPipe.h>
+#endif
 
 #include <cerrno>
 #include <cstdlib>
@@ -242,7 +247,16 @@ namespace MobileGL::MG_ConfigLoader {
         // MGPipe. Nothing here needs adding to an allow-list: InitializeAcceptedEnvVariables
         // accepts every MOBILEGL_ / LIBGL_ prefixed variable in the environment, so a name
         // that starts with MOBILEGL_ is visible to these queries by construction.
+#if MOBILEGL_PIPE_PUSH
+        // A push build with the knob unset runs every subsystem migrated so far, so the
+        // shipped path is the one the gates measure; MOBILEGL_PIPE_PUSH=0 in the
+        // environment is the all-subsystems-pull control that reproduces P1 exactly.
+        features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", MG_Pipe::kMGPipeSubsystemsMigratedAtP2);
+#else
+        // Meaningless in a pull build: there is nothing to push. Config.h documents 0 as
+        // "pull everything" and that stays literally true.
         features.PipePush = QueryEnvUint64("MOBILEGL_PIPE_PUSH", 0);
+#endif
         features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
 #if MOBILEGL_PIPE_PUSH
         // Defaults ON: read as a tri-state so only an explicitly falsy value turns it off.
@@ -250,6 +264,7 @@ namespace MobileGL::MG_ConfigLoader {
             QueryEnvQuirkOverride("MOBILEGL_PIPE_VERIFY_FATAL") != MG_Config::QuirkOverride::ForceOff;
         QueryEnvVariable("MOBILEGL_PIPE_VERIFY_CORRUPT", features.PipeVerifyCorrupt, "");
         QueryEnvVariable("MOBILEGL_PIPE_POISON_OMIT", features.PipePoisonOmit, "");
+        features.PipeHandleAbaControl = QueryEnvFlag("MOBILEGL_PIPE_HANDLE_ABA_CONTROL");
 #endif
         features.PipeStats = QueryEnvFlag("MOBILEGL_PIPE_STATS");
         // Defaults ON, so the flag has to be read as a tri-state rather than as a plain
