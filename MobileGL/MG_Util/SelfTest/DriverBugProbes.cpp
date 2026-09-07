@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "DriverBugProbes.h"
+#include "PersistentBufferOrderingProbe.h"
 
 #include <Config.h>
 #include <MG_Util/Debug/Log.h>
@@ -2445,6 +2446,10 @@ namespace MobileGL::MG_Util::SelfTest {
                 DriverBugVerdict::Unfixable, detail};
         }
 
+        Optional<DriverBugFinding> ProbePersistentBufferOrderingBug(const GLESFunctionsTable& gl) {
+            return DescribePersistentBufferOrderingBug(ProbePersistentBufferUpdateOrdering(gl));
+        }
+
         // The table. One row per known driver bug; see the header for how to add a sibling.
         using DriverBugProbeFn = Optional<DriverBugFinding> (*)(const GLESFunctionsTable&);
         constexpr DriverBugProbeFn kGlesDriverBugProbes[] = {
@@ -2457,6 +2462,7 @@ namespace MobileGL::MG_Util::SelfTest {
             &ProbeLayeredBlitDestinationBug,
             &ProbeLocatedIoBlockPayloadBug,
             &ProbeCopyImagePacked16FieldOrderBug,
+            &ProbePersistentBufferOrderingBug,
         };
     } // namespace
 
