@@ -192,6 +192,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
     }
 
+#if MOBILEGL_PIPE_PUSH
+    // ---------------------------------------------------------------------------------
+    // P4a: the four family arm predicates the draw path below gates on.
+    // ---------------------------------------------------------------------------------
+    //
+    // TEMPORARY AND SAID SO. D-K3 gives the phase four Resolve<Family>SubsystemArm() latches,
+    // beside ResolveResourceSubsystemArm / ResolveVertexInputSubsystemArm in Managers.cpp -
+    // which is package D's file for the whole phase, so the draw-path package cannot write
+    // them. It is landed BEFORE D, so it carries its own bit tests until those latches exist;
+    // at the rebase every one of these becomes a call to D's, which additionally
+    //
+    //   * LOGS each dependency refusal with one MGLOG_E naming BOTH bits, and
+    //   * reaches PipeSubsystemArmVerdict::NoArm and STOPS with the named
+    //     Fatal{PipeLegacyMemosDisabled, ...} when MOBILEGL_PIPE_LEGACY_MEMOS is 0 - which none
+    //     of these four families' legacy arms survives (D-K3's table: the four g_fboSynced*
+    //     arrays, the twin's cheap-gate trio, UnitSamplerLookupMemo's WeakPtr rows and
+    //     g_programTwinLookupMemo are all pre-handle arms).
+    //
+    // The dependency DIRECTIONS are copied here verbatim, so a mask that half-runs is refused
+    // in the meantime too and the A/B is not silently wrong; the refusal log and the stop are
+    // D's and are deliberately not duplicated here, because two writers of one diagnostic is
+    // how the two drift.
+    //
+    // Latched once per process for the reason Managers.h gives for the other two: the two arms
+    // keep their state in different places, so an answer that changed mid-run would strand
+    // everything already built against the previous one.
+    static Bool EsprytDrawTextureResourceHandlesEnabled() {
+        // Bit 10 requires bit 7: a buffer texture's BufferForTexBuffer names a Buffer handle
+        // and only bit 7 puts twins in that table (D-K2).
+        static const Bool enabled =
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemTextureResources) != 0 &&
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+        return enabled;
+    }
+
+    static Bool EsprytDrawFramebufferHandlesEnabled() {
+        // Bit 9 requires bit 10: every MGPSurface::Res names a Texture or Renderbuffer handle.
+        static const Bool enabled =
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemFramebuffer) != 0 &&
+            EsprytDrawTextureResourceHandlesEnabled();
+        return enabled;
+    }
+
+    static Bool EsprytDrawSamplerHandlesEnabled() {
+        // Bit 11 requires bit 10: every MGPBoundView::Texture and MGPImageView::Res names a
+        // Texture handle, and without bit 10 every lookup would miss and the walk would
+        // `continue` past a unit it should have unbound.
+        static const Bool enabled =
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemSamplers) != 0 &&
+            EsprytDrawTextureResourceHandlesEnabled();
+        return enabled;
+    }
+
+    static Bool EsprytDrawProgramHandlesEnabled() {
+        // Bit 12 depends on nothing: a ShaderCso handle names no texture and no buffer.
+        static const Bool enabled =
+            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
+        return enabled;
+    }
+#endif // MOBILEGL_PIPE_PUSH
+
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
         switch (v) {
         case BlendFactor::Src1Color:
@@ -2226,6 +2287,147 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_fboSyncedBackendIdGenerations[SizeT(target)] = g_attachmentBackendIdGeneration;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // P4a e1 (D-C2, D-B3). The framebuffer family's handle arm.
+        //
+        // THE FOUR-PART MEMO BECOMES TWO VALUES, and the halves are not symmetric.
+        // g_fboSyncedSlotVersions / ObjectVersions / Objects are three answers to one question
+        // - "has the state the client would describe moved?" - asked of the frontend from the
+        // backend. The applier answers it with one number: FramebufferSerial is bumped by the
+        // applier before the backend is told anything, on every set_framebuffer_state it
+        // accepts, and a record the client's ContentHash suppressor withheld provably describes
+        // state that did not move. So one Uint64 compare replaces the three.
+        //
+        // The FOURTH stays, and must: g_attachmentBackendIdGeneration answers "did *I* re-mint
+        // a driver texture id", which no client-side version can answer, and dropping it is the
+        // shape of bug commit d7655247 fixed on the buffer side (D-B3, D-O). The ES context
+        // generation joins it for the same reason the legacy arm's other memos carry it - the
+        // driver FBO names die with the context.
+        // Kept PER TARGET, like the arrays it replaces, and for the one reason that survives
+        // the collapse: ForceBindCurrentFBO syncs a single target and has to be able to say so.
+        // What collapses is the three-value "has the state moved" question into one serial.
+        struct SyncedFramebufferSerialMemo {
+            Uint64 serial = 0; // the FramebufferSerial this target was last synced at
+            Uint64 backendIdGeneration = 0;
+            Uint contextGeneration = 0;
+            Bool valid = false;
+        };
+        static Array<SyncedFramebufferSerialMemo, SizeT(FramebufferTarget::FramebufferTargetCount)>
+            g_fboSyncedSerials{};
+
+        static void InvalidateFramebufferHandleArmMemos() {
+            for (auto& memo : g_fboSyncedSerials) memo.valid = false;
+        }
+
+        // Record that `target` now reflects the applier's record as of `serial`. The two
+        // generations ride along for the reason D-B3 keeps them: they answer questions about
+        // the DRIVER's own ids that no client-side version can answer.
+        static void StampSyncedFramebufferSerial(FramebufferTarget target, Uint64 serial) {
+            auto& memo = g_fboSyncedSerials[SizeT(target)];
+            memo.serial = serial;
+            memo.backendIdGeneration = g_attachmentBackendIdGeneration;
+            memo.contextGeneration = g_backendContextGeneration;
+            memo.valid = true;
+        }
+
+        static Bool SyncedFramebufferSerialIsCurrent(FramebufferTarget target, Uint64 serial) {
+            const auto& memo = g_fboSyncedSerials[SizeT(target)];
+            return memo.valid && memo.serial == serial &&
+                   memo.backendIdGeneration == g_attachmentBackendIdGeneration &&
+                   memo.contextGeneration == g_backendContextGeneration;
+        }
+
+        // The handle arm of SyncCurrentFBO. Returns false when it declined - which is not a
+        // failure and is the only honest answer while no client has emitted yet.
+        //
+        // NO LIVE RECORD IS A MISS, NEVER A HIT, and it is the same rule the vertex-input arm
+        // states at SyncVaoAttributeBuffersByHandle. What is NOT the test, and this is a trap
+        // worth naming: FramebufferSerial is not "has the client ever described a framebuffer".
+        // MGPipeApplierReset ADVANCES every P4a working-state serial unconditionally
+        // (PipeApply.cpp), because a cleared window is itself a change a twin has to hear
+        // about - so the serial is non-zero after the first make-current even though no
+        // set_framebuffer_state has ever been applied, and gating on it would take this arm
+        // with two empty records and leave every framebuffer unsynced. The record's own Fbo
+        // handle is the test, and BOTH bindings have to be described before this arm can run
+        // at all, because it answers for both in one pass: an emitter walks {Draw, Read} and a
+        // Target = Both record writes both, so a half-described applier is the transitional
+        // state of a tree whose client half has not landed yet, and that state belongs to the
+        // pre-handle arm.
+        static Bool SyncCurrentFBOByRecord() {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            if (MG_Pipe::MGPipeHandleIsNull(st.DrawFramebuffer.Fbo) ||
+                MG_Pipe::MGPipeHandleIsNull(st.ReadFramebuffer.Fbo)) {
+                return false;
+            }
+
+            const FramebufferTarget fboTargets[] = {FramebufferTarget::Draw, FramebufferTarget::Read};
+            for (auto& target : fboTargets) {
+                if (SyncedFramebufferSerialIsCurrent(target, st.FramebufferSerial)) continue;
+
+                const MG_Pipe::MGPFramebufferState& record = target == FramebufferTarget::Draw
+                                                                 ? st.DrawFramebuffer
+                                                                 : st.ReadFramebuffer;
+                if (record.IsDefault != 0) {
+                    // The default framebuffer, said by the record rather than by comparing the
+                    // bound object against pDefaultFramebufferInfo->defaultFBO - which is one
+                    // of the four identity comparisons the reserved handle {0,1} exists to
+                    // retire (MGPipeHandles.h). Nothing to sync except the widened-attachment
+                    // masks, which only SyncToBackend ever writes and would otherwise still
+                    // describe the user FBO that was draw-bound before. The window surface is a
+                    // real RGBA buffer, so nothing here is ever widened.
+                    if (target == FramebufferTarget::Draw) {
+                        g_alphaWidenedDrawBufferMask = 0;
+                        g_integerColorDrawBufferMask = 0;
+                    }
+                    StampSyncedFramebufferSerial(target, st.FramebufferSerial);
+                    continue;
+                }
+
+                // MONOLITH GLUE, and named as such: the twin's SyncToBackend still reads the
+                // frontend object (package D re-keys its BODY onto the record; this package
+                // owns the call site and the decisions around it). The IDENTITY is already the
+                // handle - FindByHandle(record.Fbo) - so a recycled FBO cannot be mistaken for
+                // its predecessor here; the resolve-or-create fallback below is what becomes
+                // GetOrCreate(record.Fbo) once package D forwards that overload.
+                auto& slot = GetFramebufferBindingSlotChecked(target);
+                const auto& currentFBO = slot.GetBoundObject();
+                if (!currentFBO) {
+                    MGLOG_E_ONCE("A framebuffer record names %s but no FBO is bound to it.",
+                                 target == FramebufferTarget::Read ? "READ" : "DRAW");
+                    continue;
+                }
+
+                auto* twinSlot = g_backendFramebufferObjects.FindByHandle(record.Fbo);
+                auto& backendObj =
+                    twinSlot ? *twinSlot : g_backendFramebufferObjects.GetOrCreate(currentFBO);
+                if (!backendObj) {
+                    backendObj = MakeShared<BackendFramebufferObject>();
+                }
+
+                // THE "SAME FBO AS DRAW" SKIP IS NOW A FIELD, not a pointer comparison against
+                // the object the previous iteration happened to sync. Target = Both is the
+                // client saying one object is bound to both bindings, so the attachment and
+                // draw-buffer work the DRAW pass already did is not repeated - and the read
+                // buffer, which is READ-target-specific and is what that skip used to drop, is
+                // applied from the record's OWN ReadSurface. That is what makes the
+                // read-buffer-shared-FBO defect class unrepresentable rather than merely fixed:
+                // there is no path here that can reach the read binding without its own
+                // resolved read surface.
+                if (target == FramebufferTarget::Read &&
+                    record.Target == static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both)) {
+                    backendObj->SyncReadBufferToBackend(currentFBO);
+                    StampSyncedFramebufferSerial(target, st.FramebufferSerial);
+                    continue;
+                }
+
+                backendObj->SyncToBackend(currentFBO, target);
+                StampSyncedFramebufferSerial(target, st.FramebufferSerial);
+            }
+
+            return true;
+        }
+#endif // MOBILEGL_PIPE_PUSH
+
         void SyncCurrentFBO() {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -2233,6 +2435,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_backendFramebufferObjects.CollectGarbageIfNeeded();
             TextureImpl::g_backendTextureObjects.CollectGarbageIfNeeded();
             RenderbufferImpl::g_backendRenderbufferObjects.CollectGarbageIfNeeded();
+
+#if MOBILEGL_PIPE_PUSH
+            // The handle arm first, and it declines rather than half-running: with no record
+            // yet it hands the walk straight back to the pre-handle arm below, unchanged.
+            if (EsprytDrawFramebufferHandlesEnabled() && SyncCurrentFBOByRecord()) return;
+#endif
 
             const FramebufferTarget fboTargets[] = {FramebufferTarget::Draw, FramebufferTarget::Read};
 
@@ -3047,6 +3255,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool g_broadcastMemoValid = false;
         static Uint g_broadcastMemoCount = 1;
 
+#if MOBILEGL_PIPE_PUSH
+        // P4a e1 (D-C4). The handle arm's key is the framebuffer record's ContentHash, and it
+        // is a COMPLETE key for this answer rather than a cheaper approximation of the trio
+        // above: the hash is taken over every field the record carries - Fbo included, so a
+        // recycled framebuffer handle cannot be suppressed against its predecessor's record,
+        // and DrawBuffers[8] included, so an unchanged hash provably means the draw-buffer
+        // array did not move, which provably means the broadcast count did not move.
+        //
+        // The ORDERING that made this read come from the frontend is preserved and is what
+        // makes reading a record legal here: the client emits every set_* BEFORE the verb and
+        // the server specialises AT the verb, so by the time this runs the record already
+        // describes the framebuffer this draw will use - which is exactly the property the
+        // frontend read was buying (a program compiled against a stale count would otherwise
+        // not be relinked until the draw after the one that needed it).
+        //
+        // Separate statics rather than reusing the trio's: FramebufferSerial goes from 0 to
+        // non-zero exactly once in a process's life, so both arms can run in one run, and one
+        // set of fields carrying two key shapes is how a stale half is compared against a live
+        // one.
+        static Uint64 g_broadcastMemoContentHash = 0;
+        static Bool g_broadcastMemoHandleValid = false;
+        static Uint g_broadcastMemoHandleCount = 1;
+#endif
+
         // The identity+version key above is only monotonic WITHIN one GLContext: a
         // library teardown + re-init frees every FramebufferObject and restarts the
         // draw slot's counter at zero, so a recycled FBO address with coinciding
@@ -3054,6 +3286,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // structurally identical SyncCurrentFBO trio (InvalidateFramebufferBindingCache).
         void InvalidateBroadcastMemo() {
             g_broadcastMemoValid = false;
+#if MOBILEGL_PIPE_PUSH
+            g_broadcastMemoHandleValid = false;
+#endif
         }
 
         void SyncCurrentProgram(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
@@ -3077,28 +3312,55 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // only runs later in PrepareForDraw: a program compiled against a stale count
             // would not be relinked until the draw after the one that needed it.
             {
-                const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
-                const auto& drawFBO = drawSlot.GetBoundObject();
-                const Uint16 slotVersion = drawSlot.GetVersion();
-                const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
-                if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
-                    g_broadcastMemoSlotVersion != slotVersion || g_broadcastMemoObjectVersion != objectVersion) {
-                    Uint enabledDrawBuffers = 0;
-                    if (drawFBO) {
-                        const auto& drawBuffers = drawFBO->GetDrawBuffers();
-                        for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
-                            if (drawBuffers[i] != FramebufferAttachmentType::None) {
-                                enabledDrawBuffers = i + 1;
+                Bool broadcastCountResolved = false;
+#if MOBILEGL_PIPE_PUSH
+                if (EsprytDrawFramebufferHandlesEnabled()) {
+                    const auto& st = MG_Pipe::MGPipeApplier();
+                    const MG_Pipe::MGPFramebufferState& record = st.DrawFramebuffer;
+                    if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
+                        if (!g_broadcastMemoHandleValid || g_broadcastMemoContentHash != record.ContentHash) {
+                            Uint enabledDrawBuffers = 0;
+                            for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                                // -1 is FramebufferAttachmentType::None on the wire; every
+                                // other value is an attachment index.
+                                if (record.DrawBuffers[i] >= 0) {
+                                    enabledDrawBuffers = i + 1;
+                                }
+                            }
+                            g_broadcastMemoContentHash = record.ContentHash;
+                            g_broadcastMemoHandleCount = std::max<Uint>(enabledDrawBuffers, 1);
+                            g_broadcastMemoHandleValid = true;
+                        }
+                        g_fragColorBroadcastCount = g_broadcastMemoHandleCount;
+                        broadcastCountResolved = true;
+                    }
+                }
+#endif
+                if (!broadcastCountResolved) {
+                    const auto& drawSlot = GetFramebufferBindingSlotChecked(FramebufferTarget::Draw);
+                    const auto& drawFBO = drawSlot.GetBoundObject();
+                    const Uint16 slotVersion = drawSlot.GetVersion();
+                    const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
+                    if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
+                        g_broadcastMemoSlotVersion != slotVersion ||
+                        g_broadcastMemoObjectVersion != objectVersion) {
+                        Uint enabledDrawBuffers = 0;
+                        if (drawFBO) {
+                            const auto& drawBuffers = drawFBO->GetDrawBuffers();
+                            for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                                if (drawBuffers[i] != FramebufferAttachmentType::None) {
+                                    enabledDrawBuffers = i + 1;
+                                }
                             }
                         }
+                        g_broadcastMemoFbo = drawFBO.get();
+                        g_broadcastMemoSlotVersion = slotVersion;
+                        g_broadcastMemoObjectVersion = objectVersion;
+                        g_broadcastMemoCount = std::max<Uint>(enabledDrawBuffers, 1);
+                        g_broadcastMemoValid = true;
                     }
-                    g_broadcastMemoFbo = drawFBO.get();
-                    g_broadcastMemoSlotVersion = slotVersion;
-                    g_broadcastMemoObjectVersion = objectVersion;
-                    g_broadcastMemoCount = std::max<Uint>(enabledDrawBuffers, 1);
-                    g_broadcastMemoValid = true;
+                    g_fragColorBroadcastCount = g_broadcastMemoCount;
                 }
-                g_fragColorBroadcastCount = g_broadcastMemoCount;
             }
 
             BackendProgramObjectImpl* twin = nullptr;
@@ -3207,6 +3469,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+#if MOBILEGL_PIPE_PUSH
+        // The handle arm reads the record instead of the binding slot, which is one of the
+        // five GetFramebufferBindingSlotChecked call sites this phase retires. Everything the
+        // pre-handle arm below is careful about is careful here for the same reasons and in
+        // the same order: NO FAST PATH on any version (the skip is BindFramebufferId's job and
+        // its shadow is where the cost actually is), and the DEFAULT framebuffer is bound
+        // THROUGH THE SHADOW, never raw. What changes is only where the two questions - "which
+        // framebuffer" and "is it the default one" - are answered: the record's Fbo and its
+        // IsDefault byte, rather than the bound object's address and a comparison against
+        // pDefaultFramebufferInfo->defaultFBO.
+        if (EsprytDrawFramebufferHandlesEnabled()) {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPFramebufferState& record =
+                target == FramebufferTarget::Draw ? st.DrawFramebuffer : st.ReadFramebuffer;
+            // The record's own handle is the "has this binding ever been described" test, not
+            // FramebufferSerial - which MGPipeApplierReset advances whether or not anything
+            // was ever emitted (see SyncCurrentFBOByRecord).
+            if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
+                if (record.IsDefault == 0) {
+                    auto* twinEntry = FramebufferImpl::g_backendFramebufferObjects.FindByHandle(record.Fbo);
+                    if (twinEntry && *twinEntry) {
+                        (*twinEntry)->Bind(target);
+                    } else {
+                        MGLOG_E_ONCE(
+                            "No backend FBO found (maybe not synced) for the current %s FBO record, "
+                            "cannot bind FBO.",
+                            (target == FramebufferTarget::Read ? "READ" : "DRAW"));
+                    }
+                } else {
+                    MGLOG_D("Binding default framebuffer as %s FBO",
+                            (target == FramebufferTarget::Read ? "READ" : "DRAW"));
+                    // Through the shadow: a raw bind here would leave the shadow claiming
+                    // the previous user FBO, false-skipping its next re-bind.
+                    FramebufferImpl::BindFramebufferId(
+                        target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
+                }
+                return;
+            }
+        }
+#endif
+
         auto& slot = GetFramebufferBindingSlotChecked(target);
         // No fast path on the binding slot's version. It is a 16-bit counter that only
         // ForceBindCurrentFBO ever stamps here, so the comparison was against an arbitrarily old
@@ -3305,6 +3608,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::g_fboSyncedObjects[(SizeT)target] = fbo.get();
         FramebufferImpl::g_fboSyncedBackendIdGenerations[(SizeT)target] =
             FramebufferImpl::g_attachmentBackendIdGeneration;
+#if MOBILEGL_PIPE_PUSH
+        // The handle arm's equivalent, and it is stamped per target for exactly the reason the
+        // memo is kept per target at all: this entry point syncs ONE binding and must not
+        // claim the other one is current too.
+        if (EsprytDrawFramebufferHandlesEnabled()) {
+            FramebufferImpl::StampSyncedFramebufferSerial(target, MG_Pipe::MGPipeApplier().FramebufferSerial);
+        }
+#endif
     }
 
     static void BindCurrentProgramWithResources(
@@ -5595,6 +5906,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
         g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
         FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
         if (!resolved) {
             MGLOG_E_ONCE("BlitFramebuffer: multisample resolve fallback failed");
         }
@@ -6110,6 +6424,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
         g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
         FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
         if (!ok) {
             MGLOG_E_ONCE("BlitFramebuffer: could not stage the source for the multisample replicate");
             return false;
@@ -6209,6 +6526,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
             FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+            FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
         }
         if (readSamples <= 0 && drawSamples > 0) {
             // Single-sample source into a multisample destination: ES rejects the call
@@ -10131,6 +10451,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
         }
         FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
 
         // A driver that refuses the query leaves both at 0. Fall back to what the EGL config
         // was chosen with, which is what the surface actually has.
@@ -10575,6 +10898,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         BufferImpl::InvalidateIndexedBufferBindingCache();
         BufferImpl::InvalidatePixelBufferBindingCaches();
         FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
         PixelStoreImpl::InvalidatePackStateCache();
         // The render-state shadow belongs in this list for the same reason as the ones above:
         // it describes the real ES context, which outlives the MobileGL context that is
@@ -11108,6 +11434,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ScratchFBOImpl::OnBackendContextDestroyed();
         ReleasePackedWordScratchTexture();
         FramebufferImpl::InvalidateFramebufferBindingCache();
+#if MOBILEGL_PIPE_PUSH
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+#endif
         VertexArrayImpl::InvalidateVAOBindingCache();
         PixelStoreImpl::InvalidatePackStateCache();
         PrgramImpl::InvalidateBroadcastMemo();
