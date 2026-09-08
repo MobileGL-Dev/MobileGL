@@ -1335,7 +1335,8 @@ namespace {
     X(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords)         \
     X(ResourceEmit, ABufferCreatedBeforeAMakeCurrentStillLandsItsSubDataAfterOne)                \
     X(ResourceEmit, ADrawTimeIndexBindingPublishesElementArrayEvenWhenTheRespecifyCannotSeeIt)   \
-    X(ResourceEmit, ADestroyFollowsTheCreateEvenIfTheOpTableWasUnregisteredMeanwhile)
+    X(ResourceEmit, ADestroyFollowsTheCreateEvenIfTheOpTableWasUnregisteredMeanwhile)            \
+    X(ResourceEmit, ARespecifyPublishesTheCreateAHandleNeverGot)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
