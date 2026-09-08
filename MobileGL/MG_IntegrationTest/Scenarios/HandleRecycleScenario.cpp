@@ -115,6 +115,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -209,6 +210,58 @@ namespace MGITest {
                 return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_RESOURCES_DirectVulkan");
             }
             return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_RESOURCES_DirectGLES");
+        }
+
+        // P4a's version of the SAME question, and it is a THIRD question rather than a rewording
+        // of either above. The P2 marker answers "is this backend's VERTEX-INPUT memo keyed on
+        // {slot, gen}"; the P3a one answers it for the BUFFER. P4a re-keys six more object classes
+        // - texture, renderbuffer, framebuffer, sampler CSO, sampler view and shader CSO - and
+        // their four subsystem bits (kMGPipeSubsystem{Framebuffer,TextureResources,Samplers,
+        // Programs}, MGPipe.h) are what a backend has to name to honour MOBILEGL_PIPE_PUSH's
+        // default mask. A P4a case that read either older marker would report the Handles arm as
+        // armed on a tree where nothing about a texture is keyed on a handle - green for a re-key
+        // that does not exist, which is the one outcome this file exists to prevent. Set by
+        // MG_IntegrationTest/CMakeLists.txt from a content probe over each backend's own
+        // directory, exactly like its two predecessors.
+        bool ThisBackendsObjectRekeyHasLanded() {
+            const std::string& backend = HeadlessGL::Get().BackendName();
+            if (backend == "DirectVulkan") {
+                return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_OBJECTS_DirectVulkan");
+            }
+            return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_OBJECTS_DirectGLES");
+        }
+
+        // "Does MOBILEGL_PIPE_HANDLE_ABA_CONTROL steer THIS backend's P4a OBJECT keys?" - the
+        // question that decides whether the AbaControl arm of a P4a case expects the corruption
+        // or the correct pixels, and it is deliberately narrow.
+        //
+        // WHY IT IS NOT THE EXISTING MGITEST_HANDLE_ABA_IMPLEMENTED, and this is the P4a finding
+        // the file records rather than works around. That marker says "some DirectVulkan source
+        // reads Features.PipeHandleAbaControl", and today exactly one does:
+        // MagmaPipeArms.h's MagmaPipeAbaControlDefeatsIdentity, whose consumers are Magma's
+        // VERTEX-INPUT keys. Magma mints {slot, gen} for two kinds only - VertexElementsCso and
+        // Buffer (MagmaPipeIdentityTables) - so there is no texture, framebuffer, sampler, view or
+        // program key on that backend for the knob to defeat, and P4a does not add one: Magma's
+        // object paths are P7 (BRIEF-P4A.md D-Q), and MG_Backend/DirectVulkan/** is untouched in
+        // P4a apart from MagmaPipeArms.h's own statement of this fact. On DirectGLES the knob has
+        // no consumer at all.
+        //
+        // So on this tree the six P4a cases below run their AbaControl arm with the knob INERT.
+        // The honest report for that is the arm asserting the correct pixels and SAYING that it is
+        // not controlling anything here - never a lane that expects a corruption nothing can
+        // produce, which would be a hard red on an always-on integration-gpu lane, which is
+        // exactly the failure this file's header records having had once. The moment a backend
+        // grows a Features.PipeHandleAbaControl consumer over its P4a object slot tables (one `if`
+        // in GetOrCreate / FindByHandle, the way MagmaPipeClaimSlotMemos is Magma's for vertex
+        // input), the probe finds it and every one of the six flips to expecting the corruption.
+        bool ObjectAbaControlIsWiredHere() {
+            const std::string& backend = HeadlessGL::Get().BackendName();
+            const bool knob = backend == "DirectVulkan"
+                                  ? BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectVulkan")
+                                  : BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectGLES");
+            // Both halves, because either alone is a lie: a knob consumer with no object re-key
+            // has nothing to defeat, and an object re-key with no knob consumer cannot be defeated.
+            return knob && ThisBackendsObjectRekeyHasLanded();
         }
 
         // ---- the scene -----------------------------------------------------------------
@@ -407,6 +460,48 @@ void main() { oColor = texture(uTex, vUv); }
                 }
             }
 
+            // P4a's version of the gate above, for the six object kinds. Only the Handles arm
+            // needs it: `Legacy` asserts today's address/weak_ptr guards (which exist on every
+            // tree) and `AbaControl` decides what it expects from ObjectAbaControlIsWiredHere().
+            void SkipUnlessTheObjectHandlePathIsAssertableHere(const char* kindName) {
+                if (m_arm != Arm::Handles) return;
+                if (!ThisBackendsObjectRekeyHasLanded()) {
+                    GTEST_SKIP() << "subsystem not implemented on this tree: the " << kindName
+                                 << "'s Handles arm needs this backend to be keyed on {slot, gen} "
+                                    "for P4a's object families, and the build's capability probe "
+                                    "found no source under MobileGL/MG_Backend/"
+                                 << Gl().BackendName()
+                                 << " naming any of kMGPipeSubsystem{Framebuffer, TextureResources, "
+                                    "Samplers, Programs}. Until they land, this object's backend "
+                                    "twin is still reached from the frontend object, so there is no "
+                                    "{slot, gen} key here to assert about (P4a packages D and E for "
+                                    "DirectGLES; Magma's object paths are P7). The entry stays "
+                                    "registered and visible, and arms itself when that package "
+                                    "lands in a push build.";
+                }
+            }
+
+            // Says, on EVERY arm and whether or not the case passes, whether the AbaControl arm is
+            // controlling anything for this kind on this backend - the same reason ExpectPixelsFor
+            // prints what it observed. A reader of a green AbaControl entry must not have to infer
+            // which of the two it was.
+            bool ObjectAbaExpectation(const char* kindName) {
+                const bool wired = ObjectAbaControlIsWiredHere();
+                if (m_arm == Arm::AbaControl) {
+                    std::cout << "[ HandleRecycle ] aba_control kind=" << kindName
+                              << " backend=" << Gl().BackendName() << " wired=" << (wired ? "1" : "0")
+                              << (wired ? " (the knob defeats this kind's identity: the corruption IS "
+                                          "the assertion)"
+                                        : " (no Features.PipeHandleAbaControl consumer over this "
+                                          "backend's P4a object slot tables, so the knob is inert "
+                                          "here and this arm asserts the correct pixels - it is not "
+                                          "a control for this kind yet)")
+                              << std::endl;
+                    RecordProperty("aba_control_wired", wired ? 1 : 0);
+                }
+                return wired;
+            }
+
             // A VBO holding one solid-colour quad.
             GLuint MakeQuadBuffer(float r, float g, float b) {
                 const std::vector<Vertex> vertices = Quad(r, g, b);
@@ -507,6 +602,120 @@ void main() { oColor = texture(uTex, vUv); }
                 const Image image = ReadPixels(Gl().Width(), Gl().Height());
                 Gl().EndFrame();
                 return image;
+            }
+
+            // ---- G8b: the leak shape, spelled once ------------------------------------------
+            //
+            // DestroyedVertexArraysReturnTheirVertexElementsSlots below is the original; P4a adds
+            // one case per kind it mints, and seven copies of a twenty-line assertion block is how
+            // six of them quietly stop asserting the same thing. So the block lives here and each
+            // case supplies only its own churn round.
+            //
+            // `round(checkPixels, observe)` must create ONE object of the kind, put it through
+            // whatever makes the client mint its slot (which for every P4a kind means reaching a
+            // validate point - an object created and destroyed without a draw has no record and no
+            // slot), call `observe()` WHILE THE OBJECT IS STILL ALIVE, and then destroy it.
+            //
+            // `observe()` is where peakLive is sampled, and it has to be inside the round rather
+            // than after it: sampled after the destroy it would only ever see the resting count,
+            // and the "deaths arrive at the destructor rather than late" assertion below would be
+            // vacuous - which is the one of the three that catches a death path that works but
+            // runs at the wrong time (a deferred queue, a frame-boundary sweep).
+            //
+            // `maxInFlight` is how many slots of the kind one round may legitimately hold at its
+            // peak: 1 where the round creates one object, more where the round creates several of
+            // the same kind (a pipeline composite's round also creates its two stage programs, and
+            // all three are ShaderCsos).
+            using ChurnRound = std::function<void(bool checkPixels, const std::function<void()>& observe)>;
+            void AssertChurnReturnsEverySlot(PipeSlotKind kind, const char* kindName,
+                                             const char* owner, unsigned maxInFlight,
+                                             const ChurnRound& round) {
+                if (m_arm != Arm::Handles) {
+                    GTEST_SKIP() << "the client mints a " << kindName
+                                 << " slot only when its subsystem is on, and only the Handles arm "
+                                    "pins the shipping mask (0x1fff). The Legacy and AbaControl "
+                                    "lanes run MOBILEGL_PIPE_PUSH=0, where there is no allocator to "
+                                    "leak from.";
+                }
+                unsigned probe = 0;
+                if (!MGITest::PeekPipeSlotLiveCount(kind, &probe)) {
+                    GTEST_SKIP() << "the client slot allocator is out of reach from this module (a "
+                                    "pull build has none, and the Android link resolves no internal "
+                                    "symbol), so 'could not look' would be reported as 'did not "
+                                    "leak'";
+                }
+
+                // TWO WARM-UP ROUNDS BEFORE THE BASELINE IS TAKEN, so what is measured is growth
+                // WITH the churn and not the one-off cost of drawing at all. The first rounds in a
+                // process mint slots that legitimately never come back inside this case - the
+                // default vertex array's, the scene's own program's - and the second round is what
+                // proves the steady state has been reached, since a per-round leak would still be
+                // growing at that point.
+                unsigned peakLive = 0;
+                const std::function<void()> observe = [&]() {
+                    unsigned live = 0;
+                    if (MGITest::PeekPipeSlotLiveCount(kind, &live) && live > peakLive) peakLive = live;
+                };
+                round(/*checkPixels=*/true, observe);
+                round(/*checkPixels=*/false, observe);
+                peakLive = 0;
+
+                unsigned liveBefore = 0;
+                unsigned highWaterBefore = 0;
+                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(kind, &liveBefore));
+                ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(kind, &highWaterBefore));
+
+                constexpr int kChurn = 48;
+                for (int i = 0; i < kChurn; ++i) round(/*checkPixels=*/false, observe);
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the churn left a GL error behind";
+
+                unsigned liveAfter = 0;
+                unsigned highWaterAfter = 0;
+                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(kind, &liveAfter));
+                ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(kind, &highWaterAfter));
+                std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " " << kindName
+                          << " live " << liveBefore << " -> " << liveAfter << " (peak " << peakLive
+                          << "), high water " << highWaterBefore << " -> " << highWaterAfter
+                          << " over " << kChurn << " create/draw/destroy rounds" << std::endl;
+
+                // NOTHING WAS EVER MINTED, which is not "did not leak" and must not be reported as
+                // one. On the P4a contract tree the client emits nothing for any of these kinds -
+                // the five emit headers are the contract's stubs (contract-v1 D1) - so every
+                // assertion below would be 0 == 0 and the case would be a green that asserts about
+                // a kind it never saw. This is the same rule as the peek returning false, applied
+                // to the other way of not being able to look, and it arms itself the moment the
+                // owning package's emitter lands.
+                if (highWaterAfter == 0 && peakLive == 0 && liveAfter == 0) {
+                    GTEST_SKIP() << "subsystem not implemented on this tree: the client minted no "
+                                 << kindName
+                                 << " slot at all over " << (kChurn + 2)
+                                 << " create/draw/destroy rounds, so there is nothing here that "
+                                    "could leak and a green would assert nothing. P4a package "
+                                 << owner
+                                 << " owns the emitter that mints it; this case arms itself when it "
+                                    "lands.";
+                }
+
+                EXPECT_EQ(liveAfter, liveBefore)
+                    << kChurn << " " << kindName
+                    << " objects were created, drawn with and destroyed and "
+                    << (liveAfter - liveBefore)
+                    << " slots never came back. Each one holds a SlotState, a lifetime-id map node "
+                       "and the applier's record for the life of the process, and past the kind's "
+                       "slot bound every create trips Fatal{ProtocolCorruption} for good "
+                       "(PipeApply.h:97-113). This is P3a's C-1 defect, which is why every P4a kind "
+                       "frees its slot from the frontend destructor through one client-side helper "
+                       "(D-I1) rather than from a backend death table. Backend "
+                    << Gl().BackendName();
+                EXPECT_EQ(highWaterAfter, highWaterBefore)
+                    << "the " << kindName
+                    << " slot space grew with the churn instead of recycling the slot the warm-up "
+                       "rounds already handed out; the frees are not reaching the allocator's free "
+                       "list";
+                EXPECT_LE(peakLive > liveBefore ? peakLive - liveBefore : 0u, maxInFlight)
+                    << "more than " << maxInFlight << " churned " << kindName
+                    << " object(s) were live at the allocator at once, so the deaths are arriving "
+                       "late rather than at the destructor";
             }
 
             Arm m_arm = Arm::Legacy;
@@ -863,12 +1072,21 @@ void main() { oColor = texture(uTex, vUv); }
         //    UnitSamplerLookupMemo's weak_ptr test); a replacement at the same address must not
         //    sample the dead texture's driver object.
         //
-        //    The AbaControl knob does not steer this path, so this case expects the correct
-        //    pixels in EVERY arm - stated explicitly rather than by omission.
+        //    P4a MADE THIS A REAL ABA CONTROL (G8, D-I2). Until P4a the case expected the correct
+        //    pixels on EVERY arm, with the note that "the AbaControl knob does not steer this
+        //    path" - true, and vacuous the moment P4a re-keys the texture twin on {slot, gen}: a
+        //    control that only defeats guards nobody ships says nothing about the key that does.
+        //    So the expectation is now ObjectAbaExpectation()'s answer - "expect the corruption"
+        //    exactly where the knob really reaches this kind on this backend, "expect the correct
+        //    pixels, and SAY that this arm is not a control here" where it does not. See
+        //    ObjectAbaControlIsWiredHere for why the second is today's answer on both backends and
+        //    for the one change that flips it.
         // ------------------------------------------------------------------------------------
         TEST_F(HandleRecycleScenario, ATextureAtARecycledAddressDoesNotInheritItsPredecessorsTwin) {
             if (!Ready()) return;
             SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("texture");
             if (IsSkipped()) return;
 
             const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
@@ -897,8 +1115,8 @@ void main() { oColor = texture(uTex, vUv); }
             RecordProperty("recycled_texture_name", static_cast<int>(greenTexture));
 
             const Image image = DrawTexturedQuadAndRead(vao, greenTexture);
-            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/false, image, "green", "red",
-                            "the draw after the texture was recycled");
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("texture"), image,
+                            "green", "red", "the draw after the texture was recycled");
 
             glBindTexture(GL_TEXTURE_2D, 0);
             GLuint cleanupTexture = greenTexture;
@@ -916,10 +1134,23 @@ void main() { oColor = texture(uTex, vUv); }
         //    that framebuffer. It is taken from the replacement's own attachment with
         //    glGetTexImage, so "the clear went somewhere else" is visible as a texture that
         //    never became green.
+        //
+        //    P4a MADE THIS A REAL ABA CONTROL TOO (G8, D-I2), and it needed one more thing than
+        //    the texture case did: somewhere for the corruption to be VISIBLE. "The replacement's
+        //    attachment never became green" is only half a verdict - it does not say where the
+        //    clear went. So the dead framebuffer's attachment is cleared to RED in the warm-up and
+        //    read back beside the replacement's at the end: FRESH is (second green, first red),
+        //    STALE is (first green) - the clear reached a framebuffer this one only shares an
+        //    address with. A framebuffer is the kind with a handle and NO wire lifetime (D-I2):
+        //    the applier learns of it only through set_framebuffer_state keyed by Fbo, and a
+        //    recycled handle is told apart by Gen, which is inside ContentHash - so the knob has
+        //    to defeat the identity half of that memo key for this to reproduce at all.
         // ------------------------------------------------------------------------------------
         TEST_F(HandleRecycleScenario, AFramebufferAtARecycledAddressDoesNotInheritItsPredecessorsTwin) {
             if (!Ready()) return;
             SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("framebuffer");
             if (IsSkipped()) return;
 
             // Two attachments that stay alive for the whole case, so the only recycled object is
@@ -968,24 +1199,60 @@ void main() { oColor = texture(uTex, vUv); }
             BindDefaultFramebuffer();
             Gl().EndFrame();
 
-            // Read the REPLACEMENT'S attachment, not the framebuffer: that is what makes "the
-            // clear landed in the dead framebuffer" visible.
-            std::vector<std::uint8_t> texels(4 * 4 * 4, 0);
-            glBindTexture(GL_TEXTURE_2D, secondAttachment);
-            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
-            glBindTexture(GL_TEXTURE_2D, 0);
+            // Read BOTH attachments, not the framebuffer: that is what makes "the clear landed in
+            // the dead framebuffer" visible as a place rather than as an absence.
+            const auto readAttachment = [&](GLuint texture) {
+                std::vector<std::uint8_t> texels(4 * 4 * 4, 0);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                return texels;
+            };
+            const auto offendersAgainst = [](const std::vector<std::uint8_t>& texels, int r, int g,
+                                             int b) {
+                int offenders = 0;
+                for (std::size_t i = 0; i < texels.size(); i += 4) {
+                    if (texels[i] != r || texels[i + 1] != g || texels[i + 2] != b) ++offenders;
+                }
+                return offenders;
+            };
+            const std::vector<std::uint8_t> replacementTexels = readAttachment(secondAttachment);
+            const std::vector<std::uint8_t> deadTexels = readAttachment(firstAttachment);
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
 
-            // Every texel of the replacement's attachment must be the green it was cleared to.
-            int offenders = 0;
-            for (std::size_t i = 0; i < texels.size(); i += 4) {
-                if (texels[i] != 0 || texels[i + 1] != 255 || texels[i + 2] != 0) ++offenders;
+            const int replacementIsNotGreen = offendersAgainst(replacementTexels, 0, 255, 0);
+            const int deadIsNotRed = offendersAgainst(deadTexels, 255, 0, 0);
+            const bool sawStale = deadIsNotRed != 0 && offendersAgainst(deadTexels, 0, 255, 0) == 0;
+            std::cout << "[ HandleRecycle ] arm=" << ArmName(m_arm) << " framebuffer observed="
+                      << (sawStale ? "STALE (the clear reached the DEAD framebuffer's attachment)"
+                                   : (replacementIsNotGreen == 0
+                                          ? "FRESH (the clear reached the replacement's own "
+                                            "attachment)"
+                                          : "NEITHER"))
+                      << std::endl;
+
+            if (ObjectAbaExpectation("framebuffer") && m_arm == Arm::AbaControl) {
+                // The corruption IS the assertion: with the identity half of the framebuffer memo
+                // key defeated, the replacement inherits the dead framebuffer's record and its
+                // clear lands on the dead one's attachment.
+                EXPECT_NE(deadIsNotRed, 0)
+                    << "[AbaControl expects the STALE framebuffer] the DEAD framebuffer's "
+                       "attachment is still the red it was cleared to in the warm-up, so the "
+                       "replacement's clear went to its own attachment after all and the ABA was "
+                       "not reproduced - the control has stopped controlling anything.";
+            } else {
+                EXPECT_EQ(replacementIsNotGreen, 0)
+                    << "the replacement framebuffer's own attachment is not the colour it was "
+                       "cleared to, so the clear reached a framebuffer this one only shares an "
+                       "address with (first texel rgba="
+                    << static_cast<int>(replacementTexels[0]) << ","
+                    << static_cast<int>(replacementTexels[1]) << ","
+                    << static_cast<int>(replacementTexels[2]) << ","
+                    << static_cast<int>(replacementTexels[3]) << ")";
+                EXPECT_EQ(deadIsNotRed, 0)
+                    << "the DEAD framebuffer's attachment changed colour, so the replacement's "
+                       "clear reached the framebuffer it only shares a name with";
             }
-            EXPECT_EQ(offenders, 0) << "the replacement framebuffer's own attachment is not the colour it was "
-                                       "cleared to, so the clear reached a framebuffer this one only shares an "
-                                       "address with (first texel rgba="
-                                    << static_cast<int>(texels[0]) << "," << static_cast<int>(texels[1]) << ","
-                                    << static_cast<int>(texels[2]) << "," << static_cast<int>(texels[3]) << ")";
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &secondFbo);
@@ -1111,6 +1378,758 @@ void main() { oColor = texture(uTex, vUv); }
                    "deaths are arriving late rather than at the destructor";
 
             glDeleteBuffers(1, &buffer);
+        }
+
+        // ====================================================================================
+        // P4a (G8, G8b). Six more kinds, and the same two questions about each of them.
+        //
+        // WHAT IS NEW HERE, stated once so the cases below can stay short. P4a mints Texture,
+        // Renderbuffer, Framebuffer, SamplerCso, SamplerViewCso and ShaderCso handles on the
+        // client and frees every one of them from the frontend object's own destructor, through
+        // one helper per kind, in one fixed order: emit the wire delete, raise the death notice,
+        // free the slot (D-I1). That shape exists because of P3a's C-1 - a client-minted CSO whose
+        // only free was a backend death table Magma does not install, which leaked a slot and a
+        // ~1.3 KB record per VAO until the process Fatal'd - so the leak cases below run on the
+        // DirectVulkan Handles lane as well as the DirectGLES one, exactly as ID-8 requires.
+        //
+        // Two kinds carry a wrinkle the others do not:
+        //   * FRAMEBUFFER has a handle and NO wire lifetime (D-I2). There is no framebuffer row in
+        //     the call catalogue at all: the applier learns of one only through
+        //     set_framebuffer_state keyed by Fbo, and the death helper does the notice and the
+        //     free and emits nothing. The allocator is therefore the ONLY observable of a
+        //     framebuffer's lifetime, which is what the leak case reads.
+        //   * SHADERCSO covers ordinary programs AND the program-pipeline COMPOSITES minted from
+        //     the reserved high band (D-H7). A composite's slot has TWO independent release paths
+        //     - the pipeline cache's LRU eviction and the composite ProgramObject's destructor -
+        //     which is why it gets a case of its own; the second free is a proven no-op
+        //     (SlotAllocator.cpp:117-119) and this is where "proven" is measured rather than
+        //     asserted in a comment.
+        // ====================================================================================
+
+        // ------------------------------------------------------------------------------------
+        // 4. The renderbuffer. Espryt keeps a backend twin per frontend renderbuffer in the same
+        //    address-keyed registry the texture uses, and P4a re-keys it on {slot, gen}.
+        //
+        //    The replacement is deliberately a DIFFERENT SIZE, because a renderbuffer cannot be
+        //    sampled and so has no colour of its own to inherit: what a stale twin gets wrong is
+        //    the STORAGE, and the storage's extent is the one property a readback can see. 8x8
+        //    green against a dead 4x4 red: fresh reads green everywhere, and a replacement that
+        //    inherited the dead 4x4 driver renderbuffer either leaves the outer ring unwritten or
+        //    makes the framebuffer incomplete - both of which this case reports as STALE.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, ARenderbufferAtARecycledAddressDoesNotInheritItsPredecessorsStorage) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("renderbuffer");
+            if (IsSkipped()) return;
+
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+
+            GLuint deadRenderbuffer = 0;
+            glGenRenderbuffers(1, &deadRenderbuffer);
+            glBindRenderbuffer(GL_RENDERBUFFER, deadRenderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                      deadRenderbuffer);
+            ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                glViewport(0, 0, 4, 4);
+                ClearTo(1.0f, 0.0f, 0.0f, 1.0f);
+                BindDefaultFramebuffer();
+                Gl().EndFrame();
+            }
+
+            // Detach BEFORE deleting: an attached renderbuffer is kept alive by the frontend
+            // FramebufferAttachmentObject's SharedPtr, so glDeleteRenderbuffers would only unname
+            // it and the object would not die here at all.
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
+            BindDefaultFramebuffer();
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            glDeleteRenderbuffers(1, &deadRenderbuffer);
+
+            GLuint liveRenderbuffer = 0;
+            glGenRenderbuffers(1, &liveRenderbuffer);
+            if (liveRenderbuffer != deadRenderbuffer) {
+                glDeleteRenderbuffers(1, &liveRenderbuffer);
+                glDeleteFramebuffers(1, &fbo);
+                GTEST_SKIP() << "inconclusive, not proven: glGenRenderbuffers returned "
+                             << liveRenderbuffer << " rather than the deleted " << deadRenderbuffer
+                             << ", so no ABA was constructed";
+            }
+            RecordProperty("recycled_renderbuffer_name", static_cast<int>(liveRenderbuffer));
+
+            glBindRenderbuffer(GL_RENDERBUFFER, liveRenderbuffer);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 8, 8);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                      liveRenderbuffer);
+            const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            glViewport(0, 0, 8, 8);
+            ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
+            const Image image = ReadPixels(8, 8);
+            BindDefaultFramebuffer();
+            Gl().EndFrame();
+
+            const bool complete = status == GLenum(GL_FRAMEBUFFER_COMPLETE);
+            const bool allGreen = complete && static_cast<bool>(RegionIsMostly(image, 0, 8, 0, 8,
+                                                                              "green", 0.0,
+                                                                              "the replacement "
+                                                                              "renderbuffer"));
+            std::cout << "[ HandleRecycle ] arm=" << ArmName(m_arm)
+                      << " renderbuffer observed=" << (allGreen ? "FRESH (8x8 all green)"
+                                                                : "STALE (the replacement did not "
+                                                                  "get its own 8x8 storage)")
+                      << " fbo_status=0x" << std::hex << status << std::dec << std::endl;
+
+            if (ObjectAbaExpectation("renderbuffer") && m_arm == Arm::AbaControl) {
+                EXPECT_FALSE(allGreen)
+                    << "[AbaControl expects the STALE renderbuffer] the replacement got its own 8x8 "
+                       "storage with the identity half of the twin key deliberately defeated, so "
+                       "the ABA was not reproduced and this control is controlling nothing.";
+            } else {
+                EXPECT_EQ(status, GLenum(GL_FRAMEBUFFER_COMPLETE))
+                    << "the framebuffer went incomplete after the recycled renderbuffer was given "
+                       "8x8 storage, which is what a driver object inherited from the dead 4x4 "
+                       "renderbuffer looks like";
+                EXPECT_TRUE(RegionIsMostly(image, 0, 8, 0, 8, "green", 0.0,
+                                           "the replacement renderbuffer's own 8x8 storage"))
+                    << "the replacement renderbuffer did not read back as its own storage, so the "
+                       "clear reached a renderbuffer it only shares a name with";
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindRenderbuffer(GL_RENDERBUFFER, 0);
+            glDeleteRenderbuffers(1, &liveRenderbuffer);
+            glDeleteFramebuffers(1, &fbo);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // 5. The sampler object (SamplerCso). P4a content-addresses sampler CSOs at capacity 256
+        //    and hashes them field-wise over a canonical zero-initialised copy (D-F1), so two
+        //    sampler objects with identical parameters are ONE CSO by design - which is why the
+        //    ABA here is built out of two samplers whose parameters DIFFER.
+        //
+        //    The observable is the BORDER COLOUR, sampled at a constant UV outside [0,1] with
+        //    GL_CLAMP_TO_BORDER, so every fragment reads the border and the whole viewport is one
+        //    colour. That is deliberate: the border colour is the sampler parameter with the
+        //    fewest other paths to the driver (it is not in the texture's own parameter set the
+        //    way a filter effectively is), and borderColorForm is the very field G7's second
+        //    negative control drops.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, ASamplerAtARecycledAddressDoesNotInheritItsPredecessorsParameters) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("sampler object");
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+            // The texture is BLUE and is never what the case reads: every fragment samples outside
+            // [0,1], so what comes back is the sampler's border colour and nothing else.
+            const GLuint texture = MakeSolidTexture(0, 0, 255);
+
+            const auto makeBorderSampler = [](float r, float g, float b) {
+                GLuint sampler = 0;
+                glGenSamplers(1, &sampler);
+                const float border[4] = {r, g, b, 1.0f};
+                glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+                glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+                glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, border);
+                return sampler;
+            };
+            // Sampled at a constant UV well outside [0,1]: one colour for the whole viewport.
+            static const char* kBorderFS = R"(#version 330 core
+uniform sampler2D uTex;
+out vec4 oColor;
+void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
+)";
+            std::string error;
+            const GLuint borderProgram = CompileProgram(kSampleVS, kBorderFS, &error);
+            ASSERT_NE(borderProgram, 0u) << error;
+
+            const auto drawThroughSampler = [&](GLuint sampler) {
+                BindDefaultFramebuffer();
+                ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                glUseProgram(borderProgram);
+                glUniform1i(glGetUniformLocation(borderProgram, "uTex"), 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glBindSampler(0, sampler);
+                glBindVertexArray(vao);
+                glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                Gl().EndFrame();
+                return image;
+            };
+
+            const GLuint redSampler = makeBorderSampler(1.0f, 0.0f, 0.0f);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the first sampler left a GL error";
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                const Image warm = drawThroughSampler(redSampler);
+                ExpectWholeViewportIs(warm, "red", "sampler warm-up frame " + std::to_string(frame));
+            }
+
+            glBindSampler(0, 0);
+            GLuint doomed = redSampler;
+            glDeleteSamplers(1, &doomed);
+
+            const GLuint greenSampler = makeBorderSampler(0.0f, 1.0f, 0.0f);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the replacement sampler left a GL error";
+            if (greenSampler != redSampler) {
+                glDeleteSamplers(1, &greenSampler);
+                glDeleteTextures(1, const_cast<GLuint*>(&texture));
+                glBindVertexArray(0);
+                glDeleteVertexArrays(1, &vao);
+                glDeleteBuffers(1, const_cast<GLuint*>(&buffer));
+                glDeleteProgram(borderProgram);
+                GTEST_SKIP() << "inconclusive, not proven: glGenSamplers returned " << greenSampler
+                             << " rather than the deleted " << redSampler
+                             << ", so no ABA was constructed";
+            }
+            RecordProperty("recycled_sampler_name", static_cast<int>(greenSampler));
+
+            const Image image = drawThroughSampler(greenSampler);
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler object"),
+                            image, "green", "red",
+                            "the draw after the sampler object was recycled");
+
+            glBindSampler(0, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            GLuint cleanupSampler = greenSampler;
+            glDeleteSamplers(1, &cleanupSampler);
+            GLuint cleanupTexture = texture;
+            glDeleteTextures(1, &cleanupTexture);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+            glDeleteProgram(borderProgram);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // 6. The sampler VIEW (SamplerViewCso), which is a different question from either of the
+        //    two above and is the reason it gets a case rather than a comment.
+        //
+        //    A sampler view is the RESOLVED (texture, sampler) pair - what the unit actually
+        //    samples - and P4a addresses it by IDENTITY per texture object (D-F2, the deviation
+        //    from ARCHITECTURE.md:63's content-addressed 4096-entry cache, which is P7's). So the
+        //    view's key names the texture; the case recycles the TEXTURE while an explicitly bound
+        //    SAMPLER OBJECT stays alive and unchanged across the window, so what a stale view
+        //    would inherit is the dead texture through a live sampler - which the texture case
+        //    above cannot construct, because there the unit has no sampler object bound at all and
+        //    the built-in sampler travels with the texture.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, ATextureAtARecycledAddressDoesNotInheritItsPredecessorsSamplerView) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("sampler view");
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            // One sampler object for the whole case: it is the half of the view's identity that
+            // must NOT move, so that a stale view can only come from the texture half.
+            GLuint sampler = 0;
+            glGenSamplers(1, &sampler);
+            glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            const auto drawSampled = [&](GLuint texture) {
+                BindDefaultFramebuffer();
+                ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                glUseProgram(m_sampleProgram);
+                glUniform1i(glGetUniformLocation(m_sampleProgram, "uTex"), 0);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glBindSampler(0, sampler);
+                glBindVertexArray(vao);
+                glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                Gl().EndFrame();
+                return image;
+            };
+
+            const GLuint redTexture = MakeSolidTexture(255, 0, 0);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the first texture left a GL error";
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                const Image warm = drawSampled(redTexture);
+                ExpectWholeViewportIs(warm, "red", "sampler-view warm-up frame " + std::to_string(frame));
+            }
+
+            glBindSampler(0, 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            GLuint doomed = redTexture;
+            glDeleteTextures(1, &doomed);
+
+            const GLuint greenTexture = MakeSolidTexture(0, 255, 0);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the replacement texture left a GL error";
+            if (greenTexture != redTexture) {
+                GLuint cleanup = greenTexture;
+                glDeleteTextures(1, &cleanup);
+                glDeleteSamplers(1, &sampler);
+                glBindVertexArray(0);
+                glDeleteVertexArrays(1, &vao);
+                glDeleteBuffers(1, const_cast<GLuint*>(&buffer));
+                GTEST_SKIP() << "inconclusive, not proven: glGenTextures returned " << greenTexture
+                             << " rather than the deleted " << redTexture
+                             << ", so no ABA was constructed for the sampler view";
+            }
+            RecordProperty("recycled_sampler_view_texture_name", static_cast<int>(greenTexture));
+
+            const Image image = drawSampled(greenTexture);
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler view"),
+                            image, "green", "red",
+                            "the draw after the sampler view's texture was recycled under a live "
+                            "sampler object");
+
+            glBindSampler(0, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            GLuint cleanupTexture = greenTexture;
+            glDeleteTextures(1, &cleanupTexture);
+            glDeleteSamplers(1, &sampler);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // 7. The program (ShaderCso). Espryt reaches a program's backend twin through
+        //    g_programTwinLookupMemo (DirectGLES.cpp:134-135), which is keyed on the frontend
+        //    ProgramObject; P4a re-keys it on the shader CSO's {slot, gen} and gives the program a
+        //    create_shader_state / delete_shader_state lifetime of its own.
+        //
+        //    A program's colour is BAKED INTO ITS SOURCE here rather than passed as a uniform, so
+        //    "the draw used the dead program" is the only thing the pixels can mean: a uniform
+        //    would be re-set on the replacement and would hide exactly the inheritance the case is
+        //    about.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, AProgramAtARecycledAddressDoesNotInheritItsPredecessorsShaderCso) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheObjectHandlePathIsAssertableHere("program");
+            if (IsSkipped()) return;
+
+            static const char* kRedFS = R"(#version 330 core
+out vec4 oColor;
+void main() { oColor = vec4(1.0, 0.0, 0.0, 1.0); }
+)";
+            static const char* kGreenFS = R"(#version 330 core
+out vec4 oColor;
+void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
+)";
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            const auto drawWith = [&](GLuint program) {
+                BindDefaultFramebuffer();
+                ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                glUseProgram(program);
+                glBindVertexArray(vao);
+                glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                Gl().EndFrame();
+                return image;
+            };
+
+            std::string error;
+            const GLuint redProgram = CompileProgram(kColorVS, kRedFS, &error);
+            ASSERT_NE(redProgram, 0u) << error;
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                const Image warm = drawWith(redProgram);
+                ExpectWholeViewportIs(warm, "red", "program warm-up frame " + std::to_string(frame));
+            }
+
+            // Unbind first: a program that is still current is kept alive by the frontend, so
+            // glDeleteProgram would only flag it and the object would not die here.
+            glUseProgram(0);
+            GLuint doomed = redProgram;
+            glDeleteProgram(doomed);
+
+            const GLuint greenProgram = CompileProgram(kColorVS, kGreenFS, &error);
+            ASSERT_NE(greenProgram, 0u) << error;
+            if (greenProgram != redProgram) {
+                glDeleteProgram(greenProgram);
+                glBindVertexArray(0);
+                glDeleteVertexArrays(1, &vao);
+                glDeleteBuffers(1, const_cast<GLuint*>(&buffer));
+                GTEST_SKIP() << "inconclusive, not proven: glCreateProgram returned " << greenProgram
+                             << " rather than the deleted " << redProgram
+                             << ", so no ABA was constructed";
+            }
+            RecordProperty("recycled_program_name", static_cast<int>(greenProgram));
+
+            const Image image = drawWith(greenProgram);
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("program"), image,
+                            "green", "red", "the draw after the program was recycled");
+
+            glUseProgram(0);
+            glDeleteProgram(greenProgram);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        // ====================================================================================
+        // G8b: one leak case per kind P4a mints. See AssertChurnReturnsEverySlot for the shape and
+        // for why a kind that was never minted SKIPS rather than passing.
+        // ====================================================================================
+
+        TEST_F(HandleRecycleScenario, DestroyedTexturesReturnTheirTextureSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::Texture, "Texture", "B (clientfb)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    const GLuint texture = MakeSolidTexture(0, 255, 0);
+                    const Image image = DrawTexturedQuadAndRead(vao, texture);
+                    if (checkPixels) {
+                        // One picture check, so a green here cannot mean "the draws never happened
+                        // and therefore nothing was ever minted".
+                        ExpectWholeViewportIs(image, "green", "the first churned texture's draw");
+                    }
+                    observe();
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    GLuint doomed = texture;
+                    glDeleteTextures(1, &doomed);
+                });
+
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        TEST_F(HandleRecycleScenario, DestroyedTexturesReturnTheirSamplerViewSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            // A sampler view is identity-addressed PER TEXTURE OBJECT (D-F2), so the churn that
+            // exercises it is a texture churn - and the view's slot is released by the TEXTURE's
+            // death helper (D-I1: the texture helper emits ResourceDestroy, DeleteSamplerView and
+            // DeleteSamplerState), which is precisely why it needs a case of its own: a helper
+            // that forgot one of its three frees leaks only that kind and nothing else moves.
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::SamplerViewCso, "SamplerViewCso", "C (clientsp)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    const GLuint texture = MakeSolidTexture(0, 255, 0);
+                    const Image image = DrawTexturedQuadAndRead(vao, texture);
+                    if (checkPixels) {
+                        ExpectWholeViewportIs(image, "green", "the first churned sampler view's draw");
+                    }
+                    observe();
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    GLuint doomed = texture;
+                    glDeleteTextures(1, &doomed);
+                });
+
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        TEST_F(HandleRecycleScenario, DestroyedRenderbuffersReturnTheirRenderbufferSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            GLuint fbo = 0;
+            glGenFramebuffers(1, &fbo);
+
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::Renderbuffer, "Renderbuffer", "B (clientfb)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    GLuint renderbuffer = 0;
+                    glGenRenderbuffers(1, &renderbuffer);
+                    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                              renderbuffer);
+                    glViewport(0, 0, 4, 4);
+                    ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
+                    if (checkPixels) {
+                        const Image image = ReadPixels(4, 4);
+                        ExpectWholeViewportIs(image, "green", "the first churned renderbuffer's clear");
+                    }
+                    observe();
+                    // Detach before deleting: an attached renderbuffer is kept alive by the
+                    // frontend attachment's SharedPtr and would not die inside the round.
+                    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, 0);
+                    BindDefaultFramebuffer();
+                    Gl().EndFrame();
+                    glBindRenderbuffer(GL_RENDERBUFFER, 0);
+                    glDeleteRenderbuffers(1, &renderbuffer);
+                });
+
+            glDeleteFramebuffers(1, &fbo);
+        }
+
+        TEST_F(HandleRecycleScenario, DestroyedFramebuffersReturnTheirFramebufferSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            // One attachment for the whole case: only the framebuffer churns, so a texture slot
+            // that failed to come back cannot be scored against this kind.
+            GLuint attachment = 0;
+            glGenTextures(1, &attachment);
+            glBindTexture(GL_TEXTURE_2D, attachment);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            // A FRAMEBUFFER HAS NO WIRE LIFETIME AT ALL (D-I2): no create_*, no destroy row, and a
+            // death helper that raises the notice and frees the slot and emits nothing. The
+            // allocator is therefore the only observable this kind has, which makes this case the
+            // whole of its lifetime coverage rather than a supplement to a wire assertion.
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::Framebuffer, "Framebuffer", "B (clientfb)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    GLuint fbo = 0;
+                    glGenFramebuffers(1, &fbo);
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                           attachment, 0);
+                    glViewport(0, 0, 4, 4);
+                    ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
+                    if (checkPixels) {
+                        const Image image = ReadPixels(4, 4);
+                        ExpectWholeViewportIs(image, "green", "the first churned framebuffer's clear");
+                    }
+                    observe();
+                    BindDefaultFramebuffer();
+                    Gl().EndFrame();
+                    glDeleteFramebuffers(1, &fbo);
+                });
+
+            glDeleteTextures(1, &attachment);
+        }
+
+        TEST_F(HandleRecycleScenario, DestroyedSamplersReturnTheirSamplerCsoSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+            const GLuint texture = MakeSolidTexture(0, 255, 0);
+
+            // EVERY ROUND'S SAMPLER CARRIES A DIFFERENT PARAMETER SET, and that is not decoration:
+            // sampler CSOs are CONTENT-addressed at capacity 256 (D-F1), so 48 identical samplers
+            // would legitimately be ONE CSO and the case would assert nothing about the death
+            // path. The LOD bias moves per round, which changes the hash and nothing else.
+            int round = 0;
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::SamplerCso, "SamplerCso", "C (clientsp)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    GLuint sampler = 0;
+                    glGenSamplers(1, &sampler);
+                    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD,
+                                        -static_cast<float>(round % 16));
+                    ++round;
+
+                    BindDefaultFramebuffer();
+                    ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                    glUseProgram(m_sampleProgram);
+                    glUniform1i(glGetUniformLocation(m_sampleProgram, "uTex"), 0);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, texture);
+                    glBindSampler(0, sampler);
+                    glBindVertexArray(vao);
+                    glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                    const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                    Gl().EndFrame();
+                    if (checkPixels) {
+                        ExpectWholeViewportIs(image, "green", "the first churned sampler's draw");
+                    }
+                    observe();
+                    glBindSampler(0, 0);
+                    glDeleteSamplers(1, &sampler);
+                });
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+            GLuint cleanupTexture = texture;
+            glDeleteTextures(1, &cleanupTexture);
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        TEST_F(HandleRecycleScenario, DestroyedProgramsReturnTheirShaderCsoSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            // A DIFFERENT SOURCE PER ROUND, for D-F1's reason applied to programs: a shader CSO is
+            // keyed on (ShaderCso, Version) and a program archive is content-addressed, so 48
+            // identical programs could legitimately be one CSO. The constant in the fragment
+            // shader moves per round.
+            int round = 0;
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::ShaderCso, "ShaderCso", "C (clientsp)", /*maxInFlight=*/1u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    const std::string fs = "#version 330 core\nout vec4 oColor;\nvoid main() { "
+                                           "oColor = vec4(0.0, 1.0, 0.0, 1.0) + vec4(" +
+                                           std::to_string(round) + ".0 * 0.0); }\n";
+                    ++round;
+                    std::string error;
+                    const GLuint program = CompileProgram(kColorVS, fs.c_str(), &error);
+                    ASSERT_NE(program, 0u) << error;
+                    BindDefaultFramebuffer();
+                    ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                    glUseProgram(program);
+                    glBindVertexArray(vao);
+                    glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                    const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                    Gl().EndFrame();
+                    if (checkPixels) {
+                        ExpectWholeViewportIs(image, "green", "the first churned program's draw");
+                    }
+                    observe();
+                    glUseProgram(0);
+                    glDeleteProgram(program);
+                });
+
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // The COMPOSITE's own leak case (G8b, D-H7). It is a separate case and not a second phase
+        // of the one above for the reason the band exists at all: a composite's ShaderCso slot
+        // comes out of the reserved high band (kMGPipeShaderCsoCompositeSlotBase = 983040) through
+        // the allocator's ONE door into it, AllocateComposite, and it is released by TWO
+        // independent paths - ProgramPipelineObject::GetCachedDrawProgram's LRU eviction and the
+        // composite ProgramObject's own destructor. The second free is a no-op only because Free
+        // refuses a slot that is not live at that generation (SlotAllocator.cpp:117-119); if it
+        // ever stopped being one, this is where a double free or a never-freed band slot shows up,
+        // and nowhere else - the band is sparse against the ordinary program space by design, so
+        // an ordinary program's leak case cannot see it.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, EvictedPipelineCompositesReturnTheirShaderCsoSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint buffer = MakeQuadBuffer(1.0f, 1.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, buffer);
+
+            static const char* kSeparableVS = R"(#version 410 core
+in vec2 aPos;
+in vec3 aColor;
+out gl_PerVertex { vec4 gl_Position; };
+out vec3 vColor;
+void main() {
+    vColor = aColor;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+            int round = 0;
+            AssertChurnReturnsEverySlot(
+                PipeSlotKind::ShaderCso, "ShaderCso (pipeline composites)", "C (clientsp)",
+                // TWO in flight: a round creates two stage programs and the composite the pipeline
+                // flattens them into, and the two stage programs are ordinary ShaderCsos of the
+                // same kind. The composite is the third, and it is the one whose two release paths
+                // this case is about.
+                /*maxInFlight=*/3u,
+                [&](bool checkPixels, const std::function<void()>& observe) {
+                    // A DIFFERENT FRAGMENT STAGE PER ROUND: the composite is keyed on
+                    // ProgramPipelineObject::ComputeDrawProgramSignature(), the per-stage
+                    // {lifetimeId, GetLinkVersion()} array, so a round that rebuilt an identical
+                    // pipeline out of the same two programs would legitimately reuse one composite
+                    // and the case would assert nothing about the release paths.
+                    const std::string fsSource =
+                        "#version 410 core\nin vec3 vColor;\nout vec4 oColor;\nvoid main() { oColor "
+                        "= vec4(vColor, 1.0) + vec4(" + std::to_string(round) + ".0 * 0.0); }\n";
+                    ++round;
+                    const char* vsSource = kSeparableVS;
+                    const char* fsSourcePtr = fsSource.c_str();
+                    const GLuint vs = glCreateShaderProgramv(GL_VERTEX_SHADER, 1, &vsSource);
+                    const GLuint fs = glCreateShaderProgramv(GL_FRAGMENT_SHADER, 1, &fsSourcePtr);
+                    GLuint pipeline = 0;
+                    glGenProgramPipelines(1, &pipeline);
+                    glUseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+                    glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+
+                    BindDefaultFramebuffer();
+                    ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+                    glUseProgram(0);
+                    glBindProgramPipeline(pipeline);
+                    glBindVertexArray(vao);
+                    glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+                    const Image image = ReadPixels(Gl().Width(), Gl().Height());
+                    Gl().EndFrame();
+                    if (checkPixels) {
+                        // The draw has to actually happen: GetProgramForDraw() flattens the
+                        // pipeline into a composite at the validate point and nowhere else, so a
+                        // round whose draw was dropped mints no composite and the case would be
+                        // measuring an empty churn.
+                        ExpectWholeViewportIs(image, "white", "the first churned composite's draw");
+                    }
+                    observe();
+                    glBindProgramPipeline(0);
+                    glDeleteProgramPipelines(1, &pipeline);
+                    glDeleteProgram(vs);
+                    glDeleteProgram(fs);
+                });
+
+            glBindVertexArray(0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffer = buffer;
+            glDeleteBuffers(1, &cleanupBuffer);
         }
 
     } // namespace

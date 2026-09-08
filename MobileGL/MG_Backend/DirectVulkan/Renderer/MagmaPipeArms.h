@@ -194,8 +194,55 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     //
     // Off by default (Config.h), set only by the HandleRecycle AbaControl ctest lanes, and
     // #if MOBILEGL_PIPE_PUSH throughout, so no shipping pull build can even parse it.
+    // P4a (BRIEF-P4A.md D-I2, G8): WHICH KINDS THIS ANSWER COVERS, and it is not "all of them".
+    //
+    // P4a mints six more client-side kinds - Texture, Renderbuffer, Framebuffer, SamplerCso,
+    // SamplerViewCso and ShaderCso - and requires the ABA control to defeat "the identity half
+    // of P4a's memo keys as well", because a control that only defeats the guards a phase
+    // RETIRED says nothing about the key that phase SHIPS.
+    //
+    // On Magma there is no such key to defeat, and that is a fact about the roadmap rather than
+    // an omission here. MagmaPipeIdentityTables below mints exactly TWO kinds,
+    // VertexElementsCso and Buffer; a texture, a framebuffer, a sampler, a view and a program
+    // are all still reached from their frontend objects on this backend, and moving them onto
+    // handles is P7's work (ROADMAP.md:24 - "Magma anything"; P4a leaves MG_Backend/DirectVulkan
+    // untouched apart from this file). So the honest statement is per KIND, and it is spelled as
+    // code rather than as a comment so that a caller cannot read the blanket answer above and
+    // conclude the knob covers its kind:
+    //
+    //   * for the two kinds this backend really keys on {slot, gen}, the knob defeats the
+    //     identity exactly as it always has (MagmaPipeClaimSlotMemos);
+    //   * for P4a's six there is nothing here to defeat, so the answer is FALSE - and
+    //     MG_IntegrationTest's HandleRecycleScenario reads that through its own build probe and
+    //     makes those cases' AbaControl arm assert the CORRECT pixels while SAYING that it is
+    //     not controlling anything for that kind. It does not assert a corruption that no code
+    //     on this tree can produce, which would be a permanently red always-on lane.
+    //
+    // WHAT MAKES IT TRUE LATER, in one sentence, so the next reader does not have to derive it:
+    // when a backend grows a Features.PipeHandleAbaControl consumer over its P4a object slot
+    // tables - one `if` in GetOrCreate / FindByHandle, the shape MagmaPipeClaimSlotMemos already
+    // has for vertex input - this function's per-kind answer becomes that consumer's, the
+    // integration probe finds the consumer, and the six cases flip to expecting the corruption.
     inline Bool MagmaPipeAbaControlDefeatsIdentity() {
         return MG_Config::Features.PipeHandleAbaControl;
+    }
+
+    // The per-kind form of the answer above. `kind` is MG_Pipe::MGPipeKind.
+    //
+    // Deliberately a SWITCH over the kinds this backend mints rather than a default of "true":
+    // a kind added to MGPipeKind without a decision here lands in the `default` arm and is
+    // reported as NOT covered, which is the safe direction - an uncovered kind whose control
+    // asserts the correct pixels is a control that has not armed yet, while a covered-by-default
+    // kind whose control asserts a corruption nobody can produce is a red lane.
+    inline Bool MagmaPipeAbaControlCoversKind(MG_Pipe::MGPipeKind kind) {
+        switch (kind) {
+            case MG_Pipe::MGPipeKind::VertexElementsCso:
+            case MG_Pipe::MGPipeKind::Buffer:
+                return MagmaPipeAbaControlDefeatsIdentity();
+            default:
+                // P4a's six, and every other kind: not minted on this backend, so not defeatable.
+                return false;
+        }
     }
 
     // The single consumer-table entry every VAO collapses onto while the control is on. Slot

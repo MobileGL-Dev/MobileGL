@@ -405,6 +405,35 @@ function(mgl_itest_probe_for_symbol outVar directory symbolRegex)
     set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
 endfunction()
 
+# The same probe, over a CONJUNCTION: the first source in the directory that names BOTH regexes.
+#
+# P4a needs it for exactly one question and the question cannot be asked any other way. "Does
+# MOBILEGL_PIPE_HANDLE_ABA_CONTROL defeat the identity of P4a's OBJECT kinds on this backend?" is
+# not answered by "some source reads Features.PipeHandleAbaControl" - MagmaPipeArms.h does, and its
+# consumers are Magma's VERTEX-INPUT keys, so a single-regex probe would arm the six P4a ABA
+# controls on a backend where the knob cannot reach a texture, a framebuffer, a sampler, a view or a
+# program, and every one of them would assert a corruption nothing on the tree can produce - a hard
+# red on an always-on integration-gpu lane. Nor is it answered by "some source names a P4a subsystem
+# bit", which will become true for a backend that honours the mask long before anyone wires the
+# knob. What the arm actually needs is ONE SOURCE THAT DOES BOTH, and that is what this asks.
+#
+# Same staleness guarantees as the single-regex probe: CONFIGURE_DEPENDS on the glob, and every file
+# it finds appended to CMAKE_CONFIGURE_DEPENDS.
+function(mgl_itest_probe_for_two_symbols outVar directory symbolRegexA symbolRegexB)
+    file(GLOB_RECURSE mglItestProbeSources CONFIGURE_DEPENDS
+        "${directory}/*.h" "${directory}/*.hpp" "${directory}/*.cpp" "${directory}/*.c")
+    set(mglItestProbeHit "")
+    foreach(mglItestProbeSource IN LISTS mglItestProbeSources)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mglItestProbeSource}")
+        file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesA REGEX "${symbolRegexA}")
+        file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesB REGEX "${symbolRegexB}")
+        if (mglItestProbeLinesA AND mglItestProbeLinesB AND NOT mglItestProbeHit)
+            set(mglItestProbeHit "${mglItestProbeSource}")
+        endif()
+    endforeach()
+    set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
+endfunction()
+
 if (MOBILEGL_PIPE_PUSH)
     # DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
     # SlotTables.h existing: the bit is declared in the contract (MG_Pipe/MGPipe.h:77) and the
@@ -489,6 +518,50 @@ if (MOBILEGL_PIPE_PUSH)
                        "StorageBufferRegrow's, LargeArenaAdoption's and ResourceSubsystemControl's "
                        "mpr entries will SKIP")
     endif()
+
+    # P4a's THIRD re-key question, per backend, and it is not either of the two above. Bits 5/6
+    # re-keyed each backend's VERTEX-INPUT memos and bit 7/8 the BUFFER's; P4a re-keys six OBJECT
+    # classes - texture, renderbuffer, framebuffer, sampler CSO, sampler view, shader CSO - behind
+    # four new subsystem bits, and a backend has to NAME one of those constants to honour
+    # MOBILEGL_PIPE_PUSH's default mask. A P4a case that read either older marker would arm its
+    # Handles arm on a tree where nothing about a texture is keyed on a handle: green for a re-key
+    # that does not exist. Probed by the constants rather than by a file, for the reason the block
+    # above gives - packages D and E choose their own file layout.
+    foreach(mglItestObjectBackend DirectGLES DirectVulkan)
+        mgl_itest_probe_for_symbol(MGL_ITEST_OBJECT_REKEY
+            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
+            "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
+        if (MGL_ITEST_OBJECT_REKEY)
+            message(STATUS "Integration tests: ${mglItestObjectBackend} is keyed on {slot, gen} for "
+                           "P4a's object families (${MGL_ITEST_OBJECT_REKEY})")
+            list(APPEND MGL_ITEST_CAPABILITY_ENV
+                "MGITEST_HANDLE_REKEY_OBJECTS_${mglItestObjectBackend}=1")
+        else()
+            message(STATUS "Integration tests: no ${mglItestObjectBackend} source names "
+                           "kMGPipeSubsystem{Framebuffer,TextureResources,Samplers,Programs} - "
+                           "HandleRecycle's six P4a cases will SKIP their Handles arm on it")
+        endif()
+
+        # ...and whether the ABA knob reaches those kinds THERE. A conjunction, for the reason
+        # mgl_itest_probe_for_two_symbols states: reading the knob is not the same as steering
+        # P4a's keys with it, and arming this marker on the weaker evidence turns six always-on
+        # entries into a permanent red.
+        mgl_itest_probe_for_two_symbols(MGL_ITEST_OBJECT_ABA
+            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
+            "PipeHandleAbaControl"
+            "kMGPipeSubsystem(Framebuffer|TextureResources|Samplers|Programs)")
+        if (MGL_ITEST_OBJECT_ABA)
+            message(STATUS "Integration tests: MOBILEGL_PIPE_HANDLE_ABA_CONTROL steers "
+                           "${mglItestObjectBackend}'s P4a object keys (${MGL_ITEST_OBJECT_ABA})")
+            list(APPEND MGL_ITEST_CAPABILITY_ENV
+                "MGITEST_HANDLE_ABA_OBJECTS_${mglItestObjectBackend}=1")
+        else()
+            message(STATUS "Integration tests: no ${mglItestObjectBackend} source both reads "
+                           "Features.PipeHandleAbaControl and names a P4a subsystem bit - "
+                           "HandleRecycle's six P4a cases will assert the CORRECT pixels on the "
+                           "AbaControl arm and say that it is not a control for them yet")
+        endif()
+    endforeach()
 
     mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
         "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
@@ -939,14 +1012,15 @@ gtest_discover_tests(MobileGLIntegrationTest
 # explicit bitmask below that leaked PUSH=0 turned this lane's LEGACY_MEMOS=0 into D14's armless
 # combination: the bring-up aborted, on purpose, and the lane went red for a reason that was never
 # about handles. The mask is the PHASE default, not a hand-picked bit, so the lane keeps measuring
-# the shape that ships: it was kMGPipeSubsystemsMigratedAtP2 (0x7f) and is now
-# kMGPipeSubsystemsMigratedAtP3a (0x1ff, MG_Pipe/MGPipe.h), which adds bit 7 (resources) and bit 8
-# (vertex input). Pinning it at 0x7f after P3a would leave the Handles arm asserting the P2 shape
-# while the buffer and vertex-input handles it is supposed to be about stayed switched off - a lane
-# that still passes and no longer measures the key that ships. Each phase's constant survives as the
-# NEXT phase's A/B control, which is what ResourceSubsystemControl's Off lane uses 0x7f for.
+# the shape that ships: it was kMGPipeSubsystemsMigratedAtP2 (0x7f), then
+# kMGPipeSubsystemsMigratedAtP3a (0x1ff), and is now kMGPipeSubsystemsMigratedAtP4a (0x1fff,
+# MG_Pipe/MGPipe.h), which adds bits 9-12 - framebuffer, texture resources, samplers and programs.
+# Pinning it at 0x1ff after P4a would leave the Handles arm asserting the P3a shape while the six
+# OBJECT handles it is now also about stayed switched off - a lane that still passes and no longer
+# measures the key that ships. Each phase's constant survives as the NEXT phase's A/B control, which
+# is what ResourceSubsystemControl's Off lane uses 0x7f for and ObjectSubsystemControl's uses 0x1ff.
 if (MOBILEGL_PIPE_PUSH)
-    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x1ff")
+    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x1fff")
     set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
 else()
     set(MGL_ITEST_HANDLES_ARM_KNOBS "")
@@ -1051,33 +1125,36 @@ gtest_discover_tests(MobileGLIntegrationTest
 # only thing these four lanes are an A/B about is `no CSO content addressing` (bit 63,
 # kMGPipeBehaviourNoCsoContentAddressing), which is what separates the On lane from the Off lane.
 # Every
-# other bit is the build's shipping mask, so it moves with the phase: it was 0x7f
-# (kMGPipeSubsystemsMigratedAtP2) and is now 0x1ff (kMGPipeSubsystemsMigratedAtP3a) for the same
-# reason MGL_ITEST_HANDLES_ARM_KNOBS above moved. Left pinned at 0x7f after P3a these lanes would
-# keep passing while running on a configuration nothing ships - bits 7 (resources) and 8 (vertex
-# input) cleared - which is the "still green, no longer measuring the shape that ships" failure
-# the Handles-arm comment above rejects. The counters they read (csom / csob) are render-state and
+# other bit is the build's shipping mask, so it moves with the phase: 0x7f
+# (kMGPipeSubsystemsMigratedAtP2), then 0x1ff (kMGPipeSubsystemsMigratedAtP3a), now 0x1fff
+# (kMGPipeSubsystemsMigratedAtP4a) for the same reason MGL_ITEST_HANDLES_ARM_KNOBS above moved. Left
+# pinned at 0x1ff after P4a these lanes would keep passing while running on a configuration nothing
+# ships - bits 9-12 (framebuffer, texture resources, samplers, programs) cleared - which is the
+# "still green, no longer measuring the shape that ships" failure the Handles-arm comment above
+# rejects. NOTE THAT THE OFF LANE'S MASK MOVED TOO, from 0x80000000000001ff to
+# 0x8000000000001fff: the mask moves with the phase, the control is bit 63, and the two must not be
+# confused. The counters they read (csom / csob) are render-state and
 # are steered by neither bit, so raising the mask is behaviour-preserving for what they assert;
 # what it buys is that a CSO regression that only shows up with the P3a subsystems on can reach
 # them. (contract-review-v1.md item 11, closed here for all three lane families.)
 mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
-    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=no-content-addressing"
-    "MOBILEGL_PIPE_PUSH=0x80000000000001ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x8000000000001fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=content-addressed"
-    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=no-content-addressing"
-    "MOBILEGL_PIPE_PUSH=0x80000000000001ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x8000000000001fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
@@ -1120,12 +1197,15 @@ gtest_discover_tests(MobileGLIntegrationTest
 
 # --- G12: the P3a subsystem A/B, and G10's map-persistent-roundtrips lanes ------------
 #
-# THE MASKS ARE THE TWO PHASE CONSTANTS, not hand-picked bits: 0x1ff is
-# kMGPipeSubsystemsMigratedAtP3a (the push build's default) and 0x7f is
-# kMGPipeSubsystemsMigratedAtP2, which is exactly that default with bits 7 (resources) and 8
-# (vertex input) cleared. MGPipe.h:79 keeps each phase's constant alive as the next phase's A/B
-# control for this reason, and a lane that spelled its own bit pattern would stop being the shape
-# that ships the first time the default moved.
+# THE MASKS ARE PHASE CONSTANTS, not hand-picked bits: 0x1fff is
+# kMGPipeSubsystemsMigratedAtP4a (the push build's default as of P4a) and 0x7f is
+# kMGPipeSubsystemsMigratedAtP2, which is that default with bits 7 (resources), 8 (vertex input)
+# and 9-12 (P4a's four object families) cleared. MGPipe.h keeps each phase's constant alive as the
+# next phase's A/B control for this reason, and a lane that spelled its own bit pattern would stop
+# being the shape that ships the first time the default moved. THE ON LANE MOVED TO 0x1fff WITH THE
+# PHASE and the OFF LANE'S 0x7f DID NOT: this A/B is about bit 7, and pinning its On arm at 0x1ff
+# after P4a would measure the resource emitter on a configuration nothing ships. P4a's own A/B -
+# 0x1fff against 0x1ff - is ObjectSubsystemControl's, further down.
 #
 # DirectGLES only. P3a migrates Espryt's buffer and VAO paths; Magma's buffer path is P7 and
 # registers no MGPipeResourceOps, so a DirectVulkan arm would be measuring the client emitter
@@ -1146,7 +1226,7 @@ gtest_discover_tests(MobileGLIntegrationTest
 # the field inside the push guard), exactly as the HandleRecycle Legacy lanes already rely on.
 mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_RESOURCE_SUBSYSTEM_LANE=on"
-    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/resource-subsystem-on-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT
@@ -1180,12 +1260,12 @@ gtest_discover_tests(MobileGLIntegrationTest
 # TEST_FILTER, for the private-log reason above.
 mgl_itest_join_environment(MGL_ITEST_GLES_MPR_REGROW_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_MPR_LANE=storage-buffer-regrow"
-    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mpr-storage-buffer-regrow-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_MPR_LANE=large-arena-adoption"
-    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mpr-large-arena-adoption-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
@@ -1216,7 +1296,7 @@ gtest_discover_tests(MobileGLIntegrationTest
 # four processes to truncate. The fourth case skips in both lanes for exactly that reason, saying
 # so.
 mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT
-    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x1ff"
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x1fff"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x7f"
