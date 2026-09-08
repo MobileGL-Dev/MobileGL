@@ -467,16 +467,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_slotTable.LiveGenAt(slot);
         }
 
-        // The death half of GetOrCreateByHandle, for a kind whose announcement is its own
-        // destroy CALL rather than the shared death notice. Hands the twin OUT rather than
-        // destroying it in place, so the caller reaches whatever the driver id owes - a
-        // delete, a pool enrolment, a deferred release - with the entry already retired and a
-        // re-entrant GetOrCreate from the twin's destructor cannot resurrect it. The SLOT is
-        // not freed: for a handle-keyed kind the CLIENT frees it after the destroy returns.
-        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
-            if (!EsprytSlotTablesEnabled()) return BackendPtr{};
-            return m_slotTable.ReleaseByHandle(handle);
-        }
+        // NO ReleaseByHandle HERE, AND THAT IS A DECISION (review M-4). The death half of
+        // GetOrCreateByHandle exists for a kind whose announcement is its own destroy CALL
+        // rather than the shared death notice - which is the BUFFER family
+        // (BackendBufferResourceTable::ReleaseByHandle, SlotTables.h, called from
+        // resource_destroy) and none of the five kinds this registry serves: every one of them
+        // dies through DestroyByLifetimeId below, because P4a adds no server-side destroy arm
+        // for a texture, a renderbuffer, a framebuffer, a sampler CSO or a shader CSO. v1
+        // declared one here anyway and it had no caller on either arm, which made its bound and
+        // its wording things nobody would exercise until P5. The one-line wrapper comes back in
+        // the commit that gives it a caller; SlotTable::ReleaseByHandle underneath is untouched
+        // and is what SanityTest drives directly.
 
         // P2 step e2. STATIC, because a death notice is about an object and not about a
         // registry instance: it is answered by EVERY table of this kind that exists - this

@@ -3529,10 +3529,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // The release-build VOICE for StateBackendObjectRegistry::GetOrCreateByHandle's two
-        // silent refusals, shared by the five kinds P4a re-keys so the wording cannot drift
-        // between them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer
-        // family, lifted into one template because five copies of it is five chances to write
-        // one of them differently.
+        // silent refusals, shared by the kinds P4a re-keys so the wording cannot drift between
+        // them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer family,
+        // lifted into one template because a copy per kind is a chance per kind to write one of
+        // them differently.
+        //
+        // ITS CALLERS IN THIS PACKAGE ARE THE FRAMEBUFFER ATTACHMENT WALK'S TWO
+        // (FramebufferImpl::SyncAttachmentSurface: the texture registry and the renderbuffer
+        // registry), because that is where a HANDLE arrives in a payload - MGPSurface::Res -
+        // and an ADOPTION is what the arm owes rather than a lookup. The other three re-keyed
+        // kinds resolve at sites in DirectGLES.cpp (package E's SyncCurrentFBO, the lazy
+        // sampler mint and SyncCurrentProgram), so their first adoption is E's to write; this
+        // template is what they call so all five say the same thing.
         //
         // WHY A VOICE AT ALL: the table asserts, and MOBILEGL_ASSERT compiles out at INFO -
         // which all three gate builds and every shipped build are - so an object that silently
@@ -8453,6 +8461,237 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // THE FOUR CROSS-OBJECT MASKS, ANSWERED FROM THE RECORD (ID-12 DV-5, review M-3 / DV-5).
+        //
+        // All four reduce to (internal format, TEXTURE TARGET) for a texture attachment and to
+        // (internal format) for a renderbuffer one, and MGPSurface now carries both inline -
+        // InternalFormat since D-C1 and TextureTarget since c0c widened Pad0 into it. So the
+        // handle arm stops reading the frontend attachment objects to compute them, which is
+        // what D-C1's "the four cross-object masks fall out at push time with no lookup" meant.
+        //
+        // ShouldUseCaveatTextureFormat / BackendTextureFormatAddsAlpha / their renderbuffer
+        // siblings are UNTOUCHED - two of them are on D-N's byte-identical list. Only what they
+        // are ASKED changes, which is the whole point of carrying the target rather than
+        // inventing a TextureUploadTarget -> TextureTarget inverse: feeding a D-N-pinned
+        // function a guessed input would silently change what every texture is allocated as.
+        //
+        // Kind IS the gate (c0c: "consulted only when Kind == kMGPipeSurfaceKindTexture"), and
+        // kMGPipeSurfaceNoTextureTarget on a texture point is a seam defect - refused loudly and
+        // answered false, never guessed. False is the safe direction for all four: the mask
+        // turns an emulation ON, and an emulation that does not run leaves the driver's own
+        // (correct-for-the-real-format) behaviour, while one that runs on the wrong buffer
+        // clamps or overwrites texels the application wrote.
+        static Bool PushedSurfaceTextureTarget(const MG_Pipe::MGPSurface& surface, TextureTarget* out) {
+            if (surface.TextureTarget == MG_Pipe::kMGPipeSurfaceNoTextureTarget) {
+                MGLOG_E_ONCE("MGPipe: attachment surface {%u, %u} says Kind=texture but carries no "
+                             "texture target - refusing to guess one for the cross-object masks",
+                             surface.Res.Slot, surface.Res.Gen);
+                return false;
+            }
+            *out = static_cast<TextureTarget>(surface.TextureTarget);
+            return true;
+        }
+
+        static Bool IsSnormFallbackSurface(const MG_Pipe::MGPSurface& surface) {
+            const auto format = static_cast<TextureInternalFormat>(surface.InternalFormat);
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
+                TextureTarget target = TextureTarget::Unknown;
+                return PushedSurfaceTextureTarget(surface, &target) && IsSnormFormat(format) &&
+                       TextureImpl::ShouldUseCaveatTextureFormat(format, target);
+            }
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer) {
+                return IsSnormFormat(format) && TextureImpl::ShouldUseCaveatRenderbufferFormat(format);
+            }
+            return false;
+        }
+
+        static Bool IsUnormFallbackSurface(const MG_Pipe::MGPSurface& surface) {
+            const auto format = static_cast<TextureInternalFormat>(surface.InternalFormat);
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
+                TextureTarget target = TextureTarget::Unknown;
+                return PushedSurfaceTextureTarget(surface, &target) && IsUnormFormat(format) &&
+                       TextureImpl::ShouldUseCaveatTextureFormat(format, target);
+            }
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer) {
+                return IsUnormFormat(format) && TextureImpl::ShouldUseCaveatRenderbufferFormat(format);
+            }
+            return false;
+        }
+
+        static Bool IsAlphaWidenedColorSurface(const MG_Pipe::MGPSurface& surface) {
+            const auto format = static_cast<TextureInternalFormat>(surface.InternalFormat);
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
+                TextureTarget target = TextureTarget::Unknown;
+                return PushedSurfaceTextureTarget(surface, &target) &&
+                       TextureImpl::BackendTextureFormatAddsAlpha(format, target);
+            }
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer) {
+                return TextureImpl::BackendRenderbufferFormatAddsAlpha(format);
+            }
+            return false;
+        }
+
+        static Bool IsIntegerColorSurface(const MG_Pipe::MGPSurface& surface) {
+            // No target and no caveat table: integerness is a property of the format alone, so
+            // this one is the same question on both arms.
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                return false;
+            }
+            return IsIntegerColorFormat(static_cast<TextureInternalFormat>(surface.InternalFormat));
+        }
+#endif
+
+#if MOBILEGL_PIPE_PUSH
+        // The record's surface for an attachment POINT, or null when this record does not
+        // describe that point at all. MGPFramebufferState carries Color[8] + Depth + Stencil
+        // (D-C1), which is every point a framebuffer can hold on the handle arm: D-C3 refuses
+        // bit 9 outright on a driver reporting more than 8 colour attachments, and the
+        // FRONT/BACK points belong to the DEFAULT framebuffer, which has no twin at all.
+        static const MG_Pipe::MGPSurface* PushedSurfaceForAttachment(const MG_Pipe::MGPFramebufferState& record,
+                                                                     FramebufferAttachmentType point) {
+            if (point == FramebufferAttachmentType::Depth) return &record.Depth;
+            if (point == FramebufferAttachmentType::Stencil) return &record.Stencil;
+            if (point < FramebufferAttachmentType::Color0 || point > FramebufferAttachmentType::Color31) {
+                return nullptr;
+            }
+            const Int index = static_cast<Int>(point) - static_cast<Int>(FramebufferAttachmentType::Color0);
+            if (index >= static_cast<Int>(MG_Pipe::kMGPipeMaxColorAttachments)) return nullptr;
+            return &record.Color[static_cast<SizeT>(index)];
+        }
+
+        // SyncAttachmentObject's handle arm (review M-3). WHAT MOVES IS THE RESOLUTION: the twin
+        // is adopted from MGPSurface::Res through the slot table instead of being looked up by
+        // the frontend object's ADDRESS, and the attach SHAPE - layered, level, layer, the
+        // upload target and the texture target - is read off the surface instead of off the
+        // frontend attachment object. What does NOT move is the storage sync itself: the twins'
+        // SyncMipmapsToBackend / SyncToBackend still take the frontend object, because that is
+        // the monolith glue this phase keeps (they read the level shadow for the texels, which
+        // no record carries), and because those two functions have their OWN handle arms that
+        // drive the storage from the descriptor.
+        //
+        // The frontend object is therefore still handed over, and it is also CROSS-CHECKED: if
+        // the record's Res does not name the same twin the frontend attachment does, that is a
+        // seam defect - two sides that disagree about which texture is attached - and it is
+        // refused loudly rather than resolved in favour of either.
+        static Bool SyncAttachmentSurface(GLenum glFBOTarget, const MG_Pipe::MGPSurface& surface,
+                                          const MG_State::GLState::FramebufferAttachmentObject& attachmentObject,
+                                          GLenum glBackendAttachment) {
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
+                // An empty point. The caller has already detached it where that is what an
+                // empty point means; attaching nothing is what the legacy arm does here too.
+                return true;
+            }
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
+                const auto& textureObject = attachmentObject.GetTexture();
+                if (!textureObject) {
+                    MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
+                                 "attachment holds no texture - refusing to attach",
+                                 surface.Res.Slot, surface.Res.Gen);
+                    return false;
+                }
+                if (!(TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()) == surface.Res)) {
+                    MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
+                                 "attachment's texture %u is handle {%u, %u} - refusing rather than "
+                                 "attaching one of them",
+                                 surface.Res.Slot, surface.Res.Gen, textureObject->GetExternalIndex(),
+                                 TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()).Slot,
+                                 TextureImpl::g_backendTextureObjects.HandleOf(textureObject.get()).Gen);
+                    return false;
+                }
+                auto* twinSlot = AdoptTwinByHandle(TextureImpl::g_backendTextureObjects, surface.Res, "texture");
+                if (twinSlot == nullptr) {
+                    return false; // AdoptTwinByHandle named the refusal
+                }
+                if (!*twinSlot) {
+                    *twinSlot = MakeShared<TextureImpl::BackendTextureObject>();
+                }
+                // COPIED OUT of the table: SyncMipmapsToBackend can grow it (a re-mint adopts
+                // another handle), and Managers.h:381-385's pointer-invalidation warning applies
+                // to exactly this sequence.
+                SharedPtr<TextureImpl::BackendTextureObject> backendTextureObject = *twinSlot;
+                if (!backendTextureObject) {
+                    MGLOG_E_ONCE("%s: No backend texture found for FBO attachment, cannot bind texture.", __func__);
+                    return false;
+                }
+                backendTextureObject->SyncMipmapsToBackend(textureObject);
+                const auto uploadTarget = static_cast<TextureUploadTarget>(surface.UploadTarget);
+                if (surface.Layered != 0) {
+                    g_GLESFuncs.glFramebufferTexture(glFBOTarget, glBackendAttachment,
+                                                     backendTextureObject->GetBackendTextureId(),
+                                                     static_cast<GLint>(surface.Level));
+                } else if (uploadTarget == TextureUploadTarget::Texture3D ||
+                           uploadTarget == TextureUploadTarget::Texture2DArray ||
+                           uploadTarget == TextureUploadTarget::Texture1DArray ||
+                           uploadTarget == TextureUploadTarget::CubeMapArray ||
+                           uploadTarget == TextureUploadTarget::Texture2DMultisampleArray) {
+                    g_GLESFuncs.glFramebufferTextureLayer(glFBOTarget, glBackendAttachment,
+                                                          backendTextureObject->GetBackendTextureId(),
+                                                          static_cast<GLint>(surface.Level),
+                                                          static_cast<GLint>(surface.Layer));
+                } else {
+                    auto glTextureTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
+                    if (glTextureTarget == GL_UNKNOWN_MGL) {
+                        TextureTarget target = TextureTarget::Unknown;
+                        if (!PushedSurfaceTextureTarget(surface, &target)) {
+                            return false;
+                        }
+                        glTextureTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
+                    }
+                    // Same cube-face rule as the legacy arm: glBindTexture rejects the face
+                    // enums, so bind through the owning cube target and attach with the face.
+                    const Bool isCubeFace = glTextureTarget >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
+                                            glTextureTarget <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z;
+                    backendTextureObject->Bind(isCubeFace ? GL_TEXTURE_CUBE_MAP : glTextureTarget);
+                    g_GLESFuncs.glFramebufferTexture2D(glFBOTarget, glBackendAttachment, glTextureTarget,
+                                                       backendTextureObject->GetBackendTextureId(),
+                                                       static_cast<GLint>(surface.Level));
+                }
+                return true;
+            }
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer) {
+                const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
+                if (!renderbufferObject) {
+                    MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} but the frontend "
+                                 "attachment holds no renderbuffer - refusing to attach",
+                                 surface.Res.Slot, surface.Res.Gen);
+                    return false;
+                }
+                if (!(RenderbufferImpl::g_backendRenderbufferObjects.HandleOf(renderbufferObject.get()) ==
+                      surface.Res)) {
+                    MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} but the frontend "
+                                 "attachment's renderbuffer %u is a different handle - refusing rather "
+                                 "than attaching one of them",
+                                 surface.Res.Slot, surface.Res.Gen, renderbufferObject->GetExternalIndex());
+                    return false;
+                }
+                auto* twinSlot = AdoptTwinByHandle(RenderbufferImpl::g_backendRenderbufferObjects, surface.Res,
+                                                   "renderbuffer");
+                if (twinSlot == nullptr) {
+                    return false;
+                }
+                if (!*twinSlot) {
+                    *twinSlot = MakeShared<RenderbufferImpl::BackendRenderbufferObject>();
+                }
+                SharedPtr<RenderbufferImpl::BackendRenderbufferObject> backendRenderbufferObject = *twinSlot;
+                if (!backendRenderbufferObject) {
+                    MGLOG_E_ONCE("%s: No backend renderbuffer found for FBO attachment.", __func__);
+                    return false;
+                }
+                backendRenderbufferObject->SyncToBackend(renderbufferObject);
+                backendRenderbufferObject->Bind();
+                g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER,
+                                                      backendRenderbufferObject->GetBackendRenderbufferId());
+                return true;
+            }
+            MGLOG_E_ONCE("MGPipe: attachment surface {%u, %u} carries Kind=%u, which is neither a texture "
+                         "nor a renderbuffer nor an empty point - refusing to attach",
+                         surface.Res.Slot, surface.Res.Gen, surface.Kind);
+            return false;
+        }
+#endif
+
         Uint32 ComputeAlphaWidenedDrawBufferMask(const MG_State::GLState::FramebufferObject& fbo) {
             using FBO = MG_State::GLState::FramebufferObject;
             const auto& drawBuffers = fbo.GetDrawBuffers();
@@ -8866,6 +9105,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         frontendBuf > FramebufferAttachmentType::Color31) {
                         continue;
                     }
+#if MOBILEGL_PIPE_PUSH
+                    // ID-12 DV-5 / M-3: on the handle arm the four masks are answered from the
+                    // record's own surface for the point this draw buffer names, and the frontend
+                    // attachment object below is never touched - the whole arm returns here.
+                    // A draw buffer that names a point the record cannot describe is D-C3's
+                    // refusal arriving too late to refuse, so it is loud and contributes no bit.
+                    if (pushedRecord != nullptr) {
+                        const MG_Pipe::MGPSurface* pushedSurface =
+                            PushedSurfaceForAttachment(*pushedRecord, frontendBuf);
+                        if (pushedSurface == nullptr) {
+                            MGLOG_E_ONCE("MGPipe: framebuffer %u's draw buffer %u names colour point %d, "
+                                         "which its record does not describe (the record carries %u "
+                                         "colour points) - contributing no fallback mask bit",
+                                         stateFBOObject->GetExternalIndex(), i,
+                                         static_cast<Int>(frontendBuf) -
+                                             static_cast<Int>(FramebufferAttachmentType::Color0),
+                                         MG_Pipe::kMGPipeMaxColorAttachments);
+                            continue;
+                        }
+                        if (IsSnormFallbackSurface(*pushedSurface)) {
+                            snormClampOutputMask |= (1u << i);
+                        } else if (IsUnormFallbackSurface(*pushedSurface)) {
+                            unormClampOutputMask |= (1u << i);
+                        }
+                        if (IsAlphaWidenedColorSurface(*pushedSurface)) {
+                            alphaWidenedMask |= (1u << i);
+                        }
+                        if (IsIntegerColorSurface(*pushedSurface)) {
+                            integerColorMask |= (1u << i);
+                        }
+                        continue;
+                    }
+#endif
                     const auto& attachmentObject = stateFBOObject->GetAttachment(frontendBuf);
                     if (IsSnormFallbackAttachment(attachmentObject)) {
                         snormClampOutputMask |= (1u << i);
@@ -8960,9 +9232,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (isColorPoint && attachmentObject.IsEmpty() && glBackendAttachment != GL_NONE) {
                         g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER, 0);
                     }
+#if MOBILEGL_PIPE_PUSH
+                    // M-3: the ATTACHMENT RESOLUTION is the record's on the handle arm. The walk
+                    // itself still runs over the frontend's 41 points, because that is what says
+                    // which points EXIST and it is also what carries the per-attachment version
+                    // memo underneath the record hash; what the record answers is WHICH object
+                    // each point holds and in what shape.
+                    //
+                    // A point the record does not describe (Color8..Color31; the FRONT/BACK
+                    // tokens) is only reachable with a non-empty attachment if D-C3's refusal
+                    // failed to fire, so an empty one is silently fine and a live one is loud.
+                    Bool attachmentSynced;
+                    if (pushedRecord != nullptr) {
+                        const MG_Pipe::MGPSurface* pushedSurface =
+                            PushedSurfaceForAttachment(*pushedRecord, frontendType);
+                        if (pushedSurface == nullptr) {
+                            if (attachmentObject.IsEmpty()) {
+                                attachmentSynced = true;
+                            } else {
+                                MGLOG_E_ONCE("MGPipe: framebuffer %u holds an attachment at point %s, which "
+                                             "its record does not describe - refusing to attach it",
+                                             stateFBOObject->GetExternalIndex(),
+                                             MG_Util::ConvertFramebufferAttachmentTypeToString(frontendType).c_str());
+                                attachmentSynced = false;
+                            }
+                        } else {
+                            attachmentSynced = SyncAttachmentSurface(glFBOTarget, *pushedSurface, attachmentObject,
+                                                                     glBackendAttachment);
+                        }
+                    } else {
+                        attachmentSynced = SyncAttachmentObject(glFBOTarget, attachmentObject, glBackendAttachment);
+                    }
+                    if (attachmentSynced) {
+                        m_syncedFrontendAttachmentVersions[i] = attachmentVersions[i];
+                    }
+#else
                     if (SyncAttachmentObject(glFBOTarget, attachmentObject, glBackendAttachment)) {
                         m_syncedFrontendAttachmentVersions[i] = attachmentVersions[i];
                     }
+#endif
                 }
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
                 else {
