@@ -1157,6 +1157,27 @@ namespace MobileGL::MG_Pipe {
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
+        // AND "THE WORKING HANDLES THEY COULD NAME" IS ALL OF THEM, NOT JUST THE THREE ABOVE.
+        // The two framebuffer records hold eleven MGPSurface::Res naming texture and
+        // renderbuffer records this function has just dropped, and the three unit windows hold
+        // entries naming sampler-view, sampler-CSO and texture records it has just dropped. A
+        // window left populated here is a set of handles into empty tables: the next resolve
+        // either refuses and counts (a teardown-time refusal storm nothing asked for) or, on a
+        // slot the next context re-mints, resolves to somebody else's record. So this takes the
+        // same working state MGPipeApplierReset does - which is the honest reading of the rule
+        // as well: Reset keeps the object records BECAUSE they outlive a make-current, and here
+        // they do not outlive anything.
+        g_applier.DrawFramebuffer = MGPFramebufferState{};
+        g_applier.ReadFramebuffer = MGPFramebufferState{};
+        g_applier.BoundSamplerViews = {};
+        g_applier.SamplerViewStart = 0;
+        g_applier.SamplerViewCount = 0;
+        g_applier.BoundSamplerStates = {};
+        g_applier.SamplerStateStart = 0;
+        g_applier.SamplerStateCount = 0;
+        g_applier.BoundShaderImages = {};
+        g_applier.ShaderImageStart = 0;
+        g_applier.ShaderImageCount = 0;
         ++g_applier.FramebufferSerial;
         ++g_applier.SamplerViewsSerial;
         ++g_applier.SamplerStatesSerial;
