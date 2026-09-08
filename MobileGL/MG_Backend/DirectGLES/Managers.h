@@ -2525,6 +2525,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Int m_cacheWidth = 0;
             Int m_cacheHeight = 0;
             Int m_cacheSamples = 0;
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-D2/D-B3): the resource record's Serial at the last completed allocation.
+            // It replaces the four-field cache above AS A GATE - the four members stay, because
+            // they are also what the legacy arm compares and what the twin reports about the
+            // storage it actually holds - and it closes the publication hole D-D2 names:
+            // RenderbufferObject::{SetInternalFormat, AllocateStorage, SetSamples} bump no
+            // version and raise no notice, so `glBindRenderbuffer; glRenderbufferStorage(new)`
+            // on an ALREADY-ATTACHED renderbuffer moved nothing the framebuffer bit could see.
+            // The client now emits resource_respecify straight from those three mutators, the
+            // applier bumps this serial, and one compare here sees it.
+            //
+            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
+            Uint64 m_syncedResourceSerial = 0;
+#endif
         };
 
         extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>

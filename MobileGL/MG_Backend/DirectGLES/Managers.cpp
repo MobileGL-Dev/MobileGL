@@ -11423,6 +11423,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, m_backendRBOId);
         }
 
+        // P4a (D-D2): the four values BackendRenderbufferObject::SyncToBackend allocates from,
+        // spelled once per arm. Macros for the reason the texture-parameter block gives: in the
+        // PULL build each expands to the pre-P4a expression at its original site, so that
+        // build's tokens and its symbol sizes are unchanged (D-P).
+        //
+        // ARCHITECTURE.md:130 keeps the renderbuffer an INDEPENDENT frontend class while giving
+        // it the same discriminated MGPResourceDesc a texture gets, and this is where that pays:
+        // the same four fields, read out of the same record type, with Desc.Target telling the
+        // applier which of the three per-kind tables the record lives in.
+#if MOBILEGL_PIPE_PUSH
+#define MGB_RBO_FORMAT                                                                                                 \
+    (pushedRecord != nullptr ? static_cast<TextureInternalFormat>(pushedRecord->Desc.InternalFormat)                    \
+                             : stateRBOObject->GetInternalFormat())
+#define MGB_RBO_WIDTH (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Width) : static_cast<Int>(stateRBOObject->GetWidth()))
+#define MGB_RBO_HEIGHT                                                                                                 \
+    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Height) : static_cast<Int>(stateRBOObject->GetHeight()))
+#define MGB_RBO_SAMPLES                                                                                                \
+    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Samples) : static_cast<Int>(stateRBOObject->GetSamples()))
+#else
+#define MGB_RBO_FORMAT stateRBOObject->GetInternalFormat()
+#define MGB_RBO_WIDTH static_cast<Int>(stateRBOObject->GetWidth())
+#define MGB_RBO_HEIGHT static_cast<Int>(stateRBOObject->GetHeight())
+#define MGB_RBO_SAMPLES static_cast<Int>(stateRBOObject->GetSamples())
+#endif
+
         void BackendRenderbufferObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject) {
 #ifdef TRACY_ENABLE
@@ -11436,6 +11461,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Syncing RBO with backend ID %u to backend for state ID %u", m_backendRBOId,
                     stateRBOObject->GetExternalIndex());
 
+#if MOBILEGL_PIPE_PUSH
+            const MG_Pipe::MGPipeResourceRecord* pushedRecord = nullptr;
+            if (TextureResourceSubsystemEnabled()) {
+                // MONOLITH GLUE, named as such: the Renderbuffer handle of an object this
+                // backend still arrives holding. Under a real split it rides in the payload.
+                const MG_Pipe::MGPipeHandle res = g_backendRenderbufferObjects.HandleOf(stateRBOObject.get());
+                pushedRecord = PipeRenderbufferRecordForHandle(res);
+                if (pushedRecord == nullptr) {
+                    MGLOG_E_ONCE("MGPipe: renderbuffer %u has no applier record on the handle arm, so "
+                                 "its storage cannot be allocated from the pushed descriptor "
+                                 "(handle {%u, %u})",
+                                 stateRBOObject->GetExternalIndex(), res.Slot, res.Gen);
+                    return;
+                }
+                if (m_isInitialized && m_syncedResourceSerial != 0 &&
+                    m_syncedResourceSerial == pushedRecord->Serial) {
+                    MGLOG_D("RBO %u already initialized with matching parameters, skipping re-allocation.",
+                            stateRBOObject->GetExternalIndex());
+                    return;
+                }
+            } else {
+#if !MOBILEGL_PIPE_LEGACY_MEMOS
+                // UNREACHABLE: ResolveTextureResourceSubsystemArm stops at its first call when
+                // the bit is clear and the pre-handle arm is not compiled. Kept, and kept loud.
+                MGLOG_E_ONCE("MGPipe: the texture-resource subsystem bit is clear and "
+                             "MOBILEGL_PIPE_LEGACY_MEMOS=0 removed the pre-handle renderbuffer "
+                             "four-field cache, so this configuration has no arm at all");
+                return;
+#else
+                if (m_isInitialized && m_cacheInternalFormat == stateRBOObject->GetInternalFormat() &&
+                    m_cacheWidth == stateRBOObject->GetWidth() && m_cacheHeight == stateRBOObject->GetHeight() &&
+                    m_cacheSamples == stateRBOObject->GetSamples()) {
+                    MGLOG_D("RBO %u already initialized with matching parameters, skipping re-allocation.",
+                            stateRBOObject->GetExternalIndex());
+                    return;
+                }
+#endif
+            }
+#else
             if (m_isInitialized && m_cacheInternalFormat == stateRBOObject->GetInternalFormat() &&
                 m_cacheWidth == stateRBOObject->GetWidth() && m_cacheHeight == stateRBOObject->GetHeight() &&
                 m_cacheSamples == stateRBOObject->GetSamples()) {
@@ -11443,14 +11507,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         stateRBOObject->GetExternalIndex());
                 return;
             }
+#endif
 
             Bind();
 
             // Allocate storage
-            TextureInternalFormat internalFormat = stateRBOObject->GetInternalFormat();
-            Int width = static_cast<Int>(stateRBOObject->GetWidth());
-            Int height = static_cast<Int>(stateRBOObject->GetHeight());
-            Int samples = static_cast<Int>(stateRBOObject->GetSamples());
+            TextureInternalFormat internalFormat = MGB_RBO_FORMAT;
+            Int width = MGB_RBO_WIDTH;
+            Int height = MGB_RBO_HEIGHT;
+            Int samples = MGB_RBO_SAMPLES;
             GLenum glInternalFormat, glType, glFormat;
             TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
 
@@ -11492,10 +11557,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_cacheWidth = width;
             m_cacheHeight = height;
             m_cacheSamples = samples;
+#if MOBILEGL_PIPE_PUSH
+            // Stamped in the same breath as the four cache members and AFTER the allocation, so
+            // an allocation the driver refused with GL_OUT_OF_MEMORY above leaves the twin
+            // describing what it actually holds. The deferred OOM report and its RecordError are
+            // untouched: the error still lands on whatever entry point triggered the sync, which
+            // is where the deferred model puts it.
+            if (pushedRecord != nullptr) m_syncedResourceSerial = pushedRecord->Serial;
+#endif
 
             m_isInitialized = true;
             MGLOG_D("RBO %u sync completed. backend ID %u", stateRBOObject->GetExternalIndex(), m_backendRBOId);
         }
+#undef MGB_RBO_FORMAT
+#undef MGB_RBO_WIDTH
+#undef MGB_RBO_HEIGHT
+#undef MGB_RBO_SAMPLES
 
         TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
