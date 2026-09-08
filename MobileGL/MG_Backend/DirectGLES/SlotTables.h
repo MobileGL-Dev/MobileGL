@@ -285,6 +285,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry.backend;
         }
 
+        // P3a: the death half of the overload above, for a kind whose announcement is its own
+        // destroy CALL rather than the shared death notice (D-L). Hands the twin OUT rather
+        // than destroying it in place, because the caller may still have to decide what
+        // happens to the driver id it owns - Espryt pools it, deletes it, or parks it on the
+        // deferred-release list when no context is current on this thread - and every one of
+        // those outcomes has to be reached with the entry already retired, so a re-entrant
+        // GetOrCreate from a twin destructor cannot resurrect it.
+        //
+        // The slot itself is NOT freed here: it belongs to the kind, and for a handle-keyed
+        // kind the CLIENT frees it after the destroy call returns (SlotAllocator.h:60 - the
+        // Gen bump rides the next handout, so a double free cannot skip a generation). An
+        // entry whose Gen no longer matches is a twin of the slot's previous owner and is
+        // left alone: the successor's own GetOrCreate resets it.
+        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return BackendPtr{};
+            if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
+            if (handle.Slot >= m_slots.size()) return BackendPtr{};
+            Entry& entry = m_slots[handle.Slot];
+            if (!entry.Live || entry.Gen != handle.Gen) return BackendPtr{};
+            BackendPtr dead = std::move(entry.backend);
+            entry.backend.reset();
+            entry.stateRef.reset();
+            entry.Live = false;
+            return dead;
+        }
+
         // Null when no live twin of this object exists. Unlike the registry's Find this NEVER
         // mutates the table, so the returned pointer survives any later Find on it; only a
         // GetOrCreate that grows the vector can move it, and callers that hold one across a

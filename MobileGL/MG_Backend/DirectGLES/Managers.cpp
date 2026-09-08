@@ -1501,6 +1501,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_bufferMutationEpoch.fetch_add(1, std::memory_order_release);
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // The seventh slot table. A process-lifetime global, like the other six, so it links
+        // itself into its own holder list from its own constructor with no initialisation
+        // order question to answer (SlotTables.h).
+        BackendBufferResourceTable g_backendBufferResources;
+
+        Bool ResolveResourceSubsystemArm() {
+            const Bool enabled = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+            MGLOG_D("MGPipe: Espryt resource family runs the %s arm", enabled ? "handle" : "legacy");
+            return enabled;
+        }
+
+        Bool ResolveVertexInputSubsystemArm() {
+            const Bool enabled = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
+            MGLOG_D("MGPipe: Espryt vertex-input family runs the %s arm", enabled ? "handle" : "legacy");
+            return enabled;
+        }
+
+        GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res) {
+            if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
+            auto& twin = g_backendBufferResources.GetOrCreate(res);
+            if (!twin) {
+                twin = MakeShared<GLESBufferResource>();
+                // Same seed the lazy legacy path gives a resource it has just minted: nothing
+                // has defined storage yet, so the first sync owes a full (re)specification.
+                twin->pendingRespecify = true;
+            }
+            return twin.get();
+        }
+
+        GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res) {
+            auto* twin = g_backendBufferResources.FindByHandle(res);
+            return twin ? twin->get() : nullptr;
+        }
+
+        MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject) {
+            if (bufferObject == nullptr) return MG_Pipe::kMGPipeNullHandle;
+            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer,
+                                                           bufferObject->GetLifetimeId());
+        }
+#endif
+
         // See the declaration: re-mints of a live resource's driver id. Written only on
         // the context thread (all re-mint sites run there), read only by the VAO sync.
         Uint64 g_bufferBackendIdGeneration = 0;

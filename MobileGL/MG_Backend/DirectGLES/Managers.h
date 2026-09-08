@@ -644,7 +644,75 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // no map, and a respecification then has to retire the id rather than hand it
             // to glBufferData, which the driver would silently refuse.
             Bool immutableStorage = false;
+#if MOBILEGL_PIPE_PUSH
+            // P3a: the client's shadow base as the last content-carrying resource call left
+            // it. The handle-shaped ops carry `shadow + offset` beside their record, so the
+            // base is recovered by subtracting the record's own offset once, here, instead of
+            // asking a frontend object for MappedData() at every later drain. Everything the
+            // legacy arm reads through bufferObject.MappedData() - the three-tier range
+            // flush, the pool reseed, the full re-upload - reads this on the handle arm.
+            //
+            // RAW, and it may not be dereferenced except while the client's shadow is known
+            // to be live: the client owns the allocation and hands the base over per call.
+            // Null until the first respecify/subdata/flush that carries content, which is
+            // exactly when nothing has bytes to move yet.
+            const Uint8* hostBytes = nullptr;
+#endif
         };
+
+#if MOBILEGL_PIPE_PUSH
+        // P3a (D-A4): the SEVENTH Espryt slot table, and the first one keyed by a handle the
+        // CALL carried rather than one this backend minted off a frontend object's lifetime
+        // id. That is what discharges, for this kind, the debt SlotTables.h records against
+        // itself: GLESBufferResource stops hanging off PipeResource::m_backend and lives here
+        // instead, so the resource table is the server's own and a frontend heap reference is
+        // no longer part of resolving it.
+        //
+        // The StateObject parameter is BufferObject only because the template names one; not
+        // one member that touches it is instantiated on this table (no Find(StateObject*), no
+        // HandleOf, no ForEachLive), and the handle overloads never look at it. Death is
+        // announced by the family's own ResourceDestroy call, not by the shared death notice
+        // (D-L), and the slot is freed by the CLIENT after that call returns.
+        using BackendBufferResourceTable =
+            BackendSlotTable<MG_State::GLState::BufferObject, GLESBufferResource, MG_Pipe::MGPipeKind::Buffer>;
+        extern BackendBufferResourceTable g_backendBufferResources;
+
+        // Resolved once per process and latched, exactly like EsprytSlotTablesEnabled() and
+        // for the same reason: the two arms hold GLESBufferResource in DIFFERENT containers -
+        // the legacy arm in the frontend object's PipeResource::m_backend, the handle arm in
+        // the table above - so an answer that changed mid-run would strand every resource
+        // already built and leak the driver ids they own.
+        Bool ResolveResourceSubsystemArm();
+        // Same shape for the vertex-input family (bit 8). Kept separate because the two bits
+        // are separately clearable and the A/B has to be able to run either one alone.
+        Bool ResolveVertexInputSubsystemArm();
+
+        // INLINE for the reason SlotTables.h spells out at EsprytSlotTablesEnabled: both are
+        // consulted on the per-draw path (the VAO sync's gate, EnsureBufferResource, every
+        // buffer op), and out-of-line they would be a call through the PLT per consult.
+        inline Bool ResourceSubsystemEnabled() {
+            static const Bool enabled = ResolveResourceSubsystemArm();
+            return enabled;
+        }
+        inline Bool VertexInputSubsystemEnabled() {
+            static const Bool enabled = ResolveVertexInputSubsystemArm();
+            return enabled;
+        }
+
+        // Resolve-or-create / resolve-only, by the handle the call carried. Neither touches
+        // MGPipeSlots(): the handle ARRIVED already minted by the side that owns minting.
+        GLESBufferResource* GetOrCreateBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+        GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+
+        // MONOLITH GLUE, and named as such: the handle of a resource this backend is looking
+        // at through a frontend object, resolved through the client allocator's lifetime-id
+        // index. Every caller is a site P3a deliberately does NOT migrate - the SSBO / UBO /
+        // indirect / pack-PBO binding walks are dirty bits 15-17 and P4b's, and the index
+        // host mirror is P8's - so they still arrive holding the object. Under a real split
+        // neither the object nor its lifetime id exists on this side and every one of them
+        // has to receive the handle in a payload instead.
+        MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject);
+#endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on
         // every MakeCurrent (the ES context can be destroyed and recreated, e.g.
