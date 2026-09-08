@@ -17,6 +17,10 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include "SlotTables.h"
+#if MOBILEGL_PIPE_PUSH
+// P3a: the vertex-input payload views the handle arm of the VAO twin consumes.
+#include <MG_Pipe/MGPipeTypes.h>
+#endif
 
 namespace MobileGL::MG_Backend::DirectGLES {
     String EmulateBaseInstanceInVertexShader(String source, GLenum shaderType);
@@ -732,6 +736,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The legacy arm keeps calling BufferObject::MarkGpuWritten directly, and the pull
         // build never sees this function at all (G1).
         void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
+
+        // The applier's stored extent for this resource, 0 when it has no record. The one
+        // thing outside BufferImpl that needs it is the fp64 narrowing, whose source extent
+        // used to be BufferObject::GetSize().
+        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res);
 #endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on
@@ -938,6 +947,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MG_State::GLState::BufferObject* frontend = nullptr;
                     BufferImpl::GLESBufferResource* resource = nullptr;
                     Uint8 attribIndex = 0;
+#if MOBILEGL_PIPE_PUSH
+                    // P3a re-key: the entry's identity on the handle arm. A {slot, gen} cannot
+                    // be reproduced by a recycled heap address, so the clean probe compares
+                    // this instead of the raw frontend pointer and never has to ask the
+                    // allocator for it again mid-draw.
+                    MG_Pipe::MGPipeHandle handle = MG_Pipe::kMGPipeNullHandle;
+#endif
                 };
                 Bool valid = false;
                 Uint32 configVersion = 0;
@@ -945,6 +961,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Array<Entry, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> entries;
                 MG_State::GLState::BufferObject* iboFrontend = nullptr;
                 BufferImpl::GLESBufferResource* iboResource = nullptr;
+#if MOBILEGL_PIPE_PUSH
+                // P3a re-key of the memo's validity key: on the handle arm the frontend VAO's
+                // wrapping configuration version is replaced by the bound vertex-elements CSO
+                // (identity AND its server-owned content serial) plus the vertex-buffer set's
+                // own serial - three monotone Uint64s and a {slot, gen}, no wrap and no
+                // identity patch. The IBO entry keeps its separate key for the same reason it
+                // always had one: the index slot is not part of the configuration (D5).
+                MG_Pipe::MGPipeHandle elementsHandle = MG_Pipe::kMGPipeNullHandle;
+                Uint64 elementsSerial = 0;
+                Uint64 buffersSerial = 0;
+                MG_Pipe::MGPipeHandle iboHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
                 // Buffer-mutation epoch (BufferImpl::CurrentBufferMutationEpoch) at which
                 // the LAST probe pass found every entry / the IBO clean; 0 = not stamped
                 // (epochs start at 1). While a stamp matches the pre-pass epoch read, the
@@ -983,6 +1011,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool SyncFloat64AttributeAsFloat32(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib,
                                                Uint32 fetchBaseInstance);
 
+#if MOBILEGL_PIPE_PUSH
+            // The handle arm of the whole vertex-elements half. Everything it needs arrives in
+            // the applier's records - the bound CSO's two views, the vertex-buffer set, the
+            // index buffer and the resolved fetch base instance - so it takes no argument at
+            // all and touches no frontend type. The legacy arm above it is unchanged and both
+            // compile in every push build (ARCHITECTURE.md 9.6).
+            void SyncToBackendFromApplier();
+            // Same narrowing, same memo, same Adreno disable; the source bytes are the shadow
+            // base the resource call carried and the memo key is the buffer's {slot, gen}.
+            Bool SyncFloat64AttributeAsFloat32ByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
+                                                       const MG_Pipe::MGPVertexBuffer& binding,
+                                                       Uint32 fetchBaseInstance);
+#endif
+
             // What the converted float32 stream in m_convertedAttributeBufferIds[i] was built
             // from. A hit skips the CPU conversion and the re-upload; the buffer's change serial
             // is part of the key, so a glBufferSubData into the source invalidates it.
@@ -1011,6 +1053,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // version early-out in SyncToBackend must not be trusted while it is set.
             Bool m_hasConvertedFloat64Attribute = false;
             Bool m_isInitialized = false;
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+            // ---- the pre-handle memo set (ARCHITECTURE.md 9.6) -------------------------
+            // Retired by P3a on the handle arm and kept compiled here so the A/B is real: a
+            // cleared subsystem bit runs THESE, not a re-keyed twin wearing their names. A
+            // pull build forces MOBILEGL_PIPE_LEGACY_MEMOS ON, so sizeof(this) does not move
+            // and no symbol resizes (G1).
             Uint16 m_syncedIndexBufferVersion = 0;
             // Identity of the buffer the version above was stamped against. Raw and never
             // dereferenced: the slot version is a wrapping Uint16 (see the ResolvedDrawBuffers
@@ -1026,6 +1074,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_syncedConfigVersion = 0;
             Array<MG_State::GLState::VertexAttributeVersion, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
                 m_syncedAttributeVersions;
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
+#if MOBILEGL_PIPE_PUSH
+            // ---- what replaces them on the handle arm (D-G4) ---------------------------
+            // The bound vertex-elements CSO this twin last emitted, and the applier's
+            // server-owned content serial for it. Together they replace
+            // m_hasSyncedConfigVersion + m_syncedConfigVersion AND the whole per-attribute
+            // version array: the applier's stored Attributes[] IS what was last pushed, so a
+            // per-attribute compare has nothing left to prove and the walk re-emits.
+            MG_Pipe::MGPipeHandle m_syncedElementsHandle = MG_Pipe::kMGPipeNullHandle;
+            Uint64 m_syncedElementsSerial = 0;
+            Bool m_hasSyncedElements = false;
+            // The vertex-buffer set's own serial. Not in D-G4's table, and it has to be here:
+            // set_vertex_buffers is an independent call carrying the buffer identities, the
+            // offsets and the divisors this twin BAKES into the driver VAO, so a set that
+            // moved while the format did not must still re-emit them.
+            Uint64 m_syncedVertexBuffersSerial = 0;
+            // Replaces m_syncedIndexBufferVersion (a wrapping Uint16) AND
+            // m_syncedIndexBufferObject (the raw identity patch that closed its wrap hole):
+            // one monotone Uint64, no wrap, nothing to patch. This is the Track H re-key
+            // ARCHITECTURE.md 9.5 counts.
+            Uint64 m_syncedIndexSerial = 0;
+#endif
             // Byte shift currently baked into the instanced arrays' offsets by the baseInstance
             // emulation (see SetPendingFetchBaseInstance). It is draw state, not VAO state, so it
             // is deliberately NOT covered by the config version: the frontend never bumps for it.
@@ -1055,6 +1125,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // instanced array at element "floor(instance / divisor) + baseInstance", and ES has no
         // way to say the "+ baseInstance" part - so it is folded into the attribute's own byte
         // offset (baseInstance * stride) for every divisor'd array, which is exactly equivalent.
+        //
+        // P3a RETIRES THE AMBIENT GLOBAL (D-H2): an ambient process global cannot cross a
+        // pushed boundary, so on the handle arm the draw's RAW base instance rides in
+        // MGPVertexBuffers::BaseInstance and the SERVER decides whether to shift - the answer
+        // lands in MGPipeApplierState::VertexFetchBaseInstance and the VAO sync reads it there.
+        // The three declarations below and the three scopes in DirectGLES.cpp are the legacy
+        // arm's, kept compiled because a cleared subsystem bit has to run a real pre-handle
+        // path and because removing them would delete two symbols from the PULL build (G1).
+#if MOBILEGL_PIPE_LEGACY_MEMOS
         // Must be set BEFORE PrepareForDraw so the VAO sync sees it, and cleared after the draw
         // so the next one refetches from element 0; ScopedFetchBaseInstance does both.
         void SetPendingFetchBaseInstance(Uint32 baseInstance);
@@ -1067,6 +1146,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ScopedFetchBaseInstance(const ScopedFetchBaseInstance&) = delete;
             ScopedFetchBaseInstance& operator=(const ScopedFetchBaseInstance&) = delete;
         };
+#endif
+
+#if MOBILEGL_PIPE_PUSH
+        // The server-owned half of the same decision, and the reason the client never
+        // pre-shifts an offset: emulation ownership is the server's (ARCHITECTURE.md 5.7).
+        // True when the driver applies baseInstance to the vertex fetch itself, in which case
+        // the attribute-offset emulation must stay out of the way. Applied to whatever the
+        // applier stored, so the answer is the same whichever side resolved it first.
+        Bool BackendUsesNativeBaseInstance();
+#endif
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {

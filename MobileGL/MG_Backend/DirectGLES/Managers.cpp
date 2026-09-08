@@ -2242,6 +2242,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                            bufferObject->GetLifetimeId());
         }
 
+        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) { return ResourceWidthOf(res); }
+
         void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
             if (!bufferObject) return;
             if (!ResourceSubsystemEnabled()) {
@@ -3309,8 +3311,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    g_GLESFuncs.glVertexBindingDivisor != nullptr;
         }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
         // Draw state, not VAO state: set by the baseInstance draw entry points around
-        // PrepareForDraw and back to zero as soon as the draw is issued.
+        // PrepareForDraw and back to zero as soon as the draw is issued. The legacy arm's
+        // carrier; the handle arm's is MGPipeApplierState::VertexFetchBaseInstance (D-H2).
         Uint32 g_pendingFetchBaseInstance = 0;
 
         void SetPendingFetchBaseInstance(Uint32 baseInstance) {
@@ -3320,6 +3324,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 GetPendingFetchBaseInstance() {
             return g_pendingFetchBaseInstance;
         }
+#endif
+
+#if MOBILEGL_PIPE_PUSH
+        Bool BackendUsesNativeBaseInstance() { return g_GLESCapabilities.SupportsBaseInstance; }
+#endif
 
         // The "+ baseInstance" of GL's instanced-array element index, expressed as a byte shift
         // of the array's own offset. Only divisor'd arrays step per instance, so only they move.
@@ -3372,11 +3381,123 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // ---- the handle arm's small helpers -------------------------------------------
+        //
+        // Each one is its object-shaped counterpart above with the frontend reads replaced by
+        // the two wire views, and nothing else. Divisor is deliberately NOT on the attribute
+        // view: it is resolved per binding point and rides in MGPVertexBuffer::Divisor, which
+        // is where glVertexAttribDivisor reads it (D-G2).
+
+        // The entry of the applied set that feeds this attribute. The client emits one entry
+        // per enabled attribute with BindingIndex == the attribute index, so the positional
+        // slot is the answer in every real record; the scan behind it is what keeps a record
+        // that numbers its entries differently correct rather than silently misfed.
+        const MG_Pipe::MGPVertexBuffer* VertexBufferForBindingIndex(const MG_Pipe::MGPipeApplierState& st,
+                                                                    Uint32 bindingIndex) {
+            if (st.VertexBufferCount == 0) return nullptr;
+            const Uint32 begin = st.VertexBufferStart;
+            const Uint32 end = begin + st.VertexBufferCount;
+            if (bindingIndex >= begin && bindingIndex < end &&
+                bindingIndex < MG_Pipe::kMGPipeMaxVertexAttribs &&
+                st.VertexBuffers[bindingIndex].BindingIndex == bindingIndex) {
+                return &st.VertexBuffers[bindingIndex];
+            }
+            for (Uint32 i = begin; i < end && i < MG_Pipe::kMGPipeMaxVertexAttribs; ++i) {
+                if (st.VertexBuffers[i].BindingIndex == bindingIndex) return &st.VertexBuffers[i];
+            }
+            return nullptr;
+        }
+
+        // BaseInstanceByteShift, on the wire views. baseInstance is added to the ELEMENT index,
+        // so the divisor does not appear here; a resolved stride of zero never advances and the
+        // arithmetic already yields zero for it.
+        inline SizeT BaseInstanceByteShiftWire(Int32 stride, Uint32 divisor, Uint32 baseInstance) {
+            if (baseInstance == 0 || divisor == 0) return 0;
+            return static_cast<SizeT>(baseInstance) * static_cast<SizeT>(stride);
+        }
+
+        // BindAttributeBuffer, resolving the driver id from the slot table instead of from the
+        // attribute's SharedPtr. It does NOT ensure storage: on this arm the draw's buffers
+        // were ensured by SyncNeccessaryBuffers earlier in the same PrepareForDraw, which is
+        // the one place that still holds the frontend objects (a pull site P4b/P8 own).
+        inline Bool BindAttributeBufferByHandle(MG_Pipe::MGPipeHandle res) {
+            if (MG_Pipe::MGPipeHandleIsNull(res)) {
+                MGLOG_W_ONCE("Attribute has no bound buffer, skipping.");
+                return false;
+            }
+            auto* backendResource = BufferImpl::FindBufferResourceForHandle(res);
+            if (!backendResource || backendResource->id == 0) {
+                MGLOG_E_ONCE("No backend buffer found for attribute's buffer, cannot bind attribute.");
+                return false;
+            }
+            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, backendResource->id);
+            return true;
+        }
+
+        // SyncZeroStrideAttribute on the wire views: the one spelling that can carry a resolved
+        // stride of zero, which glVertexAttribPointer's zero means the opposite of.
+        inline Bool SyncZeroStrideAttributeByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
+                                                    const MG_Pipe::MGPVertexBuffer& binding) {
+            if (MG_Pipe::MGPipeHandleIsNull(binding.Res)) {
+                MGLOG_W_ONCE("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
+                return false;
+            }
+            auto* backendResource = BufferImpl::FindBufferResourceForHandle(binding.Res);
+            if (!backendResource || backendResource->id == 0) {
+                MGLOG_E_ONCE("No backend buffer for zero-stride attribute %u, cannot bind it.", attribIndex);
+                return false;
+            }
+            if (!attrib.IsInteger) {
+                const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : static_cast<GLint>(attrib.Size);
+                g_GLESFuncs.glVertexAttribFormat(attribIndex, glSize,
+                                                 MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
+                                                 attrib.Normalized ? GL_TRUE : GL_FALSE, 0);
+            } else {
+                g_GLESFuncs.glVertexAttribIFormat(attribIndex, static_cast<GLint>(attrib.Size),
+                                                  MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
+                                                  0);
+            }
+            g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
+            // The resolved offset goes on the binding point, not into a relative offset (the
+            // relative offset is capped by GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET, a buffer
+            // offset is not). BindBufferId is bypassed deliberately.
+            g_GLESFuncs.glBindVertexBuffer(attribIndex, backendResource->id,
+                                           static_cast<GLintptr>(attrib.Offset), 0);
+            return true;
+        }
+
+        // The record the applier holds for the bound vertex-elements CSO, or null.
+        const MG_Pipe::MGPipeVertexElementsRecord* BoundVertexElementsRecord(
+            const MG_Pipe::MGPipeApplierState& st) {
+            const MG_Pipe::MGPipeHandle cso = st.BoundVertexElements;
+            if (MG_Pipe::MGPipeHandleIsNull(cso)) return nullptr;
+            if (cso.Slot >= st.VertexElementsCsos.size()) return nullptr;
+            const auto& record = st.VertexElementsCsos[cso.Slot];
+            if (!record.Live || record.Gen != cso.Gen) return nullptr;
+            return &record;
+        }
+#endif // MOBILEGL_PIPE_PUSH
+
         void BackendVertexArrayObject::SyncToBackend(
             const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
+#if MOBILEGL_PIPE_PUSH
+            if (BufferImpl::VertexInputSubsystemEnabled()) {
+                // Everything this arm needs is in the applier's records; the frontend VAO is
+                // not read at all, which is the whole point of the conversion.
+                SyncToBackendFromApplier();
+                return;
+            }
+#endif
+#if !MOBILEGL_PIPE_LEGACY_MEMOS
+            (void)stateVAOObject;
+            MGLOG_E_ONCE("MGPipe: the vertex-input subsystem bit is clear and MOBILEGL_PIPE_LEGACY_MEMOS=0 "
+                         "removed the pre-handle VAO sync, so this configuration has no arm at all");
+            return;
+#else
             if (!stateVAOObject) {
                 MGLOG_E_ONCE("State VAO object is null, cannot sync to backend.");
                 return;
@@ -3602,7 +3723,204 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedFetchBaseInstance = fetchBaseInstance;
             }
             m_syncedBufferIdGeneration = currentBufferIdGeneration;
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
         }
+
+#if MOBILEGL_PIPE_PUSH
+        // The same function, driven by the applier's records (D-G4). Every branch of the walk
+        // survives - the enable/disable block, the fp64 narrowing with its Adreno disable, the
+        // zero-stride binding-API path, the attribute-buffer bind, the BGRA refusal probe, the
+        // pointer/IPointer at the shifted fetch offset and the divisor - and the gate is
+        // re-keyed onto three server-owned MGGen counters plus the CSO's {slot, gen}:
+        //
+        //   m_syncedElementsHandle + m_syncedElementsSerial   <- config version + the whole
+        //                                                        per-attribute version array
+        //   m_syncedVertexBuffersSerial                       <- (new) the buffer set's own
+        //   m_syncedIndexSerial                               <- wrapping Uint16 + identity patch
+        //   m_syncedBufferIdGeneration                        <- UNCHANGED, server-local, and
+        //                                                        still the only thing that
+        //                                                        catches a driver-id re-mint no
+        //                                                        counter on either side moves
+        //   m_hasConvertedFloat64Attribute                    <- UNCHANGED: a narrowed stream is
+        //                                                        derived from buffer CONTENT,
+        //                                                        which no serial covers
+        //   m_syncedFetchBaseInstance                         <- no longer in the gate as a
+        //                                                        DIRTY input of its own (a base
+        //                                                        instance change is a
+        //                                                        ContentHash input and so moves
+        //                                                        VertexBuffersSerial), but kept
+        //                                                        as the record of what was last
+        //                                                        EMITTED, which is what the next
+        //                                                        sync has to correct
+        void BackendVertexArrayObject::SyncToBackendFromApplier() {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+            const auto* rec = BoundVertexElementsRecord(st);
+            if (rec == nullptr) {
+                MGLOG_E_ONCE("MGPipe: no vertex-elements record is bound, so the driver VAO cannot be "
+                             "configured - nothing emitted create_vertex_elements/bind_vertex_elements");
+                return;
+            }
+
+            const Uint64 currentBufferIdGeneration = BufferImpl::g_bufferBackendIdGeneration;
+            const Bool bufferIdsRemitted = m_syncedBufferIdGeneration != currentBufferIdGeneration;
+            const Bool attributesDirty = bufferIdsRemitted || !m_hasSyncedElements ||
+                                         !(m_syncedElementsHandle == st.BoundVertexElements) ||
+                                         m_syncedElementsSerial != rec->ContentSerial ||
+                                         m_syncedVertexBuffersSerial != st.VertexBuffersSerial;
+            const Bool indexBufferDirty = bufferIdsRemitted || m_syncedIndexSerial != st.IndexBufferSerial;
+            // Emulation is server-owned: the client sends the draw's RAW base instance and never
+            // learns the answer. Applied here as well as in the applier so the decision is the
+            // same whichever side resolved it first - it is idempotent.
+            const Uint32 fetchBaseInstance =
+                BackendUsesNativeBaseInstance() ? 0u : st.VertexFetchBaseInstance;
+            const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
+            const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedFloat64Attribute;
+            if (!emitAttributes && !indexBufferDirty) {
+                return;
+            }
+            m_hasConvertedFloat64Attribute = false;
+
+            Bind();
+
+            const Uint32 attributeCount =
+                std::min<Uint32>(rec->AttributeCount, MG_Pipe::kMGPipeMaxVertexAttribs);
+            for (Uint attribIndex = 0; attribIndex < attributeCount && emitAttributes; ++attribIndex) {
+                const MGPVertexAttribWire& attrib = rec->Attributes[attribIndex];
+                const MG_Pipe::MGPVertexBuffer* binding =
+                    VertexBufferForBindingIndex(st, attrib.BindingIndex);
+                const Uint32 divisor = binding != nullptr ? binding->Divisor : 0u;
+
+                // The enable/disable block. On this arm there is no per-attribute version to
+                // compare: the applier's Attributes[] IS what was last pushed, so a moved
+                // ContentSerial means re-emit and an unchanged one means the early-out above
+                // already returned.
+                if (attrib.Enabled) {
+                    g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
+                } else {
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                }
+
+                // The fp64 narrowing, verbatim in behaviour including the Adreno workaround:
+                // when no float32 stream can be built the array is DISABLED rather than left
+                // enabled with no pointer, which is what the driver turns into a SIGSEGV inside
+                // the next draw (KHR-GL43.vertex_attrib_binding.basic-input-case4). IsLong is
+                // carried separately from Type == Float64 on the wire precisely so this test
+                // can still tell the two apart.
+                if (attrib.IsLong || attrib.Type == static_cast<Uint32>(DataType::Float64)) {
+                    if (attrib.Enabled && attrib.Type == static_cast<Uint32>(DataType::Float64) &&
+                        binding != nullptr &&
+                        SyncFloat64AttributeAsFloat32ByHandle(attribIndex, attrib, *binding, fetchBaseInstance)) {
+                        m_hasConvertedFloat64Attribute = true;
+                        // Explicit, not redundant: an earlier walk that could not build the
+                        // stream disabled this array.
+                        g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
+                        g_GLESFuncs.glVertexAttribDivisor(attribIndex, divisor);
+                        continue;
+                    }
+                    if (attrib.Enabled) {
+                        MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array whose source "
+                                     "stream could not be narrowed to float32 - disabling the array",
+                                     attribIndex);
+                    }
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    continue;
+                }
+
+                if (!attrib.Enabled || binding == nullptr) continue;
+
+                // A resolved stride of zero is the binding model's "never advance" and
+                // glVertexAttribPointer cannot say it - its zero means "tightly packed", i.e.
+                // the opposite. ES 3.1's binding-point API can.
+                if (attrib.Stride == 0 && HasVertexBindingApi()) {
+                    if (!SyncZeroStrideAttributeByHandle(attribIndex, attrib, *binding)) {
+                        continue;
+                    }
+                    // No shift here on purpose: a zero stride never advances.
+                    g_GLESFuncs.glVertexBindingDivisor(attribIndex, divisor);
+                    continue;
+                }
+
+                if (!BindAttributeBufferByHandle(binding->Res)) {
+                    continue;
+                }
+
+                // GL_BGRA as a vertex SIZE is desktop-only and ES rejects it, which leaves the
+                // array ENABLED with no pointer - and the Adreno driver then dereferences null
+                // inside the next draw (KHR-GL43.vertex_attrib_binding.basic-input-case5). So
+                // the refusal is observed and the array disabled. Deliberately ONLY this
+                // format: the per-draw sync must not grow a glGetError round trip for the
+                // formats real applications use.
+                const Bool formatMayBeRefused = attrib.IsBgra != 0;
+                if (formatMayBeRefused) {
+                    while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    } // start from a clean slate so the check below is about THIS call
+                }
+
+                const SizeT fetchOffset = static_cast<SizeT>(attrib.Offset) +
+                                          BaseInstanceByteShiftWire(attrib.Stride, divisor, fetchBaseInstance);
+                const GLenum glType = MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type));
+
+                if (!attrib.IsInteger) {
+                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : static_cast<GLint>(attrib.Size);
+                    g_GLESFuncs.glVertexAttribPointer(attribIndex, glSize, glType,
+                                                      attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride,
+                                                      (const void*)fetchOffset);
+                } else {
+                    g_GLESFuncs.glVertexAttribIPointer(attribIndex, static_cast<GLint>(attrib.Size), glType,
+                                                       attrib.Stride, (const void*)fetchOffset);
+                }
+
+                if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
+                    MGLOG_W_ONCE("DirectGLES: the driver refused the vertex format of attribute %u "
+                                 "(size=%d bgra=%d type=%s) - disabling the array so the draw cannot "
+                                 "fetch through a pointer the driver never accepted",
+                                 attribIndex, static_cast<int>(attrib.Size), attrib.IsBgra ? 1 : 0,
+                                 MG_Util::ConvertGLEnumToString(glType).c_str());
+                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    continue;
+                }
+
+                g_GLESFuncs.glVertexAttribDivisor(attribIndex, divisor);
+            }
+
+            if (indexBufferDirty) {
+                Bool indexBufferSynced = false;
+                if (!MG_Pipe::MGPipeHandleIsNull(st.IndexBuffer.Res)) {
+                    auto* backendResource = BufferImpl::FindBufferResourceForHandle(st.IndexBuffer.Res);
+                    if (backendResource && backendResource->id != 0) {
+                        BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, backendResource->id);
+                        indexBufferSynced = true;
+                    } else {
+                        MGLOG_W_ONCE("No backend buffer found for index buffer binding, cannot bind index buffer.");
+                    }
+                } else {
+                    g_GLESFuncs.glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+                    indexBufferSynced = true;
+                }
+                if (indexBufferSynced) {
+                    // The two element-array restore scopes (the restart substitution's and
+                    // MultiDrawImpl's) put the DRIVER id back without touching this serial,
+                    // which is correct: the serial records what the APPLIER last said, and
+                    // those scopes restored exactly what the applier said.
+                    m_syncedIndexSerial = st.IndexBufferSerial;
+                }
+            }
+
+            if (attributesDirty) {
+                m_syncedElementsHandle = st.BoundVertexElements;
+                m_syncedElementsSerial = rec->ContentSerial;
+                m_syncedVertexBuffersSerial = st.VertexBuffersSerial;
+                m_hasSyncedElements = true;
+            }
+            if (emitAttributes) {
+                m_syncedFetchBaseInstance = fetchBaseInstance;
+            }
+            m_syncedBufferIdGeneration = currentBufferIdGeneration;
+        }
+#endif // MOBILEGL_PIPE_PUSH
 
         void BackendVertexArrayObject::SyncClientSideAttributesForDrawArrays(
             const SharedPtr<MG_State::GLState::VertexArrayObject>& stateVAOObject, GLint first, GLsizei count) {
@@ -3829,6 +4147,104 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               (const void*)(firstElement * convertedElementSize));
             return true;
         }
+
+#if MOBILEGL_PIPE_PUSH
+        Bool BackendVertexArrayObject::SyncFloat64AttributeAsFloat32ByHandle(
+            Uint attribIndex, const MGPVertexAttribWire& attrib, const MG_Pipe::MGPVertexBuffer& binding,
+            Uint32 fetchBaseInstance) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (attribIndex >= m_convertedAttributeBufferIds.size() || attrib.Size < 1 || attrib.Size > 4) {
+                return false;
+            }
+            if (MG_Pipe::MGPipeHandleIsNull(binding.Res)) {
+                // A client-memory 64-bit array is narrowed on the draw path instead, which is
+                // the only place its fetch range is known.
+                return false;
+            }
+            auto* resource = BufferImpl::FindBufferResourceForHandle(binding.Res);
+            if (resource == nullptr) return false;
+
+            // WHAT IS NOT HERE, recorded rather than hidden: the legacy arm opens with
+            // bufferObject->SyncGpuWrites(), one of the eleven Espryt SyncPersistentMappedRange
+            // / SyncGpuWrites sites D-N keeps where they are for P3a. It cannot be made from a
+            // handle - the server has no inverse map to a frontend object, by design - so on
+            // this arm a 64-bit array whose SOURCE buffer was written by a shader and not yet
+            // pulled back narrows stale bytes. P8 is what closes it, by moving the pull to the
+            // client where the object lives; until then this is the one behavioural difference
+            // between the two arms and it is confined to fp64 vertex arrays fed by
+            // shader-written buffers.
+            const Uint8* const sourceBase = resource->hostBytes;
+            const SizeT sourceSize = BufferImpl::ResourceWidthForHandle(binding.Res);
+            if (sourceBase == nullptr || attrib.Offset >= sourceSize) {
+                return false;
+            }
+
+            const SizeT componentCount = static_cast<SizeT>(attrib.Size);
+            const SizeT sourceElementSize = componentCount * sizeof(Double);
+            const SizeT available = sourceSize - static_cast<SizeT>(attrib.Offset);
+            if (available < sourceElementSize) {
+                return false;
+            }
+
+            const Bool neverAdvances = attrib.Stride <= 0;
+            const SizeT sourceStride = neverAdvances ? sourceElementSize : static_cast<SizeT>(attrib.Stride);
+            const SizeT elementCount = neverAdvances ? 1 : ((available - sourceElementSize) / sourceStride) + 1;
+
+            const SizeT firstElement = (fetchBaseInstance != 0 && binding.Divisor != 0 && !neverAdvances)
+                                           ? static_cast<SizeT>(fetchBaseInstance)
+                                           : 0;
+            if (firstElement >= elementCount) {
+                return false;
+            }
+
+            Uint& convertedBufferId = m_convertedAttributeBufferIds[attribIndex];
+            if (convertedBufferId == 0) {
+                g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
+                if (convertedBufferId == 0) {
+                    MGLOG_E_ONCE("Failed to create the float32 scratch buffer for the 64-bit vertex array at "
+                                 "attribute %u.",
+                                 attribIndex);
+                    return false;
+                }
+            }
+            // NO MEMO YET on this arm: its key is the source buffer's identity plus its change
+            // serial, and re-keying ConvertedFloat64Stream onto the buffer's {slot, gen} is the
+            // next commit's whole subject. Until then every walk reconverts, which is correct
+            // and slower on a path that only 64-bit vertex arrays reach.
+            Vector<Float> converted;
+            NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
+                                        converted);
+            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
+            g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
+                                     converted.data(), GL_STREAM_DRAW);
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                             static_cast<Uint64>(converted.size() * sizeof(Float)));
+            }
+
+            const SizeT convertedElementSize = componentCount * sizeof(Float);
+            if (neverAdvances) {
+                // Only the binding-point API can say "stride 0".
+                if (!HasVertexBindingApi()) {
+                    return false;
+                }
+                g_GLESFuncs.glVertexAttribFormat(attribIndex, static_cast<GLint>(attrib.Size), GL_FLOAT, GL_FALSE, 0);
+                g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
+                g_GLESFuncs.glBindVertexBuffer(attribIndex, convertedBufferId, 0, 0);
+                return true;
+            }
+
+            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
+            // `normalized` is deliberately GL_FALSE rather than attrib.Normalized: GL ignores it
+            // for floating-point array types, and honouring it would scale the fetched values.
+            g_GLESFuncs.glVertexAttribPointer(attribIndex, static_cast<GLint>(attrib.Size), GL_FLOAT, GL_FALSE,
+                                              static_cast<GLsizei>(convertedElementSize),
+                                              (const void*)(firstElement * convertedElementSize));
+            return true;
+        }
+#endif // MOBILEGL_PIPE_PUSH
 
         TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;

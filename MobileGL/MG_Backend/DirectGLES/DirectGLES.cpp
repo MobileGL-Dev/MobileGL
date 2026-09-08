@@ -17,6 +17,10 @@
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Pipe/PipeInputsSwitch.h>
+#if MOBILEGL_PIPE_PUSH
+// P3a: the applier's vertex-input records the re-keyed draw-buffer memo is validated against.
+#include <MG_Pipe/PipeApply.h>
+#endif
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
@@ -574,6 +578,93 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BindBufferId(glTarget, backendResource->id);
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // The handle arm of the resolved-draw-buffers memo (D-G4). Two substitutions and
+        // nothing else:
+        //
+        //   validity  the frontend VAO's wrapping configuration version is replaced by the
+        //             bound vertex-elements CSO ({slot, gen} AND its server-owned content
+        //             serial) plus the vertex-buffer set's own serial - so an emission the
+        //             suppressor let through is what re-opens the memo, not a counter the
+        //             backend reads out of the frontend;
+        //   identity  an entry names its resource by handle and the clean probe compares that,
+        //             instead of a raw frontend address that a successor object can reproduce.
+        //
+        // The WALK itself still reads the frontend VAO's attributes, and deliberately: the
+        // buffers a draw needs ensured is a pull site P3a does not migrate (dirty bits 15-17
+        // are P4b's and the resolution move is P8's), and EnsureBufferResource still owes
+        // BufferObject::SyncPersistentMappedRange one call (D-N).
+        void SyncVaoAttributeBuffersByHandle(const SharedPtr<MG_State::GLState::VertexArrayObject>& currentVAOObject,
+                                             VertexArrayImpl::BackendVertexArrayObject::ResolvedDrawBuffers* memo,
+                                             Uint64 bufferEpoch) {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
+            Uint64 elementsSerial = 0;
+            if (!MG_Pipe::MGPipeHandleIsNull(elements) && elements.Slot < st.VertexElementsCsos.size()) {
+                const auto& record = st.VertexElementsCsos[elements.Slot];
+                if (record.Live && record.Gen == elements.Gen) elementsSerial = record.ContentSerial;
+            }
+            const Uint64 buffersSerial = st.VertexBuffersSerial;
+
+            if (memo && memo->valid && memo->elementsHandle == elements &&
+                memo->elementsSerial == elementsSerial && memo->buffersSerial == buffersSerial) {
+                if (memo->vboCleanEpoch != bufferEpoch) {
+                    Bool allClean = true;
+                    for (Uint i = 0; i < memo->count; ++i) {
+                        auto& entry = memo->entries[i];
+                        if (IsBufferDrawCleanByHandle(entry.handle, entry.resource)) continue;
+                        allClean = false;
+                        entry.resource =
+                            EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
+                    }
+                    memo->vboCleanEpoch = allClean ? bufferEpoch : 0;
+                }
+                return;
+            }
+
+            // Full walk, once per distinct buffer, rebuilding the memo as it goes.
+            MG_State::GLState::BufferObject* syncedBuffers[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
+            Uint syncedBufferCount = 0;
+            const auto& allAttributes = currentVAOObject->GetAllAttributes();
+            for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
+                const auto& attrib = allAttributes[attribIndex];
+                if (!attrib.Enabled) continue;
+                const auto& bufferObject = attrib.Buffer;
+                if (!bufferObject) continue;
+
+                auto* const bufferKey = bufferObject.get();
+                Bool alreadySynced = false;
+                for (Uint i = 0; i < syncedBufferCount; ++i) {
+                    if (syncedBuffers[i] == bufferKey) {
+                        alreadySynced = true;
+                        break;
+                    }
+                }
+                if (alreadySynced) continue;
+
+                auto* resource = EnsureBufferResource(bufferObject);
+                if (memo) {
+                    auto& entry = memo->entries[syncedBufferCount];
+                    entry.frontend = bufferKey;
+                    entry.attribIndex = static_cast<Uint8>(attribIndex);
+                    entry.resource = resource;
+                    entry.handle = HandleOfBuffer(bufferKey);
+                }
+                syncedBuffers[syncedBufferCount++] = bufferKey;
+            }
+            if (memo) {
+                memo->count = syncedBufferCount;
+                memo->elementsHandle = elements;
+                memo->elementsSerial = elementsSerial;
+                memo->buffersSerial = buffersSerial;
+                memo->valid = true;
+                // Rebuilt via EnsureBufferResource, not probed clean: the next probe pass
+                // stamps the epoch.
+                memo->vboCleanEpoch = 0;
+            }
+        }
+#endif // MOBILEGL_PIPE_PUSH
+
         // `vaoConfigVersion` is the caller's early read of currentVAOObject->GetConfigVersion():
         // the VAO's config fields live on a cache line the draw path touches nowhere else, and
         // cycling section VAOs makes that a guaranteed miss - reading it at the top of
@@ -613,6 +704,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint64 bufferEpoch = CurrentBufferMutationEpoch();
             auto* memo = vaoTwin ? &vaoTwin->GetResolvedDrawBuffersMemo() : nullptr;
             const Uint32 configVersion = vaoConfigVersion;
+#if MOBILEGL_PIPE_PUSH
+            if (VertexInputSubsystemEnabled()) {
+                SyncVaoAttributeBuffersByHandle(currentVAOObject, memo, bufferEpoch);
+            } else
+#endif
             if (memo && memo->valid && memo->configVersion == configVersion) {
                 if (memo->vboCleanEpoch != bufferEpoch) {
                     Bool allClean = true;
@@ -683,6 +779,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // rebind another buffer with no epoch (and no config-version) move,
                     // so the identity compare always runs; only the clean PROBE is
                     // elided while the stamp holds.
+#if MOBILEGL_PIPE_PUSH
+                    if (ResourceSubsystemEnabled()) {
+                        // Same three cases, with the identity re-keyed off the raw frontend
+                        // address onto the resource's {slot, gen} (D-G4).
+                        const MG_Pipe::MGPipeHandle iboHandle = HandleOfBuffer(possibleIBO.get());
+                        if (memo && memo->iboHandle == iboHandle && memo->iboCleanEpoch == bufferEpoch) {
+                            // probed fully clean at this epoch; nothing can have dirtied it
+                        } else if (memo && memo->iboHandle == iboHandle &&
+                                   IsBufferDrawCleanByHandle(iboHandle, memo->iboResource)) {
+                            memo->iboCleanEpoch = bufferEpoch;
+                        } else {
+                            auto* resource = EnsureBufferResource(possibleIBO);
+                            if (memo) {
+                                memo->iboHandle = iboHandle;
+                                memo->iboFrontend = possibleIBO.get();
+                                memo->iboResource = resource;
+                                // Repaired, not probed clean: stamp on the next clean probe.
+                                memo->iboCleanEpoch = 0;
+                            }
+                        }
+                    } else
+#endif
                     if (memo && memo->iboFrontend == possibleIBO.get() && memo->iboCleanEpoch == bufferEpoch) {
                         // probed fully clean at this epoch; nothing can have dirtied it
                     } else if (memo && memo->iboFrontend == possibleIBO.get() &&
@@ -5140,14 +5258,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // The emulated shift has to be in place before PrepareForDraw, because that is what syncs the
     // VAO; a zero here is what un-shifts the arrays for the next ordinary draw.
+    //
+    // P3a (D-H2): this is the LEGACY arm's carrier. On the handle arm the draw's raw base
+    // instance rides in MGPVertexBuffers::BaseInstance - a ContentHash input, so a base-instance
+    // change that moves no buffer is still emitted rather than suppressed - and the server
+    // decides whether to shift, because emulation ownership is the server's. The scopes below
+    // are therefore compiled only where the pre-handle arm is (a pull build always).
     inline Uint32 EmulatedFetchBaseInstance(GLuint baseinstance) {
         return UseNativeBaseInstance() ? 0u : static_cast<Uint32>(baseinstance);
     }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+#define MGL_SCOPED_FETCH_BASE_INSTANCE(name, value)                                                                    \
+    const VertexArrayImpl::ScopedFetchBaseInstance name(value)
+#else
+#define MGL_SCOPED_FETCH_BASE_INSTANCE(name, value) ((void)(value))
+#endif
+
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
-        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
+        MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
@@ -5184,7 +5315,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
-        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
+        MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
@@ -5236,7 +5367,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
         DrawSyncFlags syncBit = DrawSyncBit::Instancing;
-        const VertexArrayImpl::ScopedFetchBaseInstance fetchScope(EmulatedFetchBaseInstance(baseinstance));
+        MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
         SetCurrentBaseInstance(baseinstance);
         ForEachViewportRoutingPass([&] {
