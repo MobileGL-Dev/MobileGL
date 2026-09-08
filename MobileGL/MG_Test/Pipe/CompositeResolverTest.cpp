@@ -360,7 +360,8 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
     X(CompositeResolver, ASignatureThatHasNotMovedReusesOneComposite)                               \
     X(CompositeResolver, TwoPipelinesWithTheSameSignatureKeepTheirOwnComposite)                     \
     X(CompositeResolver, EvictionThenDestructionFreesTheSlotExactlyOnce)                            \
-    X(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce)
+    X(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce)                            \
+    X(CompositeResolver, ASignatureMoveAfterAMakeCurrentStillReleasesThroughTheResolver)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -399,6 +400,13 @@ void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
     const char* kFs = R"(#version 430 core
 out vec4 o_color;
 void main() { o_color = vec4(1.0); }
+)";
+    // A SECOND fragment stage, so a pipeline's draw-program signature can be made to move for
+    // real: ComputeDrawProgramSignature is the per-stage {lifetimeId, GetLinkVersion()} array,
+    // and a different ProgramObject is a different lifetime id.
+    const char* kFs2 = R"(#version 430 core
+out vec4 o_color;
+void main() { o_color = vec4(0.5); }
 )";
 
     // Built by hand rather than through glCreateShaderProgramv, for ProgramPipelineCompositeTest's
@@ -554,6 +562,63 @@ void main() { o_color = vec4(1.0); }
         EXPECT_EQ(recycled.Slot, cso.Slot);
         EXPECT_NE(recycled.Gen, cso.Gen);
         MGPipeSlots().Free(MGPipeKind::ShaderCso, recycled);
+    }
+
+    // THE RELEASE PATH THE TWO CASES ABOVE DO NOT TOUCH. Both of them call the death helper
+    // directly, so the resolver is not in the picture at all and its own release - the
+    // pipeline-cache path, the one the header says exists precisely because "usually" is not a
+    // contract - had no case of its own. This drives it, and it drives it AFTER A
+    // MAKE-CURRENT, which is where it used to be permanently disarmed:
+    //
+    //   Reset() cleared the entry's one flag; the next Observe took the reuse branch and
+    //   returned before anything could restore it; from then on ReleaseEntry saw !Live and
+    //   returned immediately - no delete_shader_state, no Free, no counter movement - and the
+    //   old composite's handle was simply overwritten out of the resolver. Nothing leaked
+    //   today only because the frontend's one-slot pipeline cache drops the last SharedPtr on
+    //   the overwrite, which is exactly the "a client that only reacted to destructors" case
+    //   the design refuses to rely on.
+    //
+    // The release obligation now lives in its own flag and a make-current does not touch it.
+    TEST(CompositeResolver, ASignatureMoveAfterAMakeCurrentStillReleasesThroughTheResolver) {
+        ResolverScope scope;
+        const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+        const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kFs);
+        const GLuint pipeline = MakeBoundPipeline(vs, fs);
+
+        ASSERT_GT(MGPipeProgramEmitterInstance().EmitShaderState(Ctx()), 0u);
+        const MGPipeHandle first = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(first));
+        ASSERT_TRUE(MGPipeIsCompositeShaderSlot(first.Slot));
+        ASSERT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, first));
+        ASSERT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 0u);
+
+        // THE MAKE-CURRENT. This is exactly what PipeFill's FreshlyPrimed arm does, and it
+        // reaches MGPipeCompositeResolver::Reset() through the program emitter's own Reset().
+        MGPipeProgramEmitterInstance().Reset();
+        // ... followed by a draw whose stage set has NOT moved, which is the reuse branch.
+        MGPipeProgramEmitterInstance().EmitShaderState(Ctx());
+        EXPECT_EQ(MGPipeProgramEmitterInstance().DrawCso(), first)
+            << "the same stage set is the same composite and the same handle";
+        EXPECT_GE(MGPipeCompositeResolverInstance().GetCounters().Reuses, 1u);
+        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 0u)
+            << "a reuse releases nothing";
+
+        // NOW THE STAGE SET REALLY MOVES: a different fragment stage program is a different
+        // lifetime id, so ComputeDrawProgramSignature moves and the frontend builds a second
+        // composite. The resolver has to speak the release for the first one.
+        const GLuint fs2 = MakeSeparableProgram(GL_FRAGMENT_SHADER, kFs2);
+        GL::UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs2);
+        GL::UseProgram(0);
+
+        MGPipeProgramEmitterInstance().EmitShaderState(Ctx());
+        const MGPipeHandle second = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(second));
+        EXPECT_NE(second, first) << "a moved signature is a second composite with its own handle";
+        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 1u)
+            << "the resolver's own release path, spoken after a make-current";
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, first))
+            << "and the first composite's slot really went back, exactly once";
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, second));
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

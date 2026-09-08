@@ -102,6 +102,13 @@ namespace MobileGL::MG_Pipe {
             Entry* entry = Find(key);
             if (entry != nullptr) {
                 if (entry->Signature == signature && entry->Handle == handle) {
+                    // THE SAME COMPOSITE. Not merely "the same signature": the handle is minted
+                    // off the composite ProgramObject's own lifetime id, so an identical handle
+                    // IS an identical object, and there is nothing to release whatever the
+                    // memo's freshness says. Re-arming Fresh here is what a Reset() costs - one
+                    // re-observation - and Live is deliberately NOT touched, because it is the
+                    // release obligation and it is still owed for exactly this handle.
+                    entry->Fresh = true;
                     ++m_counters.Reuses;
                     return handle;
                 }
@@ -115,35 +122,33 @@ namespace MobileGL::MG_Pipe {
             entry->Handle = handle;
             entry->CompositeLifetimeId = composite.GetLifetimeId();
             entry->Live = true;
+            entry->Fresh = true;
             ++m_counters.Mints;
             return handle;
         }
 
-        // The pipeline object itself is going away, or a test is tearing down. Speaks the same
-        // release for whatever it still holds.
-        void Forget(Uint pipelineName) {
-            for (SizeT i = 0; i < m_entries.size(); ++i) {
-                if (m_entries[i].PipelineName != pipelineName) continue;
-                ReleaseEntry(m_entries[i]);
-                m_entries[i] = m_entries.back();
-                m_entries.pop_back();
-                return;
-            }
-        }
-
         // A make-current. The entries name composites that belong to the frontend objects of
         // the context being left, and those objects outlive the switch, so the RECORDS are not
-        // released here - releasing them would emit a delete for a live program. Only the
-        // memo's freshness is dropped, which costs at most one re-observation.
+        // released here - releasing them would emit a delete for a live program.
+        //
+        // ONLY THE MEMO's FRESHNESS IS DROPPED, AND `Fresh` IS A SEPARATE FLAG FROM `Live` FOR
+        // EXACTLY THAT REASON. The two were one flag and the conflation was a real defect: the
+        // reuse branch above returns before anything could restore it, so after the first
+        // make-current every entry stayed at false for the life of the process and ReleaseEntry
+        // early-returned for ever - no delete_shader_state, no Free, no counter, and the old
+        // composite's handle simply overwritten out of the resolver. `Live` is a RELEASE
+        // OBLIGATION and nothing but ReleaseEntry may clear it; `Fresh` is the memo's own "does
+        // this entry describe the current context's pipeline of this name", which costs at most
+        // one re-observation when it is wrong.
         void Reset() {
-            for (Entry& entry : m_entries) entry.Live = false;
+            for (Entry& entry : m_entries) entry.Fresh = false;
         }
 
         void ResetCounters() { m_counters = Counters{}; }
 
         MGPipeHandle HandleFor(Uint pipelineName) const {
             for (const Entry& entry : m_entries) {
-                if (entry.PipelineName == pipelineName && entry.Live) return entry.Handle;
+                if (entry.PipelineName == pipelineName && entry.Live && entry.Fresh) return entry.Handle;
             }
             return kMGPipeNullHandle;
         }
@@ -156,11 +161,26 @@ namespace MobileGL::MG_Pipe {
             // choice: a static that held one would put a frontend destructor on an exit
             // handler's path into a torn-down pipe. A GL name, a signature of plain integers,
             // a handle and a lifetime id are all this needs.
+            // KEYED ON THE GL NAME, because a ProgramPipelineObject has no lifetime id -
+            // ComputeDrawProgramSignature reads the STAGE programs' ids and the pipeline itself
+            // carries none. glGenProgramPipelines recycles names, so a deleted-and-recreated
+            // pipeline can inherit its predecessor's entry; that is bounded and self-correcting
+            // rather than a hazard. The first Observe on the new object finds a signature and a
+            // handle that do not match and releases the old entry, and that release resolves
+            // NOTHING - the allocator erases the lifetime-id mapping on Free, so a stale
+            // CompositeLifetimeId emits no delete and frees no slot; all it costs is one
+            // redundant, idempotent death notice, which is the same shape the composite's own
+            // second release path already has. The vector is keyed by name, so it cannot grow
+            // past the highest pipeline name the process ever used.
             Uint PipelineName = 0;
             DrawProgramSignature Signature{};
             MGPipeHandle Handle = kMGPipeNullHandle;
             Uint64 CompositeLifetimeId = 0;
+            // THE RELEASE OBLIGATION. Set when this entry takes responsibility for a composite's
+            // slot, cleared ONLY by ReleaseEntry when that responsibility is discharged.
             Bool Live = false;
+            // THE MEMO's FRESHNESS, and deliberately not the same flag as Live - see Reset().
+            Bool Fresh = false;
         };
 
         Entry* Find(Uint pipelineName) {
