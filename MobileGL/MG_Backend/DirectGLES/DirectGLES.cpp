@@ -497,7 +497,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT i = 0; i < bindingPointCnt; ++i) {
                 const auto& obj =
                     MGB_CTX->GetBufferBindingPoint(BufferTarget::ShaderStorage, i).GetBoundObject();
+#if MOBILEGL_PIPE_PUSH
+                // P3a (D-D): announced on the reverse channel on the handle arm, poked into
+                // the object on the legacy one. MarkBufferGpuWritten is the one place that
+                // decides, so the three announcement sites stay one line each.
+                MarkBufferGpuWritten(obj);
+#else
                 if (obj) obj->MarkGpuWritten();
+#endif
             }
         }
 
@@ -541,7 +548,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // conformance case reads the result back with glMapBufferRange or
                 // glGetBufferSubData - which serve the frontend's CPU shadow until the buffer is
                 // flagged (BufferObject::SyncGpuWrites), exactly as for a storage buffer.
+#if MOBILEGL_PIPE_PUSH
+                MarkBufferGpuWritten(obj);
+#else
                 obj->MarkGpuWritten();
+#endif
             }
         }
 
@@ -2009,7 +2020,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* textureBuffer =
                     static_cast<MG_State::GLState::TextureObjectBuffer*>(imageBinding.Texture.get());
                 const auto& bufferObject = textureBuffer->GetBufferBindingSlot().GetBoundObject();
+#if MOBILEGL_PIPE_PUSH
+                BufferImpl::MarkBufferGpuWritten(bufferObject);
+#else
                 if (bufferObject) bufferObject->MarkGpuWritten();
+#endif
             }
         }
 

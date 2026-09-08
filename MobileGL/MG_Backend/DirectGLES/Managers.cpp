@@ -2002,6 +2002,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // no longer reaches into the frontend's address space, it ANSWERS. In monolith
                 // the client's implementation is one call away, so SyncGpuWrites' caller still
                 // sees the reconciled shadow on return, exactly as before.
+                //
+                // THE ORDER FROM HERE IS A CORRECTNESS RULE, NOT A PREFERENCE
+                // (ARCHITECTURE.md 8.2: "写回的 epoch bump 必须在任何后续读该 handle 的命令之前被
+                // server 应用；反向通道需要与正向通道相同的有序保证"):
+                //   1. writeback   - the client's shadow takes the bytes,
+                //   2. unmap       - the read mapping goes away,
+                //   3. serial stamp- syncedChangeSerial catches up with the record, so the next
+                //                    draw does not re-upload the readback over itself,
+                //   4. epoch bump  - in Ops_H_ReadbackTracked, i.e. strictly AFTER 1-3, so a
+                //                    draw-clean memo re-probed by the bump can never observe a
+                //                    half-reconciled resource. The bump must NEVER move earlier.
                 if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
                     MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
                         res, record.Offset,
@@ -2229,6 +2240,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (bufferObject == nullptr) return MG_Pipe::kMGPipeNullHandle;
             return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer,
                                                            bufferObject->GetLifetimeId());
+        }
+
+        void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
+            if (!bufferObject) return;
+            if (!ResourceSubsystemEnabled()) {
+                bufferObject->MarkGpuWritten();
+                return;
+            }
+            const MG_Pipe::MGPipeHandle res = HandleOfBuffer(bufferObject.get());
+            if (MG_Pipe::MGPipeHandleIsNull(res) || MG_Pipe::gMGPipeCallbacks.OnGpuWritten == nullptr) {
+                // Deliberately NOT a fall-back to MarkGpuWritten: on this arm the resource
+                // family is switched over, and quietly reaching into the frontend object again
+                // would hide a missing handle or a missing reverse channel behind a picture
+                // that still looks right - which is what the subsystem A/B exists to expose.
+                MGLOG_E_ONCE("MGPipe: no reverse channel for the GPU-write announcement of buffer %u "
+                             "(handle %s, OnGpuWritten %s)",
+                             bufferObject->GetExternalIndex(),
+                             MG_Pipe::MGPipeHandleIsNull(res) ? "missing" : "present",
+                             MG_Pipe::gMGPipeCallbacks.OnGpuWritten == nullptr ? "unset" : "set");
+                return;
+            }
+            // WHOLE RESOURCE, stated rather than implied: the extent is spelled as one range of
+            // kMGPipeWholeBuffer rather than as "zero ranges", because a zero count is the
+            // shape a fully NARROWED announcement will legitimately have once P8/P9 build the
+            // client's conservative set, and the two must not be the same record.
+            const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
+            MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &whole);
         }
 #endif
 

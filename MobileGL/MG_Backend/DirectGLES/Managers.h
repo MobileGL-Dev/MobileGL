@@ -720,6 +720,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource);
         GLESBufferResource* EnsureBufferResourceForHandle(
             const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
+
+        // P3a (D-D): "the GPU wrote through this resource", announced on the reverse channel
+        // instead of poked into the frontend object. ARCHITECTURE.md calls OnGpuWritten a
+        // NARROWING channel - the client builds its pending set conservatively at each
+        // draw/dispatch emission point and this callback only ever takes entries out of it -
+        // so in P3a, where the client's conservative set is exactly what the three
+        // MarkGpuWritten sites marked, the announced set is the whole resource and the
+        // observable behaviour is identical. P8/P9 narrow it; the channel is what they need.
+        //
+        // The legacy arm keeps calling BufferObject::MarkGpuWritten directly, and the pull
+        // build never sees this function at all (G1).
+        void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
 #endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on
