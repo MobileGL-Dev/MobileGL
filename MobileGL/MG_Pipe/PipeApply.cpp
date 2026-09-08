@@ -377,7 +377,11 @@ namespace MobileGL::MG_Pipe {
         static_assert(kCapabilityCount <= 64,
                       "ResidualValueBlock::CapabilityBits is a Uint64; 35 bits fit, 65 would not");
 
-        MGPipeApplierState g_applier{};
+        // A REFERENCE TO A NEVER-DESTROYED BLOCK, for MGPipeSlots()' reason
+        // (MG_Impl/Pipe/SlotAllocator.cpp): resource_destroy and delete_vertex_elements are
+        // raised from ~BufferObject / ~VertexArrayObject, and those objects are released by
+        // exit handlers that run after this translation unit's own globals are gone.
+        MGPipeApplierState& g_applier = *new MGPipeApplierState{};
 
         // The installed handle-shaped resource table. Null until a backend registers one,
         // which is what makes the client half landable on its own: with nothing here every

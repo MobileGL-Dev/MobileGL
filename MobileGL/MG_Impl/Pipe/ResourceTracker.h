@@ -552,8 +552,11 @@ namespace MobileGL::MG_Pipe {
     // The monolith's one resource tracker, beside the state tracker, the CSO cache and the
     // set-hash suppressor.
     inline MGPipeResourceTracker& MGPipeResourceTrackerInstance() {
-        static MGPipeResourceTracker tracker;
-        return tracker;
+        // NEVER DESTROYED, for MGPipeSlots()' reason (SlotAllocator.cpp): ~BufferObject reads
+        // and writes this tracker, and the objects that own the last reference to a
+        // BufferObject outlive every function-local static.
+        static MGPipeResourceTracker* tracker = new MGPipeResourceTracker();
+        return *tracker;
     }
 
     // ---------------------------------------------------------------------------------

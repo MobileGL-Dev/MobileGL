@@ -168,7 +168,15 @@ namespace MobileGL::MG_Pipe {
     }
 
     MGPipeSlotAllocator& MGPipeSlots() {
-        static MGPipeSlotAllocator allocator;
-        return allocator;
+        // NEVER DESTROYED, deliberately (one allocation for the life of the process). A
+        // frontend object's destructor reaches this allocator - ~BufferObject through
+        // MGPipeEmitResourceDestroyAndFree, ~VertexArrayObject through the death notice - and
+        // MG_Backend/MGPipe/PipeInputs.h's gPipeInputs holds SharedPtrs to those objects at
+        // namespace scope, so they are destroyed by __run_exit_handlers AFTER this
+        // function-local static would have been. A destroyed allocator then answers
+        // FindByLifetimeId out of a freed hash table and Free() writes into freed vectors -
+        // an exit-time heap corruption whose fatality depends only on the allocator's layout.
+        static MGPipeSlotAllocator* allocator = new MGPipeSlotAllocator();
+        return *allocator;
     }
 } // namespace MobileGL::MG_Pipe
