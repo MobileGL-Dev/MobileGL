@@ -43,19 +43,27 @@ namespace MobileGL::MG_Pipe {
     // stop where it says it stops (MG_Test/ScopedPipeVerb.h).
     void MGPipeLeaveVerb();
 
-    // PipeFill.cpp. DOES THIS BUILD, ON THIS BACKEND, EMIT FOR THIS P4a FAMILY? (ID-39.) The
-    // three conjuncts are the operator's per-subsystem bit in MOBILEGL_PIPE_PUSH, the family's
-    // own kMGPipeWired*Subsystem constant (`wired`, which the caller passes because it lives in
-    // the family's emit header and this header may not include one), and - for the four
-    // families P4a migrates - a backend having registered MGPipeResourceOps, which is the same
-    // per-backend signal `MGPipeResourceSubsystemEnabled()` has applied to P3a's buffers since
-    // the phase began.
+    // PipeFill.cpp. DOES THIS BUILD, ON THIS BACKEND, AT THIS MASK, EMIT FOR THIS P4a FAMILY?
+    // (ID-39, widened by S-3 / ID-41.) The four conjuncts are the operator's per-subsystem bit
+    // in MOBILEGL_PIPE_PUSH, the family's own kMGPipeWired*Subsystem constant (`wired`, which
+    // the caller passes because it lives in the family's emit header and this header may not
+    // include one), and - for the four families P4a migrates - a backend having registered
+    // MGPipeResourceOps (the same per-backend signal `MGPipeResourceSubsystemEnabled()` has
+    // applied to P3a's buffers since the phase began) and every D-K2 dependency bit of the
+    // family being set in the same mask.
     //
-    // THE THIRD CONJUNCT IS THE ONE THIS DECLARATION EXISTS FOR. Magma (DirectVulkan) registers
-    // no table and has no P4a twins; before it, the client emitted, the applier accepted, the
-    // emitters cleared their per-level dirty flags on that acceptance, and Magma's legacy
-    // upload path found nothing to upload. With it the four families emit NOTHING there and the
-    // legacy pull path runs exactly as it does on a pull build.
+    // THE LAST TWO CONJUNCTS ARE THE ONES THIS DECLARATION EXISTS FOR, and they are the same
+    // defect twice. Magma (DirectVulkan) registers no table and has no P4a twins; at a mask like
+    // 0x7ff Espryt REFUSES the texture family server-side because D-K2's fourth row says bit 10
+    // requires bit 11. In both cases the client emitted anyway, the applier accepted, the
+    // emitters cleared their per-level dirty flags on that acceptance, and the legacy upload
+    // path that still owed those texels found nothing to upload (66 DirectVulkan cases at ID-39,
+    // 47 DirectGLES cases at ID-41). With them the four families emit NOTHING in that state and
+    // the legacy pull path runs exactly as it does on a pull build.
+    //
+    // D-K2's TABLE IS IN PipeFill.cpp, ONCE: bit 9 requires bit 10, bit 10 requires bits 7 and
+    // 11, bit 11 requires bit 10, bit 12 depends on nothing - the client mirror, bit for bit, of
+    // the four `Resolve<Family>SubsystemArm()` refusals in DirectGLES/Managers.cpp.
     //
     // It is exported for the unit gate and for no other caller: the gate itself is
     // FamilyIsLive() inside PipeFill.cpp, every birth hook and every `wants()` row resolves

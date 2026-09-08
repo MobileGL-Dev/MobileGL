@@ -922,17 +922,150 @@ namespace MobileGL::MG_Pipe {
                    MGPipeGetResourceOps() != nullptr;
         }
 
-        // THE SAME TRIPLE `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
+        // ================================================================================
+        // AND THE FOURTH HALF: D-K2's DEPENDENCY TABLE, ON THE CLIENT (S-3, ID-41)
+        // ================================================================================
+        //
+        // THE DEFECT THIS CLOSES. Espryt's four `Resolve<Family>SubsystemArm()` functions
+        // (Managers.cpp ~:3595-3745) REFUSE a family whose D-K2 dependency bit is clear and run
+        // the legacy arm instead - the shape ResolveVertexInputSubsystemArm's bit-8-requires-
+        // bit-7 refusal set as the precedent. That refusal is a BACKSTOP and it cannot restore a
+        // correct picture on its own, because the client's emission was gated on the operator's
+        // mask ALONE: at 0x7ff (bit 10 set, bit 11 clear) the client emitted the whole texture
+        // family, the applier accepted it, the emitter cleared each level's per-level dirty flag
+        // on that acceptance (D-D5 as amended by ID-18 M3) - and then the server refused bit 10
+        // and ran the legacy path, which found nothing left to upload. 438/491 on the DirectGLES
+        // integration lane, the same 47 texture-upload failures ID-39 saw on Magma for the
+        // consumer-less version of exactly this mistake.
+        //
+        // So the rule is the SAME "nothing at all, not less" rule as the consumer conjunct
+        // above: with a dependency unmet the client emits NOTHING for that family and the legacy
+        // pull path runs untouched, on both sides of the boundary.
+        //
+        // THE TABLE IS WRITTEN ONCE, HERE, and every one of its rows is the client mirror of the
+        // refusal Espryt already implements, bit for bit and non-transitively - the two must say
+        // the SAME thing, because a client that withheld more than the server refuses would
+        // leave the server's handle arm live with no records to read, and a client that withheld
+        // less is the defect above.
+        struct P4aFamilyDependencyRow {
+            Uint64 Family;   // exactly one bit, and it is one of kMGPipeP4aFamilySubsystems
+            Uint64 Requires; // the bits MOBILEGL_PIPE_PUSH must ALSO carry for it to be live
+        };
+
+        inline constexpr P4aFamilyDependencyRow kMGPipeP4aFamilyDependencies[] = {
+            // BIT 9 REQUIRES BIT 10. Every MGPSurface::Res in a set_framebuffer_state record
+            // names a Texture or a Renderbuffer handle, and only bit 10 populates those two slot
+            // tables (Managers.cpp ResolveFramebufferSubsystemArm).
+            {kMGPipeSubsystemFramebuffer, kMGPipeSubsystemTextureResources},
+
+            // BIT 10 REQUIRES BIT 7 - a buffer texture's MGPResourceDesc::BufferForTexBuffer
+            // names a Buffer handle and only bit 7 puts twins in the resource slot table (D-D1,
+            // ResolveTextureResourceSubsystemArm's first row) - AND BIT 11, which is D-K2's
+            // FOURTH row (ID-14/ID-15): MGPTextureParams::BuiltinSampler is a SamplerCso HANDLE,
+            // only bit 11 mints sampler CSOs (c0b's four unconditional mints deliberately
+            // exclude it), and the applier's verdict for a null one is Fatal{ProtocolCorruption}
+            // rather than a decline. The brief's original "bit 10 without 11 is fine" is
+            // WITHDRAWN for P4a as built.
+            {kMGPipeSubsystemTextureResources,
+             kMGPipeSubsystemResources | kMGPipeSubsystemSamplers},
+
+            // BIT 11 REQUIRES BIT 10. Every MGPBoundView::Texture and every MGPImageView::Res
+            // names a Texture handle and only bit 10 populates that slot table; without it every
+            // per-unit lookup would miss and the walk would `continue` WITHOUT unbinding
+            // (ResolveSamplerSubsystemArm). With the row above this is SYMMETRIC: bits 10 and 11
+            // are one arm with two switches, and the only two masks that reach either handle arm
+            // are "both set" and "neither set".
+            {kMGPipeSubsystemSamplers, kMGPipeSubsystemTextureResources},
+
+            // BIT 12 DEPENDS ON NOTHING, and that is a ROW rather than an absence so the table
+            // covers the four families exhaustively (the static_assert below): a ShaderCso handle
+            // names no texture and no buffer, the archive rides beside the record as a companion
+            // pointer, and the extra inputs the server specialises on are read from state the
+            // backend already holds (ResolveProgramSubsystemArm).
+            {kMGPipeSubsystemPrograms, 0},
+        };
+
+        // THE MIRROR PAIRS THAT STAY FINE, said out loud rather than left as an absence, because
+        // an unreachable branch that says something different is how the reachable one drifts
+        // (Managers.cpp's own words at :2377-2381) - and because the table is only trustworthy if
+        // what it does NOT contain was decided rather than forgotten:
+        //   - bit 10 set, bit 9 clear: FINE. The legacy FBO sync reaches the texture twin through
+        //     SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
+        //   - bit 11 set, bit 9 clear: FINE, for the same reason - a sampler view names a texture,
+        //     never a framebuffer.
+        //   - bit 7 set, bit 10 clear: FINE, and it is P3a's shipped configuration.
+        //   - bit 12 set with any or none of 9/10/11: FINE, per the last row.
+        //   - bit 10 set, bit 11 clear (and its mirror) is NOT fine and is the row above; this is
+        //     the one sentence in the brief that P4a as built withdrew.
+        constexpr Uint64 P4aFamilyDependencyBits(Uint64 subsystem) {
+            Uint64 required = 0;
+            for (const P4aFamilyDependencyRow& row : kMGPipeP4aFamilyDependencies) {
+                if ((subsystem & row.Family) != 0) required |= row.Requires;
+            }
+            return required;
+        }
+
+        // The table covers the four families this phase migrates and nothing else, so a fifth
+        // family added to kMGPipeP4aFamilySubsystems without a row here does not silently inherit
+        // "depends on nothing".
+        constexpr Uint64 P4aFamilyDependencyTableCoverage() {
+            Uint64 covered = 0;
+            for (const P4aFamilyDependencyRow& row : kMGPipeP4aFamilyDependencies) covered |= row.Family;
+            return covered;
+        }
+        static_assert(P4aFamilyDependencyTableCoverage() == kMGPipeP4aFamilySubsystems,
+                      "every P4a family needs a D-K2 dependency row, even an empty one");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) ==
+                          kMGPipeSubsystemTextureResources,
+                      "bit 9 requires bit 10");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) ==
+                          (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
+                      "bit 10 requires bit 7 and bit 11");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) ==
+                          kMGPipeSubsystemTextureResources,
+                      "bit 11 requires bit 10");
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemPrograms) == 0, "bit 12 depends on nothing");
+        // No family may depend on itself: a row that did would be unfalsifiable (its own bit is
+        // set by the time the conjunct is evaluated) and would read as a dependency nobody has.
+        static_assert((P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) &
+                       kMGPipeSubsystemFramebuffer) == 0 &&
+                          (P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) &
+                           kMGPipeSubsystemTextureResources) == 0 &&
+                          (P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) &
+                           kMGPipeSubsystemSamplers) == 0,
+                      "a D-K2 row must not name its own family");
+        // The default mask carries every dependency, so the shipped arm is unchanged by all of
+        // this - the table only ever narrows a HAND-PICKED A/B mask.
+        static_assert((kMGPipeSubsystemsMigratedAtP4a &
+                       P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems)) ==
+                          P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems),
+                      "the P4a phase mask must satisfy every dependency it declares");
+
+        // IT IS THE RUNTIME BIT THAT IS TESTED, NOT THE OTHER FAMILY'S LIVENESS, and that is
+        // deliberate: Espryt's resolvers classify their arms from MOBILEGL_PIPE_PUSH alone, so
+        // testing anything else here would make the two sides disagree at some mask - which is
+        // the failure this whole commit is about, one level up. The mask is passed in rather than
+        // read, so the walk's single read of MG_Config::Features.PipePush stays the one read a
+        // whole validate point resolves against.
+        Bool P4aFamilyDependenciesAreSet(Uint64 subsystem, Uint64 pushMask) {
+            const Uint64 required = P4aFamilyDependencyBits(subsystem);
+            return (pushMask & required) == required;
+        }
+
+        // THE SAME QUADRUPLE `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
         // deliberately the same predicate rather than a second copy of it: the operator's
         // per-subsystem A/B bit in MOBILEGL_PIPE_PUSH, this build having WIRED the family
-        // at all, AND - for a P4a family - a backend having registered the consumer. The second
-        // half is the family's own kMGPipeWired*Subsystem constant, which lives in the family's
-        // emit header and is 0 until the commit that gives the emitter its body - so a client
-        // path that lands before its emitter does is inert by construction rather than by
-        // everyone remembering to check; the third is P4aFamilyHasItsConsumer above.
+        // at all, AND - for a P4a family - a backend having registered the consumer and every
+        // D-K2 dependency bit of the family being set. The second half is the family's own
+        // kMGPipeWired*Subsystem constant, which lives in the family's emit header and is 0 until
+        // the commit that gives the emitter its body - so a client path that lands before its
+        // emitter does is inert by construction rather than by everyone remembering to check; the
+        // third is P4aFamilyHasItsConsumer above and the fourth is P4aFamilyDependenciesAreSet.
         Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
-            return (MG_Config::Features.PipePush & subsystem) != 0 && (wired & subsystem) != 0 &&
-                   P4aFamilyHasItsConsumer(subsystem);
+            const Uint64 pushMask = MG_Config::Features.PipePush;
+            return (pushMask & subsystem) != 0 && (wired & subsystem) != 0 &&
+                   P4aFamilyHasItsConsumer(subsystem) &&
+                   P4aFamilyDependenciesAreSet(subsystem, pushMask);
         }
 
         // ---- THE FAMILY SEAM ----
@@ -1088,12 +1221,14 @@ namespace MobileGL::MG_Pipe {
         PublicationLatch().NoteUnpublished(kind, handle);
     }
 
-    // THE GATE ITSELF, AS AN OBSERVABLE (ID-39). Every P4a birth hook below and every `wants()`
-    // row in the walk resolve through FamilyIsLive / P4aFamilyHasItsConsumer, and neither is
-    // reachable from a test - so this is the one door a unit case has onto the answer, and it
-    // is the SAME expression rather than a second copy of it. A subsystem outside
-    // kMGPipeP4aFamilySubsystems answers the pair the P2/P3a families have always answered,
-    // which is what makes "nothing that emits today changes" checkable instead of asserted.
+    // THE GATE ITSELF, AS AN OBSERVABLE (ID-39, widened by S-3 / ID-41). Every P4a birth hook
+    // below and every `wants()` row in the walk resolve through FamilyIsLive /
+    // P4aFamilyHasItsConsumer / P4aFamilyDependenciesAreSet, and none of the three is reachable
+    // from a test - so this is the one door a unit case has onto the answer, and it is the SAME
+    // expression rather than a second copy of it. A subsystem outside kMGPipeP4aFamilySubsystems
+    // answers the pair the P2/P3a families have always answered (its consumer conjunct is
+    // vacuous and its dependency set is empty), which is what makes "nothing that emits today
+    // changes" checkable instead of asserted.
     Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired) {
         return FamilyIsLive(subsystem, wired);
     }
@@ -2249,12 +2384,19 @@ namespace MobileGL::MG_Pipe {
         // a property of the RUNNING BACKEND, and collapsing the two would make a bisect that
         // lands between them unreadable. The P2/P3a bits are outside kMGPipeP4aFamilySubsystems,
         // so the conjunct is true for every one of them and nothing that emits today changes.
+        //
+        // AND THE SIXTH IS P4aFamilyDependenciesAreSet (S-3 / ID-41), the client half of D-K2:
+        // a family one of whose dependency bits the operator left clear emits NOTHING here for
+        // the same reason - the server REFUSES that family and runs its legacy arm, and an
+        // emission the server refuses is an emission whose acceptance already cleared a frontend
+        // dirty flag the legacy arm still owed. Same table, same four families, one place.
         const Uint64 pushMask = MG_Config::Features.PipePush;
         const auto wants = [&](MGPipeDirty bit) {
             const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
             return subsystem != 0 && (pushMask & subsystem) != 0 &&
                    (kMGPipeWiredSubsystems & subsystem) != 0 &&
                    P4aFamilyHasItsConsumer(subsystem) &&
+                   P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
                    (dirty & MGPipeDirtyBit(bit)) != 0;
         };
         Uint64 payloadBytes = 0;
@@ -2319,14 +2461,17 @@ namespace MobileGL::MG_Pipe {
             payloadBytes += EmitShaderState(*ctx);
         }
         // The texture drain has no dirty bit over it (see its definition); it is gated on the
-        // subsystem bit, on this build having wired the family at all and on a backend having
-        // registered the consumer, which is the same triple `wants()` applies to every other
-        // emission. The third one is the whole of ID-39 on the path where it mattered most:
-        // the drain is what clears a level's dirty flags on acceptance, so a drain that ran
-        // against an applier no backend reads is exactly how Magma lost its texel uploads.
+        // subsystem bit, on this build having wired the family at all, on a backend having
+        // registered the consumer and on D-K2's dependency bits for the family being set, which
+        // is the same quadruple `wants()` applies to every other emission. The last two are the
+        // whole of ID-39 and of S-3 on the path where they mattered most: the drain is what
+        // clears a level's dirty flags on acceptance, so a drain that ran against an applier no
+        // backend reads is exactly how Magma lost its texel uploads, and a drain that ran at a
+        // mask whose bit 11 or bit 7 is clear is how Espryt lost them at 0x7ff and 0x5ff.
         if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
             (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0 &&
-            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources)) {
+            P4aFamilyHasItsConsumer(kMGPipeSubsystemTextureResources) &&
+            P4aFamilyDependenciesAreSet(kMGPipeSubsystemTextureResources, pushMask)) {
             payloadBytes += DrainTextureSubData(*ctx);
         }
         if (wants(MGPipeDirty::NewSamplerViews)) {
@@ -2399,13 +2544,15 @@ namespace MobileGL::MG_Pipe {
             // the very fields the migration just took over.
             const MGPipeFieldEmitter emitter = kMGPipeFieldEmittedBy[i];
             const Uint64 subsystem = SubsystemForEmitter(emitter);
-            // P4aFamilyHasItsConsumer is in this conjunction for the reason it is in `wants()`:
-            // "supplied" means A CALL WENT OUT CARRYING THIS FIELD, and on a backend with no
-            // consumer no P4a call went out at all - so withholding the pull here would leave
-            // the field unfilled at the very verb that reads it.
+            // P4aFamilyHasItsConsumer and P4aFamilyDependenciesAreSet are in this conjunction for
+            // the reason they are in `wants()`: "supplied" means A CALL WENT OUT CARRYING THIS
+            // FIELD, and on a backend with no consumer - or at a mask that leaves one of the
+            // family's D-K2 dependency bits clear - no P4a call went out at all, so withholding
+            // the pull here would leave the field unfilled at the very verb that reads it.
             const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
                                   (pushMask & subsystem) != 0 &&
                                   P4aFamilyHasItsConsumer(subsystem) &&
+                                  P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
                                   EmittedCallSuppliesTheWholeField(field) &&
                                   (applierDerives || AppliedWithoutDerivation(field));
             if (!supplied) MGPipeFillAccess::CopyField(inputs, *ctx, field);

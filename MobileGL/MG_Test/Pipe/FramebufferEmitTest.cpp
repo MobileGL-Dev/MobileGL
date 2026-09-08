@@ -256,11 +256,17 @@ namespace {
     struct FramebufferScope {
         FramebufferScope() {
             m_previousPush = MG_Config::Features.PipePush;
-            // D-K2, both rows: bit 9 requires bit 10 (MGPSurface::Res names a texture or
-            // renderbuffer handle) and bit 10 requires bit 11 (MGPTextureParams::BuiltinSampler
-            // is a SamplerCso out of the sampler family's content-addressed cache).
-            MG_Config::Features.PipePush |=
-                kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+            // D-K2, ALL THREE ROWS THAT REACH THIS SUITE, because the client enforces them since
+            // S-3 / ID-41 and not only Espryt's Resolve*SubsystemArm: bit 9 requires bit 10
+            // (MGPSurface::Res names a texture or renderbuffer handle), bit 10 requires bit 11
+            // (MGPTextureParams::BuiltinSampler is a SamplerCso out of the sampler family's
+            // content-addressed cache) and bit 10 requires bit 7 (a buffer texture's
+            // BufferForTexBuffer names a Buffer handle, D-D1). Bit 7 changes nothing else here:
+            // this file constructs no BufferObject.
+            MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
+                                            kMGPipeSubsystemFramebuffer |
+                                            kMGPipeSubsystemTextureResources |
+                                            kMGPipeSubsystemSamplers;
             m_previousContext = Move(MG_State::pGLContext);
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeFramebufferEmitterInstance().ResetForTest();
