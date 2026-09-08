@@ -36,6 +36,7 @@
 // THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
 // FramebufferEmit.h for why, in full.
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/CompositeResolver.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
@@ -95,6 +96,16 @@ namespace MobileGL::MG_Pipe {
 
             const MGPipeHandle drawCso =
                 drawProgram ? AcquireShaderCso(*drawProgram, bytes) : kMGPipeNullHandle;
+            // THE COMPOSITE'S SECOND RELEASE PATH is spoken here, not in a destructor: when the
+            // bound pipeline's draw-program signature moves, the resolver releases the slot the
+            // previous composite held. Whichever of the two paths runs second - this one or the
+            // composite ProgramObject's own ~ProgramObject - is a proven no-op, because the slot
+            // allocator refuses a slot that is not live at that generation.
+            if (drawProgram && MGPipeProgramIsPipelineComposite(*drawProgram)) {
+                if (const auto& pipeline = ctx.GetBoundProgramPipeline()) {
+                    MGPipeCompositeResolverInstance().Observe(*pipeline, *drawProgram, drawCso);
+                }
+            }
             const MGPipeHandle dispatchCso =
                 dispatchProgram ? (dispatchProgram == drawProgram ? drawCso
                                                                   : AcquireShaderCso(*dispatchProgram, bytes))
@@ -279,6 +290,10 @@ namespace MobileGL::MG_Pipe {
             m_dispatchCso = kMGPipeNullHandle;
             m_constantsCso = kMGPipeNullHandle;
             m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+            // The composite memo's freshness goes with them - and only its freshness. Its
+            // ENTRIES name composites whose frontend objects outlive the context switch, so
+            // releasing them here would emit a delete for a live program.
+            MGPipeCompositeResolverInstance().Reset();
         }
 
         void ResetCounters() {
@@ -307,7 +322,16 @@ namespace MobileGL::MG_Pipe {
             const Uint64 lifetimeId = program.GetLifetimeId();
             const MGPipeHandle existing = MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
             if (!MGPipeHandleIsNull(existing)) return existing;
-            return MGPipeSlots().AllocateFor(MGPipeKind::ShaderCso, lifetimeId);
+            // A composite is minted off ITS OWN lifetime id, out of the reserved band, and is
+            // an ordinary ShaderCso handle in every other respect - the same kind, the same
+            // {slot, gen} rules, the same Free, the same death helper. Keying it on its own
+            // lifetime id rather than on the pipeline's signature is what makes ~ProgramObject
+            // able to release it at all, and it is why two pipelines that happen to have the
+            // same signature keep their own composite: sharing one handle between two frontend
+            // objects would let the first one's death free a slot the second still names.
+            return MGPipeProgramIsPipelineComposite(program)
+                       ? MGPipeSlots().AllocateComposite(lifetimeId)
+                       : MGPipeSlots().AllocateFor(MGPipeKind::ShaderCso, lifetimeId);
         }
 
         struct Latch {
