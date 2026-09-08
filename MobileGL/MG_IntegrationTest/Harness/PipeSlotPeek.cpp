@@ -49,12 +49,34 @@ namespace MGITest {
 
     bool PeekPipeSlotHighWater(PipeSlotKind kind, unsigned* outHighWater) {
         if (outHighWater == nullptr) return false;
+        // The ORDINARY space only, for every kind including ShaderCso (contract-v2.md 4.3).
         *outHighWater = static_cast<unsigned>(MobileGL::MG_Pipe::MGPipeSlots().HighWater(Translate(kind)));
+        return true;
+    }
+
+    bool PeekPipeCompositeSlotLiveCount(unsigned* outLive) {
+        if (outLive == nullptr) return false;
+        *outLive = static_cast<unsigned>(MobileGL::MG_Pipe::MGPipeSlots().CompositeLiveCount());
+        return true;
+    }
+
+    bool PeekPipeCompositeSlotHighWater(unsigned* outHighWater) {
+        if (outHighWater == nullptr) return false;
+        *outHighWater = static_cast<unsigned>(MobileGL::MG_Pipe::MGPipeSlots().CompositeHighWater());
+        return true;
+    }
+
+    bool PeekPipeCompositeSlotBandBase(unsigned* outBandBase) {
+        if (outBandBase == nullptr) return false;
+        *outBandBase = static_cast<unsigned>(MobileGL::MG_Pipe::kMGPipeShaderCsoCompositeSlotBase);
         return true;
     }
 #else
     bool PeekPipeSlotLiveCount(PipeSlotKind, unsigned*) { return false; }
     bool PeekPipeSlotHighWater(PipeSlotKind, unsigned*) { return false; }
+    bool PeekPipeCompositeSlotLiveCount(unsigned*) { return false; }
+    bool PeekPipeCompositeSlotHighWater(unsigned*) { return false; }
+    bool PeekPipeCompositeSlotBandBase(unsigned*) { return false; }
 #endif
 
 } // namespace MGITest

@@ -227,22 +227,70 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return MG_Config::Features.PipeHandleAbaControl;
     }
 
-    // The per-kind form of the answer above. `kind` is MG_Pipe::MGPipeKind.
+    // WHICH KINDS THIS BACKEND ACTUALLY KEYS ON {slot, gen}, and therefore which kinds the knob
+    // above has an identity to defeat at all. `kind` is MG_Pipe::MGPipeKind.
     //
-    // Deliberately a SWITCH over the kinds this backend mints rather than a default of "true":
-    // a kind added to MGPipeKind without a decision here lands in the `default` arm and is
-    // reported as NOT covered, which is the safe direction - an uncovered kind whose control
-    // asserts the correct pixels is a control that has not armed yet, while a covered-by-default
-    // kind whose control asserts a corruption nobody can produce is a red lane.
-    inline Bool MagmaPipeAbaControlCoversKind(MG_Pipe::MGPipeKind kind) {
+    // EXHAUSTIVE, WITH NO `default:`, for MG_IntegrationTest/Harness/PipeSlotPeek.cpp's reason:
+    // a kind added to MGPipeKind without a decision here must be a -Wswitch warning in this
+    // file rather than a row that silently inherits somebody else's answer. Being wrong in the
+    // "covered" direction is the expensive one - a control asserting a corruption nobody can
+    // produce is a permanently red always-on lane - so an undecided kind must never read true,
+    // and with no `default:` there is no arm for it to read true from.
+    //
+    // constexpr AND PINNED BY static_assert BELOW, which is what stops it rotting the way a
+    // predicate with no caller does: MagmaPipeIdentityTables mints exactly two kinds, the
+    // asserts say so in both directions, and the file no longer compiles if the tables and this
+    // statement of them ever part company. (Review F-m5: the earlier form had no caller at all
+    // and could not make anything red or green.)
+    inline constexpr Bool MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind kind) {
         switch (kind) {
+            // The two MagmaPipeIdentityTables really mints.
             case MG_Pipe::MGPipeKind::VertexElementsCso:
             case MG_Pipe::MGPipeKind::Buffer:
-                return MagmaPipeAbaControlDefeatsIdentity();
-            default:
-                // P4a's six, and every other kind: not minted on this backend, so not defeatable.
+                return true;
+            // P4a's six object classes: still reached from their frontend objects on this
+            // backend (Magma's object paths are P7, ROADMAP.md:24), so there is no key here for
+            // the knob to defeat.
+            case MG_Pipe::MGPipeKind::Texture:
+            case MG_Pipe::MGPipeKind::Renderbuffer:
+            case MG_Pipe::MGPipeKind::Framebuffer:
+            case MG_Pipe::MGPipeKind::SamplerCso:
+            case MG_Pipe::MGPipeKind::SamplerViewCso:
+            case MG_Pipe::MGPipeKind::ShaderCso:
+            // ...and everything else this backend does not mint a handle for.
+            case MG_Pipe::MGPipeKind::None:
+            case MG_Pipe::MGPipeKind::Xfb:
+            case MG_Pipe::MGPipeKind::RenderStateCso:
+            case MG_Pipe::MGPipeKind::Fence:
+            case MG_Pipe::MGPipeKind::Query:
+            case MG_Pipe::MGPipeKind::Context:
+            case MG_Pipe::MGPipeKind::KindCount:
                 return false;
         }
+        return false;
+    }
+
+    static_assert(MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::VertexElementsCso),
+                  "MagmaPipeIdentityTables mints VertexElementsCso: the knob has an identity to "
+                  "defeat for it");
+    static_assert(MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::Buffer),
+                  "MagmaPipeIdentityTables mints Buffer: the knob has an identity to defeat for it");
+    static_assert(!MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::Texture) &&
+                      !MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::Renderbuffer) &&
+                      !MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::Framebuffer) &&
+                      !MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::SamplerCso) &&
+                      !MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::SamplerViewCso) &&
+                      !MagmaPipeAbaControlKindIsRekeyedHere(MG_Pipe::MGPipeKind::ShaderCso),
+                  "P4a's six object classes are not keyed on {slot, gen} on this backend, so "
+                  "HandleRecycleScenario's six AbaControl arms must NOT expect a corruption here. "
+                  "Wiring one of them is what flips this assert, this predicate and that arm - and "
+                  "MG_IntegrationTest's two-symbol probe over MG_Backend/DirectVulkan is what "
+                  "carries the answer into the lane");
+
+    // The per-kind form of MagmaPipeAbaControlDefeatsIdentity(): true only where there is both a
+    // key to defeat here AND the operator asked for it.
+    inline Bool MagmaPipeAbaControlCoversKind(MG_Pipe::MGPipeKind kind) {
+        return MagmaPipeAbaControlKindIsRekeyedHere(kind) && MagmaPipeAbaControlDefeatsIdentity();
     }
 
     // The single consumer-table entry every VAO collapses onto while the control is on. Slot

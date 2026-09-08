@@ -45,13 +45,20 @@ namespace MGITest {
         SamplerCso,
         SamplerViewCso,
         // ShaderCso covers BOTH the ordinary program slots and the program-pipeline COMPOSITES
-        // minted out of the reserved high band (MGPipeHandles.h:86-97, D-H7). One kind, because
-        // that is what the allocator has: the band is a second dense table inside the same
-        // kind, LiveCount counts both and HighWater is one past the highest slot handed out in
-        // either. The composite's leak case is a separate CASE rather than a separate kind for
-        // that reason - what makes it its own case is that a composite's slot has TWO
-        // independent release paths (the pipeline cache's LRU eviction and the composite
-        // ProgramObject's destructor), not that it is counted anywhere else.
+        // minted out of the reserved high band (MGPipeHandles.h:86-107, D-H7). One kind, because
+        // that is what the allocator has: the band is a second dense table inside the same kind
+        // and LiveCount counts both.
+        //
+        // THE TWO SPACES' HIGH-WATER MARKS ARE NOT ONE NUMBER, and the correction matters here
+        // more than anywhere else. c0b split them (contract-v2.md 4.3): HighWater(ShaderCso) is
+        // now the ORDINARY space only and the band's own mark is CompositeHighWater(), because
+        // a merged mark is pinned at ~983k from the first composite mint onward and every "the
+        // high-water mark did not move over N churn rounds" assertion about ordinary programs
+        // would be vacuously true for the rest of the process. The composite's leak case is a
+        // separate CASE and reads the BAND'S OWN counters below (PeekPipeCompositeSlot*) - a
+        // composite's slot has TWO independent release paths (the pipeline cache's LRU eviction
+        // and the composite ProgramObject's destructor), and a slot that never comes back to
+        // the band moves neither of the ordinary numbers.
         ShaderCso,
     };
 
@@ -63,5 +70,32 @@ namespace MGITest {
     // "did not leak".
     bool PeekPipeSlotLiveCount(PipeSlotKind kind, unsigned* outLive);
     bool PeekPipeSlotHighWater(PipeSlotKind kind, unsigned* outHighWater);
+
+    // The ShaderCso COMPOSITE BAND's own three numbers, the seventh..ninth members
+    // contract-v2.md 4.3 asks this header for. There is no `kind` argument because the band is
+    // ShaderCso's alone - AllocateComposite is the one door into it and no other kind has one.
+    // All three return false on the same terms as the two above, and a caller that gets false
+    // must SKIP.
+    //
+    //   PeekPipeCompositeSlotLiveCount   = MGPipeSlotAllocator::CompositeLiveCount(), the band's
+    //                                      share of LiveCount(ShaderCso).
+    //   PeekPipeCompositeSlotHighWater   = CompositeHighWater() VERBATIM, i.e. one past the
+    //                                      highest band slot ever handed out. It is an ABSOLUTE
+    //                                      slot number and therefore starts at the band's base,
+    //                                      not at zero - "no composite was ever minted" reads as
+    //                                      `high water == band base`, which is what the third
+    //                                      member is for. It is not returned base-relative
+    //                                      because a peek whose name says HighWater and whose
+    //                                      value is a delta is exactly the kind of quietly
+    //                                      redefined counter this member exists to correct.
+    //   PeekPipeCompositeSlotBandBase    = kMGPipeShaderCsoCompositeSlotBase, the floor the
+    //                                      other two are read against. A constant, but it
+    //                                      reaches a scenario only through this header: the
+    //                                      MG_Pipe headers and the GL headers are not meant to
+    //                                      meet in one translation unit, which is why this
+    //                                      harness exists at all.
+    bool PeekPipeCompositeSlotLiveCount(unsigned* outLive);
+    bool PeekPipeCompositeSlotHighWater(unsigned* outHighWater);
+    bool PeekPipeCompositeSlotBandBase(unsigned* outBandBase);
 
 } // namespace MGITest

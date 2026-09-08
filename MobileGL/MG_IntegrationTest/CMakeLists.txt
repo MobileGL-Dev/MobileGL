@@ -408,7 +408,9 @@ function(mgl_itest_probe_for_symbol outVar directory symbolRegex)
     set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
 endfunction()
 
-# The same probe, over a CONJUNCTION: the first source in the directory that names BOTH regexes.
+# The same probe, over a CONJUNCTION: BOTH regexes matched ANYWHERE UNDER the directory, not
+# necessarily in the same file. outVar is set to "<file matching A> + <file matching B>" when both
+# were found and to the empty string otherwise.
 #
 # P4a needs it for exactly one question and the question cannot be asked any other way. "Does
 # MOBILEGL_PIPE_HANDLE_ABA_CONTROL defeat the identity of P4a's OBJECT kinds on this backend?" is
@@ -418,23 +420,46 @@ endfunction()
 # program, and every one of them would assert a corruption nothing on the tree can produce - a hard
 # red on an always-on integration-gpu lane. Nor is it answered by "some source names a P4a subsystem
 # bit", which will become true for a backend that honours the mask long before anyone wires the
-# knob. What the arm actually needs is ONE SOURCE THAT DOES BOTH, and that is what this asks.
+# knob. What the arm needs is BOTH FACTS TO BE TRUE OF THE BACKEND.
+#
+# DIRECTORY-WIDE RATHER THAN PER FILE, and that is review finding F-M5 rather than a preference.
+# Requiring one file to carry both makes the arming depend on the FILE LAYOUT a later package
+# chooses: a backend that wires the knob in Managers.cpp while its P4a subsystem constants live in
+# SlotTables.h satisfies the question and fails the probe, the six controls keep printing wired=0
+# and asserting the correct pixels, and NOTHING fails, warns or records that the expected flip did
+# not happen - the one failure mode a control whose flip is in the future has. The false-positive
+# this trades against is a backend that reads the knob somewhere and names a P4a bit somewhere else
+# without connecting them; that costs a red lane an engineer must look at, which is the direction
+# that gets noticed. Both spellings of the answer are printed, so the configure log says which file
+# supplied which half.
 #
 # Same staleness guarantees as the single-regex probe: CONFIGURE_DEPENDS on the glob, and every file
 # it finds appended to CMAKE_CONFIGURE_DEPENDS.
 function(mgl_itest_probe_for_two_symbols outVar directory symbolRegexA symbolRegexB)
     file(GLOB_RECURSE mglItestProbeSources CONFIGURE_DEPENDS
         "${directory}/*.h" "${directory}/*.hpp" "${directory}/*.cpp" "${directory}/*.c")
-    set(mglItestProbeHit "")
+    set(mglItestProbeHitA "")
+    set(mglItestProbeHitB "")
     foreach(mglItestProbeSource IN LISTS mglItestProbeSources)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mglItestProbeSource}")
-        file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesA REGEX "${symbolRegexA}")
-        file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesB REGEX "${symbolRegexB}")
-        if (mglItestProbeLinesA AND mglItestProbeLinesB AND NOT mglItestProbeHit)
-            set(mglItestProbeHit "${mglItestProbeSource}")
+        if (NOT mglItestProbeHitA)
+            file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesA REGEX "${symbolRegexA}")
+            if (mglItestProbeLinesA)
+                set(mglItestProbeHitA "${mglItestProbeSource}")
+            endif()
+        endif()
+        if (NOT mglItestProbeHitB)
+            file(STRINGS "${mglItestProbeSource}" mglItestProbeLinesB REGEX "${symbolRegexB}")
+            if (mglItestProbeLinesB)
+                set(mglItestProbeHitB "${mglItestProbeSource}")
+            endif()
         endif()
     endforeach()
-    set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
+    if (mglItestProbeHitA AND mglItestProbeHitB)
+        set(${outVar} "${mglItestProbeHitA} + ${mglItestProbeHitB}" PARENT_SCOPE)
+    else()
+        set(${outVar} "" PARENT_SCOPE)
+    endif()
 endfunction()
 
 if (MOBILEGL_PIPE_PUSH)
@@ -545,10 +570,13 @@ if (MOBILEGL_PIPE_PUSH)
                            "HandleRecycle's six P4a cases will SKIP their Handles arm on it")
         endif()
 
-        # ...and whether the ABA knob reaches those kinds THERE. A conjunction, for the reason
-        # mgl_itest_probe_for_two_symbols states: reading the knob is not the same as steering
-        # P4a's keys with it, and arming this marker on the weaker evidence turns six always-on
-        # entries into a permanent red.
+        # ...and whether the ABA knob reaches those kinds THERE. A conjunction over the WHOLE
+        # backend directory, for the reason mgl_itest_probe_for_two_symbols states: reading the
+        # knob is not the same as steering P4a's keys with it, so the weaker single-regex evidence
+        # would turn six always-on entries into a permanent red - but requiring one FILE to carry
+        # both halves would let a backend satisfy the question and miss the probe, and the six
+        # controls would then keep asserting the correct pixels with nothing recording that the
+        # flip was forgotten (F-M5).
         mgl_itest_probe_for_two_symbols(MGL_ITEST_OBJECT_ABA
             "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestObjectBackend}"
             "PipeHandleAbaControl"
@@ -559,10 +587,11 @@ if (MOBILEGL_PIPE_PUSH)
             list(APPEND MGL_ITEST_CAPABILITY_ENV
                 "MGITEST_HANDLE_ABA_OBJECTS_${mglItestObjectBackend}=1")
         else()
-            message(STATUS "Integration tests: no ${mglItestObjectBackend} source both reads "
-                           "Features.PipeHandleAbaControl and names a P4a subsystem bit - "
-                           "HandleRecycle's six P4a cases will assert the CORRECT pixels on the "
-                           "AbaControl arm and say that it is not a control for them yet")
+            message(STATUS "Integration tests: MobileGL/MG_Backend/${mglItestObjectBackend} does not "
+                           "both read Features.PipeHandleAbaControl and name a P4a subsystem bit "
+                           "somewhere under it - HandleRecycle's six P4a cases will assert the "
+                           "CORRECT pixels on the AbaControl arm and say that it is not a control "
+                           "for them yet")
         endif()
     endforeach()
 
@@ -581,6 +610,26 @@ if (MOBILEGL_PIPE_PUSH)
     else()
         message(STATUS "Integration tests: no MG_Impl/Pipe source emits FramebufferEmissions - "
                        "ObjectSubsystemControl's emission case will SKIP")
+    endif()
+
+    # ...and the CLIENT half of the texture-upload shape, separately, because it is a different
+    # question with a different owner's file behind it (review F-m7). ctu= is emitted by PipeStats
+    # in EVERY push build whether or not anything increments it, so "the counter read zero" and
+    # "no client emitter exists" are the same number and TextureUploadShape cannot tell them apart
+    # from the summary line alone. Once package B's texture emitter lands, an emitter that stopped
+    # emitting would read exactly like no emitter at all and the two-sided assertion the scenario
+    # exists for would pass while comparing nothing. This probe is what separates them.
+    mgl_itest_probe_for_symbol(MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "ClientTextureUploadEmissions")
+    if (MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER)
+        message(STATUS "Integration tests: the client texture-upload counter has an emitter "
+                       "(${MGL_ITEST_CLIENT_TEXTURE_UPLOAD_EMITTER}) - TextureUploadShape's "
+                       "two-sided assertion is live")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT=1")
+    else()
+        message(STATUS "Integration tests: no MG_Impl/Pipe source emits "
+                       "ClientTextureUploadEmissions - TextureUploadShape records the SERVER shape "
+                       "only and asserts that ctu= is zero")
     endif()
 
     mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
@@ -1351,13 +1400,20 @@ gtest_discover_tests(MobileGLIntegrationTest
 # constant P3a shipped survives as P4a's A/B control, and a lane that spelled its own bit pattern
 # would stop being the shape that ships the first time the default moved.
 #
-# THE THIRD LANE IS THE DEPENDENCY REFUSAL (D-K2) and it is the one entry in this family that is not
-# vacuous before the emitters land: 0x9ff sets the sampler subsystem (bit 11) WITHOUT the texture
-# resource subsystem (bit 10) that every MGPBoundView::Texture and MGPImageView::Res depends on, and
-# the bring-up must log ONE error naming both bits and run the legacy sampler arm. That is a
-# decision made from the bitmask alone, so it is assertable on a tree where nothing emits yet - and
-# a half-honoured mask is invisible in the pixels by construction, which is why it needs an entry
-# rather than a code comment.
+# THE THIRD AND FOURTH LANES ARE THE DEPENDENCY REFUSALS (D-K2) and they are the entries in this
+# family that are not vacuous before the emitters land, because both are decisions made from the
+# bitmask alone. A half-honoured mask is invisible in the pixels by construction, which is why each
+# needs an entry rather than a code comment.
+#
+#   0x9ff sets the sampler subsystem (bit 11) WITHOUT the texture resource subsystem (bit 10) that
+#         every MGPBoundView::Texture and MGPImageView::Res depends on.
+#   0x5ff sets the texture resource subsystem (bit 10) WITHOUT the sampler subsystem (bit 11):
+#         D-K2's fourth row (ID-15). MGPTextureParams::BuiltinSampler is a SamplerCso handle and
+#         only bit 11 mints sampler CSOs, so bit 10 alone would emit a null there and the applier's
+#         Fatal is the next thing that happens. The brief called this pair harmless; P4a as built
+#         says otherwise, and the refusal belongs in the texture family's arm resolver.
+#
+# In both, the bring-up must log ONE error naming both bits and run the legacy arm.
 #
 # ONE CASE PER LANE, through TEST_FILTER, and it is a constraint rather than a preference: each case
 # READS the library's log and the log is a per-LANE resource (the library opens it fopen(path, "w"),
@@ -1387,6 +1443,11 @@ mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT
     "MOBILEGL_PIPE_PUSH=0x9ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-refused-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=refused-texture"
+    "MOBILEGL_PIPE_PUSH=0x5ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-refused-texture-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.ObjectSubsystemControl.On."
@@ -1414,6 +1475,15 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.RefusedTexture."
+    TEST_FILTER "ObjectSubsystemControlScenario.ATextureBitWithoutTheSamplerBitIsRefusedAndNamed"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIRONMENT}"
 )
 
 # --- The texture upload shape: RECORDED, NOT GATED in P4a (D-D4) ----------------------
