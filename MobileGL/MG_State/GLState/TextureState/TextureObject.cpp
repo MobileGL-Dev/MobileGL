@@ -12,6 +12,15 @@
 #include "MG_Util/Types.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_Pipe/PipeMutation.h>
+#if MOBILEGL_PIPE_PUSH
+// THE ONE MG_State TRANSLATION UNIT THAT SEES THE CLIENT'S TEXTURE EMITTER, on purpose: the
+// three PipePublish* helpers below are declared on TextureObjectBase and defined here, so the
+// cube's, the view's and the buffer texture's translation units call an inherited member and
+// still see only a declaration. That is the layering MG_Pipe/PipeMutation.h gives the buffer
+// family; P4a cannot use that header because it belongs to the contract package for the whole
+// phase and carries no texture row (TextureEmit.h's header comment has the full argument).
+#include <MG_Impl/Pipe/TextureEmit.h>
+#endif
 
 namespace MobileGL {
     namespace MG_State {
@@ -29,15 +38,44 @@ namespace MobileGL {
 
 #if MOBILEGL_PIPE_PUSH
             TextureObjectBase::~TextureObjectBase() {
-                // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
-                // garbage sweep. This is the last SharedPtr to this object dropping - not the
-                // glDelete* that only marks the name and leaves a still-bound object very much
-                // alive - so it is the exact moment the backend's twin, and the driver storage
-                // that twin owns, stop being reachable. The notice carries the lifetime id
-                // because the object no longer exists to be passed, and because the lifetime id
-                // is what the client slot allocator resolves the handle from. No-op unless a
-                // backend registered the ops (a pull build declares none at all).
-                NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::Texture, m_lifetimeId);
+                // P4a D-I1: BACKEND-NEUTRAL FROM DAY ONE, and the three-step order is fixed.
+                //
+                //   1. the wire delete FIRST - it drops the applier's record while the record
+                //      still exists, so a recycled slot cannot inherit a field. Published-gated
+                //      rather than slot-gated: a backend twin table mints a slot through
+                //      MGPipeSlots().Acquire whether or not the subsystem ever asked this client
+                //      to emit a create, and a resource_destroy on such a handle is a refused
+                //      call the applier counts and asserts on;
+                //   2. the death notice SECOND - it resolves the handle through the allocator,
+                //      and a backend told after the free could no longer find its twin. This is
+                //      the P2 step-e2 announcement that used to stand here alone: the last
+                //      SharedPtr to this object dropping, not the glDelete* that only marks the
+                //      name and leaves a still-bound object very much alive;
+                //   3. the slot LAST, and a double free on a stale generation is a proven no-op.
+                //
+                // Steps 2 and 3 - plus the SamplerViewCso minted off this same lifetime id - are
+                // the contract's helper. The BUILT-IN SAMPLER is deliberately not released from
+                // here: it is a real SamplerObject with its own lifetime id and its own
+                // destructor, which runs immediately after this body and takes the same helper
+                // shape. Step 1 is the client package's, one statement earlier, because the
+                // helper's file belongs to the contract package for the whole phase.
+                MG_Pipe::MGPipeEmitTextureResourceDestroy(m_lifetimeId);
+                MG_Pipe::MGPipeEmitTextureDestroyAndFree(m_lifetimeId);
+            }
+
+            // ---- P4a's three client emission points (see TextureObject.h) ----
+
+            void TextureObjectBase::PipePublishDescriptor() {
+                MG_Pipe::MGPipeEmitTextureRespecify(*this);
+            }
+
+            void TextureObjectBase::PipePublishParams() {
+                MG_Pipe::MGPipeEmitTextureParams(*this);
+            }
+
+            void TextureObjectBase::PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel,
+                                                       Bool dirty) {
+                MG_Pipe::MGPipeNoteTextureLevelDirty(*this, uploadTarget, mipmapLevel, dirty);
             }
 #endif
 
@@ -69,6 +107,24 @@ namespace MobileGL {
                     m_sampler->SetWrapT(SamplerWrapMode::ClampToEdge);
                     m_sampler->SetWrapR(SamplerWrapMode::ClampToEdge);
                 }
+#if MOBILEGL_PIPE_PUSH
+                // P4a D-D1: A RESOURCE EXISTS BEFORE ANYTHING CAN NAME IT, so resource_create is
+                // emitted from the constructor and carries no storage - the store is defined
+                // lazily by the first respecify and every backend already tolerates a resource
+                // with none. The handle itself is minted whatever the subsystem bitmask says,
+                // because set_framebuffer_state and set_sampler_views name this texture by handle
+                // out of two different subsystems.
+                //
+                // NOTHING VIRTUAL IS TOUCHED HERE and that is a correctness requirement rather
+                // than a style: the derived object does not exist yet, and
+                // ITextureObject::GetStorageType is PURE - calling it from a base constructor is
+                // undefined behaviour. The target and the GL name are the two facts a create
+                // carries and both are plain members by this point; the storage kind is derived
+                // from the target, which is exact (TextureObjectBuffer is the only class that
+                // reports Buffer and TextureBuffer is the only target it is constructed with).
+                MG_Pipe::MGPipeMintAndCreateTexture(static_cast<ITextureObject*>(this), m_lifetimeId, target,
+                                                    externalIndex);
+#endif
             }
 
             TextureInternalFormat TextureObjectBase::GetFormat() const {
@@ -116,6 +172,14 @@ namespace MobileGL {
                 BumpShapeVersion();
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                // The format is BOTH halves: a descriptor field the backend allocates from and a
+                // parameter the swizzle / depth-stencil push reads, so both records move. It is
+                // also the last statement of both glTexBuffer entry points, which is what
+                // publishes a buffer texture's window without a call site in MG_Impl/GLImpl.
+                PipePublishDescriptor();
+                PipePublishParams();
+#endif
             }
 
             Uint TextureObjectBase::GetExternalIndex() const {
@@ -142,6 +206,9 @@ namespace MobileGL {
                 m_sampler->SetBorderColor(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             const IntVec4& TextureObjectBase::GetBorderColorI() const {
@@ -157,6 +224,9 @@ namespace MobileGL {
                 m_sampler->SetBorderColorI(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             const UintVec4& TextureObjectBase::GetBorderColorUI() const {
@@ -172,6 +242,9 @@ namespace MobileGL {
                 m_sampler->SetBorderColorUI(color);
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             BorderColorForm TextureObjectBase::GetBorderColorForm() const {
@@ -222,6 +295,9 @@ namespace MobileGL {
                 }
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             void TextureObjectBase::SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) {
@@ -230,6 +306,9 @@ namespace MobileGL {
                 m_swizzleParams = values;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             const UintVec2& TextureObjectBase::GetLevelRange() const {
@@ -249,6 +328,12 @@ namespace MobileGL {
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
+#if MOBILEGL_PIPE_PUSH
+                // The level range is PARAMS, not a descriptor field: the record carries
+                // BaseLevel / MaxLevel and the storage is untouched. The descriptor is deduped on
+                // its own bytes, so the shape bump above costs nothing here.
+                PipePublishParams();
+#endif
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
@@ -261,6 +346,9 @@ namespace MobileGL {
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
+#if MOBILEGL_PIPE_PUSH
+                PipePublishParams();
+#endif
             }
 
             Bool TextureObjectBase::IsImmutable() const {
@@ -281,6 +369,14 @@ namespace MobileGL {
                 }
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                // Immutable is a descriptor fact the backend reads - and NOT a request for an
+                // acknowledgement: MGPipeResourceRespecifyNeedsAck names the buffer target
+                // explicitly, because texture allocation is lazy in monolith and stays lazy in
+                // split. The level clamp above is params.
+                PipePublishDescriptor();
+                PipePublishParams();
+#endif
             }
 
             Uint16 TextureObjectBase::GetTextureParamsVersion() const {
@@ -319,6 +415,9 @@ namespace MobileGL {
                 m_samples = samples;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
 
             Bool TextureObjectBase::HasFixedSampleLocations() const {
@@ -329,6 +428,9 @@ namespace MobileGL {
                 m_fixedSampleLocations = fixedSampleLocations;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
 
             Uint64 TextureObjectBase::GetLifetimeId() const {
@@ -360,11 +462,23 @@ namespace MobileGL {
                                                              MipmapInput input) {
                 BumpShapeVersion();
                 m_textureStorage.AllocateLevel(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, input);
+#if MOBILEGL_PIPE_PUSH
+                // AFTER the allocation, never before: BumpShapeVersion runs first and a descriptor
+                // built there would describe the level set this call is about to change. Every
+                // storage-defining GL entry point - glTexImage*, glCompressedTexImage*,
+                // glTexStorage*, glTextureView and the generated-mip storage grow - reaches
+                // storage through here, which is what makes the emission complete without one call
+                // site per entry point in MG_Impl/GLImpl.
+                PipePublishDescriptor();
+#endif
             }
 
             void TextureObjectWithOneMipmap::TruncateMipmapLevels(TextureUploadTarget uploadTarget, Uint levelCount) {
                 BumpShapeVersion();
                 m_textureStorage.TruncateToLevelCount(GetIndexOfTextureUploadTarget(uploadTarget), levelCount);
+#if MOBILEGL_PIPE_PUSH
+                PipePublishDescriptor();
+#endif
             }
 
             void TextureObjectWithOneMipmap::UpdateMipmapSubData(TextureUploadTarget uploadTarget, Uint mipmapLevel,
@@ -383,6 +497,9 @@ namespace MobileGL {
                     MGP_NOTE_AGGREGATE(TextureContent);
                 }
                 m_textureStorage.MarkDirty(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, dirty);
+#if MOBILEGL_PIPE_PUSH
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel, dirty);
+#endif
             }
 
             Bool TextureObjectWithOneMipmap::IsStorageDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel) const {
@@ -395,6 +512,13 @@ namespace MobileGL {
                 MGP_NOTE_AGGREGATE(TextureContent);
                 m_textureStorage.MarkDirtyRegion(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, offset,
                                                  size);
+#if MOBILEGL_PIPE_PUSH
+                // THE DRAIN LIST IS KEYED ON THE STORAGE OWNER FOR FREE: TextureObjectView
+                // forwards this call to the OWNER's method after remapping the level and the
+                // region, so an upload through a view and an upload through the owner arrive here
+                // on the same object with the same owner-side coordinates.
+                PipeNoteLevelDirty(uploadTarget, mipmapLevel, true);
+#endif
             }
 
             MipmapDirtyRegion TextureObjectWithOneMipmap::GetStorageDirtyRegion(TextureUploadTarget uploadTarget,

@@ -25,15 +25,22 @@ namespace MobileGL::MG_State::GLState {
 
 #if MOBILEGL_PIPE_PUSH
     FramebufferObject::~FramebufferObject() {
-        // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
-        // garbage sweep. This is the last SharedPtr to this object dropping - not the
-        // glDelete* that only marks the name and leaves a still-bound object very much
-        // alive - so it is the exact moment the backend's twin, and the driver storage
-        // that twin owns, stop being reachable. The notice carries the lifetime id
-        // because the object no longer exists to be passed, and because the lifetime id
-        // is what the client slot allocator resolves the handle from. No-op unless a
-        // backend registered the ops (a pull build declares none at all).
-        NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::Framebuffer, m_lifetimeId);
+        // P4a D-I2: A FRAMEBUFFER HAS A HANDLE AND NO WIRE LIFETIME. PipeCalls.def carries
+        // resource_destroy and five delete_* rows and NO framebuffer delete, because a
+        // framebuffer is not a resource and is not a CSO - it is STATE, and
+        // set_framebuffer_state is the only call that names one - and the catalogue is closed,
+        // so P4a invents no row. The helper is therefore steps 2 and 3 only: the death notice,
+        // raised while the handle still resolves (this is the P2 step-e2 announcement that used
+        // to stand here alone - the last SharedPtr to this object dropping, not the glDelete*
+        // that only marks the name and leaves a still-bound object very much alive), and then
+        // the slot.
+        //
+        // What makes a dangling Fbo unreachable is the frontend's own
+        // MarkFramebufferObjectForDeletion path, which already rebinds any slot holding the
+        // victim to framebuffer 0; and a RECYCLED framebuffer handle can never be suppressed
+        // against its predecessor's record, because Fbo carries Gen and Gen is inside the
+        // record's ContentHash.
+        MG_Pipe::MGPipeEmitFramebufferDestroyAndFree(m_lifetimeId);
     }
 #endif
 
