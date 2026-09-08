@@ -2724,6 +2724,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Read AFTER SyncPersistentMappedRange above, and through liveHostBase for the
             // reason written where it is declared.
             const Uint8* const hostBase = liveHostBase();
+            // AND PUBLISH IT, because the readers that have NO frontend object read
+            // resource->hostBytes and nothing else: the readback flush (Ops_H_Readback), the
+            // kill-switch map arm of Ops_H_FlushRange, and the fp64 narrowing
+            // (SyncFloat64AttributeAsFloat32ByHandle, whose legacy counterpart reads
+            // bufferObject->MappedData()). A twin is created LAZILY - D-A2's row makes
+            // Ops_H_Create a no-op - so the very first resource_respecify of a buffer finds
+            // FindBufferResourceForHandle == nullptr and its base is dropped on the floor; with
+            // glBufferData(..., data) followed by no further content call (the ordinary static
+            // vertex array) hostBytes then stayed null for the object's whole life and the fp64
+            // narrowing refused every draw, disabling the array. This is the one place that both
+            // holds the object and runs before every draw that uses the store, so it is where the
+            // base is refreshed. Only reached for a NON-adopted resource (the adopted arm
+            // returned above), so C-2's rule is intact: an adopted store's hostBytes stays null
+            // and its bytes are read through persistentPtr.
+            if (hostBase != nullptr) resource->hostBytes = hostBase;
             // "DOES THE SHADOW THIS PATH IS ABOUT TO UPLOAD HOLD MEANINGFUL BYTES?" - and it has
             // to be asked of the SAME thing the bytes come from, which is why it is not
             // record->Desc.HasDefinedContent. The descriptor states what was true at the last
