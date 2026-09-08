@@ -7919,6 +7919,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_fboSyncedSlotVersions = {0};
             g_fboSyncedObjectVersions = {0};
             g_fboSyncedObjects = {};
+#if MOBILEGL_PIPE_PUSH && MOBILEGL_ESPRYT_FBO_HANDLE_ARM_MEMOS_LINKED
+            // E's MAJOR-4 / A9: the handle arm's own memos say the same thing about the same
+            // targets, so they are invalidated HERE rather than at each of the nine call sites -
+            // six in DirectGLES.cpp and three in SanityTest.cpp, and it was the three that were
+            // missed. See the declaration in Managers.h for why the call is gated and which line
+            // each package flips.
+            InvalidateFramebufferHandleArmMemos();
+#endif
         }
 
         void BackendFramebufferObject::InvalidateSyncedState() {
@@ -8213,17 +8221,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
 #if MOBILEGL_PIPE_PUSH
-        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(FramebufferTarget asTarget,
-                                                                    MG_Pipe::MGPipeHandle fbo) {
-            if (MG_Pipe::MGPipeHandleIsNull(fbo)) return nullptr;
-            const auto& applier = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPFramebufferState& record =
-                asTarget == FramebufferTarget::Read ? applier.ReadFramebuffer : applier.DrawFramebuffer;
-            // A record the client has never sent is all zeroes, whose Fbo is the null handle and
-            // therefore matches no twin. That is the same test as "is this record mine", so
-            // there is no second emptiness check to get out of step with it.
-            if (!(record.Fbo == fbo)) return nullptr;
-            return &record;
+        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(MG_Pipe::MGPipeHandle fbo) {
+            // FramebufferRecordFor answers null for the null handle and for a slot nothing has
+            // described (both silent - that is every framebuffer before its first emission), and
+            // refuses a stale generation loudly while counting it in
+            // StaleFramebufferRecordLookups. So there is no second emptiness test here to get out
+            // of step with the applier's, and none of the three cases is a binding question.
+            return MG_Pipe::MGPipeApplier().FramebufferRecordFor(fbo);
+        }
+
+        Bool PushedFramebufferIsBoundTo(FramebufferTarget target, MG_Pipe::MGPipeHandle fbo) {
+            if (MG_Pipe::MGPipeHandleIsNull(fbo)) return false;
+            const auto binding = target == FramebufferTarget::Read ? MG_Pipe::MGPipeFramebufferTarget::Read
+                                                                   : MG_Pipe::MGPipeFramebufferTarget::Draw;
+            return MG_Pipe::MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(binding)] == fbo;
         }
 
         // The record's DrawBuffers[] is an ATTACHMENT INDEX with -1 for None (D-C1), which is
@@ -8266,10 +8277,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // point cannot be a legal read buffer and is refused rather than guessed.
             if (FramebufferSubsystemEnabled()) {
                 const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
-                const auto* record = PushedFramebufferRecord(FramebufferTarget::Read, fbo);
+                // ID-19: the OBJECT's record, not "the record of whatever is bound to READ". A
+                // framebuffer whose read buffer is being pushed need not be the read binding at
+                // all - glNamedFramebufferReadBuffer and the DSA clears reach here by name - and
+                // ReadSurface is resolved from THIS framebuffer's own read buffer under every
+                // Target, Named included (c0e's MGPFramebufferState comment).
+                const auto* record = PushedFramebufferRecord(fbo);
                 if (record == nullptr) {
-                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no read-target applier record on the "
-                                 "handle arm, so its read buffer cannot be pushed (handle {%u, %u})",
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no applier record on the handle arm, so "
+                                 "its read buffer cannot be pushed (handle {%u, %u})",
                                  stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
                     return;
                 }
@@ -8429,15 +8445,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_D("Syncing FBO with backend ID %u to backend for state ID %u, as %s FBO", m_backendFBOId,
                     stateFBOObject->GetExternalIndex(), (asTarget == FramebufferTarget::Draw ? "DRAW" : "READ"));
             GLenum glFBOTarget = MG_Util::ConvertFramebufferTargetToGLEnum(asTarget);
-            Bind(asTarget);
 
 #if MOBILEGL_PIPE_PUSH
-            // P4a (D-C2): the record for THIS bound target. The client emits one per bound
-            // target that moved, or one with Target = Both when the two bindings name the same
-            // object, so a record that reaches this twin always describes the target it is
-            // being synced as - and the "same FBO as draw" skip whose one surviving job was
-            // SyncReadBufferToBackend stops being a hazard, because the record says which
-            // target it is instead of the call site having to remember.
+            // P4a (D-C2 as corrected by ID-19): THE RECORD OF THIS FRAMEBUFFER OBJECT, resolved
+            // BEFORE the driver framebuffer is bound.
+            //
+            // The order is the whole of C-1's fix. v1 bound first and refused afterwards, so a
+            // glClearNamedFramebufferfv / glBlitNamedFramebuffer on a framebuffer that is bound
+            // to neither target left this twin's freshly minted driver FBO bound with NO
+            // ATTACHMENTS and the caller then issued the clear or the blit against it -
+            // GL_INVALID_FRAMEBUFFER_OPERATION and nothing cleared, where the legacy arm cleared
+            // correctly. A refusal now happens before anything is bound, so the driver's binding
+            // is exactly where the caller left it and the failure is one named log line rather
+            // than a wrong picture.
+            //
+            // The record is per FRAMEBUFFER OBJECT and is found by handle, so it describes this
+            // object whether it is bound to Draw, to Read, to both or to neither, and its own
+            // Target is NOT compared against `asTarget`: a Named record legitimately names no
+            // binding at all. What is still gated on `asTarget` is what reaches the DRIVER's
+            // bound target - glDrawBuffers and the four cross-object masks below, which stay
+            // Draw-only for the reason the OIT comment gives.
             const MG_Pipe::MGPFramebufferState* pushedRecord = nullptr;
             FramebufferObject::FramebufferAttachmentArray pushedDrawBuffers{};
             if (FramebufferSubsystemEnabled()) {
@@ -8447,33 +8474,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // - so the handle exists purely to key set_framebuffer_state, which is exactly
                 // what it is used for here.
                 const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
-                pushedRecord = PushedFramebufferRecord(asTarget, fbo);
+                pushedRecord = PushedFramebufferRecord(fbo);
                 if (pushedRecord == nullptr) {
-                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no %s-target applier record on the handle "
-                                 "arm, so it cannot be synced from the pushed record (handle {%u, %u})",
-                                 stateFBOObject->GetExternalIndex(),
-                                 asTarget == FramebufferTarget::Draw ? "draw" : "read", fbo.Slot, fbo.Gen);
-                    return;
-                }
-                // The record's own Target has to agree with the binding it is being applied to.
-                // Both is legal for either; anything else means a record was written into the
-                // wrong applier slot, which is the mistake D-C2 exists to make visible rather
-                // than a call-site discipline nobody can check.
-                const Uint8 expected = asTarget == FramebufferTarget::Read
-                                           ? static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Read)
-                                           : static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Draw);
-                if (pushedRecord->Target != expected &&
-                    pushedRecord->Target != static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both)) {
-                    MGLOG_E_ONCE("MGPipe: framebuffer %u's record says Target=%u but it is being synced "
-                                 "as the %s target - refusing rather than applying it to the wrong "
-                                 "binding",
-                                 stateFBOObject->GetExternalIndex(), pushedRecord->Target,
-                                 asTarget == FramebufferTarget::Draw ? "draw" : "read");
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no applier record on the handle arm, so it "
+                                 "cannot be synced from the pushed record and is left unbound rather "
+                                 "than bound-and-unconfigured (handle {%u, %u})",
+                                 stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
                     return;
                 }
                 DecodePushedDrawBuffers(*pushedRecord, pushedDrawBuffers.data());
             }
 #endif
+            Bind(asTarget);
 
             // -------------------- Connect attachments (set buffers) -----------------------
             // 1. Remap draw buffers
@@ -8583,7 +8595,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
             }
 #if MOBILEGL_PIPE_PUSH
-            // P4a (D-C4): the record's ContentHash is what says this target's resolved state
+            // P4a (D-C4): the record's ContentHash is what says this framebuffer's resolved state
             // moved, and it REPLACES the frontend attachment versions AS A KEY. It covers every
             // field the record carries, so an attachment set that moved, a draw-buffer array
             // that moved, an extent that moved and a recycled Fbo whose successor happens to
