@@ -287,11 +287,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                   "MG_IntegrationTest's two-symbol probe over MG_Backend/DirectVulkan is what "
                   "carries the answer into the lane");
 
-    // The per-kind form of MagmaPipeAbaControlDefeatsIdentity(): true only where there is both a
-    // key to defeat here AND the operator asked for it.
-    inline Bool MagmaPipeAbaControlCoversKind(MG_Pipe::MGPipeKind kind) {
-        return MagmaPipeAbaControlKindIsRekeyedHere(kind) && MagmaPipeAbaControlDefeatsIdentity();
-    }
+    // THERE IS DELIBERATELY NO PER-KIND WRAPPER HERE, and review F-v2-m3 is why. An earlier
+    // round carried `MagmaPipeAbaControlCoversKind(kind)` - the conjunction of the two
+    // statements above - and it had no caller anywhere in the tree: the knob's only two
+    // consumers (VulkanRenderer.cpp's VAO draw memo and VertexInputStateFactory.cpp's pipeline
+    // key) each hold ONE kind, VertexElementsCso, by construction, so the kind is not a
+    // variable at either site. A conjunction no build ever evaluates cannot be pinned the way
+    // the predicate above is pinned - it is not constexpr, because it reads MG_Config::Features,
+    // so no static_assert can reach it - which makes it exactly the rot F-m5 was raised about,
+    // one level up: an `&&` whose operands could be inverted or dropped with nothing to say so.
+    //
+    // The two pieces stand alone instead, and each is pinned by something that runs:
+    // MagmaPipeAbaControlKindIsRekeyedHere is constexpr and asserted in BOTH directions by the
+    // three static_asserts above, which compile in every Magma build; MagmaPipeAbaControlDefeats
+    // Identity is the knob, and its two consumers are what make it true or false. A call site
+    // that ever does hold a variable kind writes the `&&` there, where a build will run it.
 
     // The single consumer-table entry every VAO collapses onto while the control is on. Slot
     // 0 is a real, ordinary entry of both tables (MagmaPipeSlotIndex maps the first allocatable
