@@ -133,6 +133,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/HandleRecycleScenario.cpp
     Scenarios/CsoContentAddressingScenario.cpp
     Scenarios/ResourceSubsystemControlScenario.cpp
+    Scenarios/TextureParamsWithoutASamplerViewScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -1320,6 +1321,25 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}"
 )
+
+# --- G9: the mandatory red-before scenario -------------------------------------------
+#
+# TextureParamsWithoutASamplerViewScenario needs NO lane of its own, and that is deliberate rather
+# than an omission. It reads no counter and no log - its observable is a sampled colour - and its
+# claim is about the SHIPPING configuration, so the two ambient registrations at the top of this
+# file (which run at the build's default mask) are exactly the arms it wants. A lane here would pin
+# a mask and make the entry stop describing what ships the next time the default moved. The
+# DirectVulkan ambient entries skip in the scenario's SetUp, naming the backend: the gap it is about
+# is Espryt's SyncAttachmentObject / SyncNeccessaryTextures pair and P4a touches no DirectVulkan
+# source but MagmaPipeArms.h (D-Q).
+#
+# D-E3 expects its second case, AReadAttachmentOnlyTexturesDepthStencilModeReachesTheDriver, to be
+# RED until package esprytobj lands. MEASURED ON THE CONTRACT COMMIT IT IS GREEN, and the scenario's
+# header carries the mechanism: a texture parameter's only public-GL observable is a sample, and the
+# sample repairs the state it was meant to catch (the unit sync list re-syncs whenever the params
+# version moved). Nothing about any of that is expressed in this file - a registration that
+# "expected" a red would be a gate that could never go green - and the ruling on the missing
+# artefact is the integrator's, recorded in the gates result document.
 
 if (MOBILEGL_PIPE_VERIFY)
     # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
