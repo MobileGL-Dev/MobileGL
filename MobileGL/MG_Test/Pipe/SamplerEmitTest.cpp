@@ -565,7 +565,8 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
     X(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing)                                    \
     X(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves)                                  \
     X(SamplerEmit, AReferencedCsoIsNeverTheLruVictim)                                               \
-    X(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt)
+    X(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt)                              \
+    X(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -1042,6 +1043,50 @@ namespace {
             Cache().Release(handle);
         }
         Cache().Release(extra);
+    }
+
+    // THE COUNT IS PER HANDLE, NOT PER HOLDER, and this is what makes that visible to whoever
+    // holds one. Entries are content-addressed and shared by design - package B's texture-params
+    // record and this file's own bind_sampler_states name the SAME handle when the values match,
+    // each owing exactly one Release - so a holder that releases twice takes the OTHER holder's
+    // pin and the LRU may then evict a handle a published record still names, with nothing to
+    // refuse and nothing to re-emit. The cache cannot repair that, so it counts it; an assert
+    // could not, because MOBILEGL_ASSERT compiles out at INFO, i.e. in every build that runs.
+    TEST(SamplerEmit, AReleaseThisCacheNeverHandedOutIsCountedRatherThanAbsorbed) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+        const MGPipeHandle cso = Cache().Acquire(params, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        ASSERT_EQ(Cache().RefCountOf(cso), 1u);
+        ASSERT_EQ(Cache().GetCounters().UnknownReleases, 0u);
+        ASSERT_EQ(Cache().GetCounters().UnderflowedReleases, 0u);
+
+        // A HANDLE THIS CACHE NEVER MINTED: a stale one from before a reset, or one of another
+        // kind passed by mistake. It falls off the end of the probe and used to leave no trace
+        // at all - Releases counts only releases that found an entry.
+        Cache().Release(MGPipeHandle{cso.Slot + 4096u, cso.Gen});
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases, 1u);
+        EXPECT_EQ(Cache().RefCountOf(cso), 1u) << "and it took nobody else's pin on the way";
+
+        // A SECOND RELEASE OF A REFERENCE ONLY ONE HOLDER OWED. The count does not underflow -
+        // that half was already right - but the attempt is now named.
+        Cache().Release(cso);
+        EXPECT_EQ(Cache().RefCountOf(cso), 0u);
+        EXPECT_EQ(Cache().GetCounters().UnderflowedReleases, 0u);
+        Cache().Release(cso);
+        EXPECT_EQ(Cache().RefCountOf(cso), 0u) << "no underflow";
+        EXPECT_EQ(Cache().GetCounters().UnderflowedReleases, 1u);
+
+        // A NULL HANDLE IS NEITHER: an out-of-window unit holds one and releasing it is the
+        // ordinary no-op the reconciliation depends on.
+        const auto before = Cache().GetCounters();
+        Cache().Release(kMGPipeNullHandle);
+        EXPECT_EQ(Cache().GetCounters().UnknownReleases, before.UnknownReleases);
+        EXPECT_EQ(Cache().GetCounters().Releases, before.Releases);
+        // NOTHING WAS EVICTED WHILE REFERENCED, which is the ID-17 invariant the same round
+        // turned from a compiled-out assert into a number.
+        EXPECT_EQ(Cache().GetCounters().ReferencedEvictions, 0u);
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH
