@@ -25,13 +25,31 @@
 //   * GetBufferSubData reads back the latest CPU write - the shadow IS the map;
 //   * a compute-shader write through an SSBO binding of the same arena is read
 //     back - the GPU-written path for adopted stores (glFinish + direct read).
+//
+// P3a (gate G10, G12) adds a fourth case and two more lanes, and neither of them
+// changes what the three above assert:
+//
+//   * AnAdoptionCostsExactlyOneMapPersistentRoundtrip counts the acquisition.
+//     ARCHITECTURE.md:474 prices the adopted store at one round trip per STORAGE
+//     DEFINITION; `map-persistent-roundtrips` counts every map_persistent
+//     emission, mint or decline (D-B2), so one definition plus a frame of draws
+//     must publish exactly one. It reads the library's summary line, so it needs
+//     a lane with the stats channel and a private log path, and it SKIPS - with
+//     the reason - anywhere else and on any tree that does not emit the counter.
+//   * the three original cases are registered TWICE MORE, with P3a's resource and
+//     vertex-input subsystem bits set and cleared, because this file is where an
+//     adopted store's whole life is exercised: definition, in-flight SubData,
+//     readback and a GPU write. If the handle path and the legacy BufferBackendOps
+//     path disagree about any of it, one of the two arms goes red here.
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -72,6 +90,19 @@ layout(local_size_x = 1) in;
 layout(std430, binding = 0) buffer Arena { uint word; };
 void main() { word = 0xC0FFEEu; }
 )";
+
+        // Set by the MapPersistentRoundtrips. ctest entry and by nothing else; a harness marker,
+        // never read by the library.
+        constexpr const char* kLaneMarker = "MGITEST_MPR_LANE";
+        // Draws issued against the arena inside the counted window. One definition, many draws:
+        // "one per definition" (1) and "one per draw" (kDrawsInTheWindow) have to be different
+        // numbers or the assertion cannot tell them apart.
+        constexpr int kDrawsInTheWindow = 5;
+
+        bool BuildMarkerIsSet(const char* name) {
+            const char* value = std::getenv(name);
+            return value != nullptr && value[0] == '1' && value[1] == '\0';
+        }
 
         struct Vertex {
             float x, y;
@@ -122,10 +153,12 @@ void main() { word = 0xC0FFEEu; }
                 glBindVertexArray(0);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_arena != 0) glDeleteBuffers(1, &m_arena);
+                if (m_secondArena != 0) glDeleteBuffers(1, &m_secondArena);
                 if (m_program != 0) glDeleteProgram(m_program);
                 if (m_compute != 0) glDeleteProgram(m_compute);
                 m_vao = 0;
                 m_arena = 0;
+                m_secondArena = 0;
                 m_program = 0;
                 m_compute = 0;
             }
@@ -188,6 +221,40 @@ void main() { word = 0xC0FFEEu; }
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
 
+            // GTEST_SKIP() returns from the function it is written in, so this cannot report
+            // through a return value; the caller pairs it with `if (IsSkipped()) return;`.
+            void SkipUnlessTheRoundtripCounterIsReadableHere() {
+                if (std::getenv(kLaneMarker) == nullptr) {
+                    GTEST_SKIP() << "runs only in its own lane: the MapPersistentRoundtrips. ctest entry "
+                                    "sets MGITEST_MPR_LANE together with MOBILEGL_PIPE_PUSH's P3a mask, "
+                                    "MOBILEGL_PIPE_STATS=1, MOBILEGL_PIPE_STATS_PERIOD=1 and a private "
+                                    "MOBILEGL_LOG_FILE_PATH. The ambient entries and the two subsystem "
+                                    "arms configure none of that, and their log is shared - a read there "
+                                    "would race a neighbour's bring-up.";
+                    return;
+                }
+                if (!BuildMarkerIsSet("MGITEST_PIPE_PUSH_BUILD")) {
+                    GTEST_SKIP() << "this library was built without MOBILEGL_PIPE_PUSH, so "
+                                    "CallClass::MapPersistentRoundtrips does not exist and the summary "
+                                    "line carries no mpr=. The entry stays registered so that "
+                                    "`ctest -L integration-gpu` names the same tests in both builds (G2).";
+                    return;
+                }
+                if (!BuildMarkerIsSet("MGITEST_PIPE_RESOURCE_EMITTER_PRESENT")) {
+                    GTEST_SKIP() << "subsystem not implemented on this tree: no source under "
+                                    "MobileGL/MG_Impl/Pipe/ names MapPersistentRoundtrips, so nothing "
+                                    "emits map_persistent and mpr= is structurally zero. P3a package B "
+                                    "owns that emitter; this entry arms itself when it lands.";
+                    return;
+                }
+                if (PipeStatsWindow::LibraryLogPath().empty()) {
+                    GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the library's "
+                                    "summary line is the only channel this module has for reading "
+                                    "PipeStats";
+                    return;
+                }
+            }
+
             std::array<unsigned char, 4> CenterPixel() {
                 std::array<unsigned char, 4> px = {0, 0, 0, 0};
                 glReadPixels(Gl().Width() / 2, Gl().Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
@@ -199,6 +266,9 @@ void main() { word = 0xC0FFEEu; }
             unsigned int m_compute = 0;
             unsigned int m_vao = 0;
             unsigned int m_arena = 0;
+            // Only the counting case uses this one; see the comment there for why it does not
+            // simply re-specify m_arena.
+            unsigned int m_secondArena = 0;
             std::string m_buildLog;
         };
 
@@ -370,6 +440,76 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(marker, 0xC0FFEEu)
             << "the compute write into the adopted arena did not reach the CPU readback";
+    }
+
+    // G10, the per-adoption half: ONE storage definition of an arena costs ONE map_persistent
+    // emission, however many draws read it afterwards.
+    //
+    // The arena SetUp defined is deliberately re-defined inside the counted window rather than
+    // measured from outside it: the window a summary line reports is "since the previous line",
+    // so the definition has to happen between the two swaps that bracket it, and a case that
+    // counted SetUp's definition would be reading a window it did not control.
+    //
+    // ONE reading case per lane, for the reason PipeStatsWindow.h gives: the library truncates the
+    // log per process, so two readers in a lane race under `ctest -j`.
+    TEST_F(LargeArenaAdoptionScenario, AnAdoptionCostsExactlyOneMapPersistentRoundtrip) {
+        if (!Ready() || IsSkipped()) return;
+        SkipUnlessTheRoundtripCounterIsReadableHere();
+        if (IsSkipped()) return;
+
+        Gl().EndFrame(); // close the setup window, SetUp's own definition included
+
+        // One definition of a store past the 16 MiB adoption threshold, in a SECOND arena rather
+        // than by re-specifying SetUp's. Re-specifying an adopted store while a VAO's attributes
+        // still read it leaves the backend VAO bound to the retired store - `dev`'s d7655247
+        // ("rebind VAOs when an adopted buffer is respecified - the immediate retire path forgot
+        // the buffer-id generation"), which is NOT in feat/disaggregated's history. A counting
+        // case that carried that crash would be red for a reason that has nothing to do with the
+        // counter. A fresh store is the same STORAGE DEFINITION either way, which is what
+        // ARCHITECTURE.md:474 prices.
+        glGenBuffers(1, &m_secondArena);
+        glBindBuffer(GL_ARRAY_BUFFER, m_secondArena);
+        glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
+        glBindVertexArray(m_vao);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                              reinterpret_cast<void*>(kVertexOffset));
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                              reinterpret_cast<void*>(kVertexOffset + 2 * sizeof(float)));
+        ASSERT_EQ(FirstGLError(), 0u) << "defining the second arena inside the counted window failed";
+
+        // ... and then a frame's worth of traffic against it, of the shape the arena exists for:
+        // a SubData per draw, every one of which lands in the adopted mapping and none of which
+        // may acquire it again.
+        const auto vertices = QuadVertices(0.f, 1.f, 0.f);
+        for (int draw = 0; draw < kDrawsInTheWindow; ++draw) {
+            glBindBuffer(GL_ARRAY_BUFFER, m_secondArena);
+            glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
+                            GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+            DrawQuad();
+        }
+        const auto px = CenterPixel();
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_GT(px[1], 200) << "the draws inside the counted window never landed, so the count below "
+                                 "would be a number about nothing";
+
+        Gl().EndFrame(); // the swap that emits the window covering exactly the work above
+        const PipeStatsWindow::Window window = PipeStatsWindow::LastFromLaneLog();
+        ASSERT_TRUE(window.found) << "no 'MGPipe stats:' line in " << PipeStatsWindow::LibraryLogPath()
+                                  << ": either MOBILEGL_PIPE_STATS / MOBILEGL_PIPE_STATS_PERIOD did not "
+                                     "reach the process, or nothing reached PipeStats::OnPresent.";
+        RecordProperty("stats_line", window.line.c_str());
+
+        const long long roundtrips = PipeStatsWindow::CounterOrAbsent(window, "mpr");
+        ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field: " << window.line;
+        EXPECT_EQ(roundtrips, 1)
+            << "one storage definition of an adopted arena is one map_persistent emission "
+               "(ARCHITECTURE.md:474, D-B2: mint OR decline, both need an answer from the resource "
+               "owner). This window defined the arena once and drew from it "
+            << kDrawsInTheWindow << " times, so 1 is the whole cost; " << kDrawsInTheWindow
+            << " would mean the acquisition moved onto the draw path - the ~167 ms/arena hiccup this "
+               "adoption removed, re-introduced - and 0 would mean the emission stopped happening. It "
+               "reported: "
+            << window.line;
     }
 
 } // namespace MGITest

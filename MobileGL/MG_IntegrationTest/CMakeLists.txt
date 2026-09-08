@@ -131,6 +131,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PoisonOmissionScenario.cpp
     Scenarios/HandleRecycleScenario.cpp
     Scenarios/CsoContentAddressingScenario.cpp
+    Scenarios/ResourceSubsystemControlScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -649,6 +650,20 @@ gtest_discover_tests(MobileGLIntegrationTest
 # emulation never runs - the ambient registration would be exercising the un-stripped path
 # twice and calling it coverage. With the variable set, the blocks really are emitted with no
 # location and the assertion is about the spelling the device gets.
+# RESOURCE_LOCK, on this lane and on the three below it, and it is a bug fix rather than a
+# precaution. Each of these lanes gives a WHOLE SCENARIO one MOBILEGL_LOG_FILE_PATH, and one case
+# in each reads that log back to prove the pinned emulation actually armed. The library opens the
+# log fopen(path, "w"), so every process in the lane TRUNCATES it - and under `ctest -j` a sibling
+# case of the same lane can truncate it while the arming case is reading, which reads back as "the
+# log carries no arming line" and fails a healthy lane. Measured on this tree: three runs of the
+# full integration-gpu label at -j 8 produced 4 failures, 0 and 2, always one of these arming
+# cases, never the same set twice.
+#
+# The rule stated above the verify block - a case that reads the log needs a lane whose filter
+# selects it alone - would fix it by re-filtering, but that would RENAME the arming entries, and
+# an existing ctest name may never disappear (gate G14). A ctest RESOURCE_LOCK named after the log
+# is the same guarantee without touching a name: ctest never runs two entries holding the same lock
+# at once, so the only processes that can truncate a lane's log are ones nobody is reading it for.
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.UnlocatedIoBlocks."
     TEST_FILTER "UnlocatedIoBlockScenario.*"
@@ -656,6 +671,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK unlocated-io-blocks.log
         ENVIRONMENT "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}"
 )
 
@@ -772,6 +788,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK primgen-query-reroute.log
         ENVIRONMENT "${MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT}"
 )
 
@@ -807,6 +824,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK point-size-demotion-gles.log
         ENVIRONMENT "${MGL_ITEST_GLES_POINT_SIZE_DEMOTION_ENVIRONMENT}"
 )
 
@@ -817,6 +835,7 @@ gtest_discover_tests(MobileGLIntegrationTest
     PROPERTIES
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK point-size-demotion-vulkan.log
         ENVIRONMENT "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}"
 )
 
@@ -1064,6 +1083,129 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}"
+)
+
+# --- G12: the P3a subsystem A/B, and G10's map-persistent-roundtrips lanes ------------
+#
+# THE MASKS ARE THE TWO PHASE CONSTANTS, not hand-picked bits: 0x1ff is
+# kMGPipeSubsystemsMigratedAtP3a (the push build's default) and 0x7f is
+# kMGPipeSubsystemsMigratedAtP2, which is exactly that default with bits 7 (resources) and 8
+# (vertex input) cleared. MGPipe.h:79 keeps each phase's constant alive as the next phase's A/B
+# control for this reason, and a lane that spelled its own bit pattern would stop being the shape
+# that ships the first time the default moved.
+#
+# DirectGLES only. P3a migrates Espryt's buffer and VAO paths; Magma's buffer path is P7 and
+# registers no MGPipeResourceOps, so a DirectVulkan arm would be measuring the client emitter
+# against a backend nobody asked to change.
+#
+# Each reading entry gets a LOG PATH OF ITS OWN, and its ctest entry selects ONE case: the library
+# opens the log fopen(path, "w") - every process in a lane truncates it - and these cases READ it.
+# Two readers in one lane race under `ctest -j`, and the failure looks exactly like "the counter
+# was never emitted". Same rule as the CSO lanes above and the verify arming lane below.
+#
+# MOBILEGL_PIPE_STATS_PERIOD=1 makes one summary line per eglSwapBuffers, which is what lets a
+# workload be bracketed by two swaps and read back as a window covering exactly itself.
+#
+# Registered in EVERY build, including the pull build where none of the counters exists, so that
+# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
+# pull build MGITEST_PIPE_PUSH_BUILD is absent and every one of these cases skips saying so; a
+# MOBILEGL_PIPE_PUSH value in the environment of a pull library steers nothing (Config.h declares
+# the field inside the push guard), exactly as the HandleRecycle Legacy lanes already rely on.
+mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_RESOURCE_SUBSYSTEM_LANE=on"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/resource-subsystem-on-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_RESOURCE_SUBSYSTEM_LANE=off"
+    "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/resource-subsystem-off-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ResourceSubsystemControl.On."
+    TEST_FILTER "ResourceSubsystemControlScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ResourceSubsystemControl.Off."
+    TEST_FILTER "ResourceSubsystemControlScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT}"
+)
+
+# G10's two counting entries, one per scenario that has a claim about the counter:
+# StorageBufferRegrow asserts N definitions cost N round trips (never one per draw), and
+# LargeArenaAdoption asserts one adoption costs exactly one. Each names a single case in its
+# TEST_FILTER, for the private-log reason above.
+mgl_itest_join_environment(MGL_ITEST_GLES_MPR_REGROW_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_MPR_LANE=storage-buffer-regrow"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mpr-storage-buffer-regrow-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_MPR_LANE=large-arena-adoption"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mpr-large-arena-adoption-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.MapPersistentRoundtrips."
+    TEST_FILTER "StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_MPR_REGROW_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.MapPersistentRoundtrips."
+    TEST_FILTER "LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT}"
+)
+
+# LargeArenaAdoption's three behavioural cases under BOTH arms of the same A/B. This file is where
+# an adopted store's whole life is exercised - the NULL-data definition that adopts it, an
+# in-flight SubData, a readback and a GPU write - so if the handle path and the legacy
+# BufferBackendOps path disagree about any of it, one of these two lanes goes red and names which.
+# No log path: none of these three cases reads one, and giving them one would only add a file for
+# four processes to truncate. The fourth case skips in both lanes for exactly that reason, saying
+# so.
+mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x1ff"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_PIPE_PUSH=0x7f"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ResourceSubsystemOn."
+    TEST_FILTER "LargeArenaAdoptionScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ResourceSubsystemOff."
+    TEST_FILTER "LargeArenaAdoptionScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}"
 )
 
 if (MOBILEGL_PIPE_VERIFY)
