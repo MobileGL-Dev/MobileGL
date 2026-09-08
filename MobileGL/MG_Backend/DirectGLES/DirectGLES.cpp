@@ -193,80 +193,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_PIPE_PUSH
-    // ---------------------------------------------------------------------------------
-    // P4a: the four family arm predicates the draw path below gates on.
-    // ---------------------------------------------------------------------------------
-    //
-    // TEMPORARY AND SAID SO. D-K3 gives the phase four Resolve<Family>SubsystemArm() latches,
-    // beside ResolveResourceSubsystemArm / ResolveVertexInputSubsystemArm in Managers.cpp -
-    // which is package D's file for the whole phase, so the draw-path package cannot write
-    // them. It is landed BEFORE D, so it carries its own bit tests until those latches exist;
-    // at the rebase every one of these is DELETED and its callers call D's PUBLIC WRAPPERS -
+    // A4, TAKEN AT THE VERIFICATION ROUND, AND THE FOUR TEMPORARY LATCHES ARE GONE WITH IT.
+    // This package landed BEFORE D and so carried its own bit tests, plus a copy of D-K2's
+    // dependency directions, so that a half-running mask was refused in the meantime too.
+    // Package D has landed, so every consult below calls D's PUBLIC WRAPPERS instead -
     // FramebufferSubsystemEnabled() / TextureResourceSubsystemEnabled() /
     // SamplerSubsystemEnabled() / ProgramSubsystemEnabled() (Managers.h, beside the four
     // Resolve<Family>SubsystemArm() resolvers; the WRAPPER holds the `static const` latch, so
-    // the resolver is never the thing to call) - which additionally
+    // the resolver is never the thing to call) - which additionally LOG each dependency
+    // refusal naming both bits and reach Fatal{PipeLegacyMemosDisabled} under
+    // MOBILEGL_PIPE_LEGACY_MEMOS=0, neither of which a copy here could do.
     //
-    //   * LOGS each dependency refusal with one MGLOG_E naming BOTH bits, and
-    //   * reaches PipeSubsystemArmVerdict::NoArm and STOPS with the named
-    //     Fatal{PipeLegacyMemosDisabled, ...} when MOBILEGL_PIPE_LEGACY_MEMOS is 0 - which none
-    //     of these four families' legacy arms survives (D-K3's table: the four g_fboSynced*
-    //     arrays, the twin's cheap-gate trio, UnitSamplerLookupMemo's WeakPtr rows and
-    //     g_programTwinLookupMemo are all pre-handle arms).
-    //
-    // The dependency DIRECTIONS are copied here, so a mask that half-runs is refused in the
-    // meantime too and the A/B is not silently wrong; the refusal log and the stop are D's and
-    // are deliberately not duplicated here, because two writers of one diagnostic is how the
-    // two drift.
-    //
-    // D-K2 HAS FOUR ROWS, NOT THREE (ID-15). The brief's table said "bit 10 without bit 11 is
-    // fine"; that is wrong for P4a as built - MGPTextureParams::BuiltinSampler is a SamplerCso
-    // handle, only bit 11 mints sampler CSOs, and a null there is Fatal. So BIT 10 REQUIRES BIT
-    // 11 as well, which makes the texture-resource and sampler latches the same predicate by
-    // construction. D's mirror comment (esprytobj Managers.h ~631) still states the refuted
-    // sentence out loud and is D's own rework item; nothing here may copy it forward. The row
-    // is spelled as a RAW BIT TEST rather than as a call to the sampler latch, because the two
-    // latches would otherwise initialise each other.
-    //
-    // Latched once per process for the reason Managers.h gives for the other two: the two arms
-    // keep their state in different places, so an answer that changed mid-run would strand
-    // everything already built against the previous one.
-    static Bool EsprytDrawTextureResourceHandlesEnabled() {
-        // Bit 10 requires bit 7: a buffer texture's BufferForTexBuffer names a Buffer handle
-        // and only bit 7 puts twins in that table (D-K2 row 3).
-        // Bit 10 requires bit 11 (D-K2 row 4, ID-15): MGPTextureParams::BuiltinSampler is a
-        // SamplerCso handle and only bit 11 mints those.
-        static const Bool enabled =
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemTextureResources) != 0 &&
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0 &&
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemSamplers) != 0;
-        return enabled;
-    }
-
-    static Bool EsprytDrawFramebufferHandlesEnabled() {
-        // Bit 9 requires bit 10: every MGPSurface::Res names a Texture or Renderbuffer handle.
-        static const Bool enabled =
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemFramebuffer) != 0 &&
-            EsprytDrawTextureResourceHandlesEnabled();
-        return enabled;
-    }
-
-    static Bool EsprytDrawSamplerHandlesEnabled() {
-        // Bit 11 requires bit 10: every MGPBoundView::Texture and MGPImageView::Res names a
-        // Texture handle, and without bit 10 every lookup would miss and the walk would
-        // `continue` past a unit it should have unbound.
-        static const Bool enabled =
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemSamplers) != 0 &&
-            EsprytDrawTextureResourceHandlesEnabled();
-        return enabled;
-    }
-
-    static Bool EsprytDrawProgramHandlesEnabled() {
-        // Bit 12 depends on nothing: a ShaderCso handle names no texture and no buffer.
-        static const Bool enabled =
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
-        return enabled;
-    }
+    // NOTHING HERE RESTATES A DEPENDENCY DIRECTION any more - D-K2's fourth row (bit 10
+    // requires bit 11, ID-15) included. It is in ResolveTextureResourceSubsystemArm, which is
+    // its owner, and two writers of one diagnostic is how the two drift.
 
     // THE ONE PLACE THIS FILE ASKS THE APPLIER "which framebuffer record describes this
     // binding". Six reads used to spell `MGPipeApplier().DrawFramebuffer` / `.ReadFramebuffer`
@@ -281,9 +221,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // rather than as members, this one function grows a pair of parentheses and nothing else in
     // this file moves; if the accessor can answer "no record for the bound handle", that answer
     // arrives here as a null Fbo, which is already what every caller treats as a decline.
-    static const MG_Pipe::MGPFramebufferState& BoundFramebufferRecord(FramebufferTarget target) {
+    //
+    // WIRE v3 LANDED BOTH HALVES OF THAT PREDICTION: they are member FUNCTIONS and they return
+    // a NULLABLE POINTER, so the four call sites gained a null check each and nothing else in
+    // this file moved. Null is a real answer with exactly three causes (PipeApply.h): nothing
+    // is bound to that binding, no record has been written at the bound handle's slot, or the
+    // slot's generation has moved on under the handle - the third counted AND logged by the
+    // applier itself in StaleFramebufferRecordLookups. All three already arrived here as a
+    // null Fbo and were already a decline; the callers test the pointer instead.
+    static const MG_Pipe::MGPFramebufferState* BoundFramebufferRecord(FramebufferTarget target) {
         const auto& st = MG_Pipe::MGPipeApplier();
-        return target == FramebufferTarget::Draw ? st.DrawFramebuffer : st.ReadFramebuffer;
+        return target == FramebufferTarget::Draw ? st.DrawFramebuffer() : st.ReadFramebuffer();
     }
 #endif // MOBILEGL_PIPE_PUSH
 
@@ -1904,7 +1852,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             // P4a decline-site T1: M - the mask says this family is not switched on; stays
             //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
-            if (EsprytDrawSamplerHandlesEnabled()) {
+            if (SamplerSubsystemEnabled()) {
                 Uint64 epochFromRecords = 0;
                 if (UnitBindingsEpochFromRecords(epochFromRecords)) {
                     // No accessor reads and no walk on this arm; the two PipeStats accessor
@@ -2123,11 +2071,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   process that runs the version key before the first emission and the ContentHash
             //   key after it never compares one against the other. No flip at the verification
             //   round.
-            if (EsprytDrawFramebufferHandlesEnabled()) {
-                const auto& record = BoundFramebufferRecord(FramebufferTarget::Read);
-                if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
+            if (FramebufferSubsystemEnabled()) {
+                const auto* record = BoundFramebufferRecord(FramebufferTarget::Read);
+                if (record != nullptr && !MG_Pipe::MGPipeHandleIsNull(record->Fbo)) {
                     recordKeyed = true;
-                    contentHash = record.ContentHash;
+                    contentHash = record->ContentHash;
                 }
             }
 
@@ -2269,11 +2217,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint64 fboContentHash = 0;
                 // P4a decline-site F8 (draw list): K - a memo-KEY selection, not a decline; see
                 //   the read list's F8 note above. No flip at the verification round.
-                if (EsprytDrawFramebufferHandlesEnabled()) {
-                    const auto& drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
-                    if (!MG_Pipe::MGPipeHandleIsNull(drawRecord.Fbo)) {
+                if (FramebufferSubsystemEnabled()) {
+                    const auto* drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
+                    if (drawRecord != nullptr && !MG_Pipe::MGPipeHandleIsNull(drawRecord->Fbo)) {
                         fboRecordKeyed = true;
-                        fboContentHash = drawRecord.ContentHash;
+                        fboContentHash = drawRecord->ContentHash;
                     }
                 }
 #endif
@@ -2436,7 +2384,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint unit, const MG_State::GLState::ITextureObject* boundTexture) {
             // P4a decline-site I1: M - the mask says this family is not switched on; stays
             //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
-            if (!EsprytDrawSamplerHandlesEnabled()) return nullptr;
+            if (!SamplerSubsystemEnabled()) return nullptr;
             const auto& st = MG_Pipe::MGPipeApplier();
             // P4a decline-site I2: S - flips to loud-once at the verification round, and only
             //   when the current program declares images: a program with images and no pushed
@@ -2652,7 +2600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 // P4a decline-site I6: M - a set that never arrived means the full pre-handle
                 //   sweep below, which is the SAFE (wider) direction; stays silent.
-                if (EsprytDrawSamplerHandlesEnabled() && st.ShaderImageCount != 0) {
+                if (SamplerSubsystemEnabled() && st.ShaderImageCount != 0) {
                     // P4a decline-site I7: the window/mark UNION (MAJOR-1, fixed here); no flip
                     //   remains at the verification round, only the A8 measurement above.
                     const Uint32 end = std::min<Uint32>(
@@ -3007,7 +2955,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // yet it hands the walk straight back to the pre-handle arm below, unchanged.
             // P4a decline-site F1: M - the mask says this family is not switched on; stays
             //   silent at the verification round (becomes D's FramebufferSubsystemEnabled()).
-            if (EsprytDrawFramebufferHandlesEnabled() && SyncCurrentFBOByRecord()) return;
+            if (FramebufferSubsystemEnabled() && SyncCurrentFBOByRecord()) return;
 #endif
 
             const FramebufferTarget fboTargets[] = {FramebufferTarget::Draw, FramebufferTarget::Read};
@@ -3913,7 +3861,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P4a decline-site P1: M - the mask says this family is not switched on, or there
             //   is no current program at all; stays silent at the verification round (becomes
             //   D's ProgramSubsystemEnabled()).
-            if (!EsprytDrawProgramHandlesEnabled() || program == nullptr) return nullptr;
+            if (!ProgramSubsystemEnabled() || program == nullptr) return nullptr;
             const MG_Pipe::MGPipeHandle handle = g_backendProgramObjects.HandleOf(program);
             const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(handle);
             // P4a decline-site P4: S - folded into P2/P3 at the verification round; the two
@@ -4004,7 +3952,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The trust latch is fresh here and costs nothing: PrepareForDraw runs
                 // SyncCurrentFBO immediately before this, so the records have just been
                 // checked against the two bindings.
-                if (EsprytDrawFramebufferHandlesEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
+                if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
                     const MG_Pipe::MGPFramebufferState& record =
                         BoundFramebufferRecord(FramebufferTarget::Draw);
                     // P4a decline-site F7: unreachable - g_fboRecordsTrusted implies both
@@ -4175,7 +4123,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // framebuffer" and "is it the default one" - are answered: the record's Fbo and its
         // IsDefault byte, rather than the bound object's address and a comparison against
         // pDefaultFramebufferInfo->defaultFBO.
-        if (EsprytDrawFramebufferHandlesEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
+        if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
             const MG_Pipe::MGPFramebufferState& record = BoundFramebufferRecord(target);
             // The record's own handle is the "has this binding ever been described" test, not
             // FramebufferSerial - which MGPipeApplierReset advances whether or not anything
@@ -4321,7 +4269,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //   a wrong-pixel scenario (any edit to the framebuffer moves its ContentHash and hence
         //   the serial), but it is an invariant break with no demonstrable failure, and the
         //   honest form costs at most one extra sync on the next draw.
-        if (EsprytDrawFramebufferHandlesEnabled()) {
+        if (FramebufferSubsystemEnabled()) {
             FramebufferImpl::InvalidateSyncedFramebufferSerial(target);
         }
 #endif
@@ -4645,7 +4593,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // not anything was emitted).
         // P4a decline-site S1: M - the mask says this family is not switched on; stays silent
         //   at the verification round (becomes D's SamplerSubsystemEnabled()).
-        if (EsprytDrawSamplerHandlesEnabled()) {
+        if (SamplerSubsystemEnabled()) {
             const auto& st = MG_Pipe::MGPipeApplier();
             // P4a decline-site S2: S - flips to loud-once-then-the-frontend-walk at the
             //   verification round; a draw that touches units with no bind_sampler_states ever
