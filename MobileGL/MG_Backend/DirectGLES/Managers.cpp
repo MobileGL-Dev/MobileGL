@@ -3546,15 +3546,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Returns null on the legacy arm too, so a caller that reaches this without checking
         // its family's arm gets nothing rather than a twin the legacy arm would never see.
+        //
+        // SPLIT IN TWO (review N-3), and the split is what makes the two refusals REACHABLE.
+        // Both of this package's call sites stand behind a cross-check that the record's Res
+        // equals registry.HandleOf(frontendObject) - the LIVE handle - so by the time the
+        // adoption ran, the slot was in bounds and the generation was current BY CONSTRUCTION
+        // and neither refusal below could ever fire: the letter of M-4 was closed and its
+        // substance was not. The record's handle is the UNTRUSTED input and the frontend is the
+        // corroboration, so the validity question is asked FIRST, on its own, at both sites;
+        // the adoption then performs the resolve. Asking it first is also side-effect free,
+        // which the ordering rule N-1 states for the framebuffer refusal wants here too:
+        // GetOrCreateByHandle can reset an incumbent twin, and a handle this predicate rejects
+        // must not reach it.
         template <typename Registry>
-        typename Registry::BackendPtr* AdoptTwinByHandle(Registry& registry, MG_Pipe::MGPipeHandle handle,
-                                                         const char* kindName) {
-            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+        Bool PipeTwinHandleIsAdoptable(Registry& registry, MG_Pipe::MGPipeHandle handle, const char* kindName) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
             if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
                 MGLOG_E_ONCE("MGPipe: %s handle slot %u is past the backend table's %u bound - "
                              "refusing to twin it",
                              kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
-                return nullptr;
+                return false;
             }
             const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
             if (liveGen != 0 && liveGen > handle.Gen) {
@@ -3568,8 +3579,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "twin's %u - refusing rather than dropping the incumbent's driver "
                              "object",
                              kindName, handle.Slot, handle.Gen, liveGen);
-                return nullptr;
+                return false;
             }
+            return true;
+        }
+
+        template <typename Registry>
+        typename Registry::BackendPtr* AdoptTwinByHandle(Registry& registry, MG_Pipe::MGPipeHandle handle,
+                                                         const char* kindName) {
+            if (!PipeTwinHandleIsAdoptable(registry, handle, kindName)) return nullptr;
             return registry.GetOrCreateByHandle(handle);
         }
     } // namespace
@@ -3780,6 +3798,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return PipeRecordAt(MG_Pipe::MGPipeApplier().ShaderCsos, cso);
     }
 
+    // N-7: D KEYS ON THE UPLOAD HALF; WIRE (AccumulatePendingUpload, PipeApply.cpp:814) KEYS ON
+    // THE WHOLE PACKED FIELD. That asymmetry is resolved HERE, in D's favour and with the
+    // reason, rather than by widening the two comparisons: D's question is per (uploadTarget,
+    // level) because that is the granularity its upload loop iterates - it is handed a
+    // TextureUploadTarget and a level and has no second key to offer - while wire's is per
+    // record, where the whole field arrived. They agree because a texture's resource-target
+    // byte is constant for the object's life; if that ever stopped holding, wire would store
+    // two entries where D sees one and D's consume would strand the second in the set for ever
+    // (a full re-upload of that level on every sync, silently).
+    //
+    // So the low byte is CROSS-CHECKED instead of ignored. The comparand is the resource's own
+    // descriptor Target, which B fills from exactly the expression the sub-data's low byte
+    // comes from (TextureEmit.h:223 / :517 against :1037), so the two are carried and equal by
+    // construction and any disagreement is a seam defect, not a shape to learn. This is also
+    // MGPResourceDesc::Target's first reader in this package (esprytobj-v2.md §2(6) recorded it
+    // as having none).
+    static void NotePipeSubDataTargetLowByte(const MG_Pipe::MGPipeResourceRecord& record, Uint16 packedTarget,
+                                             Uint16 level) {
+        const Uint8 carried = MG_Pipe::MGPipeSubDataResourceTargetOf(packedTarget);
+        if (carried == record.Desc.Target) return;
+        MGLOG_E_ONCE("MGPipe: a pending upload for level %u carries resource target %u while its "
+                     "resource's descriptor says %u - D matches on the upload half only, so this "
+                     "entry was matched anyway; the two sides disagree about what the resource is",
+                     static_cast<Uint>(level), static_cast<Uint>(carried),
+                     static_cast<Uint>(record.Desc.Target));
+    }
+
     const MG_Pipe::MGPipeResourceRecord::PendingUpload* FindPipeTextureUpload(
         const MG_Pipe::MGPipeResourceRecord& record, Uint16 uploadTarget, Uint16 level) {
         // Linear, and deliberately so: the set holds one entry per DIRTY (uploadTarget, level)
@@ -3798,6 +3843,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         for (const auto& pending : record.PendingUploads) {
             if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) == static_cast<Uint8>(uploadTarget) &&
                 pending.Level == level) {
+                NotePipeSubDataTargetLowByte(record, pending.UploadTarget, level);
                 return &pending;
             }
         }
@@ -3822,6 +3868,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 pending.Level != level) {
                 continue;
             }
+            NotePipeSubDataTargetLowByte(record, pending.UploadTarget, level);
             // Swap-and-pop: the set is unordered by construction (it is a per-(target, level)
             // accumulation, not a queue), and an ordered erase would be quadratic over a full
             // cube-map drain.
@@ -5231,9 +5278,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // In monolith the code below keeps running exactly as it does today: the Fatal is a
             // split-only arm and the monolith body of MGPipeUnmigratedEmulation is a no-op.
-#if MOBILEGL_PIPE_PUSH
-            MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
-#endif
+            //
+            // THE MARKER IS RAISED WHERE A LEVEL IS ACTUALLY REPLAYED, not on entry (review
+            // N-4). ImageBindableHint IS the prevention half of mitigation 1, and D's own
+            // metadata-respecify arm makes the hint's ARRIVAL the trigger for entering this
+            // function - so a glBindImageTexture on a texture whose storage is not yet defined
+            // reaches here, finds no defined level, replays nothing, and would nevertheless have
+            // counted (and, under split, aborted at) the very emulation the hint exists to
+            // prevent. What the marker is about is stated in its own comment above: reaching
+            // BACK into the client's dirty model for texels. No texels owed, nothing to mark.
 #if MOBILEGL_PIPE_PUSH
             // P4a (review M-1): ON THE HANDLE ARM THE RE-DIRTY HAS TO REACH THE APPLIER'S SET,
             // not only the frontend's model. The client cleared its own flags when it emitted
@@ -5246,6 +5299,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Both models are written, not one: the frontend's because the legacy arm reads it
             // and because the client's own NoteLevelDirty hook rides on it, the applier's
             // because that is what this arm consumes.
+            Bool markedRemintPull = false;
             const MG_Pipe::MGPipeHandle rearmRes =
                 TextureResourceSubsystemEnabled() ? g_backendTextureObjects.HandleOf(stateTextureObject.get())
                                                   : MG_Pipe::kMGPipeNullHandle;
@@ -5267,6 +5321,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
                         mipmapObject->MarkStorageDirty(uploadTarget, level, true);
 #if MOBILEGL_PIPE_PUSH
+                        // N-4: one level owed is what makes this an unmigrated emulation. Once
+                        // per transition, not once per level: the marker names the SITE.
+                        if (!markedRemintPull) {
+                            MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
+                            markedRemintPull = true;
+                        }
                         if (!MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
                             const MG_Pipe::MGPBox wholeLevel{0,
                                                              0,
@@ -6235,6 +6295,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // descriptor's Levels claims and the shadow has not defined reads back {0,0,0} and the
         // per-level loops skip it, which is the same arm they take for a sparse chain today.
         //
+        // AND Desc.HasDefinedContent IS DELIBERATELY NOT READ HERE (review N-8, and the
+        // enumeration above exists to be exhaustive, so the omission is stated rather than
+        // left to be noticed). c0e made it storage-defining and the BUFFER family reads it
+        // three times, because a buffer's content is ONE fact about the whole resource. A
+        // texture's is not: content is per (uploadTarget, level) and its authority is the
+        // pending set (D-D5), which is per level and survives a bail. A whole-resource
+        // "content is undefined" would say nothing the per-level loops do not already answer
+        // by finding no level to upload, and acting on it would mean throwing away levels the
+        // set still owes. The field stays a respecify CLASSIFIER (it moves the descriptor, so
+        // wire refuses to call such a respecify metadata-only) and nothing more on this arm.
+        //
         // MACROS, NOT LOCALS, FOR THE SAME REASON AS THE PAIR ABOVE (DV-9, and it was measured):
         // routing these through locals resized SyncTextureParamsToBackend by +9 bytes in the
         // PULL build and P4a's admitted-resize set is EMPTY. Each takes the object it would
@@ -7017,6 +7088,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const SizeT levelSliceBytes = carriedSliceBytes != 0
                                                               ? carriedSliceBytes
                                                               : static_cast<SizeT>(texelSize.y()) * levelRowBytes;
+                            // N-5: THE SAME DISCIPLINE FOR SrcOffset AS FOR THE STRIDES, and the
+                            // asymmetry it removes was the review's point: the strides got a loud
+                            // refusal in the commit that started reading them while the offset -
+                            // which decides the ADDRESS glTexSubImage reads (w*bpp x h x d) bytes
+                            // from - was consumed raw. The cross-check is free, because
+                            // rectShadowPtr four lines down computes exactly the same number from
+                            // the region origin and the two pitches. A record whose regions
+                            // disagree with their own origins is corrupt, so on disagreement the
+                            // carried offsets are DROPPED - every use site falls back to the
+                            // derived pointer, which is what the legacy arm sends - and one named
+                            // line says so. Gated on subRectEligible because bpp is 0 otherwise
+                            // and the regions are not read at all.
+                            Bool pendingOffsetsAgree = true;
+                            if (pendingUpload != nullptr && subRectEligible) {
+                                for (const auto& region : pendingUpload->Regions) {
+                                    const SizeT derivedOffset = static_cast<SizeT>(region.Z) * levelSliceBytes +
+                                                                static_cast<SizeT>(region.Y) * levelRowBytes +
+                                                                static_cast<SizeT>(region.X) * bpp;
+                                    if (static_cast<SizeT>(region.SrcOffset) == derivedOffset) continue;
+                                    pendingOffsetsAgree = false;
+                                    MGLOG_E_ONCE("MGPipe: texture %u level %u carries a region whose SrcOffset "
+                                                 "%llu is not its own origin (%d,%d,%d) at the level's pitch "
+                                                 "(%llu expected) - the carried offsets are dropped and every "
+                                                 "rect is read from the shadow instead",
+                                                 stateTextureObject->GetExternalIndex(), static_cast<Uint>(level),
+                                                 static_cast<unsigned long long>(region.SrcOffset), region.X,
+                                                 region.Y, region.Z,
+                                                 static_cast<unsigned long long>(derivedOffset));
+                                    break;
+                                }
+                            }
 #else
                             const SizeT levelRowBytes = static_cast<SizeT>(texelSize.x()) * bpp;
                             const SizeT levelSliceBytes = static_cast<SizeT>(texelSize.y()) * levelRowBytes;
@@ -7079,9 +7181,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             };
 // m-1 / D-D3, "carried, never inferred": MGPSubRegion::SrcOffset is the byte offset of that
 // region's origin into the level shadow - the same number the lambda above derives from the
-// origin and the two strides - and on the handle arm it is READ rather than re-derived. Every
-// site that uses it is inside `subRectEligible`, which requires uploadData == mipData, so the
-// base the offset is relative to is the level shadow itself and never a conversion buffer.
+// origin and the two strides - and on the handle arm it is READ rather than re-derived, after
+// the cross-check above has agreed that the two spellings say the same thing (N-5). Every site
+// that uses it is inside `subRectEligible`, which requires uploadData == mipData, so the base
+// the offset is relative to is the level shadow itself and never a conversion buffer.
+//
+// THREE USE SITES, AND THE FIRST OF THEM IS UNREACHABLE (N-5's second half, and the correction
+// to what esprytobj-v2.md m-1 claimed): dirtyRectCount is forced to 0 whenever
+// UnpackRingAvailable(), and the staging-block loop that takes MGB_RECT_SRC_PTR(r, rect) first
+// requires `ringUsable && dirtyRectCount >= 2`. The two conditions cannot both hold. That shape
+// is pre-existing (the ring/scatter decision, not this package's), so the loop is left as it
+// stands and the count is corrected here instead of the loop being deleted underneath it.
 //
 // A MACRO AND NOT A SECOND LAMBDA, for DV-9's measured reason: this function's nine ErrorLopper
 // lambdas are mangled ...::$_N BY POSITION, so one more renumbers every one of them and moves
@@ -7089,9 +7199,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // pre-P4a call with one pair of parentheses. #undef'd with the rest.
 #if MOBILEGL_PIPE_PUSH
 #define MGB_RECT_SRC_PTR(idx, rect)                                                                                    \
-    ((pendingUpload != nullptr && static_cast<SizeT>(idx) < pendingUpload->Regions.size())                              \
+    ((pendingUpload != nullptr && pendingOffsetsAgree &&                                                               \
+      static_cast<SizeT>(idx) < pendingUpload->Regions.size())                                                         \
          ? static_cast<const Uint8*>(uploadData) +                                                                     \
-               static_cast<SizeT>(pendingUpload->Regions[static_cast<SizeT>(idx)].SrcOffset)                            \
+               static_cast<SizeT>(pendingUpload->Regions[static_cast<SizeT>(idx)].SrcOffset)                           \
          : rectShadowPtr(rect))
 #else
 #define MGB_RECT_SRC_PTR(idx, rect) (rectShadowPtr(rect))
@@ -8633,11 +8744,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                           GLenum glBackendAttachment) {
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
                 MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
-                // An empty point. The caller has already detached it where that is what an
-                // empty point means; attaching nothing is what the legacy arm does here too.
+                // An empty point. The caller has already detached it where the two sides AGREE
+                // that the point is empty; attaching nothing is what the legacy arm does here too.
+                //
+                // Review N-6: the detach above is decided by the FRONTEND
+                // (attachmentObject.IsEmpty()) and the attach here by the RECORD, so the one
+                // direction in which neither fires is "record empty, frontend still holding an
+                // attachment" - no detach, no attach, and the caller then stamps this point's
+                // synced version, marking it done with the PREVIOUS owner's image still on the
+                // driver. Every other record-versus-frontend disagreement in this function is
+                // loud; this one was the only silent hole and it is closed here rather than
+                // left one direction wide.
+                if (!attachmentObject.IsEmpty()) {
+                    MGLOG_E_ONCE("MGPipe: attachment record describes an EMPTY point but the frontend "
+                                 "attachment still holds an object - refusing rather than leaving the "
+                                 "previous image attached and calling the point synced");
+                    return false;
+                }
                 return true;
             }
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture) {
+                // The record's handle is validated BEFORE the frontend is consulted (N-3): it is
+                // the untrusted half, the frontend cross-check below is the corroboration, and
+                // asking in this order is what gives the two adoption refusals a reachable
+                // caller at all.
+                if (!PipeTwinHandleIsAdoptable(TextureImpl::g_backendTextureObjects, surface.Res, "texture")) {
+                    return false;
+                }
                 const auto& textureObject = attachmentObject.GetTexture();
                 if (!textureObject) {
                     MGLOG_E_ONCE("MGPipe: attachment record names texture {%u, %u} but the frontend "
@@ -8705,6 +8838,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return true;
             }
             if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer) {
+                // Same order as the texture arm above, for the same reason (N-3).
+                if (!PipeTwinHandleIsAdoptable(RenderbufferImpl::g_backendRenderbufferObjects, surface.Res,
+                                               "renderbuffer")) {
+                    return false;
+                }
                 const auto& renderbufferObject = attachmentObject.GetRenderbuffer();
                 if (!renderbufferObject) {
                     MGLOG_E_ONCE("MGPipe: attachment record names renderbuffer {%u, %u} but the frontend "
@@ -9059,9 +9197,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // to neither target left this twin's freshly minted driver FBO bound with NO
             // ATTACHMENTS and the caller then issued the clear or the blit against it -
             // GL_INVALID_FRAMEBUFFER_OPERATION and nothing cleared, where the legacy arm cleared
-            // correctly. A refusal now happens before anything is bound, so the driver's binding
-            // is exactly where the caller left it and the failure is one named log line rather
-            // than a wrong picture.
+            // correctly. What the reorder buys is exactly this and no more: THE REFUSAL ITSELF
+            // HAS NO DRIVER EFFECT - it no longer mints and binds a driver FBO as a side effect
+            // of declining. It does NOT decide the driver's binding (review N-1): every caller
+            // binds immediately afterwards and none of them looks at a return value -
+            // SyncAndBindFramebufferObject is SyncToBackend then an unconditional Bind(target)
+            // (DirectGLES.cpp:3292-3293, the path all five DSA entry points take), and
+            // BindCurrentFBO binds the current FBO's twin whether or not SyncCurrentFBO synced
+            // it. So an unconfigured framebuffer can still end up bound; what the log line
+            // promises is only that this function did not put it there.
             //
             // The record is per FRAMEBUFFER OBJECT and is found by handle, so it describes this
             // object whether it is bound to Draw, to Read, to both or to neither, and its own
@@ -9081,8 +9225,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 pushedRecord = PushedFramebufferRecord(fbo);
                 if (pushedRecord == nullptr) {
                     MGLOG_E_ONCE("MGPipe: framebuffer %u has no applier record on the handle arm, so it "
-                                 "cannot be synced from the pushed record and is left unbound rather "
-                                 "than bound-and-unconfigured (handle {%u, %u})",
+                                 "is not configured here; nothing is bound by this refusal, but the "
+                                 "caller's own bind still targets it (handle {%u, %u})",
                                  stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
                     return;
                 }

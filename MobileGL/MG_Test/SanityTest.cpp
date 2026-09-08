@@ -3181,6 +3181,13 @@ namespace {
 // resolving the params through a sampler view, or gating the push on a unit binding - leaves
 // the recording empty and this case fails, which is exactly the regression the scenario's
 // self-repair hides.
+//
+// WHAT IT DOES NOT COVER, AND THE NEXT READER MUST NOT OVER-TRUST IT (review N-9): the probe
+// drives SyncTextureParamsToBackend DIRECTLY, so the only deferral shape it can see is one
+// INSIDE that function. A regression that gates the CALL on a sampler view existing - in
+// SyncNeccessaryTextures, or in package E's per-unit walk - leaves this case green. That
+// caller-level half is a scenario's job and the scenario is package F's (G9's scenario half,
+// gates review R1); this is the backend-side probe R1 asked for and nothing wider.
 TEST(DirectGLESTextureSync, AnAttachmentOnlyTexturesParametersReachTheDriverWithNoSamplerView) {
     using namespace MobileGL;
     ScopedDirectGLESTextureBindings scoped; // fresh GLContext + registry + binding caches
