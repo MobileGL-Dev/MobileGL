@@ -338,6 +338,63 @@ TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherTha
 #endif
 }
 
+// THE TEARDOWN SCOPE DROPS THE OBJECT RECORDS, SO IT MUST DROP EVERY WORKING HANDLE THAT NAMES
+// ONE. The two framebuffer records hold eleven MGPSurface::Res naming texture and renderbuffer
+// records, and the three unit windows hold entries naming sampler-view, sampler-CSO and texture
+// records; a window left standing after the tables are emptied is a set of handles into empty
+// tables, which the next resolve either refuses and counts or - on a slot the next context
+// re-mints - resolves onto somebody else's record. Deleting any one of the eleven clears in
+// MGPipeApplierReleaseObjectRecords leaves this red.
+TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatCouldNameThem) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Both, 100));
+
+    // The three kVarTail sets, each with one entry naming a record the release is about to
+    // drop, and each at a non-zero Start so the window itself is visible in the assertions.
+    MGPBoundView view{};
+    view.View = MGPipeHandle{3, 1};
+    view.Texture = MGPipeHandle{9, 1};
+    view.Unit = 2;
+    MGPipeApplySetSamplerViews(MGPSamplerViews{2, 1, 0xAAAAu}, &view);
+
+    const MGPipeHandle samplerState{5, 1};
+    MGPipeApplyBindSamplerStates(MGPSamplerStates{2, 1, 0xBBBBu}, &samplerState);
+
+    MGPImageView image{};
+    image.Res = MGPipeHandle{9, 1};
+    image.Unit = 2;
+    image.InternalFormat = 0x8058u; // GL_RGBA8
+    MGPipeApplySetShaderImages(MGPShaderImages{2, 1, 0xCCCCu}, &image);
+
+    ASSERT_EQ(MGPipeApplier().DrawFramebuffer.Color[0].Res, (MGPipeHandle{9, 1}));
+    ASSERT_EQ(MGPipeApplier().SamplerViewCount, 1u);
+    ASSERT_EQ(MGPipeApplier().BoundSamplerViews[2].View, (MGPipeHandle{3, 1}));
+    ASSERT_EQ(MGPipeApplier().SamplerStateCount, 1u);
+    ASSERT_EQ(MGPipeApplier().BoundSamplerStates[2], samplerState);
+    ASSERT_EQ(MGPipeApplier().ShaderImageCount, 1u);
+    ASSERT_EQ(MGPipeApplier().BoundShaderImages[2].Res, (MGPipeHandle{9, 1}));
+
+    MGPipeApplierReleaseObjectRecords();
+
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Color[0].Res, kMGPipeNullHandle)
+        << "a surface handle into an emptied texture table survived the teardown";
+    EXPECT_EQ(MGPipeApplier().SamplerViewStart, 0u);
+    EXPECT_EQ(MGPipeApplier().SamplerViewCount, 0u);
+    EXPECT_EQ(MGPipeApplier().BoundSamplerViews[2].View, kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().SamplerStateStart, 0u);
+    EXPECT_EQ(MGPipeApplier().SamplerStateCount, 0u);
+    EXPECT_EQ(MGPipeApplier().BoundSamplerStates[2], kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().ShaderImageStart, 0u);
+    EXPECT_EQ(MGPipeApplier().ShaderImageCount, 0u);
+    EXPECT_EQ(MGPipeApplier().BoundShaderImages[2].Res, kMGPipeNullHandle);
+#endif
+}
+
 int main(int argc, char** argv) {
     // Before anything logs: the logger reads this variable once, on its first write, and
     // caches the handle. The name carries this process's pid, and the file is removed on the

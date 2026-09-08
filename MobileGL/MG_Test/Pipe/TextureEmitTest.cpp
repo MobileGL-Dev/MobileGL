@@ -436,10 +436,12 @@ TEST(TextureEmit, TheSubDataValidatorRefusesALevelABoxAndARegionTheRecordCannotD
 #endif
 }
 
-// A respecify redefines the store, so the boxes and rects that describe the level it replaces
-// go with it - a box kept across a shrink would have the backend upload past the end of the
-// new level. Nothing is lost by it: the frontend entry points that respecify a texture re-mark
-// the levels they define.
+// A WHOLE-RESOURCE respecify - a null MGPRespecifiedLevel*, which is every glBufferData,
+// glBufferStorage, glTexStorage* and texture view - redefines every level at once, so the boxes
+// and rects against all of them go with it: a box kept across a shrink would have the backend
+// upload past the end of the new level. THE SCOPE IS THE WHOLE POINT: this case proves the
+// whole-resource arm ONLY, and its per-level twin below proves that the other arm may not do
+// this.
 TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
 #if !MOBILEGL_PIPE_PUSH
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
@@ -450,12 +452,172 @@ TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
     MGPipeApplyResourceCreate(TextureDesc(texture, 0, 55));
     MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 55), nullptr);
     MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels);
-    ASSERT_EQ(TextureRecordOf(3).PendingUploads.size(), 1u);
+    MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels);
+    ASSERT_EQ(TextureRecordOf(3).PendingUploads.size(), 2u);
 
     MGPipeApplyResourceRespecify(TextureDesc(texture, 8, 55), nullptr);
     EXPECT_TRUE(TextureRecordOf(3).PendingUploads.empty())
         << "a 64-wide box survived onto an 8-wide store";
     EXPECT_EQ(TextureRecordOf(3).Desc.Width, 8u);
+#endif
+}
+
+// C1, AND IT IS THE CANONICAL MIP-BUILDING SEQUENCE. A mutable texture defines its levels one
+// glTexImage*D at a time, and MG_State's AllocateStorage / MarkStorageDirty are per
+// (uploadTarget, level) - so defining level 1 re-marks LEVEL 1 AND NOTHING ELSE. Level 0's
+// client dirty flag was cleared at its own emission (D-D5 step 1) and the applier's entry is
+// the only thing that still owes those texels, because Espryt's incomplete-texture bail is
+// exactly the arm this set exists for. A blanket clear here destroys them silently, in every
+// build, with no counter and no log line: this case goes red the moment the level scoping is
+// dropped and green with it.
+TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{10, 1};
+    const Uint8 texels[4096] = {};
+    MGPipeApplyResourceCreate(TextureDesc(texture, 0, 121));
+
+    // glTexImage2D(level 0, data): the respecify names the level it defines, and the drain then
+    // emits level 0's shape, which the applier accepts.
+    const MGPRespecifiedLevel levelZero{kTex2D, 0};
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelZero);
+    ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels));
+    // A SECOND FACE OF THE SAME LEVEL, keyed the way the packed Target keys it (ID-12: high
+    // byte = the cube-face upload target, low byte = the resource target), so what survives is
+    // a SET and not one lucky entry - and so that the level number alone cannot be what matched.
+    const Uint16 secondFace = static_cast<Uint16>((1u << 8) | kTex2D);
+    const MGPRespecifiedLevel faceOfLevelZero{secondFace, 0};
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &faceOfLevelZero);
+    MGPSubData otherFace = TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0);
+    otherFace.Target = secondFace;
+    ASSERT_TRUE(MGPipeApplyResourceSubData(otherFace, texels));
+    ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u);
+
+    // Espryt BAILS - the texture is not mipmap-complete for its min filter - so both entries
+    // are still owed when the next GL call arrives.
+    //
+    // glTexImage2D(level 1, data): this redefines level 1 of the (kTex2D, *) face only.
+    const MGPRespecifiedLevel levelOne{kTex2D, 1};
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelOne);
+
+    ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u)
+        << "a respecify of level 1 dropped the pending uploads of levels it never redefined - "
+           "those texels are lost for good, because their dirty flags were cleared at emission";
+    EXPECT_EQ(TextureRecordOf(10).PendingUploads[0].UploadTarget, kTex2D);
+    EXPECT_EQ(TextureRecordOf(10).PendingUploads[0].Level, 0u);
+    EXPECT_EQ(TextureRecordOf(10).PendingUploads[0].UnionBox.W, 64u);
+    EXPECT_EQ(TextureRecordOf(10).PendingUploads[1].UploadTarget, secondFace);
+
+    // And the key it DOES name goes, because that level's coordinate system has been replaced.
+    ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels));
+    ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 3u);
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelOne);
+    ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u)
+        << "the level the respecify DOES redefine kept its box across the redefinition";
+    for (const auto& entry : TextureRecordOf(10).PendingUploads) {
+        EXPECT_FALSE(entry.UploadTarget == kTex2D && entry.Level == 1u)
+            << "the redefined (upload target, level) survived";
+    }
+#endif
+}
+
+// D-D5 step 1 says the client clears its dirty flag "only for levels whose record the applier
+// ACCEPTED", and the call is the only thing that can say so: a dead or stale handle is a
+// counted no-op and a corrupt record is a Fatal that deliberately moves NO counter, so in a
+// shipped push build a refused upload and an accumulated one are otherwise identical from the
+// call site. An emitter that clears on the strength of having emitted loses those texels.
+TEST(TextureEmit, TheSubDataCallAnswersWhetherTheRecordWasAcceptedSoTheClientCanClearItsFlag) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{8, 1};
+    const Uint8 texels[4096] = {};
+    MGPipeApplyResourceCreate(TextureDesc(texture, 0, 131));
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 131), nullptr);
+
+    EXPECT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels))
+        << "an accumulated upload answered 'not accepted' and the client would re-send it forever";
+    ASSERT_EQ(TextureRecordOf(8).PendingUploads.size(), 1u);
+
+    // A stale generation is the refusal that is NOT a Fatal, so it is the one the answer has to
+    // carry: the record is gone, the texels were never taken, and the flag may not be cleared.
+    const Uint64 refusedBefore = MGPipeApplier().RefusedResourceCalls;
+    EXPECT_FALSE(
+        MGPipeApplyResourceSubData(TextureUpload(MGPipeHandle{8, 2}, 0, MGPBox{0, 0, 0, 8, 8, 1}, 0), texels))
+        << "a refused upload answered 'accepted' and the client would clear a flag nothing owes";
+    EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusedBefore + 1);
+    EXPECT_EQ(TextureRecordOf(8).PendingUploads.size(), 1u);
+
+    // The buffer half answers on the same terms, and its acceptance does not depend on a
+    // backend table being registered - a unit process has none.
+    const MGPipeHandle buffer{8, 1};
+    MGPResourceDesc bufferDesc{};
+    bufferDesc.Resource = buffer;
+    bufferDesc.Target = kMGPipeResourceTargetBuffer;
+    bufferDesc.Width = 256;
+    bufferDesc.GlNameForDiag = 132;
+    MGPipeApplyResourceCreate(bufferDesc);
+    MGPipeApplyResourceRespecify(bufferDesc, nullptr);
+    MGPSubData write{};
+    write.Res = buffer;
+    write.Target = kMGPipeResourceTargetBuffer;
+    ASSERT_TRUE(MGPipeSetSubDataBufferRange(write, 0, 64));
+    EXPECT_TRUE(MGPipeApplyResourceSubData(write, texels));
+    write.Res = MGPipeHandle{8, 9};
+    EXPECT_FALSE(MGPipeApplyResourceSubData(write, texels));
+#endif
+}
+
+// m3. MGPSubData::Target is PACKED - low byte = MGPipeResourceTarget, high byte = the cube-face
+// upload target (ID-12) - so MGPipeResourceTarget::Renderbuffer is a perfectly well-formed
+// value for it, and without a gate a renderbuffer record would route to TextureResources and
+// accumulate a pending upload onto whatever TEXTURE holds that slot. It is the same argument
+// ResourceTableForTarget makes for returning null on an unknown enumerator, and the same
+// verdict: acting outside the storage the record names is corruption, not a dropped call.
+TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRatherThanRouted) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{9, 1};
+    const Uint8 texels[4096] = {};
+    MGPipeApplyResourceCreate(TextureDesc(texture, 0, 141));
+    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 141), nullptr);
+    MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels);
+    ASSERT_EQ(TextureRecordOf(9).PendingUploads.size(), 1u);
+    const Uint64 serialBefore = TextureRecordOf(9).Serial;
+    const Uint64 refusedBefore = MGPipeApplier().RefusedResourceCalls;
+
+    MGPSubData renderbuffer = TextureUpload(texture, 0, MGPBox{0, 0, 0, 8, 8, 1}, 0);
+    renderbuffer.Target = static_cast<Uint16>(MGPipeResourceTarget::Renderbuffer);
+    ExpectRefusedNaming("resource_subdata {slot=9, gen=1}: the record's resource target names no texture "
+                        "to upload into",
+                        [&renderbuffer, &texels]() { MGPipeApplyResourceSubData(renderbuffer, texels); });
+
+    // And so is a value at or above the catalogue, and so is the buffer target arriving with a
+    // non-zero upload-target half - which the whole-field buffer test above cannot see.
+    MGPSubData pastTheCatalogue = renderbuffer;
+    pastTheCatalogue.Target = static_cast<Uint16>(MGPipeResourceTarget::Count);
+    ExpectRefusedNaming("resource_subdata {slot=9, gen=1}: the record's resource target names no texture "
+                        "to upload into",
+                        [&pastTheCatalogue, &texels]() {
+                            MGPipeApplyResourceSubData(pastTheCatalogue, texels);
+                        });
+
+    MGPSubData packedBuffer = renderbuffer;
+    packedBuffer.Target = static_cast<Uint16>(0x0100u | kMGPipeResourceTargetBuffer);
+    ExpectRefusedNaming("resource_subdata {slot=9, gen=1}: the record's resource target names no texture "
+                        "to upload into",
+                        [&packedBuffer, &texels]() { MGPipeApplyResourceSubData(packedBuffer, texels); });
+
+    EXPECT_EQ(TextureRecordOf(9).PendingUploads.size(), 1u)
+        << "a record naming no texture was accumulated onto the texture holding that slot";
+    EXPECT_EQ(TextureRecordOf(9).Serial, serialBefore) << "not one refusal may move the serial";
+    EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusedBefore)
+        << "a corrupt record is not a dropped call and must not be counted as one";
 #endif
 }
 

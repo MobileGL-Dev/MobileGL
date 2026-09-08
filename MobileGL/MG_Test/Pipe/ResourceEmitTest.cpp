@@ -1419,6 +1419,21 @@ namespace {
         const MGPHandleOnly wrongKind = KindHandle(res, MGPipeKind::SamplerCso);
         ExpectRefusedNaming("resource_destroy {slot=5, gen=1}: the handle names no resource kind",
                             [&wrongKind]() { MGPipeApplyResourceDestroy(wrongKind); });
+
+        // AND unmap_persistent GIVES THE SAME VERDICT, because it is the only one of the four
+        // buffer-only calls that carries a discriminator at all. An assertion here is not a
+        // check: MOBILEGL_ASSERT compiles out at INFO, which is what all three gate builds and
+        // every shipped build are, so a texture-kinded record used to walk into ResolveResource
+        // and alias whatever BUFFER holds that slot - which is exactly what the destroy's Fatal
+        // above exists to stop. The live buffer at slot 5 is what makes the aliasing reachable.
+        MGPipeApplyResourceCreate(BufferDesc(res, 0, 44));
+        MGPipeApplyResourceRespecify(BufferDesc(res, 256, 44), nullptr);
+        ASSERT_TRUE(MGPipeApplier().Resources[5].Live);
+        const MGPHandleOnly textureKind = KindHandle(res, MGPipeKind::Texture);
+        ExpectRefusedNaming("unmap_persistent {slot=5, gen=1}: the persistent donation is the buffer "
+                            "family's and the handle names another kind",
+                            [&textureKind]() { MGPipeApplyUnmapPersistent(textureKind); });
+
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u)
             << "a corrupt record is not a dropped call and must not be counted as one";
 #endif
