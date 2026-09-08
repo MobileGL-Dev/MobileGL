@@ -1812,11 +1812,50 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // mismatch means some backend texture id was re-minted since, and any of this
             // twin's attachment points may still hold the dead id even though the frontend
             // attachment versions match - so the walk re-attaches everything first.
+            //
+            // SERVER-OWNED AND IT SURVIVES P4a (D-B3). It answers "did *I* re-mint a driver
+            // texture id", which no client-side version can answer; dropping it would
+            // reintroduce exactly the class of bug commit d7655247 fixed on the buffer side.
             Uint64 m_syncedBackendIdGeneration = 0;
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-C4): MGPFramebufferState::ContentHash as of this twin's last sync, PER
+            // BOUND TARGET, and it is the second of the hash's two jobs - "the server's
+            // render-pass memo key, and the CLIENT's emission suppressor". It replaces
+            // m_syncedFrontendAttachmentVersions AS A KEY (the array stays: it is what the
+            // legacy arm compares, and it is the mechanism the handle arm re-arms through).
+            //
+            // The hash covers every field the record carries - Fbo included, so a recycled
+            // framebuffer handle whose successor happens to carry an identical attachment set
+            // can never be suppressed against its predecessor, and DrawBuffers[8] included, so
+            // a suppressed record provably means the draw-buffer array did not move, which
+            // provably means the fragColor broadcast count did not move.
+            //
+            // PER TARGET rather than one, because Draw and Read sync different things off two
+            // different records; 0 is never a live hash (a computed 0 is remapped to 1 by the
+            // client's suppressor), so a zeroed memo is a guaranteed miss.
+            Array<Uint64, SizeT(FramebufferTarget::FramebufferTargetCount)> m_syncedRecordHashes = {0};
+#endif
         };
 
         extern TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject, MG_Pipe::MGPipeKind::Framebuffer>
             g_backendFramebufferObjects;
+
+#if MOBILEGL_PIPE_PUSH
+        // P4a (D-C2): the applier's record FOR THIS BOUND TARGET, or null.
+        //
+        // The applier holds set_framebuffer_state as WORKING STATE - two records, Draw and Read,
+        // written by whichever emission named that target (Target = Both writes both). This twin
+        // is per FRAMEBUFFER OBJECT, so the two have to be matched: the record is this twin's
+        // only if its Fbo names this twin's handle. A mismatch means the object being synced is
+        // not the one currently bound to that target, which is a real sequence (a scratch FBO
+        // synced while another is bound) and is answered with null rather than with the other
+        // framebuffer's attachments.
+        //
+        // `fbo` is the handle the caller resolved for this twin; passing it in rather than
+        // resolving it here keeps the monolith-glue lookup at one site per sync.
+        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(FramebufferTarget asTarget,
+                                                                    MG_Pipe::MGPipeHandle fbo);
+#endif
         // True when the read buffer names a fixed-point (norm/snorm) attachment that the
         // backend actually stores in a floating-point format. GL clamps a read from a
         // fixed-point colour buffer to [0,1] (GL_CLAMP_READ_COLOR defaults to
