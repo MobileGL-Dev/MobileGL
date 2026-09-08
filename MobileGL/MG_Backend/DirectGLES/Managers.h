@@ -712,6 +712,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // neither the object nor its lifetime id exists on this side and every one of them
         // has to receive the handle in a payload instead.
         MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject);
+
+        // The handle arms of the two draw-path entry points below. IsBufferDrawCleanByHandle
+        // asks the applier the same five questions IsBufferDrawClean asks the frontend object,
+        // with identical semantics (D-A4); EnsureBufferResourceForHandle is the ensure path
+        // driven by the applier's descriptor and the shadow base the call carried.
+        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource);
+        GLESBufferResource* EnsureBufferResourceForHandle(
+            const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
 #endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on

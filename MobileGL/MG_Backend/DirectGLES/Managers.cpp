@@ -8,6 +8,14 @@
 
 #include "Managers.h"
 #include <MG_Pipe/PipeInputsSwitch.h>
+#if MOBILEGL_PIPE_PUSH
+// P3a: the handle-shaped resource op table, the applier's records and the reverse channel.
+// Both headers are compiled into the library only under push, so they are included here
+// under the same condition - a pull build must gain no declaration it cannot link.
+#include <MG_Pipe/MGPipeCallbacks.h>
+#include <MG_Pipe/MGPipeHostSpan.h>
+#include <MG_Pipe/PipeApply.h>
+#endif
 #include "Utils.h"
 #include "DirectGLES.h"
 #include "BackendObject_DirectGLES.h"
@@ -883,6 +891,293 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return DirectGLES::IsBackendContextCurrentOnThisThread();
             }
 
+#if MOBILEGL_PIPE_PUSH
+            // P3a: ONE body per helper, parameterised on where its host bytes and its
+            // extent come from, so the legacy arm and the handle arm of a push build share
+            // the three-tier flush, the respecify and the range upload rather than owning a
+            // copy each - a second copy of the tier ladder is exactly how a tier changes in
+            // silence. The #else below is the PULL build, whose text must stay byte-identical
+            // to the pre-P3a one (G1: the pull build gains no symbol and resizes none); it is
+            // frozen by that gate and retires with the pull path at P13.
+            // (Re)specify backend storage from the shadow copy: glBufferData.
+            // The orphaning point - the ES driver performs the actual rename.
+            // TODO(buffer-pool Phase 2): orphan-on-respecify is NOT yet implemented.
+            // When the current id is BUSY (lastUseFrameSerial > CompletedFrameSerial())
+            // && !persistentMapped && !noOrphan, express the orphan as an id-swap
+            // (retire the busy id into the pool, bind a fresh/pooled id) instead of the
+            // in-place glBufferData below, to avoid the driver's own rename/stall. Not
+            // pursued yet: glBufferData/glBufferSubData currently sit below profiler
+            // noise, so respecify is not a hot path in the profiled scenes.
+            // The body both arms run. `size`, `usage`, `initialData` and `syncedSerial` are the
+            // four things the legacy arm reads off the frontend object and the handle arm reads
+            // off the applier's stored descriptor and the shadow base the call carried; nothing
+            // else in here differs, so there is ONE glBufferData and one extent rule rather
+            // than two that can drift apart.
+            void RespecifyStorageWith(GLESBufferResource& resource, SizeT size, GLenum usage,
+                                      const void* initialData, Uint64 syncedSerial) {
+#ifdef TRACY_ENABLE
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                // Read BEFORE the fields below are overwritten: whether this respecify changes
+                // the store's EXTENT is what decides if the indexed-binding shadow still
+                // describes the driver.
+                const Bool extentChanged = !resource.storageInitialized || resource.storageSize != size;
+                BindBufferId(TempBufferTarget, resource.id);
+                g_GLESFuncs.glBufferData(TempBufferTarget, (GLsizeiptr)size, initialData, usage);
+                if (MG_Util::PipeStats::Enabled() && initialData != nullptr) {
+                    // An ORPHANING respecify passes NULL and moves nothing, which is exactly
+                    // why the test is on initialData rather than on size.
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                 static_cast<Uint64>(size));
+                }
+                resource.storageSize = size;
+                resource.storageInitialized = true;
+                resource.pendingRespecify = false;
+                resource.pendingRanges.clear();
+                resource.pendingResidentWrites.clear();
+                resource.syncedChangeSerial = syncedSerial;
+                // A GROWN store keeps its indexed bindings, and BindBufferBaseCached skips a
+                // rebind whenever the shadow already records this id at that index - so on a
+                // driver that resolves a whole-buffer indexed binding's extent at BIND time
+                // (Adreno does; Mali does not) the shader keeps seeing the old, smaller range:
+                // stores past it are dropped and loads return zero. Forget what the shadow
+                // claims for this id so the next SyncBufferBindingPoints issues the bind for
+                // real. Only when the extent actually moved: an orphaning respecify at the same
+                // size is Minecraft's per-frame hot path and its bindings are still exact.
+                if (extentChanged) {
+                    InvalidateIndexedBufferBindingShadowsForId(resource.id);
+                }
+            }
+
+            void RespecifyStorageNow(GLESBufferResource& resource, BufferObject& bufferObject) {
+                const SizeT size = bufferObject.GetSize();
+                // An orphaning respecify (glBufferData with NULL, content never
+                // written since) stays a pure NULL reallocation: the driver renames
+                // the store without a stall and nothing is transferred. Uploading
+                // the stale shadow here turned Minecraft-style orphaning into a
+                // full-size synchronized upload.
+                const void* initialData =
+                    (size > 0 && bufferObject.HasDefinedContent()) ? bufferObject.MappedData() : nullptr;
+                RespecifyStorageWith(resource, size, MG_Util::ConvertBufferUsageToGLEnum(bufferObject.GetUsage()),
+                                     initialData, bufferObject.GetChangeSerial());
+            }
+
+            Bool StorageMatchesSize(const GLESBufferResource& resource, SizeT size) {
+                return resource.storageInitialized && !resource.pendingRespecify && resource.storageSize == size;
+            }
+
+            Bool StorageMatches(const GLESBufferResource& resource, const BufferObject& bufferObject) {
+                return StorageMatchesSize(resource, bufferObject.GetSize());
+            }
+
+            // The host bytes a range upload/flush reads. On the legacy arm the frontend object's
+            // shadow; on the handle arm the base the last content-carrying call handed over.
+            void UploadRangeFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT start, SizeT end) {
+#ifdef TRACY_ENABLE
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                if (start >= end || hostBase == nullptr) return;
+                BindBufferId(TempBufferTarget, resource.id);
+                g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
+                                            hostBase + start);
+            }
+
+            void UploadRangeNow(GLESBufferResource& resource, BufferObject& bufferObject, SizeT start, SizeT end) {
+                UploadRangeFrom(resource, bufferObject.MappedData(), start, end);
+            }
+
+            // Ring machinery shared with the UBO/unpack rings; defined further down in
+            // this same unnamed namespace.
+            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
+            Bool RingAvailable(PersistentRing& ring);
+
+            // True when a pending-range flush can go through the staging ring right
+            // now: kill switch off, the ES copy entry point resolved, and the ring's
+            // own availability gate (EXT_buffer_storage + fences + live context) up.
+            Bool UploadRingUsableNow() {
+                if (MG_Config::Features.EsprytDisableUploadRing) return false;
+                if (!g_GLESFuncs.glCopyBufferSubData) return false;
+                return RingAvailable(g_uploadRing);
+            }
+
+            // A partial range below this goes through the staging ring instead of a
+            // range-invalidating map: the map's page-substitution fast path needs a
+            // sizeable (page-coverable) range to engage, and below it the driver
+            // falls back to waiting out the WAR hazard on the CPU.
+            constexpr SizeT kInvalidateRangeMinBytes = 128u * 1024u;
+
+            // Push every queued range of `resource` from the shadow into the backend
+            // store, without ever letting a driver resolve the WAR hazard against
+            // in-flight frames at the WHOLE BUFFER's expense. Three tiers:
+            //
+            //   1. glMapBufferRange(WRITE | INVALIDATE_RANGE) + memcpy. The entire
+            //      mapped range is rewritten from the authoritative shadow, so
+            //      declaring its old bytes dead is exact - and it lets the driver
+            //      swap fresh pages in for JUST that range. This is the only tier
+            //      whose cost scales with the RANGE on this Mali driver: both the
+            //      immediate glBufferSubData (pre-queueing) and a staged
+            //      glCopyBufferSubData into a busy MUTABLE store ghost the whole
+            //      destination with a worker-thread memcpy - Minecraft 26.3 streams
+            //      ~1MB section meshes into 128MB arenas about nine times a frame
+            //      during a camera pan, and 9 x 128MB of ghosting per frame is
+            //      ~380ms, the measured 2-4 fps. (Backing the arenas with immutable
+            //      stores also kills the ghost, but eagerly commits every arena's
+            //      full extent - +hundreds of MB - which LMK'd the whole device.)
+            //   2. The staging ring + glCopyBufferSubData: the copy is ordered on
+            //      the GPU timeline, no CPU wait (MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH
+            //      forces this tier as the map path's negative control).
+            //   3. Direct glBufferSubData (potentially stalling) when neither the
+            //      map entry points nor the ring exist.
+            //
+            // The ranges are flushed AS QUEUED (VecRange1D::Add already merges
+            // near-adjacent ones): bytes, not flush calls, are the cost axis here,
+            // and collapsing a scattered flush into its union re-copied nearly whole
+            // chunk-mesh arenas every frame.
+            // The caller owns syncedChangeSerial; this only drains the queue.
+            //
+            // ONE body for both arms, and deliberately so: the three-tier decision (whole-buffer
+            // orphan map / >= 128 KiB range-invalidating map / staged ring copy) is what the MC
+            // 26.3 p99 depends on, and a second copy of it for the handle arm is exactly how a
+            // tier silently changes. The arms differ only in where `hostBase` and `frontendSize`
+            // come from.
+            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize) {
+#ifdef TRACY_ENABLE
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                VecRange1D ranges;
+                {
+                    const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                    if (resource.pendingRanges.empty()) return;
+                    ranges = std::move(resource.pendingRanges);
+                    resource.pendingRanges.clear();
+                }
+                // No shadow to read from: only reachable on the handle arm, where the base
+                // arrives with the call, and only for a resource that queued a range before any
+                // content-carrying call named one. The queue is already drained, so the next
+                // full re-upload is what puts the store right.
+                if (hostBase == nullptr) return;
+                // Clamp against BOTH extents: the readback flush may run while the
+                // frontend size and the backend store disagree (a pending respecify
+                // resolves that later; bytes past either end have nowhere to land).
+                const SizeT limit = std::min(frontendSize, resource.storageSize);
+                const Bool mapUsable = !MG_Config::Features.EsprytDisableInvalidateFlush &&
+                                       g_GLESFuncs.glMapBufferRange && g_GLESFuncs.glUnmapBuffer;
+                const Bool ringUsable = UploadRingUsableNow();
+                for (const auto& range : ranges) {
+                    const SizeT end = std::min(range.end, limit);
+                    const SizeT start = std::min(range.start, end);
+                    const SizeT size = end - start;
+                    if (size == 0) continue;
+                    if (MG_Util::PipeStats::Enabled()) {
+                        // Counted once per queued range, before the three delivery shapes
+                        // below diverge: all three move exactly these bytes, and it is the
+                        // byte count - not the shape - that sizes SEG_STAGE.
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(size));
+                    }
+                    // The invalidating map's fast path is SHAPE-dependent on this Mali
+                    // driver: a whole-buffer invalidation renames the store outright,
+                    // and a large range gets fresh pages - but a small unaligned range
+                    // of a busy store makes the map WAIT (osup_sync_object_wait, ~9%
+                    // of a Minecraft 26.3 replay). So: whole buffer -> orphan-map;
+                    // large range -> range-invalidating map; small range -> the staged
+                    // ring copy, whose worst case (a whole-destination ghost) is only
+                    // ever the small destination itself.
+                    //
+                    // The map covers EXACTLY the queued range: only those bytes are the
+                    // shadow's to rewrite. Widening to page bounds looked free and was
+                    // not - the widened bytes clobbered GPU-written data (an SSBO
+                    // counter beside the app's SubData) with the stale shadow.
+                    const Bool wholeBuffer = start == 0 && end == limit && limit == resource.storageSize;
+                    if (mapUsable && (wholeBuffer || size >= kInvalidateRangeMinBytes)) {
+                        BindBufferId(TempBufferTarget, resource.id);
+                        const GLbitfield access =
+                            GL_MAP_WRITE_BIT |
+                            (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
+                        void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
+                                                                 (GLsizeiptr)size, access);
+                        if (dst) {
+                            Memcpy(dst, hostBase + start, size);
+                            g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                            continue;
+                        }
+                    }
+                    SizeT ringOffset = 0;
+                    if (ringUsable && size <= kUploadRingMaxBytes &&
+                        RingAllocate(g_uploadRing, size, ringOffset)) {
+                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, hostBase + start, size);
+                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
+                        g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
+                                                        (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
+                    } else {
+                        UploadRangeFrom(resource, hostBase, start, end);
+                    }
+                }
+            }
+
+            void FlushPendingRangesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
+                FlushPendingRangesFrom(resource, bufferObject.MappedData(), bufferObject.GetSize());
+            }
+
+            // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
+            // into the upload ring and delivered by glCopyBufferSubData. The destination
+            // is the IMMUTABLE persistent store, which the driver can neither rename nor
+            // ghost, so the copy is plain job ordering - after every in-flight reader,
+            // before the next consumer - which is exactly glBufferSubData's contract.
+            // (The in-place host write these bytes replaced tore the frames still
+            // reading the old vertex data: one-frame wrong geometry during fast camera
+            // movement.) Fallback: direct glBufferSubData - the adopted store carries
+            // DYNAMIC_STORAGE, and immutability again forbids the whole-store ghost.
+            //
+            // It never read the frontend object (the bytes are on the resource's own queue and
+            // the extent is the backend store's), so it takes none: the handle arm calls exactly
+            // this function with exactly these semantics.
+            void DrainResidentWritesNow(GLESBufferResource& resource) {
+#ifdef TRACY_ENABLE
+                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+                Vector<GLESBufferResource::PendingResidentWrite> writes;
+                {
+                    const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                    if (resource.pendingResidentWrites.empty()) return;
+                    writes = std::move(resource.pendingResidentWrites);
+                    resource.pendingResidentWrites.clear();
+                }
+                const SizeT limit = resource.storageSize;
+                const Bool ringUsable = UploadRingUsableNow();
+                for (const auto& write : writes) {
+                    if (write.offset >= limit) continue;
+                    const SizeT size = std::min(write.bytes.size(), limit - write.offset);
+                    if (size == 0) continue;
+                    if (MG_Util::PipeStats::Enabled()) {
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(size));
+                    }
+                    SizeT ringOffset = 0;
+                    if (ringUsable && size <= kUploadRingMaxBytes &&
+                        RingAllocate(g_uploadRing, size, ringOffset)) {
+                        Memcpy(g_uploadRing.store.mappedPtr + ringOffset, write.bytes.data(), size);
+                        BindBufferId(GL_COPY_READ_BUFFER, g_uploadRing.store.id);
+                        BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
+                        g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
+                                                        (GLintptr)ringOffset, (GLintptr)write.offset,
+                                                        (GLsizeiptr)size);
+                    } else {
+                        BindBufferId(TempBufferTarget, resource.id);
+                        g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)write.offset, (GLsizeiptr)size,
+                                                    write.bytes.data());
+                    }
+                }
+            }
+
+            // The two-argument spelling the legacy arm's call sites use, kept so those sites
+            // are the SAME text in both builds (G1). The object was never read.
+            void DrainResidentWritesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
+                (void)bufferObject;
+                DrainResidentWritesNow(resource);
+            }
+#else
             // (Re)specify backend storage from the shadow copy: glBufferData.
             // The orphaning point - the ES driver performs the actual rename.
             // TODO(buffer-pool Phase 2): orphan-on-respecify is NOT yet implemented.
@@ -1118,6 +1413,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
+#endif // MOBILEGL_PIPE_PUSH
 
             // EXT_buffer_storage bit values (same numeric values as the desktop ARB
             // tokens); defined locally so this compiles regardless of which GLES headers
@@ -1482,6 +1778,399 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 BumpBufferMutationEpoch();
             }
 
+#if MOBILEGL_PIPE_PUSH
+            // ---- P3a: the same seven ops plus the create/unmap pair, BY HANDLE ------------
+            //
+            // Every body below is its Ops_* counterpart above with exactly the substitutions
+            // D-A2's table names and nothing else: the frontend object's GetSize() / GetUsage()
+            // / HasDefinedContent() / MappedData() / GetChangeSerial() become the applier
+            // record's Desc.Width / Desc.Usage / Desc.HasDefinedContent, the shadow base the
+            // call carried, and the record's server-owned Serial. Every branch survives -
+            // pendingRespecify early-out, the off-thread queue, the adopted zero-copy stamp,
+            // the upload-ring kill switch, the Mali WAR-stall queue-only default.
+            //
+            // NOTHING here reads a frontend type. The one thing a handle op cannot do is ask
+            // an object for its shadow, which is why GLESBufferResource::hostBytes exists: the
+            // three content-carrying calls hand the base over and the later drains read it.
+
+            // The applier's record for this resource, or null when the client never created it
+            // (or created it into a slot that has since been recycled).
+            const MG_Pipe::MGPipeResourceRecord* ResourceRecordOf(MG_Pipe::MGPipeHandle res) {
+                if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
+                const auto& records = MG_Pipe::MGPipeApplier().Resources;
+                if (res.Slot >= records.size()) return nullptr;
+                const auto& record = records[res.Slot];
+                if (!record.Live || record.Gen != res.Gen) return nullptr;
+                return &record;
+            }
+
+            // The server-owned MGGen this backend mirrors in syncedChangeSerial. Zero for a
+            // resource with no record, which is the same "never synced" answer a frontend
+            // change serial of zero gave.
+            Uint64 ResourceSerialOf(MG_Pipe::MGPipeHandle res) {
+                const auto* record = ResourceRecordOf(res);
+                return record != nullptr ? record->Serial : 0;
+            }
+            SizeT ResourceWidthOf(MG_Pipe::MGPipeHandle res) {
+                const auto* record = ResourceRecordOf(res);
+                return record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
+            }
+
+            void Ops_H_Create(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
+                (void)res;
+                (void)desc;
+                // Nothing, and that is the row D-A2 writes: storage is defined lazily by the
+                // first resource_respecify, and the ensure path already tolerates a resource
+                // with none. Minting the twin here would only move the allocation earlier.
+            }
+
+            void Ops_H_Respecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
+                                 const void* initialBytes) {
+                auto* resource = FindBufferResourceForHandle(res);
+                if (initialBytes != nullptr && resource != nullptr) {
+                    // A respecify's companion pointer IS the shadow base (offset 0).
+                    resource->hostBytes = static_cast<const Uint8*>(initialBytes);
+                }
+                if (!resource) return; // lazy: the ensure path full-uploads on creation
+                if (resource->immutableStorage) {
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    if (resource->id != 0 && CanTouchGLNow() &&
+                        resource->contextGeneration == g_bufferContextGeneration) {
+                        NoteBufferIdDeleted(resource->id);
+                        g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                        resource->id = 0;
+                        resource->immutableStorage = false;
+                    }
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                    resource->pendingRespecify = true;
+                    resource->pendingRanges.clear();
+                    resource->pendingResidentWrites.clear();
+                    return;
+                }
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration) {
+                    resource->pendingRespecify = true;
+                    resource->pendingRanges.clear();
+                    resource->pendingResidentWrites.clear();
+                    return;
+                }
+                if (desc.Width == 0) {
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                    resource->pendingRespecify = false;
+                    resource->pendingRanges.clear();
+                    resource->pendingResidentWrites.clear();
+                    return;
+                }
+                // Same orphaning rule, expressed on the descriptor: a NULL-data respecify has
+                // HasDefinedContent clear and the client sends no bytes for it.
+                const void* initialData = desc.HasDefinedContent != 0 ? initialBytes : nullptr;
+                RespecifyStorageWith(*resource, static_cast<SizeT>(desc.Width),
+                                     MG_Util::ConvertBufferUsageToGLEnum(static_cast<BufferUsage>(desc.Usage)),
+                                     initialData, ResourceSerialOf(res));
+            }
+
+            void Ops_H_SubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record, const void* bytes) {
+                const SizeT offset = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferOffset(record));
+                const SizeT size = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record));
+                auto* resource = FindBufferResourceForHandle(res);
+                if (!resource) return;
+                if (bytes != nullptr) resource->hostBytes = static_cast<const Uint8*>(bytes) - offset;
+                if (resource->pendingRespecify) return; // full re-upload pending anyway
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration ||
+                    !StorageMatchesSize(*resource, ResourceWidthOf(res))) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.Add({offset, offset + size});
+                    return;
+                }
+                // The adopted zero-copy store already HAS the bytes; a driver upload here would
+                // re-synchronize what coherent mapping made free.
+                if (resource->persistentMapped && resource->persistentPtr) {
+                    resource->syncedChangeSerial = ResourceSerialOf(res);
+                    return;
+                }
+                if (MG_Config::Features.EsprytDisableUploadRing) {
+                    UploadRangeFrom(*resource, resource->hostBytes, offset, offset + size);
+                    resource->syncedChangeSerial = ResourceSerialOf(res);
+                    return;
+                }
+                // The Mali WAR-stall fix, unchanged: queue and let draw-time sync stage the
+                // merged ranges through the upload ring.
+                const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                resource->pendingRanges.Add({offset, offset + size});
+            }
+
+            void Ops_H_ResidentSubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
+                                       const void* bytes) {
+                const SizeT offset = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferOffset(record));
+                const SizeT size = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record));
+                auto* resource = FindBufferResourceForHandle(res);
+                if (!resource || size == 0 || bytes == nullptr) return;
+                // DELIBERATELY not stored as hostBytes: these are the application's staging
+                // store and are valid for the duration of the call only (BufferObject.h:84-85),
+                // which is exactly why they are COPIED here rather than referenced later.
+                const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                auto& write = resource->pendingResidentWrites.emplace_back();
+                write.offset = offset;
+                const auto* source = static_cast<const Uint8*>(bytes);
+                write.bytes.assign(source, source + size);
+            }
+
+            void Ops_H_FlushRange(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPFlushRange& record,
+                                  const void* bytes) {
+                auto* resource = FindBufferResourceForHandle(res);
+                if (!resource) return;
+                const SizeT start = static_cast<SizeT>(record.Offset);
+                const SizeT end = start + static_cast<SizeT>(record.Size);
+                if (bytes != nullptr) resource->hostBytes = static_cast<const Uint8*>(bytes) - start;
+                if (resource->pendingRespecify) return;
+                if (!CanTouchGLNow() || resource->id == 0 ||
+                    resource->contextGeneration != g_bufferContextGeneration ||
+                    !StorageMatchesSize(*resource, ResourceWidthOf(res))) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.Add({start, end});
+                    return;
+                }
+                if (resource->persistentMapped && resource->persistentPtr) {
+                    resource->syncedChangeSerial = ResourceSerialOf(res);
+                    return;
+                }
+                if (!MG_Config::Features.EsprytDisableUploadRing) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.Add({start, end});
+                    return;
+                }
+                // The kill-switch arm, and it reads the application's REAL flags per call -
+                // which is why MGPFlushRange carries them unnormalised.
+                const Flags<BufferMappingAccessBit> appAccess{
+                    static_cast<std::underlying_type_t<BufferMappingAccessBit>>(record.AccessFlags)};
+                const Bool invalidate = (appAccess & BufferMappingAccessBit::InvalidateRange) ||
+                                        (appAccess & BufferMappingAccessBit::InvalidateBuffer);
+                const Bool unsynchronized = static_cast<Bool>(appAccess & BufferMappingAccessBit::Unsynchronized);
+                if (PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC && (invalidate || unsynchronized) &&
+                    resource->hostBytes != nullptr) {
+                    BindBufferId(TempBufferTarget, resource->id);
+                    void* mappedData = g_GLESFuncs.glMapBufferRange(
+                        TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
+                        GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
+                            (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
+                    if (mappedData) {
+                        Memcpy(mappedData, resource->hostBytes + start, end - start);
+                        g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                        resource->syncedChangeSerial = ResourceSerialOf(res);
+                        return;
+                    }
+                    MGLOG_E_ONCE("Failed to map buffer with ID: %u for flush, falling back to glBufferSubData",
+                                 resource->id);
+                }
+                UploadRangeFrom(*resource, resource->hostBytes, start, end);
+                resource->syncedChangeSerial = ResourceSerialOf(res);
+            }
+
+            void Ops_H_Readback(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPReadback& record) {
+                auto* resource = FindBufferResourceForHandle(res);
+                if (!resource || resource->id == 0 || !resource->storageInitialized) return;
+                if (!CanTouchGLNow() || resource->contextGeneration != g_bufferContextGeneration) return;
+                if (resource->persistentMapped) {
+                    // Queued resident SubData bytes land first (GPU-ordered), then the finish
+                    // makes them - and any shader writes already queued on this context -
+                    // visible through the coherent mapping the reads use. There is no backend
+                    // copy to read back in this case.
+                    DrainResidentWritesNow(*resource);
+                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                    return;
+                }
+                if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
+                const SizeT size = std::min<SizeT>(static_cast<SizeT>(record.Size), resource->storageSize);
+                if (size == 0) return;
+
+                // Queued app writes must land in the backend store before it is read back, or
+                // the writeback below would revert them in the shadow.
+                FlushPendingRangesFrom(*resource, resource->hostBytes, ResourceWidthOf(res));
+
+                BindBufferId(TempBufferTarget, resource->id);
+                void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)record.Offset,
+                                                            static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
+                if (mapped == nullptr) {
+                    MGLOG_E_ONCE("Ops_H_Readback: glMapBufferRange(read) failed for buffer %u", resource->id);
+                    return;
+                }
+                // The reverse channel replaces BufferObject::WritebackFromBackend: the backend
+                // no longer reaches into the frontend's address space, it ANSWERS. In monolith
+                // the client's implementation is one call away, so SyncGpuWrites' caller still
+                // sees the reconciled shadow on return, exactly as before.
+                if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
+                    MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+                        res, record.Offset,
+                        MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped), static_cast<Uint64>(size),
+                                            MG_Pipe::kMGHostSpanSegNone, 0});
+                } else {
+                    MGLOG_E_ONCE("Ops_H_Readback: no reverse channel is installed, so the GPU-written bytes of "
+                                 "buffer %u cannot reach the client shadow",
+                                 resource->id);
+                }
+                g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                // The shadow now matches the backend byte for byte; without this the next draw
+                // would see a newer serial and re-upload the readback over it.
+                resource->syncedChangeSerial = ResourceSerialOf(res);
+            }
+
+            void Ops_H_Destroy(MG_Pipe::MGPipeHandle res) {
+                // The twin comes OUT of the table first, so the three outcomes below are
+                // reached with the entry already retired. The SLOT is the client's to free,
+                // after this returns (D-L).
+                SharedPtr<BackendBufferResource> twin = g_backendBufferResources.ReleaseByHandle(res);
+                // Verbatim Ops_OnDestroy: stale generation -> zero the id; on-thread ->
+                // IsPoolable/EnrollIntoPool else scrub + glDeleteBuffers; off-thread ->
+                // g_deferredBufferReleases plus the lock-free flag.
+                Ops_OnDestroy(std::move(twin));
+            }
+
+            // D-E: the ONLY two changes are the signature and the three reads that went
+            // through the frontend object (GetSize() -> size, MappedData() -> seedBytes,
+            // SetBackendResource(...) -> the slot table's GetOrCreate). Every other statement
+            // is byte-identical to Ops_AcquirePersistentMap above - the four-way capability
+            // gate, the stale-generation wipe BEFORE the new stamp, the idempotency hit, the
+            // fresh-id sequence with ++g_bufferBackendIdGeneration, immutableStorage set as
+            // soon as the store exists, the MGLOG_E_ONCE decline and the success stamps.
+            void* Ops_H_MapPersistent(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes) {
+                if (!CanTouchGLNow() || !g_GLESFuncs.glBufferStorageEXT || !g_GLESFuncs.glMapBufferRange ||
+                    !g_GLESFuncs.glGenBuffers) {
+                    return nullptr;
+                }
+                if (size == 0) return nullptr;
+
+                auto* resource = GetOrCreateBufferResourceForHandle(res);
+                if (!resource) return nullptr;
+                // Before the generation is stamped, not after: everything on the resource
+                // describes a context that is gone, and the idempotency check below would
+                // otherwise hand the caller the dead context's mapped pointer.
+                if (resource->contextGeneration != g_bufferContextGeneration) {
+                    resource->id = 0;
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    resource->immutableStorage = false;
+                    resource->storageInitialized = false;
+                    resource->storageSize = 0;
+                }
+                resource->contextGeneration = g_bufferContextGeneration;
+
+                if (resource->persistentMapped && resource->persistentPtr && resource->storageSize == size) {
+                    return resource->persistentPtr; // idempotent
+                }
+
+                // Need a fresh id: glBufferStorage fails on a buffer that already has
+                // immutable storage, and any prior mutable store is replaced anyway.
+                if (resource->id != 0) {
+                    NoteBufferIdDeleted(resource->id);
+                    // Driver VAOs may have this id baked into attribute/element bindings
+                    // keyed on versions this re-mint does not move.
+                    ++g_bufferBackendIdGeneration;
+                    g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                    resource->id = 0;
+                    resource->immutableStorage = false;
+                }
+                g_GLESFuncs.glGenBuffers(1, &resource->id);
+                if (resource->id == 0) return nullptr;
+
+                // Seed from the shadow (the client's bytes are still live at this point: it
+                // adopts and drops them only after this returns).
+                BindBufferId(TempBufferTarget, resource->id);
+                const void* initial = seedBytes;
+                g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(size), initial,
+                                               GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit |
+                                                   kDynamicStorageBit);
+                // Set as soon as the store exists, not once the map succeeds: the failure
+                // path below leaves this id holding immutable storage, and whoever touches
+                // it next has to know that glBufferData cannot redefine it.
+                resource->immutableStorage = true;
+                void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
+                                                         GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                if (!ptr) {
+                    MGLOG_E_ONCE("Ops_H_MapPersistent: glMapBufferRange(persistent) failed for buffer %u",
+                                 resource->id);
+                    resource->persistentMapped = false;
+                    resource->persistentPtr = nullptr;
+                    return nullptr;
+                }
+                resource->persistentPtr = ptr;
+                resource->persistentMapped = true;
+                resource->storageSize = static_cast<SizeT>(size);
+                resource->storageInitialized = true;
+                resource->pendingRespecify = false;
+                {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->pendingRanges.clear();
+                    resource->pendingResidentWrites.clear();
+                }
+                resource->syncedChangeSerial = ResourceSerialOf(res);
+                return ptr;
+            }
+
+            void Ops_H_UnmapPersistent(MG_Pipe::MGPipeHandle res) {
+                (void)res;
+                // P3a emits this from nowhere: the donation is permanent for the life of the
+                // store and is ended by the respecify / destroy paths, which already retire
+                // the immutable id. The entry exists so the transport has both halves of the
+                // pair (D-E), and giving it a body that unmapped a live coherent store would
+                // be the one thing D-B4 forbids.
+            }
+
+            // The epoch-tracking wrappers, duplicated for this table - same contract as the
+            // seven above, including AcquirePersistentMap's bump EVEN ON DECLINE (the client
+            // still enters a persistent map the per-draw probes must start seeing).
+            void Ops_H_RespecifyTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
+                                        const void* initialBytes) {
+                Ops_H_Respecify(res, desc, initialBytes);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_H_SubDataTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
+                                      const void* bytes) {
+                Ops_H_SubData(res, record, bytes);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_H_ResidentSubDataTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
+                                              const void* bytes) {
+                Ops_H_ResidentSubData(res, record, bytes);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_H_FlushRangeTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPFlushRange& record,
+                                         const void* bytes) {
+                Ops_H_FlushRange(res, record, bytes);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_H_ReadbackTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPReadback& record) {
+                Ops_H_Readback(res, record);
+                BumpBufferMutationEpoch();
+            }
+            void Ops_H_DestroyTracked(MG_Pipe::MGPipeHandle res) {
+                Ops_H_Destroy(res);
+                BumpBufferMutationEpoch();
+            }
+            void* Ops_H_MapPersistentTracked(MG_Pipe::MGPipeHandle res, Uint64 size, const void* seedBytes) {
+                void* result = Ops_H_MapPersistent(res, size, seedBytes);
+                // Bump even on decline: the client still enters a persistent map the per-draw
+                // probes must start seeing.
+                BumpBufferMutationEpoch();
+                return result;
+            }
+
+            const MG_Pipe::MGPipeResourceOps g_glesResourceOps = {
+                .Create = Ops_H_Create,
+                .Respecify = Ops_H_RespecifyTracked,
+                .SubData = Ops_H_SubDataTracked,
+                .SubDataResident = Ops_H_ResidentSubDataTracked,
+                .FlushRange = Ops_H_FlushRangeTracked,
+                .Readback = Ops_H_ReadbackTracked,
+                .Destroy = Ops_H_DestroyTracked,
+                .MapPersistent = Ops_H_MapPersistentTracked,
+                .UnmapPersistent = Ops_H_UnmapPersistent,
+            };
+#endif // MOBILEGL_PIPE_PUSH
+
             const BufferBackendOps g_glesBufferBackendOps = {
                 .Respecify = Ops_RespecifyTracked,
                 .SubData = Ops_SubDataTracked,
@@ -1549,6 +2238,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void RegisterBufferBackendOps() {
             MG_State::GLState::SetBufferBackendOps(&g_glesBufferBackendOps);
+#if MOBILEGL_PIPE_PUSH
+            // P3a: the handle-shaped table goes up beside it, at the same two bring-up sites
+            // and with the same lifetime. Registration is UNCONDITIONAL, exactly as
+            // BufferBackendOps' is: the subsystem bit is the FRONTEND's dispatch predicate
+            // (MGPipeResourceSubsystemEnabled reads the bit AND this table's presence), so a
+            // build with bit 7 clear registers a table nobody calls and the A/B stays a pure
+            // configuration question rather than a bring-up-order one.
+            MG_Pipe::MGPipeSetResourceOps(&g_glesResourceOps);
+#endif
             // Frontend writes issued while ops were unregistered advanced change
             // serials with no per-op bump; re-open every draw-clean memo.
             BumpBufferMutationEpoch();
@@ -1558,6 +2256,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (MG_State::GLState::GetBufferBackendOps() == &g_glesBufferBackendOps) {
                 MG_State::GLState::SetBufferBackendOps(nullptr);
             }
+#if MOBILEGL_PIPE_PUSH
+            if (MG_Pipe::MGPipeGetResourceOps() == &g_glesResourceOps) {
+                MG_Pipe::MGPipeSetResourceOps(nullptr);
+            }
+#endif
             // From here on frontend writes bypass the tracked ops entirely.
             BumpBufferMutationEpoch();
             InvalidateArrayBufferBindingCache();
@@ -1621,7 +2324,47 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // The same five questions, asked of the applier instead of the frontend object, with
+        // IDENTICAL semantics (D-A4):
+        //   identity      the slot table's twin at this handle, not GetBackendResource()
+        //   size          record.Desc.Width, not GetSize()
+        //   freshness     record.Serial vs syncedChangeSerial, not GetChangeSerial()
+        //   map state     record.HasLiveHostWrites, not IsMapped()
+        //   the rest      unchanged, and server-side to begin with
+        //
+        // HasLiveHostWrites is ALWAYS FALSE in P3a and is written by nobody; it is here so the
+        // phase that pushes persistent-mapped host writes can set it with no new record kind,
+        // and the assertion below is what stops that phase landing a silent semantic change.
+        Bool IsBufferDrawCleanByHandle(MG_Pipe::MGPipeHandle res, const GLESBufferResource* resource) {
+            if (!resource) return false;
+            const auto* twin = g_backendBufferResources.FindByHandle(res);
+            if (twin == nullptr || twin->get() != resource) return false;
+            if (resource->contextGeneration != g_bufferContextGeneration) return false;
+            if (resource->id == 0) return false;
+            if (resource->persistentMapped) {
+                return resource->persistentPtr != nullptr && resource->pendingResidentWrites.empty();
+            }
+            const auto* record = ResourceRecordOf(res);
+            if (record == nullptr) return false;
+#if MOBILEGL_PIPE_VERIFY
+            MOBILEGL_ASSERT(!record->HasLiveHostWrites,
+                            "MGPipeResourceRecord::HasLiveHostWrites is set, but P3a has no producer for it");
+#endif
+            if (record->HasLiveHostWrites) return false;
+            if (resource->pendingRespecify || !resource->storageInitialized) return false;
+            if (!resource->pendingRanges.empty()) return false;
+            if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
+            return resource->syncedChangeSerial.load(std::memory_order_acquire) == record->Serial;
+        }
+#endif
+
         Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource) {
+#if MOBILEGL_PIPE_PUSH
+            if (ResourceSubsystemEnabled()) {
+                return IsBufferDrawCleanByHandle(HandleOfBuffer(frontend), resource);
+            }
+#endif
             // Identity first: a respecify path can hand the frontend a NEW resource; the
             // memoed pointer is then stale (and only kept alive by the caller's shadow).
             if (!resource || resource != frontend->GetBackendResource().get()) return false;
@@ -1644,11 +2387,141 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return resource->syncedChangeSerial.load(std::memory_order_acquire) == frontend->GetChangeSerial();
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // The handle arm of the ensure path. Same shape, same order, same branches; the four
+        // frontend reads become the applier's stored descriptor, its Serial and the shadow base
+        // the last content-carrying call handed over.
+        //
+        // It still takes the frontend object for ONE reason, recorded rather than hidden:
+        // BufferObject::SyncPersistentMappedRange() is one of the eleven Espryt sites
+        // ROADMAP/D-N explicitly keeps where it is for P3a (the per-site attribution table is
+        // P8's to execute). Every other line here is handle-shaped. When P8 moves that call to
+        // the client this signature loses its last frontend argument.
+        GLESBufferResource* EnsureBufferResourceForHandle(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
+                                                          MG_Pipe::MGPipeHandle res) {
+            auto* resource = GetOrCreateBufferResourceForHandle(res);
+            if (!resource) return nullptr;
+
+            if (resource->contextGeneration != g_bufferContextGeneration) {
+                // The id (if any) belonged to a destroyed ES context.
+                resource->id = 0;
+                resource->storageInitialized = false;
+                resource->storageSize = 0;
+                resource->pendingRespecify = true;
+                resource->pendingRanges.clear();
+                resource->pendingResidentWrites.clear();
+                resource->contextGeneration = g_bufferContextGeneration;
+                resource->persistentMapped = false;
+                resource->persistentPtr = nullptr;
+                resource->immutableStorage = false;
+            }
+
+            // An immutable store nothing maps any more, retired here on the thread that can.
+            if (resource->immutableStorage && !resource->persistentMapped && resource->id != 0) {
+                NoteBufferIdDeleted(resource->id);
+                ++g_bufferBackendIdGeneration;
+                g_GLESFuncs.glDeleteBuffers(1, &resource->id);
+                resource->id = 0;
+                resource->immutableStorage = false;
+                resource->storageInitialized = false;
+                resource->storageSize = 0;
+                resource->pendingRespecify = true;
+            }
+
+            // Zero-copy coherent persistent buffer: nothing to (re)upload at draw time.
+            if (resource->persistentMapped && resource->persistentPtr && resource->id != 0) {
+                DrainResidentWritesNow(*resource);
+                return resource;
+            }
+
+            if (resource->id == 0) {
+                const SizeT poolSize = ResourceWidthOf(res);
+                // The pool reseed is a whole-buffer upload and its only source of bytes on this
+                // arm is the shadow base the client last sent; with none, a recycled id could
+                // not be reseeded and a fresh store is the honest answer.
+                const Uint reused = (poolSize > 0 && !resource->persistentMapped &&
+                                     resource->hostBytes != nullptr)
+                                        ? AcquireFromPool(poolSize)
+                                        : 0;
+                if (reused != 0) {
+                    resource->id = reused;
+                    resource->storageSize = poolSize;
+                    resource->storageInitialized = true;
+                    resource->pendingRespecify = false;
+                    BindBufferId(TempBufferTarget, reused);
+                    g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, resource->hostBytes);
+                    if (MG_Util::PipeStats::Enabled()) {
+                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
+                                                     static_cast<Uint64>(poolSize));
+                    }
+                    {
+                        const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                        resource->pendingRanges.clear();
+                        resource->pendingResidentWrites.clear();
+                    }
+                    resource->syncedChangeSerial = ResourceSerialOf(res);
+                } else {
+                    g_GLESFuncs.glGenBuffers(1, &resource->id);
+                    if (resource->id == 0) {
+                        MGLOG_E_ONCE("Failed to generate buffer object.");
+                        MGLOG_E_ONCE("ES glGetError(): %s",
+                                     MG_Util::ConvertGLEnumToString(g_GLESFuncs.glGetError()).c_str());
+                        return resource;
+                    }
+                    resource->storageInitialized = false;
+                    resource->pendingRespecify = true;
+                }
+            }
+
+            // D-N keeps this call here for P3a. It can queue ranges and move the record, so
+            // everything below is read AFTER it.
+            if (bufferObject) bufferObject->SyncPersistentMappedRange();
+
+            const auto* record = ResourceRecordOf(res);
+            const SizeT size = record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
+            if (size == 0) {
+                return resource;
+            }
+            const Uint64 serial = record->Serial;
+            const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(static_cast<BufferUsage>(record->Desc.Usage));
+            const void* initialData = record->Desc.HasDefinedContent != 0 ? resource->hostBytes : nullptr;
+
+            if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {
+                RespecifyStorageWith(*resource, size, usage, initialData, serial);
+            } else if (!resource->pendingRanges.empty()) {
+                FlushPendingRangesFrom(*resource, resource->hostBytes, size);
+                resource->syncedChangeSerial = serial;
+            } else if (resource->syncedChangeSerial != serial) {
+                // Mutations this backend could not track (the table was unregistered between
+                // contexts); re-upload everything.
+                RespecifyStorageWith(*resource, size, usage, initialData, serial);
+            }
+            return resource;
+        }
+#endif
+
         GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
             if (!bufferObject) return nullptr;
+
+#if MOBILEGL_PIPE_PUSH
+            if (ResourceSubsystemEnabled()) {
+                const MG_Pipe::MGPipeHandle res = HandleOfBuffer(bufferObject.get());
+                if (MG_Pipe::MGPipeHandleIsNull(res)) {
+                    // The client never created this resource on the wire. There is deliberately
+                    // no fall-back to the legacy arm: silently twinning it off the frontend
+                    // object would hide a missing emission behind a working picture, which is
+                    // exactly what the subsystem A/B exists to make visible.
+                    MGLOG_E_ONCE("MGPipe: buffer %u has no resource handle - the resource family is switched "
+                                 "over but nothing emitted resource_create for it",
+                                 bufferObject->GetExternalIndex());
+                    return nullptr;
+                }
+                return EnsureBufferResourceForHandle(bufferObject, res);
+            }
+#endif
 
             auto* resource = static_cast<GLESBufferResource*>(bufferObject->GetBackendResource().get());
             if (!resource) {
