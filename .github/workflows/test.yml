@@ -790,7 +790,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang-20 libx11-dev
 
       - name: Include-closure assertions and negative control
-        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test --require-all
+        # --expect-probes 4 (contract-v2.md 7.6): an exit code cannot tell four probes from none,
+        # so a --probe typo or a manifest edit that selected nothing would run zero probes and
+        # exit 0 - the second half of the finding that added the flag. The count is the length of
+        # scripts/check_include_closure.py's PROBES list and changing one means changing the other.
+        #
+        # --compiler stays clang++-20, which is what the step above installs (Debian's clang-20
+        # package ships /usr/bin/clang++-20). It is deliberately NOT the bare `clang++` the local
+        # campaign gate spells: that spelling exists because the WSL box has no clang++-20, and
+        # copying it here would trade a version-pinned compiler for whatever the runner has.
+        run: python3 scripts/check_include_closure.py --mode both --compiler clang++-20 --self-test --require-all --expect-probes 4
 
   benchmark:
     runs-on: ubuntu-latest

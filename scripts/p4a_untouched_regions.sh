@@ -71,6 +71,14 @@
 # claim is "byte-identical", and a comment that stopped describing what the code does is exactly
 # the kind of drift a "verbatim move" is supposed to be checked for.
 #
+# THE HASH'S EXACT EXTENT, so that the claim is not read wider than it is (review F-m3, inherited
+# from the parent verbatim): it starts at the beginning of the LINE THAT CARRIES THE NAME and ends
+# at the region's closing brace. A return type, an attribute or a template header sitting on an
+# EARLIER line of a multi-line signature is therefore OUTSIDE the hash, and changing one of those
+# alone does not move this gate. The end IS covered - the self-test's tail controls below prove
+# the extent reaches the closing brace - and G1's symbol report is what catches a signature that
+# changed shape.
+#
 # Exactly one definition must be found per name. Zero or two is exit 2 (could not run), never a
 # silent pass: a rename this gate could not follow must not read as "nothing moved". Two is the
 # expected shape of a #if/#else pair that re-spells one of these bodies beside an untouched copy -
@@ -363,7 +371,17 @@ def extract(rows):
     return out, problems
 
 
-def perturb(rows, target, src, dst):
+def perturb(rows, target, src, dst, where='head'):
+    """Insert one line into a region's body, at its HEAD or at its TAIL.
+
+    TWO POSITIONS, AND THE SECOND ONE IS REVIEW FINDING F-m2. Every control used to insert at the
+    very first byte after the opening brace, so all four of them would still have tripped if
+    find_definition() returned an extent that stopped short of the closing brace - nothing in the
+    self-test proved that a region reaches its own end, and an extractor that hashed all but the
+    last statement of every body would have passed the whole self-test while being blind to a
+    change in that statement. The `tail` position inserts immediately BEFORE the closing brace,
+    which is the byte such an extractor would have dropped.
+    """
     for name, kind, source in rows:
         if name != target:
             continue
@@ -375,15 +393,22 @@ def perturb(rows, target, src, dst):
                              % (target, len(hits)))
             return 2
         begin, end = hits[0]
-        # The opening brace is located in the MASKED text and then used as an offset into the
-        # original: a brace inside a comment or a string on the signature line would otherwise send
-        # the perturbation somewhere that is not the body, and the control would be proving the
-        # wrong thing. Offsets are identical between the two by construction (mask() preserves
-        # length).
-        brace = masked.index('{', begin)
-        patched = (text[:brace + 1] +
-                   '\n            // p4a_untouched_regions.sh --self-test: a body that MOVED.\n' +
-                   text[brace + 1:])
+        if where == 'tail':
+            # end is one PAST the closing brace (find_function / find_namespace both return
+            # `match_forward(...) + 1`), so end - 1 is the brace itself and this lands inside the
+            # body, one character before it ends.
+            note = '\n            // p4a_untouched_regions.sh --self-test: a body whose TAIL moved.\n'
+            patched = text[:end - 1] + note + text[end - 1:]
+        else:
+            # The opening brace is located in the MASKED text and then used as an offset into the
+            # original: a brace inside a comment or a string on the signature line would otherwise
+            # send the perturbation somewhere that is not the body, and the control would be
+            # proving the wrong thing. Offsets are identical between the two by construction
+            # (mask() preserves length).
+            brace = masked.index('{', begin)
+            patched = (text[:brace + 1] +
+                       '\n            // p4a_untouched_regions.sh --self-test: a body that MOVED.\n' +
+                       text[brace + 1:])
         open(dst, 'w', encoding='utf-8', newline='').write(patched)
         return 0
     sys.stderr.write('[p4a-untouched] %s is not one of the regions\n' % target)
@@ -406,7 +431,7 @@ def main(argv):
             sys.stdout.write('%s  %s\n' % (sha, name))
         return 2 if problems else 0
     if mode == 'perturb':
-        return perturb(rows, argv[3], argv[4], argv[5])
+        return perturb(rows, argv[3], argv[4], argv[5], argv[6] if len(argv) > 6 else 'head')
     sys.stderr.write('[p4a-untouched] unknown mode %r\n' % mode)
     return 2
 
@@ -487,6 +512,31 @@ extract_baseline() {
     fi
     printf '%s  %s\n' "$pinned" "$name" >> "$WORK_DIR/$out.sha"
   done
+  # ...and put the list back into the FIXED ORDER (review F-m1). The pinned rows were stripped out
+  # of the spec above and appended here, so without this the baseline side emits them LAST while
+  # extract_ref emits everything in REGIONS order. The gate itself never noticed - compare_lists
+  # looks rows up by name - but the documented capture workflow did: the header promises "stdout is
+  # always the sha list ... in the fixed order above - so a baseline capture is a plain redirect",
+  # and a baseline captured that way then diffed against a two-ref stdout showed seven spurious
+  # differences purely from row order.
+  reorder_sha_list "$WORK_DIR/$out.sha" || return 2
+  return 0
+}
+
+# Rewrite a `<sha>  <region>` list in REGIONS order, in place. Rows whose name is not in REGIONS
+# would be a bug in the caller rather than a difference, so they are kept at the end where they are
+# visible instead of being dropped.
+reorder_sha_list() {
+  local file=$1 name
+  : > "$file.ordered" || return 2
+  printf '%s\n' "$REGIONS" | awk -F@ '{ print $1 }' > "$WORK_DIR/reorder.names" || return 2
+  while read -r name; do
+    [ -n "$name" ] || continue
+    awk -v n="$name" '$2 == n { print }' "$file" >> "$file.ordered" || return 2
+  done < "$WORK_DIR/reorder.names"
+  awk 'NR == FNR { known[$0] = 1; next } !($2 in known) { print }' \
+      "$WORK_DIR/reorder.names" "$file" >> "$file.ordered" || return 2
+  mv -f "$file.ordered" "$file" || return 2
   return 0
 }
 
@@ -524,7 +574,9 @@ compare_lists() {
 # A gate that always says "identical" and a gate that is working produce the same green, so the
 # comparison has to be shown failing. Both controls run: the POSITIVE ones (an untouched copy
 # compares equal; an edit OUTSIDE the regions is invisible) rule out a comparison that reports
-# every region as moved, and the four NEGATIVE ones rule out the comparison that never reports any.
+# every region as moved, and the eight NEGATIVE ones - D-N's four regions, each perturbed at the
+# HEAD of its body and again at its TAIL - rule out both the comparison that never reports any and
+# the extraction whose extent stops before the closing brace (F-m2).
 if [ "${1:-}" = "--self-test" ]; then
   [ $# -eq 1 ] || { say "--self-test takes no other arguments"; exit 2; }
   mkdir -p "$WORK_DIR/pristine" || exit 2
@@ -575,39 +627,55 @@ if [ "${1:-}" = "--self-test" ]; then
   fi
   say "positive control: an edit outside the seventeen regions is invisible, in all three files"
 
-  # One negative control per SELF_TEST_FUNCTIONS entry. Each is run on its own, from the pristine
-  # copy, so the message it produces has to NAME that region - a control that only proved "some
-  # region moved" would not distinguish "this row is compared" from "this row is extracted as an
-  # empty range and every comparison of it is vacuous".
+  # TWO negative controls per SELF_TEST_FUNCTIONS entry - one at the HEAD of the body and one at
+  # its TAIL. Each is run on its own, from the pristine copy, so the message it produces has to
+  # NAME that region: a control that only proved "some region moved" would not distinguish "this
+  # row is compared" from "this row is extracted as an empty range and every comparison of it is
+  # vacuous".
+  #
+  # THE TAIL HALF IS REVIEW FINDING F-m2. With head-only controls, an extraction that returned an
+  # extent stopping short of the closing brace would still have tripped all four - the inserted
+  # line is at the very first byte of the body - so nothing here proved that a region reaches its
+  # own end, and a change to the LAST statement of a protected body would have been invisible to a
+  # gate whose self-test was fully green. The tail control inserts immediately before the closing
+  # brace, which is exactly the byte such an extractor would have dropped.
   controls=0
   for target in $SELF_TEST_FUNCTIONS; do
     targetSource=$(printf '%s\n' "$REGIONS" | awk -F@ -v n="$target" '$1 == n { print $3 }')
     [ -n "$targetSource" ] || { say "$target is not one of the regions"; exit 2; }
-    rm -rf "$WORK_DIR/perturbed"
-    cp -r "$WORK_DIR/pristine" "$WORK_DIR/perturbed" || exit 2
-    write_spec "$WORK_DIR/perturbed" "$WORK_DIR/perturbed.spec"
-    python3 "$PY" perturb "$WORK_DIR/perturbed.spec" "$target" \
-        "$WORK_DIR/pristine/$(blob_name "$targetSource")" \
-        "$WORK_DIR/perturbed/$(blob_name "$targetSource")" || exit 2
-    python3 "$PY" extract "$WORK_DIR/perturbed.spec" > "$WORK_DIR/perturbed.sha" || exit 2
-    if compare_lists "$WORK_DIR/pristine.sha" "$WORK_DIR/perturbed.sha" "pristine" "perturbed" \
-         2> "$WORK_DIR/perturbed.err"; then
-      say "NEGATIVE CONTROL DID NOT TRIP: $target's body was changed and the comparison still"
-      say "reported every region as identical. This gate cannot go red for the reason it exists, so"
-      say "every green it has ever printed means nothing."
-      exit 2
-    fi
-    if ! grep -q "FIRST REGION THAT MOVED: $target" "$WORK_DIR/perturbed.err"; then
-      say "NEGATIVE CONTROL TRIPPED FOR THE WRONG REASON: the comparison went red but did not name"
-      say "$target as the first region that moved. It said:"
-      sed 's/^/[p4a-untouched]   /' "$WORK_DIR/perturbed.err" >&2
-      exit 2
-    fi
-    controls=$((controls + 1))
-    say "negative control $controls: a perturbed $target body is reported, and named"
+    for position in head tail; do
+      rm -rf "$WORK_DIR/perturbed"
+      cp -r "$WORK_DIR/pristine" "$WORK_DIR/perturbed" || exit 2
+      write_spec "$WORK_DIR/perturbed" "$WORK_DIR/perturbed.spec"
+      python3 "$PY" perturb "$WORK_DIR/perturbed.spec" "$target" \
+          "$WORK_DIR/pristine/$(blob_name "$targetSource")" \
+          "$WORK_DIR/perturbed/$(blob_name "$targetSource")" "$position" || exit 2
+      python3 "$PY" extract "$WORK_DIR/perturbed.spec" > "$WORK_DIR/perturbed.sha" || exit 2
+      if compare_lists "$WORK_DIR/pristine.sha" "$WORK_DIR/perturbed.sha" "pristine" "perturbed" \
+           2> "$WORK_DIR/perturbed.err"; then
+        say "NEGATIVE CONTROL DID NOT TRIP: $target's body was changed at its $position and the"
+        say "comparison still reported every region as identical. This gate cannot go red for the"
+        say "reason it exists, so every green it has ever printed means nothing."
+        if [ "$position" = tail ]; then
+          say "  A TAIL control that does not trip while the head one does means the extracted"
+          say "  extent stops before the closing brace: the last statement of every protected body"
+          say "  is outside the hash and can be rewritten silently."
+        fi
+        exit 2
+      fi
+      if ! grep -q "FIRST REGION THAT MOVED: $target" "$WORK_DIR/perturbed.err"; then
+        say "NEGATIVE CONTROL TRIPPED FOR THE WRONG REASON: the comparison went red but did not name"
+        say "$target as the first region that moved ($position control). It said:"
+        sed 's/^/[p4a-untouched]   /' "$WORK_DIR/perturbed.err" >&2
+        exit 2
+      fi
+      controls=$((controls + 1))
+      say "negative control $controls: a perturbed $target body ($position) is reported, and named"
+    done
   done
-  if [ "$controls" -ne 4 ]; then
-    say "expected FOUR negative controls (BRIEF-P4A.md D-N), ran $controls"
+  if [ "$controls" -ne 8 ]; then
+    say "expected EIGHT negative controls (BRIEF-P4A.md D-N's four regions, each at its head and at"
+    say "its tail), ran $controls"
     exit 2
   fi
   say "self-test passed: $controls negative controls, all tripped and all named"
