@@ -741,6 +741,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // thing outside BufferImpl that needs it is the fp64 narrowing, whose source extent
         // used to be BufferObject::GetSize().
         SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res);
+        // The applier's server-owned mutation serial for this resource, 0 when it has no
+        // record. It is what the narrowed-fp64 memo keys its freshness on now that the
+        // frontend change serial is gone from the backend's view.
+        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res);
 #endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on
@@ -1008,8 +1012,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // dropping it. Returns false when the stream cannot be built, in which case the
             // caller must DISABLE the array - leaving a 64-bit array enabled with no pointer is
             // what the Adreno driver turns into a SIGSEGV at the next draw.
+#if MOBILEGL_PIPE_LEGACY_MEMOS
             Bool SyncFloat64AttributeAsFloat32(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib,
                                                Uint32 fetchBaseInstance);
+#endif
 
 #if MOBILEGL_PIPE_PUSH
             // The handle arm of the whole vertex-elements half. Everything it needs arrives in
@@ -1030,7 +1036,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // is part of the key, so a glBufferSubData into the source invalidates it.
             struct ConvertedFloat64Stream {
                 Bool valid = false;
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+                // The pre-handle pin: a FRONTEND lifetime id, i.e. the key
+                // ARCHITECTURE.md 9.5 lists for deletion as "ConvertedVertexStreamKey's
+                // sourcePin". Kept compiled for the legacy arm (and therefore present in
+                // every pull build, which is what keeps sizeof(this) still).
                 Uint64 sourceLifetimeId = 0;
+#endif
+#if MOBILEGL_PIPE_PUSH
+                // What replaces it: the source buffer's {slot, gen}. It is the SAME identity
+                // the rest of the backend now keys on, it cannot be reproduced by a recycled
+                // frontend address, and it costs the walk no allocator probe - the handle is
+                // already in the vertex-buffer entry that named the source.
+                MG_Pipe::MGPipeHandle sourceHandle = MG_Pipe::kMGPipeNullHandle;
+#endif
+                // On the handle arm this is the applier's server-owned Serial rather than the
+                // frontend change serial; both answer the same question - "have the source
+                // bytes moved since the conversion" - and neither is trusted for a
+                // persistently mapped buffer, which is written with no call at all.
                 Uint64 sourceChangeSerial = 0;
                 SizeT sourceOffset = 0;
                 SizeT sourceStride = 0;

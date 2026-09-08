@@ -218,8 +218,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 VertexArrayImpl::g_backendVertexArrayObjects.DestroyByLifetimeId(lifetimeId);
                 break;
             default:
-                // Buffer already has its own death signal (BufferBackendOps::OnDestroy) and
-                // every other kind has no backend twin table here.
+                // Buffer death crosses as ResourceDestroy (P3a): the catalogue has a call for
+                // it, so no seventh NotifyStateObjectDestroyed raiser is added. The notice
+                // exists for kinds that have NO such call - it carries {kind, lifetimeId} and
+                // not the object, and one entry point serves all of them because the answer is
+                // the same. The order at the buffer's death is fixed and not negotiable:
+                // resource_destroy first (the applier clears Live, the backend retires the
+                // twin), then MGPipeSlots().Free - the allocator erases its lifetimeId -> slot
+                // mapping on Free, so a notice resolved twice finds nothing the second time.
+                // On the legacy arm the signal is still BufferBackendOps::OnDestroy. Every
+                // other kind has no backend twin table here.
                 break;
             }
         }
@@ -2243,6 +2251,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) { return ResourceWidthOf(res); }
+        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res) { return ResourceSerialOf(res); }
 
         void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
             if (!bufferObject) return;
@@ -4028,6 +4037,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         }
 
+#if MOBILEGL_PIPE_LEGACY_MEMOS
         Bool BackendVertexArrayObject::SyncFloat64AttributeAsFloat32(
             Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib, Uint32 fetchBaseInstance) {
 #ifdef TRACY_ENABLE
@@ -4147,6 +4157,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                               (const void*)(firstElement * convertedElementSize));
             return true;
         }
+#endif // MOBILEGL_PIPE_LEGACY_MEMOS
 
 #if MOBILEGL_PIPE_PUSH
         Bool BackendVertexArrayObject::SyncFloat64AttributeAsFloat32ByHandle(
@@ -4199,29 +4210,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
+            auto& stream = m_convertedAttributeStreams[attribIndex];
             Uint& convertedBufferId = m_convertedAttributeBufferIds[attribIndex];
-            if (convertedBufferId == 0) {
-                g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
+            const Uint64 sourceSerial = BufferImpl::ResourceSerialForHandle(binding.Res);
+            // The memo, re-keyed: the pin is the source buffer's {slot, gen} instead of a
+            // frontend lifetime id, and the freshness input is the applier's server-owned
+            // Serial instead of the frontend change serial. A PERSISTENTLY MAPPED source is
+            // still never trusted - it is written through the pointer with no call at all, so
+            // no serial on either side can prove the converted copy is current.
+            const Bool memoHit = stream.valid && convertedBufferId != 0 && !resource->persistentMapped &&
+                                 stream.sourceHandle == binding.Res &&
+                                 stream.sourceChangeSerial == sourceSerial &&
+                                 stream.sourceOffset == static_cast<SizeT>(attrib.Offset) &&
+                                 stream.sourceStride == sourceStride &&
+                                 stream.componentCount == componentCount && stream.elementCount == elementCount;
+            if (!memoHit) {
                 if (convertedBufferId == 0) {
-                    MGLOG_E_ONCE("Failed to create the float32 scratch buffer for the 64-bit vertex array at "
-                                 "attribute %u.",
-                                 attribIndex);
-                    return false;
+                    g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
+                    if (convertedBufferId == 0) {
+                        MGLOG_E_ONCE("Failed to create the float32 scratch buffer for the 64-bit vertex array at "
+                                     "attribute %u.",
+                                     attribIndex);
+                        return false;
+                    }
                 }
-            }
-            // NO MEMO YET on this arm: its key is the source buffer's identity plus its change
-            // serial, and re-keying ConvertedFloat64Stream onto the buffer's {slot, gen} is the
-            // next commit's whole subject. Until then every walk reconverts, which is correct
-            // and slower on a path that only 64-bit vertex arrays reach.
-            Vector<Float> converted;
-            NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
-                                        converted);
-            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
-            g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
-                                     converted.data(), GL_STREAM_DRAW);
-            if (MG_Util::PipeStats::Enabled()) {
-                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
-                                             static_cast<Uint64>(converted.size() * sizeof(Float)));
+                Vector<Float> converted;
+                NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
+                                            converted);
+                BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
+                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
+                                         converted.data(), GL_STREAM_DRAW);
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
+                                                 static_cast<Uint64>(converted.size() * sizeof(Float)));
+                }
+                stream.valid = true;
+                stream.sourceHandle = binding.Res;
+                stream.sourceChangeSerial = sourceSerial;
+                stream.sourceOffset = static_cast<SizeT>(attrib.Offset);
+                stream.sourceStride = sourceStride;
+                stream.componentCount = componentCount;
+                stream.elementCount = elementCount;
+                MGLOG_D("DirectGLES: narrowed the 64-bit vertex array at attribute %u to %zu float32 element(s).",
+                        attribIndex, elementCount);
             }
 
             const SizeT convertedElementSize = componentCount * sizeof(Float);
