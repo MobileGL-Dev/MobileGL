@@ -48,11 +48,46 @@
 //     in particular they would go RED if any of the four reachability paths were ever made to
 //     depend on the texture having a sampler VIEW - which is exactly the coupling P4a's
 //     resource-addressed set_texture_params removes and the thing a later phase could reintroduce;
-//   * the "落地前必须红" artefact ROADMAP.md:20 asks for is NOT produced by this file, and no
-//     public-GL integration scenario on a monolith tree can produce it. Producing it needs an
-//     observation of the DRIVER's texture object taken while the texture is still
-//     read-attachment-only, which means a probe inside MG_Backend/DirectGLES - package D's files
-//     (C.7), not this package's. The integrator's ruling is recorded in the gates result document.
+//   * the "落地前必须红" artefact ROADMAP.md:20 asks for is NOT produced by the public-GL half
+//     of this file, and no public-GL integration scenario on a monolith tree can produce it.
+//     Producing it needs an observation of the DRIVER's texture object taken while the texture is
+//     still read-attachment-only. ID-19 rules that G9 is therefore a WHITE-BOX assertion, and this
+//     file now carries the SCENARIO half of it (the unit half is package D's,
+//     MG_Test/SanityTest.cpp's DirectGLESTextureSync.AnAttachmentOnlyTexturesParametersReachThe
+//     DriverWithNoSamplerView).
+//
+// THE WHITE-BOX HALF, and what it adds to the four cases below. Each case, at the point where its
+// texture is reachable ONLY its own way and BEFORE the observing sample, takes three readings
+// through MG_IntegrationTest/Harness/PipeApplyPeek.h and asserts all three:
+//
+//   (a) the APPLIER holds a set_texture_params record for this texture, at a non-zero ParamsSerial,
+//       carrying the field the case moved;
+//   (b) ESPRYT's applied value for the same texture - read back from the DRIVER, through the twin's
+//       own ES name - is that value ALREADY, not after the first sampler view;
+//   (c) Espryt holds NO SAMPLER VIEW for this texture yet, which is what turns (b) from "applied"
+//       into "applied WITHOUT one" and is the whole claim D10 makes.
+//
+// (c) is the assertion the public-GL half structurally cannot make: making it there would create
+// the view. (b) is the half that goes red on a backend that DEFERS - a tree where the parameter
+// push is gated on a sampler view existing is green on all four public-GL cases forever, because
+// the sample that observes the parameter is also what mints the view and repairs the state.
+//
+// WHAT THE THREE READINGS DO **NOT** COVER, so the next reader does not over-trust them
+// (esprytobj re-review N-9, carried here by request). D's unit probe drives
+// SyncTextureParamsToBackend directly, so the only deferral shape IT can see is one INSIDE that
+// function. These three run through the real per-frame paths and therefore also see a deferral
+// introduced ABOVE it - in SyncNeccessaryTextures, in the attachment walk, or in E's per-unit walk.
+// Between them the two halves cover both, and neither covers both alone.
+//
+// A READING THAT CANNOT BE TAKEN IS DECLINED BY NAME AND THE CASE CONTINUES - it is not a
+// GTEST_SKIP, and that is a deliberate departure from the shape the review sketched. These four
+// cases are dual-purpose: they are also the END-TO-END regression net around D10, and that net is
+// the ONLY thing measuring D10 on exactly the arms where the peek cannot look (the pull build,
+// which has no applier at all; the 0x1ff and 0 lanes, where the texture family is switched off;
+// Magma, which has no Espryt twin). Skipping the case there would delete the one verdict those
+// lanes carry in order to report the absence of a second one. The decline is printed, recorded as
+// a test property and named, so a lane that silently stopped taking the reading is visible in the
+// log rather than in a count.
 //
 // WHY THE SECOND ONE IS THE RED, mechanically (scout-espryt-framebuffer.md 2.6, re-opened at the
 // base ref). Today a texture's parameters ride on the UNIT BINDING and on the DRAW attachment set:
@@ -102,6 +137,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeApplyPeek.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -271,10 +307,171 @@ void main() {
                 glTextureParameteri(texture, GL_TEXTURE_SWIZZLE_B, GL_ZERO);
             }
 
+            // Which of the two parameters a case moved, and therefore which one the white-box
+            // reading has to find on both sides of the seam. Two, because they are the two the
+            // four cases use and because a peek that reported "some parameter" would be green for
+            // a backend that applied the wrong one.
+            enum class MovedParameter { Swizzle, DepthStencilMode };
+
+            // ------------------------------------------------------------------------------
+            // G9's WHITE-BOX READING (ID-19). Called by every case at the point where its
+            // texture is reachable only its own way and BEFORE the observing sample - which is
+            // the whole of the design, because the sample repairs what it observes.
+            //
+            // `expectedSwizzle` is the four GL enums the case set (or left at their defaults);
+            // `expectedDepthStencilMode` is GL_DEPTH_COMPONENT or GL_STENCIL_INDEX. Both are
+            // always passed and `moved` says which one is the case's subject, so a reader of a
+            // failure can see the untouched half beside the moved one.
+            void TakeTheWhiteBoxReadingBeforeAnySample(GLuint texture, GLenum target,
+                                                       MovedParameter moved,
+                                                       const GLint expectedSwizzle[4],
+                                                       GLint expectedDepthStencilMode,
+                                                       const char* whatMadeItReachable) {
+                const char* const movedName =
+                    moved == MovedParameter::Swizzle ? "GL_TEXTURE_SWIZZLE_*"
+                                                     : "GL_DEPTH_STENCIL_TEXTURE_MODE";
+
+                PipeTextureParamsRecordPeek record{};
+                if (!PeekPipeTextureParamsRecord(static_cast<unsigned>(texture), &record)) {
+                    DeclineTheWhiteBoxReading(
+                        "no set_texture_params record for this texture in the applier. Either "
+                        "there is no applier here (a PULL build: MGPipeApplierState is "
+                        "#if MOBILEGL_PIPE_PUSH), or this lane's MOBILEGL_PIPE_PUSH leaves "
+                        "kMGPipeSubsystemTextureResources (bit 10) clear, or no backend "
+                        "registered MGPipeResourceOps so the client never emitted (c0f). The "
+                        "end-to-end half of this case below is unaffected and still decides it.");
+                    return;
+                }
+
+                // From here the reading WAS taken, so everything is a hard assertion: a record
+                // that exists and does not carry the parameter is exactly the finding.
+                EXPECT_NE(record.ParamsSerial, 0u)
+                    << "the applier holds a resource record for texture " << texture
+                    << " at handle {" << record.Slot << ", " << record.Gen
+                    << "} but its ParamsSerial is 0, i.e. NO set_texture_params has ever been "
+                       "applied to it - and this case moved " << movedName << " while the texture "
+                       "was " << whatMadeItReachable
+                    << ". A parameter change on a texture with no sampler view has to produce a "
+                       "record addressed BY RESOURCE (D10, D-E1); a zero here means the client "
+                       "never emitted one, which is the coupling P4a exists to remove reappearing "
+                       "on the emitter's side of the seam.";
+
+                if (moved == MovedParameter::Swizzle) {
+                    for (int channel = 0; channel < 4; ++channel) {
+                        EXPECT_EQ(record.Swizzle[channel], static_cast<int>(expectedSwizzle[channel]))
+                            << "the applier's set_texture_params record for texture " << texture
+                            << " carries the wrong swizzle in channel " << channel
+                            << " (record 0x" << std::hex << record.Swizzle[channel] << ", expected 0x"
+                            << expectedSwizzle[channel] << std::dec
+                            << "). The record is what Espryt reads, so a wrong value here is a "
+                               "wrong value everywhere downstream of it.";
+                    }
+                } else {
+                    EXPECT_EQ(record.DepthStencilMode, static_cast<int>(expectedDepthStencilMode))
+                        << "the applier's set_texture_params record for texture " << texture
+                        << " carries GL_DEPTH_STENCIL_TEXTURE_MODE 0x" << std::hex
+                        << record.DepthStencilMode << ", expected 0x" << expectedDepthStencilMode
+                        << std::dec << ".";
+                }
+
+                // (c) - and it is checked BEFORE (b) is read, because (b) reads the driver and a
+                // reader of a failure needs to know the view question was answered on the state
+                // this case built rather than on anything the peek did.
+                bool hasSamplerView = true;
+                if (!PeekEsprytHasSamplerViewForTexture(static_cast<unsigned>(texture),
+                                                        &hasSamplerView)) {
+                    DeclineTheWhiteBoxReading(
+                        "Espryt holds no twin for this texture, so neither the sampler-view "
+                        "question nor the applied-value one can be asked here. On a backend other "
+                        "than DirectGLES that is the designed state (P4a touches no DirectVulkan "
+                        "source but MagmaPipeArms.h, D-Q).");
+                    return;
+                }
+                EXPECT_FALSE(hasSamplerView)
+                    << "Espryt already holds a SAMPLER VIEW for texture " << texture
+                    << ", which was " << whatMadeItReachable
+                    << " and has never been bound to a sampler unit in this case. The whole claim "
+                       "of D10 is that a texture reached this way has no view, so if one exists "
+                       "the reading below cannot separate 'applied by resource' from 'applied "
+                       "through the view' and this case has stopped measuring G9.";
+
+                EsprytAppliedTextureParamsPeek applied{};
+                if (!PeekEsprytAppliedTextureParams(static_cast<unsigned>(texture),
+                                                    static_cast<unsigned>(target), &applied)) {
+                    DeclineTheWhiteBoxReading(
+                        "Espryt's applied value could not be read back from the driver (no twin, "
+                        "no ES name yet, or a target this peek has no binding query for).");
+                    return;
+                }
+
+                std::cout << "[ TextureParamsWithoutASamplerView ] white-box: texture " << texture
+                          << " -> applier handle {" << record.Slot << ", " << record.Gen
+                          << "} paramsSerial " << record.ParamsSerial << ", Espryt ES name "
+                          << applied.BackendTextureId << ", sampler view: none, " << movedName
+                          << " applied before any sample" << std::endl;
+
+                if (moved == MovedParameter::Swizzle) {
+                    for (int channel = 0; channel < 4; ++channel) {
+                        EXPECT_EQ(applied.Swizzle[channel], static_cast<int>(expectedSwizzle[channel]))
+                            << "ESPRYT HAS NOT APPLIED THE SWIZZLE YET. Channel " << channel
+                            << " of the driver texture (ES name " << applied.BackendTextureId
+                            << ") reads 0x" << std::hex << applied.Swizzle[channel] << ", the "
+                            << "application set 0x" << expectedSwizzle[channel] << std::dec
+                            << ", and the applier's record already carries the right value - so "
+                               "the record reached the server and the server has not pushed it. "
+                               "The texture was " << whatMadeItReachable
+                            << " and has NO sampler view (asserted above), which makes this "
+                               "exactly the deferred-to-first-view shape G9 exists to catch: the "
+                               "sample at the end of this case would repair it, and the "
+                               "end-to-end assertion below would then pass on a driver that was "
+                               "told late. That is the half no public-GL case can see.";
+                    }
+                } else {
+                    if (!applied.DepthStencilModeIsReadable) {
+                        DeclineTheWhiteBoxReading(
+                            "this driver would not answer glGetTexParameteriv("
+                            "GL_DEPTH_STENCIL_TEXTURE_MODE), so the applied aspect mode cannot be "
+                            "read back. The record half above was still asserted.");
+                        return;
+                    }
+                    EXPECT_EQ(applied.DepthStencilMode, static_cast<int>(expectedDepthStencilMode))
+                        << "ESPRYT HAS NOT APPLIED THE DEPTH/STENCIL ASPECT MODE YET. The driver "
+                           "texture (ES name " << applied.BackendTextureId << ") reads 0x"
+                        << std::hex << applied.DepthStencilMode << ", the application set 0x"
+                        << expectedDepthStencilMode << std::dec
+                        << ", and the applier's record already carries the right value. The "
+                           "texture was " << whatMadeItReachable
+                        << " and has no sampler view, so this is D-E3's gap measured directly "
+                           "rather than through a sample that would repair it: a driver left at "
+                           "GL_DEPTH_COMPONENT samples the DEPTH bits where the application asked "
+                           "for stencil.";
+                }
+            }
+
+            // Printed, recorded and named, never silent - a lane that stopped taking the reading
+            // must be visible in the log. See this file's header for why it is not a GTEST_SKIP.
+            void DeclineTheWhiteBoxReading(const std::string& why) {
+                std::cout << "[ TextureParamsWithoutASamplerView ] white-box reading DECLINED: "
+                          << why << std::endl;
+                RecordProperty("g9_white_box", "declined");
+                RecordProperty("g9_white_box_reason", why.c_str());
+            }
+
             GLuint m_fetchProgram = 0;
             GLuint m_vao = 0;
             GLuint m_quadBuffer = 0;
         };
+
+        // The swizzle SwizzleRedIntoGreen leaves behind, as GL enums: R -> ZERO, G -> ONE,
+        // B -> ZERO and A untouched at its GL default. Written once here because both the
+        // applier record and the driver read-back are compared against it.
+        constexpr GLint kRedIntoGreenSwizzle[4] = {GL_ZERO, GL_ONE, GL_ZERO, GL_ALPHA};
+        // A texture whose aspect mode was never touched, i.e. the GL initial value - which is
+        // also what a zeroed MGPTextureParams::DepthStencilMode decodes to (MGPipeTypes.h).
+        constexpr GLint kUntouchedDepthStencilMode = GL_DEPTH_COMPONENT;
+        // ...and the identity swizzle, for the case whose subject is the aspect mode: the moved
+        // half is asserted, and the untouched half is carried so a failure prints both.
+        constexpr GLint kUntouchedSwizzle[4] = {GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA};
 
         // ------------------------------------------------------------------------------------
         // 1. DRAW ATTACHMENT ONLY. Green today (SyncNeccessaryTextures' FBO list walks the draw
@@ -306,6 +503,13 @@ void main() {
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glDeleteFramebuffers(1, &fbo);
+
+            // G9's white-box reading, taken here: the texture has been a draw attachment and
+            // nothing else, and the sample below has not happened yet.
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle,
+                                                  kRedIntoGreenSwizzle, kUntouchedDepthStencilMode,
+                                                  "an attachment of the DRAW framebuffer and "
+                                                  "nothing else");
 
             const Image image = SampleAndRead(m_fetchProgram, texture);
             EXPECT_TRUE(WholeViewportIs(image, "green",
@@ -406,6 +610,16 @@ void main() {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the read-attachment frame left a GL error";
 
+            // G9's white-box reading, and this is the case it matters most for: the aspect
+            // mode was set while the texture was reachable ONLY as a read attachment, and the
+            // observation below is a sample that would repair an unsynced parameter on its way
+            // to reporting it.
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D,
+                                                  MovedParameter::DepthStencilMode,
+                                                  kUntouchedSwizzle, GL_STENCIL_INDEX,
+                                                  "an attachment of the READ framebuffer and "
+                                                  "nothing else");
+
             // ---- the observation ----
             BindDefaultFramebuffer();
             glViewport(0, 0, Gl().Width(), Gl().Height());
@@ -484,6 +698,15 @@ void main() {
             Gl().EndFrame();
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
 
+            // G9's white-box reading. RGBA8 is a core image format, so no widening carrier is
+            // minted and the driver's swizzle is the application's own - the composition
+            // RecreateBackendTexture applies for a NON-core format would show up here as a
+            // legitimate difference and this case deliberately does not use one.
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle,
+                                                  kRedIntoGreenSwizzle, kUntouchedDepthStencilMode,
+                                                  "an image-unit binding and nothing else, across "
+                                                  "a RequireImageBindableStorage re-mint");
+
             const Image image = SampleAndRead(m_fetchProgram, texture);
             EXPECT_TRUE(WholeViewportIs(image, "green",
                                         "a texture that was only ever an image-unit binding, sampled "
@@ -524,6 +747,13 @@ void main() {
                              << copyError << std::dec << "), so there is no copy endpoint to be";
             }
             Gl().EndFrame();
+
+            // G9's white-box reading, on the DESTINATION - the endpoint whose parameters moved.
+            TakeTheWhiteBoxReadingBeforeAnySample(destination, GL_TEXTURE_2D,
+                                                  MovedParameter::Swizzle, kRedIntoGreenSwizzle,
+                                                  kUntouchedDepthStencilMode,
+                                                  "a glCopyImageSubData destination and nothing "
+                                                  "else");
 
             // ...and the destination now holds the source's RED texel, which the swizzle must turn
             // into GREEN when it is finally sampled.
