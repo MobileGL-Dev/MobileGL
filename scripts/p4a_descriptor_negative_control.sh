@@ -88,7 +88,12 @@
 # very build directory, and every reading they take there would come from a deliberately corrupted
 # library. So repair() runs from the EXIT trap as well - a mid-way failure (a patched header that
 # would not compile, an interrupt) repairs too - and a repair that itself fails downgrades the
-# verdict to 2. The state repair() reads lives in THIS shell and not in a command substitution,
+# verdict to 2. That downgrade is delivered from THREE places, and REPAIR_RC is what makes the
+# last two of them possible (review F-v2-m4, which found it set and never read): run_control's
+# own `if ! repair` turns a failed repair into 'could-not-run' for that control; the check after
+# the control loop catches a repair that failed on any earlier path and forces the run's exit
+# code to 2; and the EXIT trap reads it too, so a repair that fails while the script is on its
+# way out through an early `exit` cannot leave a corrupted build directory behind a 0 or a 1. The state repair() reads lives in THIS shell and not in a command substitution,
 # which is what makes the trap version of it a real repair rather than a no-op, and every child's
 # exit status is additionally checked for "killed by a signal" so that a Ctrl-C stops the run
 # instead of carrying on into the next control and signing off with a verdict about a control
@@ -176,6 +181,11 @@ say() { echo "[p4a-g7] $*" >&2; }
 PATCHED_HEADER=""
 PATCHED_BACKUP=""
 PATCHED_TEST=""
+# Sticky across every repair this run performs: 0 while every repair put the tree back, 2 once
+# any of them did not. Read in three places (see the header): run_control's `if ! repair`, the
+# check after the control loop, and the EXIT trap. It is sticky rather than per-call because a
+# build directory that was once left un-restored stays untrustworthy even if a later repair of a
+# different header succeeds.
 REPAIR_RC=0
 repair() {
   [ -n "$PATCHED_HEADER" ] || return 0
@@ -224,7 +234,20 @@ note_interrupt() { [ -n "$INTERRUPTED" ] || INTERRUPTED=$1; }
 child_was_signalled() { [ "${1:-0}" -ge 128 ]; }
 trap 'note_interrupt INT; repair; trap - INT; kill -INT $$' INT
 trap 'note_interrupt TERM; repair; trap - TERM; kill -TERM $$' TERM
-trap 'repair' EXIT
+# The EXIT trap covers the paths that leave through an early `exit` with a header still patched
+# (a patch that would not compile, a build that failed). On those the status is already chosen,
+# so the trap has to OVERRIDE it when the repair did not put the tree back - which is what makes
+# REPAIR_RC readable at all from here. Calling `exit` inside an EXIT trap replaces the status and
+# does not re-enter the trap.
+on_exit() {
+  repair || true
+  if [ "$REPAIR_RC" -ne 0 ]; then
+    say "a repair did NOT put the tree back; exit 2 regardless of what this run was going to say."
+    say "THE BUILD DIRECTORY IS NOT TRUSTWORTHY: repair it before reading anything out of it."
+    exit 2
+  fi
+}
+trap 'on_exit' EXIT
 
 # --- one control -----------------------------------------------------------------------------
 # Sets the GLOBAL CONTROL_VERDICT to "tripped" / "did-not-trip" / "wrong-reason" /
@@ -468,6 +491,16 @@ for mglRow in "${CONTROL_ROWS[@]}"; do
     break
   fi
 done
+
+# Every repair this run performed, read once. run_control already turns a failed repair of the
+# control it is running into 'could-not-run', so this only ever fires for a repair that failed
+# somewhere run_control does not report from - but the whole point of a sticky flag is that the
+# verdict may not be better than the state of the build directory it was measured in.
+if [ "$REPAIR_RC" -ne 0 ]; then
+  SUMMARY="$SUMMARY
+  (a repair did NOT put the tree back - the build directory is not trustworthy)"
+  WORST=2
+fi
 
 trap - EXIT
 say "---- G7 (P4a descriptor emission) ----$SUMMARY"
