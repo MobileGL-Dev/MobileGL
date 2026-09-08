@@ -1136,18 +1136,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
-            // NO `FlushPendingRangesNow` FORWARDER HERE, and that is G5's doing (ID-11).
-            // The gate extracts the ONE definition of that name from this file and compares
-            // its bytes with the pre-P3a one, so a second definition - even a two-line
-            // forwarder - is a gate that cannot run rather than a gate that passes. The pull
-            // build's untouched function below IS that definition; a push build has none, and
-            // its two legacy call sites call the shared ladder above directly. The property
-            // the row exists for is stronger this way than the row asks: a push build
-            // contains exactly ONE three-tier ladder and BOTH arms call it, where a forwarder
-            // would have left the pull text as a second ladder for the extractor to hash.
-            // (The handle arm cannot call FlushPendingRangesNow itself: its signature takes a
+            // THE TWO-ARM SHAPE, AND BOTH ARMS ARE HASHED FROM HERE ON (ID-15, which
+            // supersedes ID-13's "FlushPendingRangesNow is defined exactly once, outside any
+            // `#if`").
+            //
+            // This file has TWO three-tier drains, and exactly one of them is compiled into any
+            // given build: `FlushPendingRangesFrom` above, inside `#if MOBILEGL_PIPE_PUSH`, is
+            // what a PUSH build runs - both of its call sites, the legacy one and
+            // Ops_H_Readback, reach it - and `FlushPendingRangesNow` inside the `#else` below,
+            // byte-identical to 5cb826b0, is what a PULL build runs. A push build compiles no
+            // FlushPendingRangesNow at all.
+            //
+            // NO FORWARDER HERE, which is what forced the two-arm shape: G5's extractor is
+            // preprocessor-blind, so a `FlushPendingRangesNow` that forwarded onto the ladder
+            // above would leave TWO definitions of that one name in the file and the gate would
+            // exit 2 - a gate that cannot run - rather than compare anything. (The handle arm
+            // cannot call FlushPendingRangesNow itself either: its signature takes a
             // BufferObject&, and having no frontend object to offer is the whole point of the
             // conversion.)
+            //
+            // WHAT ID-15 ADDS. The shape above is sound, but a gate keyed on the NAME
+            // `FlushPendingRangesNow` alone would from here on protect only the text the
+            // shipping build never compiles: a tier-threshold or map-access-bit edit made in
+            // FlushPendingRangesFrom - the ladder that actually runs, and the one MC 26.3's p99
+            // depends on - would satisfy both G1 (the pull text did not move) and G5 (the pull
+            // name still hashes the same). So scripts/p3a_untouched_regions.sh hashes BOTH
+            // names: eleven functions, the pull ladder compared against the P3a base ref and
+            // this one against a sha pinned at 3e298c9a. Neither ladder may drift, and neither
+            // may drift AWAY FROM THE OTHER without the gate saying so.
 
             // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
             // into the upload ring and delivered by glCopyBufferSubData. The destination

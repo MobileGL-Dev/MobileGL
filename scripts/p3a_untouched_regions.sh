@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# G5's gate: "pool 与延迟释放原样搬" is LITERAL - TEN functions in
+# G5's gate: "pool 与延迟释放原样搬" is LITERAL - ELEVEN functions in
 # MobileGL/MG_Backend/DirectGLES/Managers.cpp are byte-identical after P3a.
 #
 # WHAT G5 CLAIMS, and why a diff of the file cannot say it. ARCHITECTURE.md:316 puts the three
 # persistently mapped rings and the buffer pool in the do-not-touch list, and :515 says what
 # protects them: `present` and eglSwapBuffers are strictly 1:1, so the rings' and the pool's retire
 # only ever happens inside Present, and a batching change would starve them. P3a rewrites the file
-# those ten functions live in - Ops_* becomes handle-shaped, the twin's gate is re-keyed - so the
+# those functions live in - Ops_* becomes handle-shaped, the twin's gate is re-keyed - so the
 # file's diff is large by design and says nothing about whether the pool moved. This gate extracts
-# the ten BODIES and compares them on their own.
+# the eleven BODIES and compares them on their own.
 #
-# The ten, and what each one is (BRIEF-P3A.md D-F for the first nine, D-C and E's risk row for the
-# tenth):
+# The eleven, and what each one is (BRIEF-P3A.md D-F for the first nine, D-C and E's risk row for
+# the tenth, ID-15 for the eleventh):
 #
 #   IsPoolable                     takes the server-side resource, never the frontend object
 #   EnrollIntoPool                 the retireSerial = CurrentFrameSerial() + 1 stamp is load-bearing
@@ -25,6 +25,19 @@
 #   FlushPendingRangesNow          the three-tier drain: tier 1 is an INVALIDATE_BUFFER map + memcpy
 #                                  for a whole-buffer flush or a range >= 128 KiB, tier 2 the upload
 #                                  ring + glCopyBufferSubData, tier 3 UploadRangeNow
+#   FlushPendingRangesFrom         the SAME three-tier drain, on the arm that ships. Born in P3a
+#
+# THE ELEVENTH IS HERE BY INTEGRATOR DECISION ID-15, and it is the whole reason the row about the
+# tenth is not decorative. On this tree Managers.cpp has TWO arms: `#if MOBILEGL_PIPE_PUSH` holds
+# FlushPendingRangesFrom, `#else` holds FlushPendingRangesNow byte-identically, and BOTH of a push
+# build's call sites reach the former. ID-13 asked for one definition outside any `#if`; the tree
+# chose the two-arm shape instead, for the reason written at Managers.cpp's `#else` boundary (a
+# forwarder would leave two definitions of one name and the extractor, which is preprocessor-blind,
+# would exit 2 rather than run). The consequence, and what ID-15 closes: a push build compiles no
+# FlushPendingRangesNow at all, so a gate that hashed only that name protected text the shipping
+# build never sees, and a tier-threshold edit made in the ladder that DOES ship would pass it. So
+# both names are hashed. The pull build's ladder is compared against the base ref; the push build's
+# is compared against a sha pinned at the commit where it was reviewed - see PINNED_FUNCTIONS.
 #
 # THE TENTH IS HERE BY INTEGRATOR DECISION ID-11, resolving a contradiction inside the brief.
 # D-F's "Decision: nine functions" table omits FlushPendingRangesNow, but BRIEF-P3A.md:420 calls it
@@ -55,8 +68,8 @@
 # silent pass: a rename that this gate could not follow must not read as "nothing moved".
 #
 # Usage:
-#   scripts/p3a_untouched_regions.sh <ref-a> <ref-b>   compare the ten bodies at two git refs
-#   scripts/p3a_untouched_regions.sh <ref>             print the ten shas at one ref (the D.0
+#   scripts/p3a_untouched_regions.sh <ref-a> <ref-b>   compare the eleven bodies at two git refs
+#   scripts/p3a_untouched_regions.sh <ref>             print the eleven shas at one ref (the D.0
 #                                                      baseline capture: ... > p3a-before-untouched.sha)
 #   scripts/p3a_untouched_regions.sh --self-test       prove the comparison can go red
 #
@@ -66,22 +79,32 @@
 # Both arguments are GIT REFS: the gate is about what landed, so an uncommitted edit is invisible
 # by design. Use HEAD after committing, which is what D.1 and the CI row do.
 #
-# Exit codes: 0 the ten bodies are identical at both refs (or a single ref was listed);
+# Exit codes: 0 the eleven bodies are identical at both refs (or a single ref was listed);
 #             1 at least one moved - the first one in the fixed order is named on stderr;
 #             2 the gate could not run: a bad ref, a missing file, a name that is not defined
 #               exactly once, or a self-test whose control failed to trip.
 set -u -o pipefail
 
 SOURCE_PATH=MobileGL/MG_Backend/DirectGLES/Managers.cpp
+# The ten that exist at the P3a base ref, so their baseline is read out of <ref-a>.
 FUNCTIONS="IsPoolable EnrollIntoPool AcquireFromPool TrimBufferPool ClearBufferPool ProcessDeferredBufferReleases CreateRingStorage RingAvailable RingAllocate FlushPendingRangesNow"
-EXPECTED_FUNCTION_COUNT=10
+# The ELEVENTH (ID-15), and it is a different kind of row: it was BORN in P3a, so there is no
+# body at the base ref to compare it with and its baseline is PINNED below, captured at
+# 3e298c9a - the commit at which the two-arm shape was reviewed and accepted.
+PINNED_FUNCTIONS="FlushPendingRangesFrom"
+PINNED_BASELINE_REF=3e298c9a
+PINNED_SHA_FlushPendingRangesFrom=37fc94ffc5991923d222d585daa3af6511d2352d255623026ce35a3b6963c4a6
+ALL_FUNCTIONS="$FUNCTIONS $PINNED_FUNCTIONS"
+EXPECTED_FUNCTION_COUNT=11
 # The functions the self-test perturbs, one control each. ClearBufferPool is small, has no forward
 # declaration and no overload, so a failure to trip there is about the COMPARISON rather than about
-# the extraction. FlushPendingRangesNow is the opposite shape on purpose - the longest body in the
-# set, three nested tiers, its own early returns - and it is the ID-11 addition, so a control that
-# only ever perturbed the easy one would leave the tenth entry unproven: an entry that silently
-# extracted the wrong extent would compare equal forever.
-SELF_TEST_FUNCTIONS="ClearBufferPool FlushPendingRangesNow"
+# the extraction. The two flush ladders are the opposite shape on purpose - the longest bodies in
+# the set, three nested tiers, their own early returns - and they are the ID-11 and ID-15
+# additions, so a control that only ever perturbed the easy one would leave them unproven: an
+# entry that silently extracted the wrong extent would compare equal forever. Both ladders are
+# controlled, not one of them, because the whole point of the eleventh row is that they are two
+# bodies and either can drift.
+SELF_TEST_FUNCTIONS="ClearBufferPool FlushPendingRangesNow FlushPendingRangesFrom"
 
 say() { echo "[p3a-untouched] $*" >&2; }
 
@@ -245,6 +268,11 @@ def perturb(src, dst, names, target):
 
 
 def main(argv):
+    # m4: the sha list is parsed by awk, and on Windows (Git Bash, MSYS python) text-mode stdout
+    # translates '\n' into CRLF - after which `$2 == n` never matches and the gate exits 1 on an
+    # untouched tree. Linux CI never saw it; a developer running the gate locally always did.
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(newline='\n')
     mode = argv[1]
     names = argv[-1].split()
     if mode == 'extract':
@@ -263,7 +291,8 @@ def main(argv):
 sys.exit(main(sys.argv))
 PYTHON
 
-# Extract the nine bodies at a git ref into "$2".
+# Extract the eleven bodies at a git ref into "$2". Every one of them must be defined exactly
+# once there; this is the side the gate is ABOUT (<ref-b>, and the single-ref listing's ref).
 extract_ref() {
   local ref=$1 out=$2 blob="$WORK_DIR/$2.cpp"
   if ! git show "$ref:$SOURCE_PATH" > "$blob" 2>"$WORK_DIR/show.err"; then
@@ -271,8 +300,43 @@ extract_ref() {
     sed 's/^/[p3a-untouched]   /' "$WORK_DIR/show.err" >&2
     return 2
   fi
-  python3 "$PY" extract "$blob" "$FUNCTIONS" > "$WORK_DIR/$out.sha"
+  python3 "$PY" extract "$blob" "$ALL_FUNCTIONS" > "$WORK_DIR/$out.sha"
   return $?
+}
+
+# The BASELINE side (<ref-a>). Same extraction, with one difference that the eleventh row makes
+# necessary: a function born in P3a has no body at the P3a base ref, and CI passes exactly that
+# ref as <ref-a>. Asking for it there is not "the gate could not run" - it is the expected
+# answer - so a name in PINNED_FUNCTIONS that is missing at <ref-a> takes the sha pinned at the
+# top of this script instead. Everything else still has to be found: the fallback is entered
+# only after a strict extraction failed, and it then re-extracts the pre-P3a ten strictly, so a
+# genuine rename of one of THOSE is still exit 2 rather than a silently short list.
+extract_baseline() {
+  local ref=$1 out=$2 blob="$WORK_DIR/$2.cpp" name sha
+  if ! git show "$ref:$SOURCE_PATH" > "$blob" 2>"$WORK_DIR/show.err"; then
+    say "cannot read $SOURCE_PATH at '$ref':"
+    sed 's/^/[p3a-untouched]   /' "$WORK_DIR/show.err" >&2
+    return 2
+  fi
+  if python3 "$PY" extract "$blob" "$ALL_FUNCTIONS" > "$WORK_DIR/$out.sha" 2>"$WORK_DIR/$out.err"; then
+    return 0
+  fi
+  if ! python3 "$PY" extract "$blob" "$FUNCTIONS" > "$WORK_DIR/$out.sha"; then
+    say "the baseline ref '$ref' does not define the pre-P3a ten exactly once each:"
+    sed 's/^/[p3a-untouched]   /' "$WORK_DIR/$out.err" >&2
+    return 2
+  fi
+  for name in $PINNED_FUNCTIONS; do
+    eval "sha=\$PINNED_SHA_$name"
+    if [ -z "$sha" ] || [ "$sha" = "PLACEHOLDER_SHA" ]; then
+      say "$name has no pinned baseline sha; the eleventh row cannot be compared"
+      return 2
+    fi
+    printf '%s  %s\n' "$sha" "$name" >> "$WORK_DIR/$out.sha"
+    say "$name is not defined at '$ref' (it was born in P3a): its baseline is the sha PINNED in"
+    say "  this script, captured at $PINNED_BASELINE_REF"
+  done
+  return 0
 }
 
 # Compare two sha lists. Prints the first function that moved.
@@ -287,8 +351,10 @@ compare_lists() {
         say "  $labelA $shaA"
         say "  $labelB ${shaB:-<not found>}"
         say "  G5 (ARCHITECTURE.md:316, :515) says the buffer pool, the deferred-release drain, the"
-        say "  three rings and FlushPendingRangesNow's three-tier drain (BRIEF-P3A.md:420, :1708)"
-        say "  move VERBATIM. If this change is intended, it is not a P3a change and it needs its"
+        say "  three rings and BOTH arms of the three-tier flush drain - FlushPendingRangesNow in"
+        say "  the pull build, FlushPendingRangesFrom in the push build (BRIEF-P3A.md:420, :1708,"
+        say "  ID-11, ID-15) - move VERBATIM. If this change is intended, it is not a P3a change"
+        say "  and it needs its"
         say "  own commit and its own reason; if it is not, revert the body. A push arm that carries"
         say "  its own COPY of one of these bodies beside an untouched pull arm is the same finding:"
         say "  the handle arm must CALL the untouched function, not re-spell it."
@@ -311,8 +377,8 @@ if [ "${1:-}" = "--self-test" ]; then
   [ -f "$SOURCE_PATH" ] || { say "$SOURCE_PATH is not in this tree"; exit 2; }
 
   cp -f "$SOURCE_PATH" "$WORK_DIR/pristine.cpp" || exit 2
-  if ! python3 "$PY" extract "$WORK_DIR/pristine.cpp" "$FUNCTIONS" > "$WORK_DIR/pristine.sha"; then
-    say "the extractor could not read the ten bodies out of the working tree's $SOURCE_PATH"
+  if ! python3 "$PY" extract "$WORK_DIR/pristine.cpp" "$ALL_FUNCTIONS" > "$WORK_DIR/pristine.sha"; then
+    say "the extractor could not read the eleven bodies out of the working tree's $SOURCE_PATH"
     exit 2
   fi
   found=$(wc -l < "$WORK_DIR/pristine.sha")
@@ -323,7 +389,7 @@ if [ "${1:-}" = "--self-test" ]; then
   say "positive control: $EXPECTED_FUNCTION_COUNT bodies extracted from the working tree"
 
   cp -f "$WORK_DIR/pristine.cpp" "$WORK_DIR/copy.cpp"
-  python3 "$PY" extract "$WORK_DIR/copy.cpp" "$FUNCTIONS" > "$WORK_DIR/copy.sha" || exit 2
+  python3 "$PY" extract "$WORK_DIR/copy.cpp" "$ALL_FUNCTIONS" > "$WORK_DIR/copy.sha" || exit 2
   if ! compare_lists "$WORK_DIR/pristine.sha" "$WORK_DIR/copy.sha" "pristine" "copy" 2>/dev/null; then
     say "POSITIVE CONTROL FAILED: an untouched copy compared as MOVED. The comparison is reporting"
     say "differences that are not there, so its verdict means nothing in either direction."
@@ -334,27 +400,27 @@ if [ "${1:-}" = "--self-test" ]; then
   # The second positive control, and it is the one that matters for P3a: the rest of this file
   # IS going to be rewritten (the Ops_* become handle-shaped, the twin's gate is re-keyed), so a
   # gate that fired on any edit to Managers.cpp would have to be switched off in the same week it
-  # landed. An edit outside the ten bodies must be invisible here.
-  { echo "// p3a_untouched_regions.sh --self-test: an edit OUTSIDE the ten bodies."; \
+  # landed. An edit outside the eleven bodies must be invisible here.
+  { echo "// p3a_untouched_regions.sh --self-test: an edit OUTSIDE the eleven bodies."; \
     cat "$WORK_DIR/pristine.cpp"; } > "$WORK_DIR/outside.cpp"
-  python3 "$PY" extract "$WORK_DIR/outside.cpp" "$FUNCTIONS" > "$WORK_DIR/outside.sha" || exit 2
+  python3 "$PY" extract "$WORK_DIR/outside.cpp" "$ALL_FUNCTIONS" > "$WORK_DIR/outside.sha" || exit 2
   if ! compare_lists "$WORK_DIR/pristine.sha" "$WORK_DIR/outside.sha" "pristine" "outside" \
        2>/dev/null; then
-    say "POSITIVE CONTROL FAILED: an edit OUTSIDE the ten bodies was reported as one of them"
+    say "POSITIVE CONTROL FAILED: an edit OUTSIDE the eleven bodies was reported as one of them"
     say "moving. This gate would fire on every P3a commit to Managers.cpp and would have to be"
     say "silenced, which is the same as not having it."
     exit 2
   fi
-  say "positive control: an edit outside the ten bodies is invisible"
+  say "positive control: an edit outside the eleven bodies is invisible"
 
   # One negative control per SELF_TEST_FUNCTIONS entry. Each is run on its own, from the pristine
   # copy, so the message it produces has to NAME that function - a control that only proved "some
-  # body moved" would not distinguish "the tenth entry is compared" from "the tenth entry is
+  # body moved" would not distinguish "the eleventh entry is compared" from "the eleventh entry is
   # extracted as an empty range and every comparison of it is vacuous".
   for target in $SELF_TEST_FUNCTIONS; do
     python3 "$PY" perturb "$WORK_DIR/pristine.cpp" "$WORK_DIR/perturbed.cpp" \
-        "$target" "$FUNCTIONS" || exit 2
-    python3 "$PY" extract "$WORK_DIR/perturbed.cpp" "$FUNCTIONS" > "$WORK_DIR/perturbed.sha" || exit 2
+        "$target" "$ALL_FUNCTIONS" || exit 2
+    python3 "$PY" extract "$WORK_DIR/perturbed.cpp" "$ALL_FUNCTIONS" > "$WORK_DIR/perturbed.sha" || exit 2
     if compare_lists "$WORK_DIR/pristine.sha" "$WORK_DIR/perturbed.sha" "pristine" "perturbed" \
          2> "$WORK_DIR/perturbed.err"; then
       say "NEGATIVE CONTROL DID NOT TRIP: $target's body was changed and the comparison"
@@ -377,7 +443,7 @@ fi
 # --- the gate -------------------------------------------------------------------------------
 case $# in
   1)
-    extract_ref "$1" one || exit 2
+    extract_baseline "$1" one || exit 2
     cat "$WORK_DIR/one.sha"
     say "listed the $EXPECTED_FUNCTION_COUNT bodies at $1"
     exit 0
@@ -389,7 +455,7 @@ case $# in
     ;;
 esac
 
-extract_ref "$1" a || exit 2
+extract_baseline "$1" a || exit 2
 extract_ref "$2" b || exit 2
 cat "$WORK_DIR/b.sha"
 

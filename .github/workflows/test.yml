@@ -1635,19 +1635,27 @@ jobs:
       # VERBATIM, and ARCHITECTURE.md:515 says why - their retire happens only inside Present, so
       # a batching or ordering change there starves them, and nothing else in this workflow can
       # see it. P3a rewrites the rest of Managers.cpp by design, so a file diff says nothing; the
-      # script extracts the nine named bodies and compares their hashes on their own.
+      # script extracts the ELEVEN named bodies and compares their hashes on their own.
+      #
+      # Eleven and not ten (ID-15): Managers.cpp carries the three-tier flush drain TWICE, once
+      # per preprocessor arm, and a push build compiles only FlushPendingRangesFrom while the
+      # untouched FlushPendingRangesNow lives in the `#else`. Hashing the pull name alone would
+      # protect text no shipping build compiles, so both are hashed - the pull ladder against
+      # BASELINE, the push ladder against a sha pinned in the script at 3e298c9a, because that
+      # one was born in P3a and has no body at the base ref to compare with.
       #
       # Scoped to the disaggregation branch and to a manual dispatch, deliberately: the question
-      # is "did these nine move since P3a started", and BASELINE is P3a's base ref. On dev, where
-      # unrelated buffer fixes land on their own schedule, the same comparison would be asking a
-      # question nobody posed - it belongs with the TEMPORARY trigger lines at the top of this
-      # file and retires with them.
+      # is "did these eleven move since P3a started", and BASELINE is P3a's base ref. On dev,
+      # where unrelated buffer fixes land on their own schedule, the same comparison would be
+      # asking a question nobody posed - it belongs with the TEMPORARY trigger lines at the top
+      # of this file and retires with them.
       #
       # --self-test is the half that keeps it honest, and it is not optional: a comparison that
-      # silently stopped comparing produces exactly the same green as nine untouched bodies. It
-      # runs three canned controls - nine bodies extracted, an edit OUTSIDE them ignored, and a
-      # perturbed body reported BY NAME - and fails if any of them does not answer. Same shape as
-      # gen_pipe.py --self-test above.
+      # silently stopped comparing produces exactly the same green as eleven untouched bodies. It
+      # runs six canned controls - eleven bodies extracted, an untouched copy compared equal, an
+      # edit OUTSIDE them ignored, and each of the three perturbation targets (ClearBufferPool
+      # and BOTH flush ladders) reported BY NAME - and fails if any of them does not answer.
+      # Same shape as gen_pipe.py --self-test above.
       - name: The buffer pool, the deferred-release drain and the rings did not move (G5)
         if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
         run: bash scripts/p3a_untouched_regions.sh "${BASELINE}" HEAD
