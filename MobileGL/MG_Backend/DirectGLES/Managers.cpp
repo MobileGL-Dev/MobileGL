@@ -7677,11 +7677,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              stateTextureObject->GetExternalIndex(), res.Slot, res.Gen);
                 return nullptr;
             }
-            // D-E1: kMGPipeNullHandle here is Fatal{ProtocolCorruption} territory - EVERY
-            // ITextureObject owns a SamplerObject, so a null is a malformed record and not "no
-            // sampler". The applier is where that verdict is raised; this side names it and
-            // declines, because a backend that sampled through whatever the driver texture last
-            // held would be the silent half of the same bug.
+            // NO set_texture_params HAS BEEN APPLIED FOR THIS TEXTURE YET, which is not the same
+            // thing as a malformed one and must not be read as one. ParamsSerial is the
+            // applier's own "have I ever stored a params record here" (it is bumped on every
+            // set_texture_params and starts at 0), and Params is value-initialised beside it -
+            // so on a texture the application has never given a parameter to, BuiltinSampler is
+            // null because the record was never written, not because a client wrote a null.
+            // There is nothing to push in that state; SyncTextureParamsToBackend's own gate
+            // reaches the same conclusion silently (m_syncedParamsSerial starts at 0 too and the
+            // compare skips), and this decline is made silent for the same reason. Found by the
+            // verification round's census: three cases were declining loudly here on textures
+            // that had simply never been glTexParameter'd.
+            if (record->ParamsSerial == 0) {
+                MGLOG_D("Texture %u has no set_texture_params record yet, so it has no built-in "
+                        "sampler to push.",
+                        stateTextureObject->GetExternalIndex());
+                return nullptr;
+            }
+            // D-E1: kMGPipeNullHandle in a record that WAS written is Fatal{ProtocolCorruption}
+            // territory - EVERY ITextureObject owns a SamplerObject, so a null is a malformed
+            // record and not "no sampler". The applier is where that verdict is raised; this
+            // side names it and declines, because a backend that sampled through whatever the
+            // driver texture last held would be the silent half of the same bug.
             const MG_Pipe::MGPipeHandle builtin = record->Params.BuiltinSampler;
             if (MG_Pipe::MGPipeHandleIsNull(builtin)) {
                 MGLOG_E_ONCE("MGPipe: texture %u's set_texture_params names the null handle as its "
