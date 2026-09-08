@@ -394,6 +394,138 @@ namespace MobileGL::MG_Pipe {
 
         constexpr Uint32 kAllPipelineChunks =
             static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+
+        // ----------------------------------------------------------------------------
+        // P3a: resolving a handle, growing a slot table, and the bounds gate.
+        // ----------------------------------------------------------------------------
+
+        // Grows a slot-indexed record table so `slot` is in it. Slot spaces are DENSE per
+        // kind - the allocator is a free list plus a high-water mark - which is exactly why
+        // the server's object table is an array a handle indexes rather than a map, and why
+        // this grows only when a new high-water mark arrives.
+        template <class Record>
+        Record& RecordAt(Vector<Record>& records, Uint32 slot) {
+            if (slot >= records.size()) records.resize(static_cast<SizeT>(slot) + 1);
+            return records[slot];
+        }
+
+        // Null means "this applier does not have that resource": an out-of-range slot, a slot
+        // that is not live, or a handle whose generation has moved on because the slot was
+        // recycled under it. FindCso above is the same three questions for the CSO store.
+        MGPipeResourceRecord* FindResource(MGPipeHandle res) {
+            if (res.Slot >= g_applier.Resources.size()) return nullptr;
+            MGPipeResourceRecord& record = g_applier.Resources[res.Slot];
+            if (!record.Live || record.Gen != res.Gen) return nullptr;
+            return &record;
+        }
+
+        // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are.
+        //
+        // A resource call is applied at the GL call that causes it, while MGPipeApplierReset
+        // runs at the first validate of a FRESH CONTEXT - so a buffer that outlives a context
+        // switch (a shared store, a worker context) legitimately reaches this applier with its
+        // record already dropped. Aborting a verify lane on a sequence that is legal would be
+        // a wire that fires for a reason it does not exist for, so the refusal is a DEFINED
+        // no-op: nothing is stored, nothing is dispatched, no serial moves, and the debug
+        // assertion names it. That is the shape bind_render_state already uses for a dead CSO.
+        //
+        // The faults below are the other class entirely: a record that does not describe its
+        // own bytes would have the BACKEND read or write outside a store, which is memory
+        // corruption rather than a dropped call, so those get the tag ARCHITECTURE.md reserves
+        // for exactly this - Fatal{ProtocolCorruption} - and the record's identity in the line.
+        constexpr const char* kResourceRefusalNote =
+            "the record is not this applier's; the call is dropped, not applied";
+
+        // Returns the fault, or null when [offset, offset+size) lies inside `width` bytes.
+        // Written so nothing can overflow: `offset > width` is answered before the subtraction
+        // that the second question needs.
+        const char* BufferRangeFault(Uint64 offset, Uint64 size, Uint64 width) {
+            if (offset > width) return "the offset starts past the resource's declared storage";
+            if (size > width - offset) return "the range runs past the resource's declared storage";
+            return nullptr;
+        }
+
+        // The buffer half of MGPSubData is a CONVENTION over a texture record's box
+        // (MGPipeTypes.h): offset in UnionBox.X, size in UnionBox.W, no level and no regions.
+        // MGPipeSetSubDataBufferRange is its only encoder, so every field it writes is a field
+        // the applier can hold the record to - which is what makes a hand-rolled or corrupted
+        // record visible instead of being read as a plausible range.
+        const char* SubDataBoxFault(const MGPSubData& record) {
+            // The box's first coordinate is a signed Int32 on the wire and the encoder never
+            // writes a negative one; read back as unsigned (which is what the decoder does,
+            // deliberately, rather than sign-extending) a corrupt one lands above the
+            // encodable bound and is refused here.
+            if (MGPipeSubDataBufferOffset(record) > 0x7FFFFFFFull) {
+                return "the destination offset is above the bound one record can encode";
+            }
+            if (record.Level != 0) return "the buffer half carries a mip level";
+            if (record.RegionCount != 0) return "the buffer half carries sub-regions";
+            return nullptr;
+        }
+
+#if MOBILEGL_PIPE_VERIFY
+        // D-A4's pin. HasLiveHostWrites is ALWAYS false in this phase and is written by
+        // nobody: it exists so the phase that pushes persistent-mapped host writes can set it
+        // with no new record kind. A producer that landed under it would change what
+        // IsBufferDrawClean answers with no other visible edit, so a verify build refuses to
+        // let one arrive unannounced.
+        void PinNoLiveHostWrites(const MGPipeResourceRecord& record, MGPipeHandle res, const char* call) {
+            if (!record.HasLiveHostWrites) return;
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeLiveHostWrites")
+                                 " %s {slot=%u, gen=%u}: the resource record says host writes are live, and "
+                                 "no path in this phase may set that",
+                                 call, res.Slot, res.Gen);
+        }
+#else
+        void PinNoLiveHostWrites(const MGPipeResourceRecord&, MGPipeHandle, const char*) {}
+#endif
+
+        // The one gate every content-carrying buffer write goes through. resource_subdata and
+        // buffer_subdata_resident differ only in which backend hook takes the bytes and in the
+        // fact that one of them is allowed to be absent, so a second copy of this arithmetic
+        // would be a second place to get it wrong.
+        void ApplyBufferWrite(const char* call, const MGPSubData& record, const void* bytes, Bool resident) {
+            MGPipeResourceRecord* stored = FindResource(record.Res);
+            MOBILEGL_ASSERT(stored != nullptr, "%s named {slot=%u, gen=%u}: %s", call, record.Res.Slot,
+                            record.Res.Gen, kResourceRefusalNote);
+            if (stored == nullptr) return;
+
+            const Uint64 offset = MGPipeSubDataBufferOffset(record);
+            const Uint64 size = MGPipeSubDataBufferSize(record);
+            const char* fault = SubDataBoxFault(record);
+            if (fault == nullptr) fault = BufferRangeFault(offset, size, stored->Desc.Width);
+            if (fault == nullptr && size != 0 && bytes == nullptr) {
+                fault = "a non-empty write carries no bytes";
+            }
+            if (fault != nullptr) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                     " %s {slot=%u, gen=%u, glName=%u}: %s (offset=%llu, size=%llu, "
+                                     "storage=%u bytes)",
+                                     call, record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
+                                     fault, static_cast<unsigned long long>(offset),
+                                     static_cast<unsigned long long>(size), stored->Desc.Width);
+                return;
+            }
+            PinNoLiveHostWrites(*stored, record.Res, call);
+
+            // THE SERIAL MOVES BEFORE THE BACKEND IS TOLD, and that order is load-bearing:
+            // the backend stamps its own synced serial from this record inside the hook, so a
+            // bump afterwards would leave the twin stamped one mutation behind and the next
+            // draw would re-upload what it had just landed.
+            ++stored->Serial;
+
+            if (g_resourceOps == nullptr) return;
+            if (resident) {
+                // kOptional, and the frontend already checks the same way for the table this
+                // one replaces: a backend that does not implement the resident path leaves the
+                // member null and the write is landed by its ordinary sub-data route instead.
+                if (g_resourceOps->SubDataResident != nullptr) {
+                    g_resourceOps->SubDataResident(record.Res, record, bytes);
+                }
+                return;
+            }
+            if (g_resourceOps->SubData != nullptr) g_resourceOps->SubData(record.Res, record, bytes);
+        }
     } // namespace
 
     MGPipeApplierState& MGPipeApplier() { return g_applier; }
@@ -680,57 +812,235 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
-    // P3a: the fourteen new entry points, AT THE CONTRACT COMMIT ONLY.
+    // P3a: the nine resource entry points (D-A1, D-A2).
     //
-    // Every body below is a deliberate no-op. The contract commit's job is the SHAPE - the
-    // signatures the client, the backend and the gates compile against, the records they
-    // write into and the op table they dispatch through - and the bodies land in the two
-    // commits that follow on this branch, before anything emits a single one of these calls.
+    // WHAT THE APPLIER OWNS HERE IS IDENTITY, EXTENT AND ORDER - NOT CONTENT. A buffer's
+    // bytes are the backend's; what crosses is a {slot, gen} handle, a flat descriptor and,
+    // where the call carries content, the client's own shadow base. So each body below does
+    // three things in this order: resolve the handle against this applier's record, check the
+    // record against its own declared extent, and only then move the record and hand the call
+    // to the backend.
     //
-    // NOTHING REACHES THEM HERE, and that is checked rather than hoped: the two subsystem
-    // bits are not in MG_Impl/Pipe/PipeFill.cpp's kMGPipeWiredSubsystems, the dirty bits that
-    // would gate the emission still map to no subsystem, and the emitters beside them are
-    // stubs that emit nothing. A no-op that could be reached would be worse than an
-    // unimplemented one - it would silently drop a mutation - which is exactly why the two
-    // halves land in one commit apiece rather than one half at a time.
+    // NOTHING REGISTERS MGPipeResourceOps IN THIS PACKAGE, so every dispatch below is a null
+    // check that falls through, and the tree behaves exactly as it did. That is deliberate and
+    // it is what makes this commit landable on its own: the frontend still dispatches the op
+    // table these replace, the backend that will register one is a later package, and the
+    // records these bodies keep are already correct when it does.
+    //
+    // THE THREE SERIALS ARE MGGen-CLASS: server-owned, monotone, never crossing the line. No
+    // MGPipe call may require the client to supply or know one (ARCHITECTURE.md 4.2.2), which
+    // is why they are incremented here rather than carried in a payload.
     // ================================================================================
 
-    void MGPipeApplyResourceCreate(const MGPResourceDesc& desc) { (void)desc; }
+    void MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
+        MOBILEGL_ASSERT(desc.Resource.Slot >= kMGPipeFirstAllocatableSlot,
+                        "resource_create named the reserved slot 0");
+        if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return;
+
+        // A CREATE STARTS THE RECORD OVER rather than editing it. The slot it names may be a
+        // RECYCLED one whose record still describes the previous occupant, and inheriting one
+        // field of that - a Width, a Serial, an Immutable - is precisely how a buffer at a
+        // recycled address inherits its predecessor's contents. The generation is the client
+        // allocator's answer to "is this still the same GL object", so it is taken from the
+        // handle and nothing else survives.
+        MGPipeResourceRecord& record = RecordAt(g_applier.Resources, desc.Resource.Slot);
+        record = MGPipeResourceRecord{};
+        record.Gen = desc.Resource.Gen;
+        record.Live = true;
+        record.Desc = desc;
+        // Serial stays 0: a create is not a mutation. The descriptor a create carries defines
+        // no storage - that is the first respecify's job, and a backend tolerates a resource
+        // that has none - and a fresh backend twin starts its own synced serial at 0, so the
+        // two agree from the first instant without either side publishing anything.
+        if (g_resourceOps != nullptr && g_resourceOps->Create != nullptr) {
+            g_resourceOps->Create(desc.Resource, desc);
+        }
+    }
 
     void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes) {
-        (void)desc;
-        (void)initialBytes;
+        MGPipeResourceRecord* record = FindResource(desc.Resource);
+        MOBILEGL_ASSERT(record != nullptr, "resource_respecify named {slot=%u, gen=%u}: %s",
+                        desc.Resource.Slot, desc.Resource.Gen, kResourceRefusalNote);
+        if (record == nullptr) return;
+        PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
+
+        // The descriptor is replaced WHOLE, because that is what a respecify is: the store's
+        // extent, usage, storage flags, immutability and defined-content flag are all restated
+        // by the call that redefines it, and the backend reads them from here instead of
+        // asking a frontend object for them.
+        record->Desc = desc;
+        ++record->Serial;
+
+        // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half
+        // of that flag is MGPipeResourceRespecifyNeedsAck(desc): glBufferStorage is a real
+        // synchronous allocation and the only entry point allowed a synchronous ack, while
+        // glBufferData travels through the same call and must not acknowledge one. In monolith
+        // the acknowledgement IS the return of this function - the applier is one call away -
+        // so the predicate has nothing to gate here and is deliberately not branched on: a
+        // branch whose arms were identical would be dead code the transport would then have to
+        // find and remove. PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage is what
+        // keeps the predicate honest until the doorbell reads it.
+        if (g_resourceOps != nullptr && g_resourceOps->Respecify != nullptr) {
+            g_resourceOps->Respecify(desc.Resource, desc, initialBytes);
+        }
     }
 
     void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes) {
-        (void)record;
-        (void)bytes;
+        // The applier stores NOTHING per record - the contents are the backend's, and the
+        // range is the backend's to land - so the whole of its job is the gate and the serial.
+        ApplyBufferWrite("resource_subdata", record, bytes, /*resident=*/false);
     }
 
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes) {
-        (void)record;
-        (void)bytes;
+        // `bytes` is the application's staging store and is valid for THE DURATION OF THE CALL
+        // ONLY, which is why the backend hook copies rather than remembering the pointer.
+        ApplyBufferWrite("buffer_subdata_resident", record, bytes, /*resident=*/true);
     }
 
     void MGPipeApplyResourceFlushRange(const MGPFlushRange& record, const void* bytes) {
-        (void)record;
-        (void)bytes;
+        MGPipeResourceRecord* stored = FindResource(record.Res);
+        MOBILEGL_ASSERT(stored != nullptr, "resource_flush_range named {slot=%u, gen=%u}: %s",
+                        record.Res.Slot, record.Res.Gen, kResourceRefusalNote);
+        if (stored == nullptr) return;
+
+        const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
+        if (fault == nullptr && record.Size != 0 && bytes == nullptr) {
+            fault = "a non-empty flush carries no bytes";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_flush_range {slot=%u, gen=%u, glName=%u}: %s "
+                                 "(offset=%llu, size=%llu, storage=%u bytes)",
+                                 record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
+                                 static_cast<unsigned long long>(record.Offset),
+                                 static_cast<unsigned long long>(record.Size), stored->Desc.Width);
+            return;
+        }
+        PinNoLiveHostWrites(*stored, record.Res, "resource_flush_range");
+        ++stored->Serial;
+
+        // record.AccessFlags are the application's REAL mapping flags and this applier does
+        // not normalise them: the backend reads INVALIDATE_RANGE / INVALIDATE_BUFFER /
+        // UNSYNCHRONIZED per call to choose its upload shape, and merging them here would take
+        // that choice away from the side that pays for it.
+        if (g_resourceOps != nullptr && g_resourceOps->FlushRange != nullptr) {
+            g_resourceOps->FlushRange(record.Res, record, bytes);
+        }
     }
 
-    void MGPipeApplyResourceReadback(const MGPReadback& record) { (void)record; }
+    void MGPipeApplyResourceReadback(const MGPReadback& record) {
+        MGPipeResourceRecord* stored = FindResource(record.Res);
+        MOBILEGL_ASSERT(stored != nullptr, "resource_readback named {slot=%u, gen=%u}: %s", record.Res.Slot,
+                        record.Res.Gen, kResourceRefusalNote);
+        if (stored == nullptr) return;
 
-    void MGPipeApplyResourceDestroy(const MGPHandleOnly& handle) { (void)handle; }
+        const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_readback {slot=%u, gen=%u, glName=%u}: %s "
+                                 "(offset=%llu, size=%llu, storage=%u bytes)",
+                                 record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
+                                 static_cast<unsigned long long>(record.Offset),
+                                 static_cast<unsigned long long>(record.Size), stored->Desc.Width);
+            return;
+        }
 
-    // A DECLINE, which is a real answer rather than a failure: the persistent-map acquisition
-    // is allowed to say no, the caller already has that branch, and null is what it reads.
+        // NO SERIAL MOVES. A readback does not mutate the resource; it produces host bytes out
+        // of it. Bumping here would tell the backend twin its store had changed and buy a
+        // re-upload of what it had just been read out of.
+        //
+        // THE ANSWER TRAVELS BACK THROUGH THE REVERSE CHANNEL, NOT THROUGH THIS FUNCTION, and
+        // the applier's contribution to that is the ORDER: the hook is called synchronously
+        // and this returns only once it has finished, so the writeback into the client's
+        // shadow and the mutation-epoch bump that must follow it have both happened before the
+        // caller reads. The epoch bump stays server-side and happens AFTER the writeback,
+        // never before - a rule the reverse channel needs as much as the forward one, because
+        // a bump that overtook its writeback would leave the draw-clean memo stale behind it.
+        //
+        // With no table registered nothing answers, and nothing asks either: the frontend is
+        // still on the path this call replaces.
+        if (g_resourceOps != nullptr && g_resourceOps->Readback != nullptr) {
+            g_resourceOps->Readback(record.Res, record);
+        }
+    }
+
+    void MGPipeApplyResourceDestroy(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "resource_destroy on kind %u",
+                        handle.Kind);
+        MGPipeResourceRecord* record = FindResource(handle.Handle);
+        MOBILEGL_ASSERT(record != nullptr, "resource_destroy named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
+                        handle.Handle.Gen, kResourceRefusalNote);
+        if (record == nullptr) return;
+
+        // The record is dropped WHOLE and the generation is kept. The client allocator owns
+        // the Gen bump, and it takes it on the next HANDOUT of the slot rather than on the
+        // free, so a server-side bump here would put the two identities out of step and a
+        // double free could skip a generation. Everything else goes: a stale read of a
+        // destroyed slot must find nothing, not the extent of the buffer that used to be there.
+        const Uint32 gen = record->Gen;
+        *record = MGPipeResourceRecord{};
+        record->Gen = gen;
+
+        // The applier's own state is consistent before the backend hears the news, so a hook
+        // that looked back at this applier could not see a resource that is already gone. The
+        // CLIENT frees the slot after this returns, in that order, because the allocator
+        // forgets the lifetime id on free and a notice resolved twice finds nothing the second
+        // time.
+        if (g_resourceOps != nullptr && g_resourceOps->Destroy != nullptr) {
+            g_resourceOps->Destroy(handle.Handle);
+        }
+    }
+
     void* MGPipeApplyMapPersistent(const MGPHandleOnly& handle, Uint64 size, const void* seedBytes) {
-        (void)handle;
-        (void)size;
-        (void)seedBytes;
-        return nullptr;
+        // COUNTED FIRST AND UNCONDITIONALLY, because the counter is acquisition ATTEMPTS and
+        // not acquisitions: every one of them - mint or decline - needs an answer from the
+        // resource owner, and under a transport a decline costs the same round trip as a mint.
+        // Defined that way the number is identical in both modes, equals "one per storage
+        // definition", and is non-zero and assertable today; defined as "round trips actually
+        // taken" it would be 0 by construction in monolith and could never go red.
+        ++g_applier.MapPersistentRoundtrips;
+
+        MGPipeResourceRecord* record = FindResource(handle.Handle);
+        MOBILEGL_ASSERT(record != nullptr, "map_persistent named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
+                        handle.Handle.Gen, kResourceRefusalNote);
+        if (record == nullptr) return nullptr;
+
+        // NO SERIAL MOVES and NO DESCRIPTOR CHANGES: the donation re-mints the backend's own
+        // driver object, which is a server-local event that the backend's own id generation
+        // already catches, and the client's view of the store's extent is untouched by it.
+        //
+        // A NULL RETURN IS A DECLINE, not a failure - the acquisition is allowed to say no,
+        // the caller already has that branch, and that is why the call is kOptional as well as
+        // kReplySlot. An unregistered table declines every acquisition, which is exactly the
+        // answer a build with no migrated backend should give.
+        if (g_resourceOps == nullptr || g_resourceOps->MapPersistent == nullptr) return nullptr;
+        return g_resourceOps->MapPersistent(handle.Handle, size, seedBytes);
     }
 
-    void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "unmap_persistent on kind %u",
+                        handle.Kind);
+        MGPipeResourceRecord* record = FindResource(handle.Handle);
+        MOBILEGL_ASSERT(record != nullptr, "unmap_persistent named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
+                        handle.Handle.Gen, kResourceRefusalNote);
+        if (record == nullptr) return;
+
+        // Never emitted by this phase's own paths - the donation is permanent for the store's
+        // life and the retire happens inside the backend - so this exists to keep the pair
+        // complete and to give the transport both halves.
+        if (g_resourceOps != nullptr && g_resourceOps->UnmapPersistent != nullptr) {
+            g_resourceOps->UnmapPersistent(handle.Handle);
+        }
+    }
+
+    // ================================================================================
+    // P3a: the five vertex-input entry points, STILL STUBS AT THIS COMMIT.
+    //
+    // They land in the commit that follows this one on the same branch. Nothing reaches them
+    // in the meantime and that is checked rather than hoped: their dirty bits map to no
+    // subsystem, the two subsystem bits are not in MG_Impl/Pipe/PipeFill.cpp's
+    // kMGPipeWiredSubsystems, and the emitters beside them are stubs that emit nothing.
+    // ================================================================================
 
     void MGPipeApplyCreateVertexElements(const MGPVertexElements& desc, const void* blobBytes) {
         (void)desc;
