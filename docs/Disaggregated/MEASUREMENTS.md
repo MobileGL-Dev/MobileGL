@@ -193,7 +193,30 @@ python3 tools/trace_replay/run_android_retrace_local.py \
 
 读法：**推送没有在拉取基线之下净减少**（那是开放问题 1 原本的期望），而是在四个 trace、两个后端上稳定多花 **8–14% 逐线程 CPU**（p50），p99 同向；finish 开与关两臂几乎一致，说明多出来的是客户端 CPU 而不是 GPU 时间。三点读数纪律：bsl 用例的 p99 两臂都由着色器编译主导（约 1.6–2.3 s），startup 用例只有 59 帧尾窗且 p99 是加载，两者的 p99 都不承载这个问题；26.3 的 DirectVulkan 两臂都在热钳下跑（大核 1689600 kHz），绝对值偏高但两臂同状态，相对差有效；`acc/draw` 两臂相同（accessor 计数还是 tracker 填充时的调用，P2 没改它的定义）。
 
-<!-- P2-AB-TABLE: integrator fills the Oppo (3B159D009VZ00000, Mali) rows -->
+Oppo PLG110（`3B159D009VZ00000`，Mali，会话 reboot-clean 一次、整段钉频，32 次运行前后判定全部 PINNED），单位 ms/帧：
+
+| trace | 后端 | finish | pull p50 | push p50 | Δ p50 | pull p99 | push p99 | Δ p99 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|
+| `minecraft-1.21.4-in-world` | DirectGLES | 关 | 8.297 | 9.803 | **+18.2%** | 10.446 | 11.817 | +13.1% | |
+| `minecraft-1.21.4-in-world` | DirectGLES | 开 | 8.366 | 9.700 | **+15.9%** | 10.774 | 11.935 | +10.8% | |
+| `minecraft-1.21.4-in-world` | DirectVulkan | 关 | 5.341 | 5.941 | **+11.2%** | 6.785 | 7.287 | +7.4% | |
+| `minecraft-1.21.4-in-world` | DirectVulkan | 开 | 5.349 | 5.931 | **+10.9%** | 6.765 | 7.376 | +9.0% | |
+| `improved-transparency-minecraft-26.3` | DirectGLES | 关 | 41.252 | 45.022 | **+9.1%** | 79.054 | 91.729 | +16.0% | |
+| `improved-transparency-minecraft-26.3` | DirectGLES | 开 | 41.062 | 44.227 | **+7.7%** | 82.357 | 85.087 | +3.3% | push 臂第 1 次重复被 harness 误杀（见下），best of 2 |
+| `improved-transparency-minecraft-26.3` | DirectVulkan | 关 | 54.478 | 60.108 | **+10.3%** | 91.733 | 111.789 | +21.9% | |
+| `improved-transparency-minecraft-26.3` | DirectVulkan | 开 | 50.657 | 59.829 | +18.1% | 68.068 | 100.402 | +47.5% | pull 臂这次 best-of-3 明显快于同臂 nofinish（50.7 对 54.5），差值被放大；以 nofinish 行为准 |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectGLES | 关 | 6.615 | 7.185 | **+8.6%** | 2491.9 | 2268.9 | 编译主导 | |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectGLES | 开 | 6.543 | 7.065 | **+8.0%** | 2170.5 | 3387.9 | 编译主导 | |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectVulkan | 关 | 4.087 | 4.452 | **+8.9%** | 1264.6 | 1295.4 | 编译主导 | |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectVulkan | 开 | 4.058 | 4.464 | **+10.0%** | 1271.9 | 1295.3 | 编译主导 | |
+| `minecraft-1.21.4-startup` | DirectGLES | 关 | 1.471 | 1.740 | +18.3% | 966.9 | 956.3 | 加载主导 | |
+| `minecraft-1.21.4-startup` | DirectGLES | 开 | 1.473 | 1.641 | +11.4% | 959.0 | 946.2 | 加载主导 | |
+| `minecraft-1.21.4-startup` | DirectVulkan | 关 | 0.416 | 0.460 | +10.6% | 1129.1 | 1124.7 | 加载主导 | |
+| `minecraft-1.21.4-startup` | DirectVulkan | 开 | 0.419 | 0.471 | +12.4% | 1131.2 | 1124.0 | 加载主导 | |
+
+两机读法：Mali 上 Espryt 的相对代价比 Adreno 高一档（in-world +16–18% 对 +11–13%；26.3 +8–9% 对 +14%），Magma 两机一致（+10–11%）；p99 在 26.3 上同向放大（Mali Magma +22%），这是 P2 tracker 在 draw 最密的用例上的尾部代价，随 P3a–P4a 的句柄化收缩，按口径记录。计数器（`acc/draw`、六个 memo 门、`resid=`、`csom`/`csob`）两机逐字相同——它们数的是代码路径不是硬件（§3 的结论再次成立）。
+
+**harness 误杀（记录，dev 侧跟进）**：Oppo `improved-transparency-minecraft-26.3` DirectGLES push/finish 的第 1 次重复在第 960 帧被 `android-plugin/trace-replay-ci.sh` 强停（events 日志 `am_kill … due to from pid <adb shell>`，oom adj 0，`logcat -b crash` 无崩溃）：那个脚本的等待循环对 `pidof` 单次采样失败即判定"应用已退出"并 force-stop，一次 adb 抖动就丢一次重复。数字用剩下两次重复的 best-of；修法是连续 N 次采样失败才判退出。
 
 ## 11. tracker 的绝对 ns：上限与 T1/T2（D.4.3）
 
