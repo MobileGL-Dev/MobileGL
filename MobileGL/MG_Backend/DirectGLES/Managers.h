@@ -697,8 +697,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the table above - so an answer that changed mid-run would strand every resource
         // already built and leak the driver ids they own.
         Bool ResolveResourceSubsystemArm();
-        // Same shape for the vertex-input family (bit 8). Kept separate because the two bits
-        // are separately clearable and the A/B has to be able to run either one alone.
+        // Same shape for the vertex-input family (bit 8), and separate because the two bits are
+        // separately clearable - but NOT independent, and the resolver says so out loud rather
+        // than half-running: bit 8 REQUIRES bit 7, because the vertex-input handle arm resolves
+        // every attribute's driver buffer id out of the resource slot table and only bit 7 puts
+        // twins there. `0x17f` (bit 8 on, bit 7 off) is therefore refused at arm resolution with
+        // a named MGLOG_E and runs the legacy vertex-input arm; `0x0ff` (bit 7 on, bit 8 off) is
+        // a real, supported A/B, because the legacy VAO walk reaches the handle arm through
+        // EnsureBufferResource's own dispatch. Both resolvers also answer
+        // MG_Config::Features.PipeLegacyMemos, so "the bit is clear and the legacy arm was taken
+        // away" is a named verdict instead of a silent legacy run.
         Bool ResolveVertexInputSubsystemArm();
 
         // INLINE for the reason SlotTables.h spells out at EsprytSlotTablesEnabled: both are

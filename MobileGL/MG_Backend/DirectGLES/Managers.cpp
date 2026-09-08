@@ -2266,14 +2266,90 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // order question to answer (SlotTables.h).
         BackendBufferResourceTable g_backendBufferResources;
 
+        // The two P3a families get the three-way treatment ClassifyEsprytSlotArm established for
+        // bit 5, rather than reading their bit and stopping there: "the bit is clear AND the
+        // legacy arm has been taken away" is a real configuration an operator can ask for, and a
+        // family that only reads its own bit answers it by running the very arm that was
+        // disabled, in silence. The two families differ in whether that third verdict is
+        // REACHABLE, which is why the classifier takes it as a parameter rather than assuming it.
+        //
+        // NOT A STOP, unlike ResolveEsprytSlotTablesArm's NoArm. Bit 5's stop is safe because no
+        // shipped lane pins bit 5 clear; bits 7 and 8 are clear in every `.Handles` itest lane
+        // today (MG_IntegrationTest/CMakeLists.txt pins MOBILEGL_PIPE_PUSH=0x7f beside
+        // MOBILEGL_PIPE_LEGACY_MEMOS=0), which is contract-review item 11 and package D's to
+        // re-pin. Aborting here would turn that lane red for a mis-pinned control rather than
+        // for a defect. The verdict is therefore NAMED and loud, and the stop can be promoted
+        // the moment those lanes carry an explicit 0x1ff arm.
+        enum class PipeSubsystemArmVerdict { Handles, Legacy, NoArm };
+
+        PipeSubsystemArmVerdict ClassifyPipeSubsystemArm(Bool subsystemBitSet, Bool legacyMemosEnabled,
+                                                         Bool legacyArmSurvivesLegacyMemos) {
+            if (subsystemBitSet) return PipeSubsystemArmVerdict::Handles;
+            if (legacyArmSurvivesLegacyMemos || legacyMemosEnabled) return PipeSubsystemArmVerdict::Legacy;
+            return PipeSubsystemArmVerdict::NoArm;
+        }
+
         Bool ResolveResourceSubsystemArm() {
-            const Bool enabled = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+            const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+            // The buffer family's legacy arm is the Ops_* table and g_glesBufferBackendOps, which
+            // are compiled UNCONDITIONALLY - only the VAO twin's memos and the pre-handle VAO
+            // body live under MOBILEGL_PIPE_LEGACY_MEMOS - so this family cannot be left armless
+            // and NoArm is unreachable for it. Said out loud rather than assumed, because the
+            // knob is still answered below.
+            const PipeSubsystemArmVerdict verdict =
+                ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
+                                         /*legacyArmSurvivesLegacyMemos=*/true);
+            if (verdict == PipeSubsystemArmVerdict::Legacy && !MG_Config::Features.PipeLegacyMemos) {
+                MGLOG_W("MGPipe: MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemResources (bit 7) clear while "
+                        "MOBILEGL_PIPE_LEGACY_MEMOS=0 asks for the pre-handle arms to be gone; the buffer "
+                        "ops table is compiled unconditionally, so the LEGACY arm is what this process runs");
+            }
+            const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
             MGLOG_D("MGPipe: Espryt resource family runs the %s arm", enabled ? "handle" : "legacy");
             return enabled;
         }
 
         Bool ResolveVertexInputSubsystemArm() {
-            const Bool enabled = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
+            const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemVertexInput) != 0;
+            const Bool resourcesBitSet =
+                (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemResources) != 0;
+            // BIT 8 REQUIRES BIT 7, and it is refused here rather than half-run. The vertex-input
+            // handle arm resolves every attribute's driver buffer id through
+            // FindBufferResourceForHandle, i.e. out of the resource SLOT TABLE - and only bit 7
+            // puts twins in that table (with bit 7 clear EnsureBufferResource takes the legacy
+            // arm and parks the twin on PipeResource::m_backend instead). The pair therefore
+            // produced a walk in which every BindAttributeBufferByHandle logged once and
+            // `continue`d WITHOUT disabling the array, so every draw fetched through whatever
+            // pointer the driver VAO last held. The mirror pair (bit 7 set, bit 8 clear) is fine:
+            // the legacy VAO walk calls BindAttributeBuffer -> EnsureBufferResource, which
+            // dispatches to the handle arm by itself.
+            if (bitSet && !resourcesBitSet) {
+                MGLOG_E("MGPipe: kMGPipeSubsystemVertexInput (bit 8) is set but kMGPipeSubsystemResources "
+                        "(bit 7) is clear; the vertex-input handle arm resolves attribute buffer ids "
+                        "through the resource slot table, which only bit 7 populates - REFUSING bit 8 and "
+                        "running the legacy vertex-input arm. Set bit 7 as well, or clear both");
+                return false;
+            }
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+            constexpr Bool kLegacyVaoArmCompiled = true;
+#else
+            constexpr Bool kLegacyVaoArmCompiled = false;
+#endif
+            // Unlike the buffer family, this one's legacy arm IS conditional: the pre-handle
+            // SyncToBackend body and the twin memos it reads are inside MOBILEGL_PIPE_LEGACY_MEMOS.
+            const PipeSubsystemArmVerdict verdict =
+                ClassifyPipeSubsystemArm(bitSet, MG_Config::Features.PipeLegacyMemos,
+                                         /*legacyArmSurvivesLegacyMemos=*/false);
+            if (verdict == PipeSubsystemArmVerdict::NoArm || !kLegacyVaoArmCompiled) {
+                if (verdict != PipeSubsystemArmVerdict::Handles) {
+                    MGLOG_E("MGPipe: PipeLegacyMemosDisabled - MOBILEGL_PIPE_PUSH leaves "
+                            "kMGPipeSubsystemVertexInput (bit 8) clear and the pre-handle VAO sync is "
+                            "%s, so this process has no vertex-input arm at all; the driver VAO will "
+                            "not be configured and SyncToBackend says so again at the first draw",
+                            kLegacyVaoArmCompiled ? "disabled by MOBILEGL_PIPE_LEGACY_MEMOS=0" : "not compiled");
+                }
+            }
+            const Bool enabled = verdict == PipeSubsystemArmVerdict::Handles;
             MGLOG_D("MGPipe: Espryt vertex-input family runs the %s arm", enabled ? "handle" : "legacy");
             return enabled;
         }
