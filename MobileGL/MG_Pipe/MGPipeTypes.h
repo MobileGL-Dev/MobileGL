@@ -298,9 +298,16 @@ namespace MobileGL::MG_Pipe {
         Uint8 FixedSampleLocations, Immutable;
         Uint32 Usage;        // BufferUsage
         Uint32 StorageFlags; // glBufferStorage flags
-        Uint8 HasDefinedContent;  // false after a NULL-data respecify
+        Uint8 HasDefinedContent;  // false after a NULL-data respecify - STORAGE-DEFINING
         Uint8 ImageBindableHint;  // client-side everImageBound; pre-emptive allocation
         Uint16 Pad0;
+        // ImageBindableHint and BindMask above are the two METADATA fields the rule exists
+        // for: a respecify that moves only them - every storage-defining field equal to the
+        // stored descriptor - is a metadata update, with no reallocation ack and no
+        // PendingUploads clear. The rule, the full storage-defining field set and the third
+        // field allowed to differ (GlNameForDiag) are stated beside
+        // MGPipeResourceRespecifyNeedsAck below (P4a, ID-18 M4), which is where the applier
+        // and both twins read them from.
         // Diagnostics only. A GL name is NEVER an identity, never a memo key and never part
         // of a content hash (section 4.2.1). Widened from the plan's two bytes, which
         // cannot hold one.
@@ -560,19 +567,52 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPSurface, 24);
 
-    // P4a, D-C2/D-C3: the record is emitted PER BOUND TARGET.
+    // P4a, D-C2/D-C3 and ID-19: THE RECORD DESCRIBES A FRAMEBUFFER OBJECT, and Target says
+    // whether it ALSO moves a binding.
     //
-    // GL has two independent framebuffer bindings and this record carries one Fbo and one
-    // ReadSurface, so Target says which binding it describes: 0 = Draw, 1 = Read, 2 = Both
-    // (one object bound to both targets). The draw-buffer array is applied only for a record
-    // whose Target is not Read - Espryt's own comment records the Minecraft 26.x OIT bug
-    // where a READ-only sync landed glDrawBuffers on the wrong framebuffer - and ReadSurface
-    // is resolved from the READ framebuffer's own read buffer, which is what makes the
-    // read-buffer-shared-FBO defect class unrepresentable rather than merely fixed.
+    // A `Named` record describes the framebuffer object it names (Fbo) and changes NO
+    // binding. `Draw` / `Read` / `Both` records describe the same object AND set the bound
+    // handle(s) of the target(s) they name.
+    //
+    // The applier therefore keeps records PER FRAMEBUFFER OBJECT, keyed by the handle's slot
+    // (the generation is checked on lookup and a stale one refuses; a framebuffer has no wire
+    // lifetime - D-I2, the catalogue has no framebuffer delete - so a successor's record
+    // simply OVERWRITES the slot), plus the two bound handles. And every DSA entry point that
+    // hands a framebuffer to the server BY NAME - BlitNamedFramebuffer, the four
+    // ClearNamedFramebuffer*, and the DSA attachment / draw-buffer / read-buffer setters at
+    // their validate point - is PRECEDED BY A Named RECORD, so that any framebuffer the
+    // server is about to receive by name already has one.
+    //
+    // That last rule is the phase's main correction, not a nicety. With only the two
+    // bound-target records, glClearNamedFramebufferfv(fbo) on an unbound fbo made the backend
+    // mint a fresh driver framebuffer with NO ATTACHMENTS, find no record for it, decline,
+    // and then issue the clear against it anyway - GL_INVALID_FRAMEBUFFER_OPERATION and
+    // nothing cleared, where the legacy arm cleared correctly. Writing such an object into
+    // the bound-target record instead would have been worse: the applier would then claim it
+    // is bound.
+    //
+    // GL has two independent framebuffer bindings and one record carries one Fbo, so a
+    // Draw/Read pair is two records and one object bound to both targets is one record with
+    // Both. The draw-buffer array belongs to the OBJECT the record names; it reaches the
+    // driver's bound draw framebuffer only for a record whose Target is Draw or Both -
+    // Espryt's own comment records the Minecraft 26.x OIT bug where a READ-only sync landed
+    // glDrawBuffers on the wrong framebuffer - and a Named record's draw buffers are applied
+    // when that object is next configured, never to whatever happens to be bound. ReadSurface
+    // is resolved from THAT framebuffer's own read buffer in EVERY record, Named included,
+    // which is what makes the read-buffer-shared-FBO defect class unrepresentable rather than
+    // merely fixed.
+    //
+    // Target IS A ContentHash INPUT (the hash covers the whole record), and the emitter's
+    // suppressor must be keyed by the framebuffer the record names, not by one global slot:
+    // two different objects' Named records in a row must both go out, and a Named record must
+    // never be suppressed against the same object's bound record or the reverse.
     enum class MGPipeFramebufferTarget : Uint8 {
         Draw = 0,
         Read = 1,
         Both = 2,
+        // Describes the framebuffer named by Fbo and changes no binding (ID-19). Emitted
+        // ahead of every DSA entry point that hands that framebuffer over by name.
+        Named = 3,
         Count,
     };
 
@@ -589,14 +629,48 @@ namespace MobileGL::MG_Pipe {
     static_assert(kMGPipeMaxColorAttachments == MobileGL::kMGMaxDrawBuffers,
                   "MGPFramebufferState::Color[] and DrawBuffers[] are one array width");
 
+    // ONE RECORD DESCRIBES ONE FRAMEBUFFER OBJECT - the one named by Fbo - and Target says
+    // whether it also moves a binding (P4a, D-C2 as corrected by ID-19; see
+    // MGPipeFramebufferTarget above for the failure that forced it).
+    //
+    // A Named record describes that object and changes NO binding. Draw / Read / Both records
+    // describe that object AND set the bound handle(s) of the target(s) they name. The applier
+    // keeps these records PER FRAMEBUFFER OBJECT, keyed by Fbo's slot (generation checked on
+    // lookup; a framebuffer has no wire lifetime - D-I2 - so a successor's record simply
+    // overwrites the slot), plus the two bound handles; every DSA entry point that hands a
+    // framebuffer to the server by name is preceded by a Named record.
+    //
+    // WHAT Target CHANGES, FIELD BY FIELD. NO FIELD IN THIS RECORD REFERS TO "the currently
+    // bound framebuffer" - every one of them describes the object named by Fbo - and that is
+    // the invariant a reader depends on:
+    //
+    //   Fbo, Color[], Depth, Stencil, ReadSurface, Width/Height/Layers/Samples,
+    //   FixedSampleLocations, IsDefault, Complete
+    //       properties of the object named by Fbo, identical in meaning under every Target.
+    //       In particular ReadSurface is resolved from THAT framebuffer's own read buffer -
+    //       on a Named record too - never from whichever framebuffer is bound to GL_READ.
+    //   DrawBuffers[]
+    //       a property of the named object; it reaches the driver's bound draw framebuffer
+    //       only when Target is Draw or Both. Under Named it is stored with the object and
+    //       applied when that object is next configured.
+    //   Target
+    //       the only binding-specific field: Draw/Read/Both name the binding(s) this record
+    //       also sets, Named names none. It is a ContentHash input.
+    //   ContentHash
+    //       per RECORD, not per object, and the emitter's suppressor is keyed by the
+    //       framebuffer named: a Named record must never be suppressed against the same
+    //       object's bound record, nor one object's Named record against another's.
     struct MGPFramebufferState {
         MGPipeHandle Fbo; // kMGPipeDefaultFramebuffer for the default framebuffer
         MGPSurface Color[8];
         MGPSurface Depth, Stencil;
-        // The RESOLVED read surface, not an index. This is what structurally closes the
+        // The RESOLVED read surface, not an index, and it is THIS framebuffer's own read
+        // buffer under every Target - Named included. This is what structurally closes the
         // read-buffer-shared-FBO defect class.
         MGPSurface ReadSurface;
-        Int8 DrawBuffers[8]; // attachment index, -1 = NONE
+        // attachment index, -1 = NONE. The named object's array; applied to the bound draw
+        // framebuffer only when Target is Draw or Both.
+        Int8 DrawBuffers[8];
         Uint16 Width, Height, Layers, Samples;
         // Complete is FramebufferObject::CheckCompleteness(), the frontend-only answer - NOT
         // glCheckFramebufferStatus's. CheckFramebufferStatus_State additionally consults
@@ -607,12 +681,15 @@ namespace MobileGL::MG_Pipe {
         // answer, and glCheckFramebufferStatus keeps answering from the frontend as it does
         // today.
         Uint8 FixedSampleLocations, IsDefault, Complete;
-        Uint8 Target; // MGPipeFramebufferTarget, above (P4a, D-C2; was Pad0)
+        // MGPipeFramebufferTarget, above (P4a, D-C2; was Pad0). Draw/Read/Both also set the
+        // named binding(s); Named sets none (ID-19). The ONLY binding-specific field.
+        Uint8 Target;
         Uint32 Pad1;
         // Two jobs (section 4.5.6): the server's render-pass memo key, and the CLIENT's
         // emission suppressor - an unchanged hash means this record is not sent at all.
         // The same pattern is mandatory for every kVarTail set_* below, or 26.2's
         // redundant glBindSampler traffic reappears as a variable-length record per batch.
+        // Target is one of its inputs, and the suppressor is keyed per framebuffer.
         Uint64 ContentHash;
     };
     MGP_ASSERT_POD(MGPFramebufferState, 304);
@@ -1007,6 +1084,46 @@ namespace MobileGL::MG_Pipe {
     inline Bool MGPipeResourceRespecifyNeedsAck(const MGPResourceDesc& desc) {
         return desc.Immutable != 0 && desc.Target == kMGPipeResourceTargetBuffer;
     }
+
+    // P4a, ID-18 M4: A RESPECIFY WHOSE STORAGE-DEFINING FIELDS ALL EQUAL THE STORED
+    // DESCRIPTOR IS A METADATA UPDATE, NOT A REALLOCATION.
+    //
+    // MGPResourceDesc::BindMask and ImageBindableHint are STICKY facts the client discovers
+    // AFTER allocation - a texture first bound as a shader image, first used as a render
+    // target - and they ride resource_create and every resource_respecify. An IMMUTABLE
+    // texture never has a later respecify, so without a rule those two would reach the server
+    // only by accident, or never; with one, a mask change after allocation emits a
+    // resource_respecify that REPEATS the storage the resource already has.
+    //
+    // The applier and both twins must classify such a record as a metadata update:
+    //   - NO reallocation acknowledgement. MGPipeResourceRespecifyNeedsAck above still
+    //     answers the per-record question, but a metadata update allocates nothing, so a
+    //     record it classifies as metadata is not acked even when that predicate says the
+    //     call may require one.
+    //   - NO PendingUploads clear - not the whole vector, and not the redefined level either.
+    //     This REFINES the level-scoped clear: identical storage fields clear NOTHING. (The
+    //     level-scoped rule exists because clearing the whole vector on a level-1 definition
+    //     silently dropped level 0's accepted texels; a metadata update must drop neither.)
+    //   - The stored descriptor's BindMask and ImageBindableHint ARE updated - BindMask is
+    //     sticky and therefore ORed, never replaced - and the twin re-derives its storage
+    //     flags from the new mask on its next sync, recreating backend storage only where the
+    //     backend actually needs it. The record itself is not a request to recreate.
+    //
+    // THE STORAGE-DEFINING FIELD SET, named here so that neither side has to guess and a
+    // later field cannot join it by silence. It is every MGPResourceDesc member except the
+    // three metadata ones and the padding:
+    //
+    //     Target, StorageKind, InternalFormat, Width, Height, Depth, ArrayLayers, Levels,
+    //     Samples, FixedSampleLocations, Immutable, Usage, StorageFlags, HasDefinedContent,
+    //     ViewOf, BufferForTexBuffer, BufOffset, BufSize.
+    //
+    // `Resource` is the identity the stored descriptor is looked up BY, not a comparand. The
+    // three fields that may differ on a metadata update are exactly BindMask,
+    // ImageBindableHint and GlNameForDiag (diagnostics only, never an identity, never a memo
+    // key). HasDefinedContent is storage-defining ON PURPOSE: glBufferData(size, NULL) at an
+    // unchanged size is an orphaning reallocation and has to keep clearing, rather than being
+    // mistaken for a mask change. A field added to MGPResourceDesc must be placed in one of
+    // the two lists in the same commit - PipeCatalogue pins the struct's size for that.
 
     // The forward terminator for a server-initiated texture pull (section 7.1). May carry
     // zero regions - that is how a pull that needs nothing is answered.

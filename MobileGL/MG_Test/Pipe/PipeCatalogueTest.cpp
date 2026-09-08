@@ -185,13 +185,28 @@ TEST(PipeCatalogue, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNames
     // different owners, one byte each.
     EXPECT_NE(offsetof(MGPTextureParams, ForceResync), offsetof(MGPTextureParams, SamplerResync));
 
-    // Pad0 -> Uint8 Target, and the SIZE DID NOT MOVE, which is the whole point: the record is
-    // emitted once per bound target that moved, or once with Both, and that costs a byte the
-    // struct already had.
+    // Pad0 -> Uint8 Target, and the SIZE DID NOT MOVE, which is the whole point: the record
+    // describes one framebuffer OBJECT and Target says which binding(s), if any, it also
+    // sets, and that costs a byte the struct already had. Named (ID-19) cost nothing at all -
+    // it is a fourth value of a byte that was already there, which is why the applier could
+    // be given a per-object table without a wire change.
     EXPECT_EQ(sizeof(MGPFramebufferState), 304u);
     EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Draw), 0u);
     EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Read), 1u);
     EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Both), 2u);
+    // Named = 3, and it is pinned by VALUE rather than merely by existence: the applier
+    // validates a record with `Target >= Count`, so an enumerator inserted ahead of Named
+    // would silently re-point every Named record the client already emits at Draw or Read -
+    // and a Draw record for a framebuffer that is not bound is the exact corruption Named
+    // exists to prevent (a DSA clear/blit landing on an unattached driver framebuffer).
+    EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Named), 3u);
+    // Count is the applier's refusal bound and it is 4 now, not 3: a wire that still refused
+    // 3 would drop every DSA record on the floor.
+    EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Count), 4u);
+    // The byte must be able to hold every value, since Target is a Uint8 in the record and
+    // the enum is the only thing that says what fits.
+    EXPECT_LE(static_cast<Uint32>(MGPipeFramebufferTarget::Count), 256u);
+    EXPECT_EQ(sizeof(MGPFramebufferState::Target), 1u);
     // The wire's colour-attachment width is ONE width, and it is the wire's rather than the
     // driver's: a driver reporting more attachments than this is refused at bring-up, never
     // truncated into the record.
@@ -886,6 +901,22 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 
     // And the opcode did not move: a flag-word edit is not a catalogue edit.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ResourceRespecify), 3);
+
+    // P4a, ID-18 M4. The metadata-update rule is a PROSE contract stated beside the predicate
+    // above - it compares an incoming descriptor against the applier's stored one, which this
+    // header cannot do - so what is pinnable here is the thing that would make the prose lie:
+    // a field added to MGPResourceDesc and classified into neither list. The size is the
+    // tripwire, and the two metadata fields are named so the classification cannot be lost to
+    // a rename either.
+    EXPECT_EQ(sizeof(MGPResourceDesc), 88u);
+    EXPECT_EQ(sizeof(MGPResourceDesc::BindMask), 2u);
+    EXPECT_EQ(sizeof(MGPResourceDesc::ImageBindableHint), 1u);
+    // HasDefinedContent sits next to ImageBindableHint and is deliberately on the OTHER side
+    // of the line: glBufferData(size, NULL) at an unchanged size is an orphaning
+    // reallocation, so a record that moves only it must still clear, and must never be read
+    // as a mask change.
+    EXPECT_NE(offsetof(MGPResourceDesc, HasDefinedContent),
+              offsetof(MGPResourceDesc, ImageBindableHint));
 }
 
 // G13b, D-M: "emulation 在 split 下显式 Fatal 直到 P8" costs P4a a NAMED, GREPPABLE call site
