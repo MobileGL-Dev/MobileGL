@@ -36,38 +36,333 @@
 // THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
 // FramebufferEmit.h for why, in full.
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
+#include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
+#include <MG_Util/Metrics/PipeStats.h>
 
 namespace MobileGL::MG_Pipe {
 
     // 0 until the emitters below have bodies; see FramebufferEmit.h's note.
     inline constexpr Uint64 kMGPipeWiredProgramSubsystem = 0;
 
-    // STUB AT THE CONTRACT COMMIT: emits nothing, returns 0 payload bytes.
+    // D-H6. ~0u is the BACKENDS' "never uploaded" sentinel for a global-constants version, and
+    // ProgramObject::MarkUBOContentDirty skips it on the wrap for exactly that reason. The
+    // client must never put it on the wire either: a server that received it would read its own
+    // record as "nothing has ever been uploaded here" and re-upload for ever.
+    inline constexpr Uint32 kMGPipeGlobalConstantsNeverUploaded = ~Uint32{0};
+
+    inline constexpr Bool MGPipeGlobalConstantsVersionIsEmittable(Uint32 version) {
+        return version != kMGPipeGlobalConstantsNeverUploaded;
+    }
+
+    // A program's identity for the wire, out of the SNAPSHOT the last link consumed and never
+    // out of the live attach list: glAttachShader and glCompileShader take effect only at the
+    // NEXT link and neither moves m_linkVersion, so a stage mask built from GetAttachedShaders
+    // would describe a program that does not exist yet. GetLinkedShaderStages() is also what
+    // indexes GetGeneratedSpirv(), so the two halves of this descriptor are guaranteed to agree
+    // by construction rather than by care.
+    inline Uint32 MGPipeStageMaskOf(const MG_State::GLState::ProgramObject& program) {
+        Uint32 mask = 0;
+        for (const ShaderStage stage : program.GetLinkedShaderStages()) {
+            if (stage == ShaderStage::Unknown) continue;
+            mask |= Uint32{1} << static_cast<Uint32>(stage);
+        }
+        return mask;
+    }
+
     class MGPipeProgramEmitter {
     public:
         using GLContext = MG_State::GLState::GLContext;
+        using ProgramObject = MG_State::GLState::ProgramObject;
 
         // create_shader_state (re-issued on the SAME handle whenever the link version moves -
         // Gen moves only on slot reuse), then bind_shader_state and set_draw_program /
         // set_dispatch_program. Two program calls because the frontend has two joins and two
         // PipeInputs slots.
+        //
+        // BOTH JOINS HAPPEN HERE and both are the verb's own: GetProgramForDraw flattens a
+        // bound pipeline into its composite and GetProgramForDispatch answers the compute
+        // question, and with a plain glUseProgram they are the same object, so the ordinary
+        // frame pays one join it was going to pay anyway.
         Uint64 EmitShaderState(GLContext& ctx) {
-            (void)ctx;
-            return 0;
+            Uint64 bytes = 0;
+            const auto& drawProgram = ctx.GetProgramForDraw();
+            const auto& dispatchProgram = ctx.GetProgramForDispatch();
+
+            const MGPipeHandle drawCso =
+                drawProgram ? AcquireShaderCso(*drawProgram, bytes) : kMGPipeNullHandle;
+            const MGPipeHandle dispatchCso =
+                dispatchProgram ? (dispatchProgram == drawProgram ? drawCso
+                                                                  : AcquireShaderCso(*dispatchProgram, bytes))
+                                : kMGPipeNullHandle;
+
+            // THE BOUND CSO IS THE DRAW ONE WHEN THERE IS ONE. bind_shader_state names what
+            // glUseProgram selected, and when a program pipeline is bound instead that is the
+            // composite; a compute-only pipeline has no draw program at all, and then the
+            // dispatch program is the only thing bound. A null handle is legal here and means
+            // exactly "nothing bound".
+            const MGPipeHandle boundCso = !MGPipeHandleIsNull(drawCso) ? drawCso : dispatchCso;
+            if (boundCso != m_boundCso) {
+                MGPipeApplyBindShaderState(HandleOnly(boundCso));
+                m_boundCso = boundCso;
+                ++m_binds;
+                bytes += sizeof(MGPHandleOnly);
+            }
+            if (drawCso != m_drawCso) {
+                MGPipeApplySetDrawProgram(HandleOnly(drawCso));
+                m_drawCso = drawCso;
+                ++m_drawSets;
+                bytes += sizeof(MGPHandleOnly);
+            }
+            if (dispatchCso != m_dispatchCso) {
+                MGPipeApplySetDispatchProgram(HandleOnly(dispatchCso));
+                m_dispatchCso = dispatchCso;
+                ++m_dispatchSets;
+                bytes += sizeof(MGPHandleOnly);
+            }
+            return bytes;
         }
 
         // set_global_constants: the DEFAULT UNIFORM BLOCK only, keyed (ShaderCso, Version) and
         // at most once per program per frame. Version is GetUBOContentVersion() and must never
         // be ~0u, which is the backends' "never uploaded" sentinel - the wrap skips it.
+        //
+        // NAMED uniform blocks are NOT this call's: set_shader_buffers(Uniform) is a later
+        // phase's and BindCurrentProgramWithResources' named-UBO block is untouched. What
+        // travels here is globalUboScratch, the link phase's CPU array, which has no GL name
+        // and no BufferObject behind it.
         Uint64 EmitGlobalConstants(GLContext& ctx) {
-            (void)ctx;
-            return 0;
+            const auto& program = ctx.GetProgramForDraw();
+            if (!program) return 0;
+            const Uint32 version = program->GetUBOContentVersion();
+            // THE SENTINEL IS NEVER EMITTED. A server that received ~0u would read its own
+            // record as "never uploaded" and re-upload every frame for ever.
+            if (!MGPipeGlobalConstantsVersionIsEmittable(version)) return 0;
+            const Uint size = program->GetUBOSize();
+            if (size == 0) return 0;
+
+            Uint64 bytes = 0;
+            const MGPipeHandle cso = AcquireShaderCso(*program, bytes);
+            // (ShaderCso, Version) IS the key, so the latch is the key: an unchanged pair means
+            // the server already holds these bytes and re-sending them would move the record's
+            // serial for nothing.
+            if (cso == m_constantsCso && version == m_constantsVersion) return bytes;
+
+            m_lastConstants = MGPGlobalConstants{};
+            m_lastConstants.ShaderCso = cso;
+            m_lastConstants.Version = version;
+            // THE ONE BLOB RULE: Size 0 means "this record does not declare its blob" - which
+            // is what a monolith emission is - and the bytes ride beside it as a companion
+            // pointer. Offset carries the staging address for diagnostics only; nothing reads
+            // it as a length.
+            m_lastConstants.Blob.Seg = kMGHostSpanSegNone;
+            m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(program->GetUBOData());
+            m_lastConstants.Blob.Size = 0;
+            MGPipeApplySetGlobalConstants(m_lastConstants, program->GetUBOData());
+            m_constantsCso = cso;
+            m_constantsVersion = version;
+            ++m_constantSets;
+            if (MG_Util::PipeStats::Enabled()) {
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, size);
+            }
+            return bytes + sizeof(MGPGlobalConstants) + size;
         }
 
-        void Reset() {}
+        // D-H4's re-issue rule, and it is the CreateVertexElements shape one for one: the
+        // record goes out again on the SAME handle whenever the link version moves, which is
+        // legal because MGPipeHandle::Gen increments only on slot reuse and never on a
+        // respecify. A program that relinks is the same GL object and the server's twin table
+        // must not be asked to mint a second one.
+        MGPipeHandle AcquireShaderCso(const ProgramObject& program, Uint64& payloadBytes) {
+            const MGPipeHandle handle = AcquireShaderCsoHandle(program);
+            if (MGPipeHandleIsNull(handle)) return handle;
+            Latch& latch = LatchFor(handle);
+
+            const Uint32 linkVersion = program.GetLinkVersion();
+            if (latch.RecordLive && latch.RecordGen == handle.Gen && latch.LinkVersion == linkVersion) {
+                return handle;
+            }
+
+            const auto& link = program.GetLinkReflection();
+            const auto& spirv = program.GetSpirvReflection();
+
+            m_lastDesc = MGPProgramDesc{};
+            m_lastDesc.Cso = handle;
+            m_lastDesc.StageMask = MGPipeStageMaskOf(program);
+            m_lastDesc.GlobalUboSize = static_cast<Uint32>(program.GetUBOSize());
+            m_lastDesc.ReservedNumSamplesOffset = static_cast<Uint32>(spirv.reservedNumSamplesOffset);
+            m_lastDesc.SpirvStatus = spirv.spirvStatus ? 1 : 0;
+            m_lastDesc.NativeFloat64 = spirv.nativeFloat64 ? 1 : 0;
+            m_lastDesc.PointSizeDemoted = spirv.pointSizeDemoted ? 1 : 0;
+            m_lastDesc.EnableSpirvValidation = spirv.enableSpirvValidation ? 1 : 0;
+
+            // ONE BLOB REF PER MODULE, IN THE LINKED-SHADER-SNAPSHOT'S ORDER, which is the
+            // order GetGeneratedSpirv() is indexed in - so Spirv[i] and StageMask agree because
+            // they came out of the same snapshot. Every one of them declares Size 0 (the one
+            // Blob rule); Offset carries the module's staging address so a reader can see which
+            // slots are occupied without the record pretending to declare a length it does not
+            // own.
+            const SizeT moduleCount = spirv.generatedSpirv.size();
+            MOBILEGL_ASSERT(moduleCount <= 6,
+                            "MGPProgramDesc::Spirv[] carries six modules and this program linked %u",
+                            static_cast<Uint>(moduleCount));
+            for (SizeT i = 0; i < moduleCount && i < 6; ++i) {
+                m_lastDesc.Spirv[i].Seg = kMGHostSpanSegNone;
+                m_lastDesc.Spirv[i].Offset = reinterpret_cast<Uint64>(spirv.generatedSpirv[i].data());
+                m_lastDesc.Spirv[i].Size = 0;
+            }
+            m_lastDesc.Reflection.Seg = kMGHostSpanSegNone;
+            m_lastDesc.Reflection.Offset = reinterpret_cast<Uint64>(&link);
+            m_lastDesc.Reflection.Size = 0;
+
+            MGPipeApplyCreateShaderState(m_lastDesc, &link, &spirv);
+            ++m_creates;
+            payloadBytes += sizeof(MGPProgramDesc);
+
+            latch.RecordLive = true;
+            latch.RecordGen = handle.Gen;
+            latch.LinkVersion = linkVersion;
+            return handle;
+        }
+
+        // C-1's question for this kind - see MGPipeSamplerEmitter::RecordIsPublished for the
+        // full reason. A ShaderCso slot can exist with no record behind it, because a backend
+        // twin table mints one through MGPipeSlots().Acquire whether or not the program
+        // subsystem ever asked this client to emit a create.
+        //
+        // THE COMPOSITE BAND IS INDEXED SEPARATELY, for the allocator's own reason: the band
+        // base is 983040, so a slot-indexed vector would allocate ~983k latches for one program
+        // pipeline. Both spaces stay dense against their own high-water mark.
+        Bool RecordIsPublished(MGPipeHandle handle) const {
+            if (MGPipeHandleIsNull(handle)) return false;
+            const Vector<Latch>& table = TableOf(handle);
+            const SizeT slot = SlotIndexOf(handle);
+            if (slot >= table.size()) return false;
+            const Latch& latch = table[slot];
+            return latch.RecordLive && latch.RecordGen == handle.Gen;
+        }
+
+        void NoteRecordDestroyed(MGPipeHandle handle) {
+            if (MGPipeHandleIsNull(handle)) return;
+            Vector<Latch>& table = TableOf(handle);
+            const SizeT slot = SlotIndexOf(handle);
+            if (slot < table.size() && table[slot].RecordGen == handle.Gen) {
+                table[slot] = Latch{};
+            }
+            if (m_boundCso == handle) m_boundCso = kMGPipeNullHandle;
+            if (m_drawCso == handle) m_drawCso = kMGPipeNullHandle;
+            if (m_dispatchCso == handle) m_dispatchCso = kMGPipeNullHandle;
+            if (m_constantsCso == handle) {
+                m_constantsCso = kMGPipeNullHandle;
+                m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+            }
+        }
+
+        // The validate point's FreshlyPrimed arm. MGPipeApplierReset clears DrawProgram,
+        // DispatchProgram and BoundShaderCso - all three are per-context WORKING STATE - so
+        // the three mirrors here go with them, or the first emission after a make-current
+        // would be suppressed as unchanged and the server would draw with the previous
+        // context's program bound.
+        //
+        // The RECORD half stays, and that is the rule rather than an oversight: the applier
+        // keeps its shader-CSO records across a make-current because a program lives in a share
+        // group, and re-publishing one would move its Serial for nothing. The global-constants
+        // key goes with the working state because its record's bytes are per (Cso, Version) and
+        // a fresh server has not been told them.
+        void Reset() {
+            m_boundCso = kMGPipeNullHandle;
+            m_drawCso = kMGPipeNullHandle;
+            m_dispatchCso = kMGPipeNullHandle;
+            m_constantsCso = kMGPipeNullHandle;
+            m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+        }
+
+        void ResetCounters() {
+            m_creates = m_binds = m_drawSets = m_dispatchSets = m_constantSets = 0;
+        }
+
+        // ---- what a unit case reads ----
+        const MGPProgramDesc& LastProgramDesc() const { return m_lastDesc; }
+        const MGPGlobalConstants& LastGlobalConstants() const { return m_lastConstants; }
+        MGPipeHandle BoundCso() const { return m_boundCso; }
+        MGPipeHandle DrawCso() const { return m_drawCso; }
+        MGPipeHandle DispatchCso() const { return m_dispatchCso; }
+        Uint64 CreateCount() const { return m_creates; }
+        Uint64 BindCount() const { return m_binds; }
+        Uint64 DrawProgramSetCount() const { return m_drawSets; }
+        Uint64 DispatchProgramSetCount() const { return m_dispatchSets; }
+        Uint64 GlobalConstantsSetCount() const { return m_constantSets; }
+
+    private:
+        // THE ONE PLACE THE BAND CAN ENTER. An ordinary program's slot comes from the ordinary
+        // allocator door keyed on its lifetime id. CompositeResolver.h widens this to send a
+        // pipeline composite through MGPipeSlotAllocator::AllocateComposite instead, and
+        // nothing else about the emission changes - the server never learns a composite is a
+        // composite.
+        MGPipeHandle AcquireShaderCsoHandle(const ProgramObject& program) {
+            const Uint64 lifetimeId = program.GetLifetimeId();
+            const MGPipeHandle existing = MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
+            if (!MGPipeHandleIsNull(existing)) return existing;
+            return MGPipeSlots().AllocateFor(MGPipeKind::ShaderCso, lifetimeId);
+        }
+
+        struct Latch {
+            Bool RecordLive = false;
+            Uint32 RecordGen = 0;
+            Uint32 LinkVersion = 0;
+        };
+
+        // TWO TABLES, NOT A WIDER ONE, and it is the allocator's own reason repeated where it
+        // bites a second time: the composite band starts at slot 983040, so folding a composite
+        // into the ordinary slot-indexed vector would allocate ~983k latches - and grow them
+        // again on every future push_back - for a single program pipeline. Both spaces stay
+        // dense against their own high-water mark, which is exactly what the allocator does one
+        // level down.
+        Vector<Latch>& TableOf(MGPipeHandle handle) {
+            return MGPipeIsCompositeShaderSlot(handle.Slot) ? m_compositeLatch : m_latch;
+        }
+        const Vector<Latch>& TableOf(MGPipeHandle handle) const {
+            return MGPipeIsCompositeShaderSlot(handle.Slot) ? m_compositeLatch : m_latch;
+        }
+        static SizeT SlotIndexOf(MGPipeHandle handle) {
+            return MGPipeIsCompositeShaderSlot(handle.Slot)
+                       ? static_cast<SizeT>(handle.Slot - kMGPipeShaderCsoCompositeSlotBase)
+                       : static_cast<SizeT>(handle.Slot);
+        }
+        Latch& LatchFor(MGPipeHandle handle) {
+            Vector<Latch>& table = TableOf(handle);
+            const SizeT slot = SlotIndexOf(handle);
+            if (slot >= table.size()) table.resize(slot + 1);
+            return table[slot];
+        }
+
+        static MGPHandleOnly HandleOnly(MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::ShaderCso);
+            return only;
+        }
+
+        MGPProgramDesc m_lastDesc{};
+        MGPGlobalConstants m_lastConstants{};
+
+        Vector<Latch> m_latch;
+        Vector<Latch> m_compositeLatch;
+        MGPipeHandle m_boundCso = kMGPipeNullHandle;
+        MGPipeHandle m_drawCso = kMGPipeNullHandle;
+        MGPipeHandle m_dispatchCso = kMGPipeNullHandle;
+        MGPipeHandle m_constantsCso = kMGPipeNullHandle;
+        Uint32 m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+
+        Uint64 m_creates = 0;
+        Uint64 m_binds = 0;
+        Uint64 m_drawSets = 0;
+        Uint64 m_dispatchSets = 0;
+        Uint64 m_constantSets = 0;
     };
 
     inline MGPipeProgramEmitter& MGPipeProgramEmitterInstance() {

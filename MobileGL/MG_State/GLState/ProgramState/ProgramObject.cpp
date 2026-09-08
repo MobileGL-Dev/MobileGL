@@ -14,6 +14,7 @@
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
 
 const char* kDefaultFragmentShaderSource = R"(#version 460 core
@@ -40,7 +41,21 @@ namespace MobileGL::MG_State::GLState {
         // object no longer exists to be passed, and because the lifetime id is what the client
         // slot allocator resolves the handle from. No-op unless a backend registered the ops
         // (a pull build declares none at all).
-        NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::ShaderCso, m_lifetimeId);
+        //
+        // P4a D-I1: the notice is no longer raised directly - it is step 2 of the ONE
+        // client-side death helper for this kind, which emits delete_shader_state first,
+        // raises the notice second and frees the slot last. The client mints the ShaderCso, so
+        // the client is where its death has to be spoken from: a backend death-ops table is a
+        // redundant, idempotent SECOND path, and under a backend that installs none it was
+        // previously the ONLY one, which is how a slot leaks for the life of the process.
+        //
+        // AN ORDINARY PROGRAM AND A PIPELINE COMPOSITE TAKE THIS SAME LINE. A composite is an
+        // ordinary ProgramObject with its own lifetime id, its slot merely comes out of the
+        // reserved band, and its OTHER release path - the pipeline cache dropping it when the
+        // draw-program signature moves - goes through the same helper. Whichever runs second is
+        // a proven no-op, because the slot allocator refuses a slot that is not live at that
+        // generation.
+        MG_Pipe::MGPipeEmitShaderCsoDestroyAndFree(m_lifetimeId);
 #endif
     }
 

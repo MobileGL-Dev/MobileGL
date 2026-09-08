@@ -1111,6 +1111,23 @@ namespace MobileGL::MG_State::GLState {
             return Artifacts();
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // The phase-B twin of GetLinkReflection, and it exists for exactly one caller:
+        // create_shader_state publishes the WHOLE SpirvArtifacts beside the whole
+        // LinkArtifacts, because the archive the far side deserialises into is those two
+        // structs and nothing else. The granular getters above (GetGeneratedSpirv,
+        // GetSpirvStatus, UsesNativeFloat64, PointSizeDemoted, GetSpirvValidationEnabled,
+        // GetUBOSize) cover what the GL layer needs and deliberately do not reach
+        // reservedNumSamplesOffset or uniformOffsets, which the descriptor does need.
+        //
+        // PUSH-ONLY, so a pull build's symbol set and this class's layout are byte-for-byte
+        // what they were: an inline const-ref accessor adds nothing to a pull build that is
+        // never compiled into one. It joins both phases, like every other Spirv() reader.
+        const SpirvArtifacts& GetSpirvReflection() const {
+            return Spirv();
+        }
+#endif
+
         static Bool IsValidUniformLocation(const LinkArtifacts& artifacts, Int location) {
             if (location < 0 || location > static_cast<Int>(artifacts.maxUniformLocation)) return false;
             if (static_cast<SizeT>(location) >= artifacts.uniformIndexInTProgram.size()) return false;
