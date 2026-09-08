@@ -15,6 +15,15 @@ def mobileGlBuildServerSpike = {
     (rootProject.findProperty('mobilegl.buildServerSpike') ?: System.getenv('MOBILEGL_BUILD_SERVER_SPIKE') ?: 'OFF') as String
 }
 
+// P2 A/B opt-in. OFF by default, so the plugin flavour and every trace APK nobody asked for
+// keep the pull shape; the paired two-device A/B (docs/Disaggregated ROADMAP GO/NO-GO items
+// 3-4) builds one trace APK with it ON and compares it against the OFF build. Either
+//   ./gradlew :app:assembleTraceDebug -Pmobilegl.pipePush=ON
+// or MOBILEGL_PIPE_PUSH_APK=ON in the environment.
+def mobileGlPipePush = {
+    (rootProject.findProperty('mobilegl.pipePush') ?: System.getenv('MOBILEGL_PIPE_PUSH_APK') ?: 'OFF') as String
+}
+
 android {
     namespace 'top.mobilegl.mobilegl'
     compileSdk 34
@@ -70,6 +79,9 @@ android {
                         // grow a binary nothing loads. See mobileGlBuildServerSpike
                         // above for the two ways to enable it.
                         arguments "-DMOBILEGL_BUILD_SERVER_SPIKE=${mobileGlBuildServerSpike()}"
+                        // P2: the push-shaped library for the paired A/B, same flavour, same
+                        // signing, one extra CMake option. See mobileGlPipePush above.
+                        arguments "-DMOBILEGL_PIPE_PUSH=${mobileGlPipePush()}"
                     }
                 }
             }
