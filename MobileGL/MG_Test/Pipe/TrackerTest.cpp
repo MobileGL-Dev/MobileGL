@@ -72,6 +72,8 @@ namespace {
     X(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) \
     X(TrackerWalk, ThePixelPackShutterIsAByteCompareOfThePackHalfOnly) \
     X(TrackerWalk, TheFireTalliesOnlyRunWhilePipeStatsIsOn) \
+    X(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) \
+    X(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) \
     X(TrackerAttribPayload, AFloatWriteCarriesTheFloatBitsAndNamesItsClass) \
     X(TrackerAttribPayload, AnIntWriteCarriesTheIntWordsAndNamesItsClass) \
     X(TrackerAttribPayload, AUintWriteCarriesTheUintWordsAndNamesItsClass) \
@@ -460,6 +462,85 @@ namespace {
         Walk();
         EXPECT_EQ(m_tracker.WalkCount(), 0u);
         EXPECT_EQ(m_tracker.FireCount(MGPipeDirty::NewRenderState), 0u);
+        m_cache.Reset();
+    }
+
+    // ===================================================================================
+    // P3a D-I: bit 10's narrowed shutter
+    // ===================================================================================
+    //
+    // NEW_INDEX_BUFFER used to be MixShutter(the whole buffer-CONTENT aggregate, the VAO
+    // identity), so it fired on any buffer write anywhere - a glBufferSubData into a texture
+    // upload staging buffer re-published the index binding. It now reads the bound VAO's own
+    // element-slot version and the identity of whatever is bound to it.
+    //
+    // THIS IS THE ONE CASE THE OLD SHUTTER COULD NOT PASS, which is why it is here rather
+    // than in the narrowing commit's prose.
+    TEST_F(TrackerWalk, TheIndexBufferBitDoesNotFireOnAnUnrelatedBufferWrite) {
+        const SharedPtr<MG_State::GLState::BufferObject> indices = Ctx().CreateBufferObject(1);
+        indices->Respecify(64, nullptr);
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(indices);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "the steady state must be quiet before the interesting half of this case";
+
+        // An entirely unrelated buffer's contents move. Nothing about the element binding
+        // changed, so the bit must stay down.
+        const SharedPtr<MG_State::GLState::BufferObject> unrelated = Ctx().CreateBufferObject(2);
+        unrelated->Respecify(4096, nullptr);
+        Array<Uint8, 16> bytes{};
+        unrelated->UploadSubData(DataPtr{bytes.data(), bytes.size()}, 0);
+        ASSERT_NE(Ctx().GetAnyBufferChangeGeneration(), 0u) << "the buffer aggregate did move";
+        Walk();
+        EXPECT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "NEW_INDEX_BUFFER fired on a write to a buffer that is not the element binding";
+
+        // And the control, on the same tracker: the binding itself moving DOES fire it, so
+        // the quiet above is a narrowing and not a dead bit.
+        const SharedPtr<MG_State::GLState::BufferObject> other = Ctx().CreateBufferObject(3);
+        other->Respecify(64, nullptr);
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(other);
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "NEW_INDEX_BUFFER did not fire when the element binding changed";
+        m_cache.Reset();
+    }
+
+    // The slot version is a WRAPPING Uint16 that BindingSlot bumps only on a real change, so
+    // it is widened at this boundary - and the bound object's lifetime id joins it because
+    // identity is what closes the wrap hole. 65536 binds later the version reads the same
+    // number it did at the start; if that number were the whole shutter, a binding that had
+    // moved onto a DIFFERENT buffer would read as unchanged and the draw would fetch indices
+    // from the previous one.
+    TEST_F(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) {
+        const SharedPtr<MG_State::GLState::BufferObject> objects[3] = {
+            Ctx().CreateBufferObject(1), Ctx().CreateBufferObject(2), Ctx().CreateBufferObject(3)};
+        for (const auto& object : objects) object->Respecify(64, nullptr);
+        auto& slot = Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot();
+
+        slot.Bind(objects[0]);
+        Walk();
+        Walk();
+        ASSERT_EQ(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u);
+        const Uint16 versionAtStart = slot.GetVersion();
+
+        // Drive the Uint16 all the way round WITHOUT the tracker looking, which is exactly
+        // the window a wrap needs: every bind between two walks is invisible to it.
+        //
+        // THREE buffers, not two, and that is the whole construction: BindingSlot bumps its
+        // version only on a real change, so strictly alternating between two objects makes
+        // the version and the bound object share a parity - 65536 changes always land back on
+        // the object they started from, and the wrap is unobservable. Cycling three lands on
+        // objects[65536 % 3] == objects[1] at exactly the same raw version.
+        for (Uint32 i = 1; i <= 65536u; ++i) slot.Bind(objects[i % 3]);
+        ASSERT_EQ(slot.GetVersion(), versionAtStart) << "the version did not come back round";
+        ASSERT_EQ(slot.GetBoundObject(), objects[1]) << "the binding did not land on a different buffer";
+
+        Walk();
+        EXPECT_NE(m_tracker.LastDirty() & MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer), 0u)
+            << "the slot version wrapped onto a DIFFERENT buffer and the bit stayed down - the "
+               "identity half of the shutter is what has to close that hole";
         m_cache.Reset();
     }
 

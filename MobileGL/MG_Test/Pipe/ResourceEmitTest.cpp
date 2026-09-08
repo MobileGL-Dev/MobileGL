@@ -55,7 +55,13 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include <Config.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
+
+#include <vector>
 #endif
 
 using namespace MobileGL;
@@ -1315,6 +1321,294 @@ namespace {
         EXPECT_TRUE(MGPipeApplier().VertexElementsCsos.empty());
 #endif
     }
+
+#if !MOBILEGL_PIPE_PUSH
+    // G2 REQUIRES THE PULL AND PUSH ctest NAME SETS TO BE IDENTICAL, name for name, so a
+    // push-only case cannot be ABSENT from a pull build - it has to be there and SKIP. This
+    // list declares exactly the suite.name pairs the push build gets from the real cases
+    // below, the shape PipeInputsTest and TrackerTest established for the same reason.
+#define MGL_RESOURCE_EMIT_TEST_LIST(X)                                                             \
+    X(ResourceEmit, EveryBufferTargetSetsItsBindMaskBit)                                            \
+    X(ResourceEmit, ABindMaskBitIsStickyAcrossARespecifyThatDoesNotRebind)                          \
+    X(ResourceEmit, ADestroyedBufferReleasesItsSlotAndAStaleHandleResolvesToNothing)                \
+    X(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+    MGL_RESOURCE_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::BufferObject;
+
+    // The client emitters run only when the resource subsystem bit is on AND a backend has
+    // installed an op table (that pair is what lets the client half land without changing a
+    // single observable). A unit process has no backend, so a case installs an EMPTY table:
+    // every member is null, the applier's stubs dispatch to nothing, and what the case reads
+    // is what the CLIENT built - which is the only half this package owns.
+    //
+    // AN RAII SCOPE RATHER THAN A gtest FIXTURE, and that is not a style choice: the two
+    // gates grep `ctest -R 'ResourceEmit\.'`, a TEST_F puts its cases under the FIXTURE's
+    // name, and gtest refuses to mix TEST and TEST_F under one suite name - so a fixture
+    // would either rename every case out of the gate's reach or force the contract commit's
+    // placeholder (which must see NO table registered) into the same SetUp.
+    struct PushArm {
+        PushArm() {
+            m_previousPush = MG_Config::Features.PipePush;
+            MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
+            MGPipeSetResourceOps(&m_ops);
+            m_previousContext = Move(MG_State::pGLContext);
+            MG_State::pGLContext = MakeUnique<GLContext>();
+        }
+        ~PushArm() {
+            // The context first: its buffer objects emit their destroy and free their slots
+            // on the way out, which is the order D-L fixes and which this teardown therefore
+            // has to respect too.
+            MG_State::pGLContext.reset();
+            MG_State::pGLContext = Move(m_previousContext);
+            MGPipeSetResourceOps(nullptr);
+            MG_Config::Features.PipePush = m_previousPush;
+        }
+        PushArm(const PushArm&) = delete;
+        PushArm& operator=(const PushArm&) = delete;
+
+        MGPipeResourceOps m_ops{};
+        Uint64 m_previousPush = 0;
+        UniquePtr<GLContext> m_previousContext;
+    };
+
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+
+    const SharedPtr<BufferObject>& MakeBuffer(Uint name) { return Ctx().CreateBufferObject(name); }
+
+    // Bind `buffer` to `target` the way the GL entry point for that target does. The index
+    // target is the BOUND VAO's element slot, not one of BufferState's, which is why it
+    // cannot go through GetBufferBindingSlot's global path.
+    void BindTo(BufferTarget target, const SharedPtr<BufferObject>& buffer) {
+        if (target == BufferTarget::Index) {
+            Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(buffer);
+            return;
+        }
+        Ctx().GetBufferBindingSlot(target).Bind(buffer);
+    }
+
+    Bool IsGlobalTarget(BufferTarget target) {
+        for (const auto candidate : MG_State::GLState::GlobalBufferTargets) {
+            if (candidate == target) return true;
+        }
+        return false;
+    }
+
+    // D-A3, and the risk register calls this the one P3a deliverable whose only real gate is
+    // a unit test: a wrong ELEMENT_ARRAY bit silently disables restart rewriting and
+    // multi-draw flattening under split and is invisible in monolith.
+    //
+    // Every enumerator, one fresh buffer each, so the assertion is an EQUALITY rather than a
+    // "has the bit": a target that maps to no bit at all (the transfer and query targets)
+    // must leave the mask empty, and a table row that leaked a neighbour's bit fails here.
+    //
+    // ON CREATE the mask is necessarily empty and that is not a gap in the test: the create
+    // is emitted from the buffer object's CONSTRUCTOR, and nothing can be bound to an object
+    // that does not exist yet. What the create carries is the identity and an undefined
+    // store; the bind then happens; the respecify carries the mask. The case asserts both
+    // halves so that a create which started carrying a stale mask would fail too.
+    TEST(ResourceEmit, EveryBufferTargetSetsItsBindMaskBit) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        Uint name = 1;
+        for (SizeT i = 0; i < static_cast<SizeT>(BufferTarget::BufferTargetCount); ++i) {
+            const auto target = static_cast<BufferTarget>(i);
+            if (target != BufferTarget::Index && !IsGlobalTarget(target)) continue;
+            const Uint64 createsBefore = tracker.CreateCount();
+            const SharedPtr<BufferObject> buffer = MakeBuffer(name++);
+            ASSERT_EQ(tracker.CreateCount(), createsBefore + 1)
+                << "the constructor did not emit resource_create for target " << i;
+            const MGPResourceDesc created = tracker.LastDesc();
+            EXPECT_EQ(created.BindMask, 0u)
+                << "resource_create carried a binding for an object nothing could have bound yet";
+            EXPECT_EQ(created.Width, 0u) << "resource_create must carry no storage";
+            EXPECT_EQ(created.Target, 0u) << "the buffer arm of the resource discriminator";
+
+            BindTo(target, buffer);
+            buffer->Respecify(64, nullptr);
+
+            const MGPResourceDesc respecified = tracker.LastDesc();
+            const auto expected = static_cast<Uint16>(MGPipeBindMaskForBufferTarget(target));
+            EXPECT_EQ(respecified.BindMask, expected)
+                << "BindMask for BufferTarget " << i << " (" << respecified.BindMask << " vs " << expected << ")";
+            EXPECT_EQ(respecified.Resource, created.Resource) << "a respecify keeps the handle";
+            EXPECT_EQ(respecified.Width, 64u);
+            // Unbind, so the next iteration's fresh buffer sees an empty binding state.
+            if (target == BufferTarget::Index) {
+                Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(nullptr);
+            } else {
+                Ctx().GetBufferBindingSlot(target).Bind(nullptr);
+            }
+        }
+        // The one bit whose only consumer is in another phase, asserted by name so that a
+        // table edit that moved it is a failure here rather than a silent P8 regression.
+        EXPECT_EQ(MGPipeBindMaskForBufferTarget(BufferTarget::Index),
+                  static_cast<Uint32>(kMGPipeBindIndex | kMGPipeBindElementArray));
+    }
+
+    // Sticky means ORed and never cleared, exactly like the image-bindable hint. A buffer
+    // that was an element array once keeps saying so - which is what the split-mode index
+    // mirror keys on, and it must not depend on the buffer still being bound when its store
+    // is next defined.
+    TEST(ResourceEmit, ABindMaskBitIsStickyAcrossARespecifyThatDoesNotRebind) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const SharedPtr<BufferObject> buffer = MakeBuffer(1);
+
+        BindTo(BufferTarget::Index, buffer);
+        buffer->Respecify(32, nullptr);
+        const Uint16 afterIndexBind = tracker.LastDesc().BindMask;
+        ASSERT_TRUE(afterIndexBind & kMGPipeBindElementArray);
+
+        // Unbind it entirely and define the store again: the bit survives.
+        Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(nullptr);
+        buffer->Respecify(48, nullptr);
+        EXPECT_EQ(tracker.LastDesc().BindMask & kMGPipeBindElementArray, kMGPipeBindElementArray)
+            << "the ELEMENT_ARRAY bit was cleared by an unbind";
+
+        // And a SECOND target ORs in rather than replacing.
+        BindTo(BufferTarget::Vertex, buffer);
+        buffer->Respecify(64, nullptr);
+        const Uint16 both = tracker.LastDesc().BindMask;
+        EXPECT_EQ(both & kMGPipeBindElementArray, kMGPipeBindElementArray);
+        EXPECT_EQ(both & kMGPipeBindVertex, kMGPipeBindVertex);
+        Ctx().GetBufferBindingSlot(BufferTarget::Vertex).Bind(nullptr);
+    }
+
+    // D-L's ORDER, which is not negotiable: the destroy is emitted while the handle still
+    // resolves, and only then does the slot go back. The allocator erases the lifetimeId ->
+    // slot mapping on free, so a notice resolved twice finds nothing the second time - and
+    // the generation moves on the NEXT handout of the slot, never in the free, so a double
+    // free cannot skip one.
+    TEST(ResourceEmit, ADestroyedBufferReleasesItsSlotAndAStaleHandleResolvesToNothing) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        // Owned by the case rather than by BufferState, so that "the last reference drops" is
+        // this line and not a chain of unbinds: the death this case is about is the
+        // destructor, not the glDelete* that only marks the name.
+        SharedPtr<BufferObject> buffer = MakeShared<BufferObject>(1);
+        const MGPipeHandle handle = tracker.Find(*buffer);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        EXPECT_EQ(tracker.Resolve(handle), buffer.get()) << "the slot -> object inverse the reverse channel uses";
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::Buffer, handle));
+
+        const Uint64 destroysBefore = tracker.DestroyCount();
+        buffer.reset();
+
+        EXPECT_EQ(tracker.DestroyCount(), destroysBefore + 1) << "~BufferObject did not emit resource_destroy";
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Buffer, handle)) << "the slot was not freed";
+        EXPECT_EQ(tracker.Resolve(handle), nullptr) << "a stale handle still resolves to an object";
+
+        // THE SLOT COMES BACK WITH A HIGHER GENERATION, so the stale handle above can never
+        // name the buffer that lands on it next. The allocator's free list is shared with
+        // every other case in this process, so which allocation reclaims THIS slot is not
+        // fixed - the case allocates until one does rather than assuming the next one will,
+        // and the property it is after is about the slot, not about the order.
+        Vector<SharedPtr<BufferObject>> keepAlive;
+        SharedPtr<BufferObject> successor;
+        for (Uint next = 2; next < 96 && !successor; ++next) {
+            SharedPtr<BufferObject> candidate = MakeShared<BufferObject>(next);
+            keepAlive.push_back(candidate);
+            if (tracker.Find(*candidate).Slot == handle.Slot) successor = candidate;
+        }
+        ASSERT_TRUE(successor) << "the freed slot never came back out of the allocator";
+        const MGPipeHandle fresh = tracker.Find(*successor);
+        EXPECT_EQ(fresh.Slot, handle.Slot);
+        EXPECT_NE(fresh.Gen, handle.Gen) << "the generation did not move on reuse";
+        EXPECT_EQ(tracker.Resolve(handle), nullptr) << "the stale handle resolved to its successor";
+        EXPECT_EQ(tracker.Resolve(fresh), successor.get());
+    }
+
+    // One MGPSubData record encodes its destination range in the box's first coordinate and
+    // first extent, which caps the offset at 2^31-1 and the size at 2^32-1, and a range
+    // beyond a bound has to be SPLIT into contiguous ascending pieces or REFUSED - never
+    // silently truncated. Overlapping or reordered pieces would change what the backend's
+    // queue-and-drain sees, and the Mali WAR-stall fix depends on that queue being exactly
+    // the writes the application made.
+    //
+    // WITH THE RECORD'S OWN BOUNDS THE SPLIT IS UNREACHABLE, and this case says so out loud
+    // rather than pretending otherwise: a second piece begins at least 2^32-1 bytes past the
+    // first, which is already past the OFFSET cap, so an over-long range is refused. What
+    // makes the split live is the transport's segment, which is far tighter - so the walk
+    // takes its cap as an argument, and the split half of this case drives it at a reachable
+    // value. That is the same code path the emitter takes, with one constant changed.
+    TEST(ResourceEmit, AWholeBufferSubDataBeyondTheRecordBoundIsSplitIntoContiguousRecords) {
+        std::vector<std::pair<Uint64, Uint64>> pieces;
+        const auto collect = [&](Uint64 at, Uint64 length) { pieces.emplace_back(at, length); };
+
+        // Inside every bound: exactly one record, unsplit.
+        pieces.clear();
+        EXPECT_TRUE(MGPipeForEachSubDataRecordRange(16, 1024, collect));
+        ASSERT_EQ(pieces.size(), 1u);
+        EXPECT_EQ(pieces[0].first, 16u);
+        EXPECT_EQ(pieces[0].second, 1024u);
+
+        // Exactly ON the offset cap: still one record, because the cap is inclusive.
+        pieces.clear();
+        EXPECT_TRUE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset, 64, collect));
+        ASSERT_EQ(pieces.size(), 1u);
+        EXPECT_EQ(pieces[0].first, kMGPipeSubDataMaxRecordOffset);
+
+        // ---- the split, at a reachable cap ----
+        constexpr Uint64 kSegment = 32ull * 1024ull * 1024ull; // a transport segment's shape
+        constexpr Uint64 kWhole = kSegment * 3 + 7;
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(0, kWhole, collect, kSegment));
+        ASSERT_EQ(pieces.size(), 4u);
+        Uint64 covered = 0;
+        Uint64 expectedAt = 0;
+        for (const auto& piece : pieces) {
+            EXPECT_EQ(piece.first, expectedAt) << "the pieces are not contiguous and ascending";
+            EXPECT_LE(piece.second, kSegment) << "a piece is bigger than the cap";
+            EXPECT_GT(piece.second, 0u);
+            covered += piece.second;
+            expectedAt += piece.second;
+            // And every piece the walk produced has to be encodable by the record builder -
+            // a piece the box refuses is a record the applier's bounds gate would abort on.
+            MGPSubData record{};
+            EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second, record))
+                << "a piece the splitter produced does not fit one record";
+            EXPECT_EQ(MGPipeSubDataBufferOffset(record), piece.first);
+            EXPECT_EQ(MGPipeSubDataBufferSize(record), piece.second);
+        }
+        EXPECT_EQ(covered, kWhole) << "the split covered the range more or less than exactly once";
+
+        // A whole-buffer sub-data that starts at a NON-ZERO offset splits from there, so the
+        // first piece is not special.
+        pieces.clear();
+        ASSERT_TRUE(MGPipeForEachSubDataRecordRange(1024, kSegment + 1, collect, kSegment));
+        ASSERT_EQ(pieces.size(), 2u);
+        EXPECT_EQ(pieces[0].first, 1024u);
+        EXPECT_EQ(pieces[0].second, kSegment);
+        EXPECT_EQ(pieces[1].first, 1024u + kSegment);
+        EXPECT_EQ(pieces[1].second, 1u);
+
+        // ---- the refusals, and NOTHING is emitted before one is decided ----
+        // Past the offset cap: no piece of a range that starts past it starts inside it.
+        pieces.clear();
+        EXPECT_FALSE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset + 1, 16, collect));
+        EXPECT_TRUE(pieces.empty()) << "a refused range still emitted records";
+
+        // Too long for the record's own bounds: the second piece would begin past the offset
+        // cap, so it is refused ENTIRELY rather than emitted up to the point of failure - a
+        // half-emitted range is a partial content write the backend would land as a whole one.
+        pieces.clear();
+        EXPECT_FALSE(MGPipeForEachSubDataRecordRange(0, kMGPipeSubDataMaxRecordSize + 1, collect));
+        EXPECT_TRUE(pieces.empty()) << "the walk emitted a prefix of a range it then refused";
+
+        // The same refusal through the reachable cap, which is what a transport will hit
+        // first: a range whose later pieces cross the offset cap is refused whole.
+        pieces.clear();
+        EXPECT_FALSE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset - kSegment,
+                                                     kSegment * 4, collect, kSegment));
+        EXPECT_TRUE(pieces.empty());
+    }
+#endif // MOBILEGL_PIPE_PUSH
 } // namespace
 
 int main(int argc, char** argv) {

@@ -204,29 +204,40 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
-    // ONE record caps at a 2^31-1 offset and a 2^32-1 size (MGPipeTypes.h), so a range
-    // beyond either has to be split. The pieces are CONTIGUOUS and in ascending order:
+    // ONE record's destination box caps the offset at 2^31-1 and the size at 2^32-1
+    // (MGPipeTypes.h), so a range beyond either has to be split. The pieces are CONTIGUOUS
+    // and in ASCENDING order, and both properties are load-bearing rather than tidy:
     // splitting a content write into overlapping or reordered pieces would change what the
-    // backend's queue-and-drain sees, and the Mali WAR-stall fix depends on the queue being
+    // backend's queue-and-drain sees, and the Mali WAR-stall fix depends on that queue being
     // exactly the writes the application made.
+    inline constexpr Uint64 kMGPipeSubDataMaxRecordOffset = 0x7FFFFFFFull;
+    inline constexpr Uint64 kMGPipeSubDataMaxRecordSize = 0xFFFFFFFFull;
+
+    // WITH THE RECORD'S OWN BOUND THE SPLIT IS NOT REACHABLE, and saying so is better than a
+    // loop that reads as if it were: a second piece starts at least 2^32-1 bytes past the
+    // first, which is already past the OFFSET cap, so a range too big for one record is
+    // REFUSED rather than split. The offset cap cannot be split away at all - every piece of
+    // a range that starts past 2^31-1 starts past it too - and a silent truncation is the one
+    // answer that must not happen, so the walk emits nothing and its caller says so once.
     //
-    // The OFFSET bound cannot be split away - every piece of a range that starts past
-    // 2^31-1 starts past it too - so the walk returns false for such a range and emits
-    // nothing rather than emitting a record whose box the applier's bounds gate would
-    // refuse. That needs a >2 GiB buffer, which nothing in the corpus has; the answer is
-    // still stated rather than assumed, because the alternative is a silent truncation.
+    // `maxChunk` exists because the record's bound is not the tight one for long: a transport
+    // segment is far smaller (tens of MiB), and that is where this walk starts producing real
+    // splits. It is a parameter now, and exercised at a reachable value by the unit gate, so
+    // that lowering it is one argument rather than a new code path written under pressure.
     template <class Fn>
-    inline Bool MGPipeForEachSubDataRecordRange(Uint64 offset, Uint64 size, Fn&& piece) {
-        constexpr Uint64 kMaxOffset = 0x7FFFFFFFull;
-        constexpr Uint64 kMaxSize = 0xFFFFFFFFull;
-        if (offset > kMaxOffset) return false;
+    inline Bool MGPipeForEachSubDataRecordRange(Uint64 offset, Uint64 size, Fn&& piece,
+                                                Uint64 maxChunk = kMGPipeSubDataMaxRecordSize) {
+        if (offset > kMGPipeSubDataMaxRecordOffset) return false;
         if (size == 0) return true;
-        // A single piece may run to the end of the buffer; only its SIZE is split.
-        Uint64 at = offset;
-        Uint64 left = size;
-        while (left > 0) {
-            if (at > kMaxOffset) return false;
-            const Uint64 chunk = left > kMaxSize ? kMaxSize : left;
+        if (maxChunk == 0) return false;
+        // Every piece has to be encodable BEFORE any of them is emitted: a half-emitted range
+        // is a partial content write the backend would land as if it were the whole one.
+        const Uint64 chunkCap = maxChunk < kMGPipeSubDataMaxRecordSize ? maxChunk : kMGPipeSubDataMaxRecordSize;
+        for (Uint64 at = offset; at < offset + size; at += chunkCap) {
+            if (at > kMGPipeSubDataMaxRecordOffset) return false;
+        }
+        for (Uint64 at = offset, left = size; left > 0;) {
+            const Uint64 chunk = left > chunkCap ? chunkCap : left;
             piece(at, chunk);
             at += chunk;
             left -= chunk;
