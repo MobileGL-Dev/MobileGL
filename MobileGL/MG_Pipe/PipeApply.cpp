@@ -1094,6 +1094,32 @@ namespace MobileGL::MG_Pipe {
     void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
     const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
 
+    namespace {
+        // P4a's BELT (ID-39). See MGPipeApplierState::RefusedNoConsumer for the whole argument;
+        // in one line: acceptance is a contract with the client, and accepting a record on a
+        // backend that consumes none of them makes the emitter clear a dirty flag the legacy
+        // pull path still owed.
+        //
+        // IT IS THE SAME SIGNAL THE CLIENT'S GATE READS, deliberately - g_resourceOps is the
+        // table a backend installs at its own bring-up and uninstalls at teardown, and
+        // MGPipeApplierReset does NOT touch it (see there), so the gate cannot flap between a
+        // make-current and the emissions that follow it. The two therefore agree on every path
+        // except the one this exists for: an emitter called directly, without passing PipeFill.
+        //
+        // EVERY CALLER PLACES IT AFTER THE RECORD'S OWN SHAPE CHECKS AND BEFORE ANYTHING MOVES.
+        // A malformed record is Fatal{ProtocolCorruption} whether or not anything would have
+        // read it - a trip wire that fires only on some backends is a trip wire nobody can
+        // trust - so the refusal is the LAST thing asked and the first thing that stops the
+        // write. The three unit-set entry points are the exception and say so at their call
+        // site: ApplyUnitWindow validates and writes in one step, so the question has to be
+        // asked in front of it.
+        Bool NoP4aConsumer() {
+            if (g_resourceOps != nullptr) return false;
+            ++g_applier.RefusedNoConsumer;
+            return true;
+        }
+    } // namespace
+
     void MGPipeApplierReset() {
         g_applier.RenderStateCsos.clear();
         g_applier.BoundRenderStateCso = kMGPipeNullHandle;
@@ -1123,6 +1149,7 @@ namespace MobileGL::MG_Pipe {
         g_applier.RefusedResourceCalls = 0;
         g_applier.RefusedVertexInputCalls = 0;
         g_applier.RefusedObjectCalls = 0;
+        g_applier.RefusedNoConsumer = 0;
         g_applier.BoundVertexElements = kMGPipeNullHandle;
         g_applier.VertexBuffers = {};
         g_applier.VertexBufferStart = 0;
@@ -1553,6 +1580,15 @@ namespace MobileGL::MG_Pipe {
                                  kMGPipeMaxResourceSlots);
             return false;
         }
+        // P4a's belt, and only over the P4a half of this call: the BUFFER row is P3a's and its
+        // consumer question is the frontend's (MGPipeResourceSubsystemEnabled), which has
+        // already answered it before the emission - a buffer record can only arrive here on a
+        // backend that registered the table, so asking again would be a second copy of that
+        // rule in the one path that runs. A texture or renderbuffer create declined here leaves
+        // the client's publication latch at false, which is what makes the next respecify's
+        // self-healing create do the right thing if a table appears later.
+        if (desc.Target != kMGPipeResourceTargetBuffer && NoP4aConsumer()) return false;
+
         *record = MGPipeResourceRecord{};
         record->Gen = desc.Resource.Gen;
         record->Live = true;
@@ -1583,6 +1619,12 @@ namespace MobileGL::MG_Pipe {
                                  desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
             return false;
         }
+        // P4a's belt, for MGPipeApplyResourceCreate's reason and in front of the resolution
+        // rather than after it: with no consumer no create was ever accepted, so resolving
+        // first would report the absence as RefusedResourceCalls - the counter that means "a
+        // seam defect" - for a state that is by design.
+        if (desc.Target != kMGPipeResourceTargetBuffer && NoP4aConsumer()) return false;
+
         MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_respecify", desc.Resource);
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
@@ -1711,6 +1753,10 @@ namespace MobileGL::MG_Pipe {
                                  static_cast<Uint32>(MGPipeSubDataUploadTargetOf(record.Target)));
             return false;
         }
+        // P4a's belt, AFTER the target fault above and before the upload is accumulated: this
+        // is the call whose acceptance clears a level's dirty flags (D-D5 / ID-18 M3), so it is
+        // the one that turned "no consumer" into lost texels on Magma.
+        if (NoP4aConsumer()) return false;
         return ApplyTextureUpload(record, bytes, regions);
     }
 
@@ -2200,6 +2246,14 @@ namespace MobileGL::MG_Pipe {
         // The surfaces' Res handles are not resolved either: an attachment PINS its texture,
         // and in monolith the frontend's own SharedPtr is that keep-alive, so a refusal here
         // would be enforcing a lifetime rule monolith cannot need and split has not defined.
+        // P4a's belt, after the record's own shape checks and before the table is touched. This
+        // entry point is the ONE the client can reach without passing PipeFill's gate -
+        // GL_Framebuffer.cpp's PipePublishFramebufferByName calls the emitter directly at the
+        // fifteen DSA sites - so on a backend with no consumer this is where those records
+        // stop. RefusedNoConsumer and not RefusedObjectCalls: the framebuffer family's counter
+        // contract (see the header) is that no framebuffer call ever moves that one.
+        if (NoP4aConsumer()) return;
+
         MGPipeFramebufferRecord* record =
             RecordAt(g_applier.FramebufferRecords, state.Fbo.Slot, kMGPipeMaxFramebufferSlots);
         // Unreachable: the bound was checked above, before anything moved. The null check is
@@ -2311,6 +2365,9 @@ namespace MobileGL::MG_Pipe {
                                  desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxSamplerCsoSlots);
             return;
         }
+        // P4a's belt, after the blob rule and the slot bound and before the record moves.
+        if (NoP4aConsumer()) return;
+
         MGPipeSamplerCsoRecord& record = *recordAt;
         // A CREATE STARTS THE RECORD OVER AND LEAVES Serial AT 0; A RE-ISSUE ON A LIVE IDENTITY
         // COUNTS UP. The first half is what stops a recycled slot contributing one field of its
@@ -2367,6 +2424,9 @@ namespace MobileGL::MG_Pipe {
                                  view.Cso.Slot, view.Cso.Gen, kMGPipeMaxSamplerViewSlots);
             return;
         }
+        // P4a's belt, after the slot bound and before the record moves.
+        if (NoP4aConsumer()) return;
+
         MGPipeSamplerViewRecord& record = *recordAt;
         // RE-ISSUING ON THE SAME HANDLE IS HOW A RESTRICTION CHANGE TRAVELS - a view is
         // identity-addressed one per texture object, minted off that object's lifetime id, and
@@ -2411,6 +2471,11 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplySetTextureParams(const MGPTextureParams& params) {
+        // P4a's belt, and FIRST here because this call's first act is a resolution: with no
+        // consumer no texture create was accepted, so resolving would report the absence as
+        // RefusedObjectCalls - the counter that means a seam defect - for the designed state.
+        if (NoP4aConsumer()) return;
+
         // ADDRESSED BY RESOURCE AND BY NOTHING ELSE, which is the whole point of the call: a
         // texture that is only an FBO attachment, only an image-unit binding or only a
         // glCopyImageSubData endpoint has no sampler view to hang its parameters on, and the
@@ -2458,7 +2523,16 @@ namespace MobileGL::MG_Pipe {
     // unit with no texture carries a null resource. None of the three is resolved against a
     // record either - a set is WORKING STATE, the records it names are OBJECT state, and the
     // backend resolves the pair at its own sync point where both are current.
+    //
+    // P4a's belt sits IN FRONT of ApplyUnitWindow on all three, and this is the one place it
+    // is not last: ApplyUnitWindow validates the window and writes it in the same step, so
+    // there is no point between the two to stand at. The cost is that on a backend with no
+    // consumer a malformed window is declined rather than Fatal - which is the right trade the
+    // one way round it can be made, because that backend would never have been handed the
+    // window at all (the client's gate stops it) and the shipped configuration that DOES
+    // consume these still trips the wire.
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
+        if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("set_sampler_views", hdr.Start, hdr.Count, hdr.ContentHash, tail,
                              g_applier.BoundSamplerViews, g_applier.SamplerViewStart,
                              g_applier.SamplerViewCount)) {
@@ -2468,6 +2542,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail) {
+        if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("bind_sampler_states", hdr.Start, hdr.Count, hdr.ContentHash, tail,
                              g_applier.BoundSamplerStates, g_applier.SamplerStateStart,
                              g_applier.SamplerStateCount)) {
@@ -2482,6 +2557,7 @@ namespace MobileGL::MG_Pipe {
         // sent and recast on the server - the record carries the application's format, and the
         // bind-format recast that turns a GL_RG32F bind into something 19 of 26 non-core
         // formats on Adreno will accept is the backend's, not this applier's.
+        if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("set_shader_images", hdr.Start, hdr.Count, hdr.ContentHash, tail,
                              g_applier.BoundShaderImages, g_applier.ShaderImageStart,
                              g_applier.ShaderImageCount)) {
@@ -2552,6 +2628,10 @@ namespace MobileGL::MG_Pipe {
         PinProgramArchiveRoundTrip(desc, *link, *spirv);
 #endif
 
+        // P4a's belt, after the blob rule, the slot bound and the verify round trip - all three
+        // are checks on the RECORD and stay honest on every backend - and before it is stored.
+        if (NoP4aConsumer()) return;
+
         MGPipeShaderCsoRecord& record = *recordAt;
         // A RE-ISSUE ON THE SAME HANDLE IS HOW A RELINK TRAVELS: the handle is minted per
         // frontend program and Gen moves only on slot reuse, so an existing record of the same
@@ -2583,6 +2663,11 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
                         "bind_shader_state on kind %u", handle.Kind);
+        // P4a's belt, and first for set_texture_params' reason: with no consumer this applier
+        // holds no shader CSO record, so the resolution below would report the designed state
+        // as RefusedObjectCalls. The null-handle unbind is behind it too - a binding this
+        // applier never made is not one it may clear.
+        if (NoP4aConsumer()) return;
         // The null handle is legal and means "nothing bound", which is a GL state and not an
         // error; a DEAD handle leaves the previous binding untouched and is counted, which is
         // bind_render_state's precedent for the same question.
@@ -2639,6 +2724,7 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
                         "set_draw_program on kind %u", handle.Kind);
+        if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
             g_applier.DrawProgram = kMGPipeNullHandle;
             ++g_applier.ProgramBindingSerial;
@@ -2653,6 +2739,7 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
                         "set_dispatch_program on kind %u", handle.Kind);
+        if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
             g_applier.DispatchProgram = kMGPipeNullHandle;
             ++g_applier.ProgramBindingSerial;
@@ -2668,6 +2755,12 @@ namespace MobileGL::MG_Pipe {
         // ON THE PROGRAM'S RECORD, not in the working state, and that is what makes it survive a
         // make-current: the block is (ShaderCso, Version) keyed and belongs to the program, not
         // to the context that last uploaded it.
+        //
+        // P4a's belt goes in front of the resolution for set_texture_params' reason, and it is
+        // in front of the fault block too because THIS call's bounds come out of the resolved
+        // program's own GlobalUboSize - there is nothing to validate against until the record
+        // is in hand.
+        if (NoP4aConsumer()) return;
         MGPipeShaderCsoRecord* stored = ResolveShaderCso("set_global_constants", record.ShaderCso);
         if (stored == nullptr) return;
 

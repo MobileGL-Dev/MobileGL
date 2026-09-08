@@ -1142,6 +1142,20 @@ int main(int argc, char** argv) {
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
 #endif
+#if MOBILEGL_PIPE_PUSH
+    // ID-39: A BACKEND IS PRESENT, for the whole binary. Since ID-39 every P4a-family entry
+    // point in MG_Pipe/PipeApply.cpp declines a record - and the client's gate in
+    // MG_Impl/Pipe/PipeFill.cpp emits none at all - when no backend has registered
+    // MGPipeResourceOps, because acceptance is a contract with the emitter and an accepted
+    // record nothing reads makes the client clear work the legacy pull path still owed. Every
+    // case in this suite is about the arm where a backend DOES consume the records, which is
+    // the shipped DirectGLES configuration, so it installs the same signal that backend
+    // installs. The table is empty because none of its hooks is on a framebuffer path at all:
+    // set_framebuffer_state stores a record and dispatches nothing. The two arms of the rule
+    // itself are pinned in ResourceEmitTest and TextureEmitTest.
+    static const MGPipeResourceOps kConsumerPresent{};
+    MGPipeSetResourceOps(&kConsumerPresent);
+#endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
     fs::remove(path, ec);

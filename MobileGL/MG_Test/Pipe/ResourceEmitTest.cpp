@@ -156,6 +156,27 @@ namespace {
         }
     };
 
+    // "A BACKEND IS PRESENT", which since ID-39 is a thing the applier ASKS: every P4a-family
+    // entry point declines a record - and counts RefusedNoConsumer - when no backend has
+    // registered MGPipeResourceOps, because acceptance is a contract with the emitter and an
+    // accepted record nothing will read makes the client clear a dirty flag the legacy pull
+    // path still owed. A case that wants the P4a half of this applier to behave as it does
+    // under DirectGLES scopes this on; the case that wants the OTHER arm simply does not.
+    //
+    // THE TABLE IS EMPTY AND THAT IS DELIBERATE. Its hooks are the BUFFER family's, and every
+    // non-buffer resource row is stored and returned rather than dispatched (see
+    // MGPipeApplyResourceCreate) - so what registering it changes here is the consumer question
+    // and nothing else. It nests: the previous table is restored, not nulled.
+    struct ScopedResourceOps {
+        ScopedResourceOps() : m_saved(MGPipeGetResourceOps()) {
+            static const MGPipeResourceOps kEmpty{};
+            MGPipeSetResourceOps(&kEmpty);
+        }
+        ~ScopedResourceOps() { MGPipeSetResourceOps(m_saved); }
+
+        const MGPipeResourceOps* m_saved;
+    };
+
     MGPResourceDesc BufferDesc(MGPipeHandle res, Uint32 width, Uint32 glName) {
         MGPResourceDesc desc{};
         desc.Resource = res;
@@ -1355,6 +1376,9 @@ namespace {
         GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
 #else
         ApplierGuard guard;
+        // The texture and renderbuffer rows below are P4a's, and P4a's belt declines those on a
+        // backend that consumes none of them (ID-39) - so this case says which arm it is about.
+        ScopedResourceOps consumer;
         const MGPipeHandle shared{7, 3};
 
         MGPipeApplyResourceCreate(TargetedDesc(shared, MGPipeResourceTarget::Buffer, 0, 11));
@@ -1390,6 +1414,195 @@ namespace {
         EXPECT_TRUE(MGPipeApplier().Resources[7].Live) << "a texture destroy dropped the buffer's record";
         EXPECT_TRUE(MGPipeApplier().RenderbufferResources[7].Live);
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
+#endif
+    }
+
+    // ID-39: THE APPLIER'S HALF OF THE "NO CONSUMER" RULE, over every P4a-family entry point.
+    //
+    // WHY AN APPLIER ASKS A QUESTION ABOUT THE BACKEND AT ALL is written beside
+    // MGPipeApplierState::RefusedNoConsumer: acceptance became a CONTRACT WITH THE CLIENT at
+    // ID-18 M3 - the emitters clear a texture level's dirty flags, advance their descriptor
+    // mirrors and latch their suppressors on the answer these calls return - so an applier that
+    // accepts a record nothing in the process will ever read makes the client forget work the
+    // legacy pull path still owed. On DirectVulkan, which registers no MGPipeResourceOps and
+    // has none of P4a's twins, that put 66 texture-upload-shaped integration-gpu cases red on
+    // the push build while the pull build stayed 966/966 green.
+    //
+    // IT IS A BELT AND NOT THE GATE. The client's gate is FamilyIsLive in
+    // MG_Impl/Pipe/PipeFill.cpp (pinned by TextureEmit.WithNoBackendConsumerTheFamilyGateIsFalse
+    // AndNothingReachesTheApplier) and it stops the emission upstream. This is under it, and it
+    // is not redundant: GL_Framebuffer.cpp's PipePublishFramebufferByName reaches the
+    // framebuffer emitter DIRECTLY at the fifteen DSA sites, without passing through PipeFill,
+    // so set_framebuffer_state is a record that can arrive here on a backend with no consumer.
+    //
+    // THE DEATH PATHS ARE DELIBERATELY NOT IN THE LIST and the second half of the case says so:
+    // a destroy is idempotent cleanup that must keep working whatever the registration did.
+    TEST(ResourceEmit, EveryP4aFamilyEntryPointDeclinesWhenNoBackendRegisteredTheConsumer) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+        ApplierGuard guard; // leaves the table UNREGISTERED, which is this half's whole point
+        ASSERT_EQ(MGPipeGetResourceOps(), nullptr);
+
+        const MGPipeHandle texture{7, 3};
+        const MGPipeHandle cso{9, 1};
+        const MGPipeHandle fbo{4, 2};
+
+        MGPTextureParams params{};
+        params.Res = texture;
+        params.BuiltinSampler = cso;
+
+        MGPSubData upload{};
+        upload.Res = texture;
+        upload.Target = MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::Tex2D), 0u);
+
+        MGPFramebufferState fboState{};
+        fboState.Fbo = fbo;
+        fboState.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Draw);
+
+        MGPSamplerDesc samplerDesc{};
+        samplerDesc.Cso = cso;
+        const SamplerParameters samplerParams{};
+
+        MGPSamplerView view{};
+        view.Cso = cso;
+        view.Texture = texture;
+
+        const MGPSamplerViews viewSet{0, 1, 0};
+        const MGPBoundView viewTail[1]{};
+        const MGPSamplerStates stateSet{0, 1, 0};
+        const MGPipeHandle stateTail[1]{kMGPipeNullHandle};
+        const MGPShaderImages imageSet{0, 1, 0};
+        const MGPImageView imageTail[1]{};
+
+        MGPProgramDesc program{};
+        program.Cso = cso;
+        program.StageMask = 0x3u;
+        const MG_State::GLState::LinkArtifacts link;
+        const MG_State::GLState::SpirvArtifacts spirv;
+
+        MGPGlobalConstants constants{};
+        constants.ShaderCso = cso;
+
+        const MGPHandleOnly csoHandle{cso, static_cast<Uint32>(MGPipeKind::ShaderCso), 0};
+
+        // ---- with no consumer: every one of them declines, and NOTHING is stored ----
+        EXPECT_FALSE(MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 22)));
+        EXPECT_FALSE(
+            MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
+        EXPECT_FALSE(MGPipeApplyResourceSubData(upload, nullptr));
+        MGPipeApplySetTextureParams(params);
+        MGPipeApplySetFramebufferState(fboState);
+        MGPipeApplyCreateSamplerState(samplerDesc, &samplerParams);
+        MGPipeApplyCreateSamplerView(view);
+        MGPipeApplySetSamplerViews(viewSet, viewTail);
+        MGPipeApplyBindSamplerStates(stateSet, stateTail);
+        MGPipeApplySetShaderImages(imageSet, imageTail);
+        MGPipeApplyCreateShaderState(program, &link, &spirv);
+        MGPipeApplyBindShaderState(csoHandle);
+        MGPipeApplySetDrawProgram(csoHandle);
+        MGPipeApplySetDispatchProgram(csoHandle);
+        MGPipeApplySetGlobalConstants(constants, nullptr);
+
+        // FIFTEEN CALLS, FIFTEEN REFUSALS, AND THE NUMBER IS THE ASSERTION: an entry point that
+        // is added to a P4a family later and forgets the belt makes this line fail rather than
+        // silently accepting a record on a backend that reads none.
+        EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 15u);
+        // AND NOT ONE OF THE OTHER THREE MOVED. The refusal is a configuration fact, not a seam
+        // defect, so it must not read as one to an operator grepping the counters.
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
+        EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+        EXPECT_EQ(MGPipeApplier().StaleFramebufferRecordLookups, 0u);
+
+        // NOTHING IS LIVE, which is the property, rather than "no table exists". The belt stands
+        // AFTER each entry point's own record-shape checks so that a malformed record is
+        // Fatal{ProtocolCorruption} on every backend and not only on the ones that consume - and
+        // the bound check for the four create-shaped calls IS RecordAt, which grows the table to
+        // the slot on its way to answering. So a refused create may leave a zeroed row behind
+        // and stores nothing in it. It costs nothing where it matters: on a backend with no
+        // consumer the client's gate emits none of these at all, and the one record that reaches
+        // this applier without passing that gate - set_framebuffer_state, published by name from
+        // GL_Framebuffer.cpp - is declined in front of its RecordAt.
+        const auto nothingLiveAt = [](const auto& table, SizeT slot) {
+            return table.size() <= slot || !table[slot].Live;
+        };
+        EXPECT_TRUE(nothingLiveAt(MGPipeApplier().TextureResources, 7));
+        EXPECT_TRUE(nothingLiveAt(MGPipeApplier().SamplerCsos, 9));
+        EXPECT_TRUE(nothingLiveAt(MGPipeApplier().SamplerViewCsos, 9));
+        EXPECT_TRUE(nothingLiveAt(MGPipeApplier().ShaderCsos, 9));
+        // set_framebuffer_state's table is the one that must not even be grown: it is declined
+        // in front of its RecordAt, because it is the one call a backend with no consumer can
+        // actually receive.
+        EXPECT_TRUE(MGPipeApplier().FramebufferRecords.empty());
+        EXPECT_EQ(MGPipeApplier().SamplerViewCount, 0u);
+        EXPECT_EQ(MGPipeApplier().SamplerStateCount, 0u);
+        EXPECT_EQ(MGPipeApplier().ShaderImageCount, 0u);
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundShaderCso));
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().DrawProgram));
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().DispatchProgram));
+        EXPECT_TRUE(MGPipeHandleIsNull(
+            MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)]));
+
+        // ---- and with one, every one of them lands. Same records, same order ----
+        {
+            ScopedResourceOps consumer;
+            const Uint64 refusalsBefore = MGPipeApplier().RefusedNoConsumer;
+
+            EXPECT_TRUE(
+                MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 22)));
+            EXPECT_TRUE(MGPipeApplyResourceRespecify(
+                TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
+            MGPipeApplySetTextureParams(params);
+            MGPipeApplySetFramebufferState(fboState);
+            MGPipeApplyCreateSamplerState(samplerDesc, &samplerParams);
+            MGPipeApplyCreateSamplerView(view);
+            MGPipeApplySetSamplerViews(viewSet, viewTail);
+            MGPipeApplyBindSamplerStates(stateSet, stateTail);
+            MGPipeApplySetShaderImages(imageSet, imageTail);
+            MGPipeApplyCreateShaderState(program, &link, &spirv);
+            MGPipeApplyBindShaderState(csoHandle);
+            MGPipeApplySetDrawProgram(csoHandle);
+            MGPipeApplySetDispatchProgram(csoHandle);
+            MGPipeApplySetGlobalConstants(constants, nullptr);
+
+            EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, refusalsBefore);
+            ASSERT_GT(MGPipeApplier().TextureResources.size(), 7u);
+            EXPECT_TRUE(MGPipeApplier().TextureResources[7].Live);
+            EXPECT_EQ(MGPipeApplier().TextureResources[7].Desc.Width, 64u);
+            EXPECT_EQ(MGPipeApplier().TextureResources[7].Params.BuiltinSampler, cso);
+            ASSERT_GT(MGPipeApplier().FramebufferRecords.size(), 4u);
+            EXPECT_TRUE(MGPipeApplier().FramebufferRecords[4].Live);
+            EXPECT_EQ(MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)],
+                      fbo);
+            ASSERT_GT(MGPipeApplier().SamplerCsos.size(), 9u);
+            EXPECT_TRUE(MGPipeApplier().SamplerCsos[9].Live);
+            ASSERT_GT(MGPipeApplier().SamplerViewCsos.size(), 9u);
+            EXPECT_TRUE(MGPipeApplier().SamplerViewCsos[9].Live);
+            ASSERT_GT(MGPipeApplier().ShaderCsos.size(), 9u);
+            EXPECT_TRUE(MGPipeApplier().ShaderCsos[9].Live);
+            EXPECT_EQ(MGPipeApplier().SamplerViewCount, 1u);
+            EXPECT_EQ(MGPipeApplier().SamplerStateCount, 1u);
+            EXPECT_EQ(MGPipeApplier().ShaderImageCount, 1u);
+            EXPECT_EQ(MGPipeApplier().BoundShaderCso, cso);
+            EXPECT_EQ(MGPipeApplier().DrawProgram, cso);
+            EXPECT_EQ(MGPipeApplier().DispatchProgram, cso);
+            // resource_subdata's ACCEPTED path wants a real destination box against real
+            // storage, which is a texture-emitter fixture and not this file's; it is proved end
+            // to end by TextureEmit.WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReaches
+            // TheApplier's second half (SubDataCount 1, RefusedSubDataCount 0). Driving a
+            // half-built record through it here would trip the upload validator's own wire,
+            // which is a different rule and not this case's.
+
+            // AND THE DEATH PATHS ARE NOT BELTED, which is the other half of the ruling: they
+            // are idempotent cleanup and they run on whatever the registration is. Driven with
+            // the table registered here and asserted UNCOUNTED, so that a later commit which
+            // adds them to the belt has to change this line.
+            MGPipeApplyDeleteShaderState(csoHandle);
+            MGPipeApplyResourceDestroy(KindHandle(texture, MGPipeKind::Texture));
+            EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, refusalsBefore);
+            EXPECT_FALSE(MGPipeApplier().ShaderCsos[9].Live);
+            EXPECT_FALSE(MGPipeApplier().TextureResources[7].Live);
+        }
 #endif
     }
 

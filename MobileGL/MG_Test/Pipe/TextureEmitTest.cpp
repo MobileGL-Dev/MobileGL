@@ -57,6 +57,7 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/PipeFill.h>
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_Pipe/PipeApply.h>
@@ -268,6 +269,20 @@ namespace {
 
         UniquePtr<GLContext> m_previousContext;
         Uint64 m_previousPush = 0;
+    };
+
+    // ID-39's OTHER ARM, scoped. This binary registers an (empty) MGPipeResourceOps table in
+    // main() because the whole suite is about the emitter and the applier as they behave under
+    // a backend that CONSUMES what they publish - DirectGLES, which registers the table at its
+    // own bring-up. The one case that is about a backend with no consumer takes the table away
+    // for its own duration and puts it back.
+    struct ScopedNoResourceOps {
+        ScopedNoResourceOps() : m_saved(MGPipeGetResourceOps()) { MGPipeSetResourceOps(nullptr); }
+        ~ScopedNoResourceOps() { MGPipeSetResourceOps(m_saved); }
+        ScopedNoResourceOps(const ScopedNoResourceOps&) = delete;
+        ScopedNoResourceOps& operator=(const ScopedNoResourceOps&) = delete;
+
+        const MGPipeResourceOps* m_saved;
     };
 
     MGPipeTextureEmitter& Textures() { return MGPipeTextureEmitterInstance(); }
@@ -808,6 +823,90 @@ TEST(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList) {
     EXPECT_EQ(Textures().RefusedSubDataCount(), 1u) << "the retry was refused as well";
     EXPECT_FALSE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
     EXPECT_EQ(Textures().DrainListSize(), 0u);
+}
+
+// ID-39: THE CLIENT'S HALF OF THE "NO CONSUMER" RULE, and the defect it closes.
+//
+// A P4a family's gate used to be two conjuncts - the operator's subsystem bit in
+// MOBILEGL_PIPE_PUSH, and this build having WIRED the family. P3a's buffers have always had a
+// THIRD (MGPipeResourceSubsystemEnabled() is bit 7 AND MGPipeGetResourceOps() != nullptr) and
+// P4a's four families did not. Magma (DirectVulkan) registers no table and has none of P4a's
+// twins, so with kMGPipeWiredTextureSubsystem = 1 the client emitted, the applier ACCEPTED, the
+// emitter cleared the level's dirty flags on that acceptance (D-D5 as amended by ID-18 M3), and
+// Magma's legacy upload path then found nothing to upload: 66 texture-upload-shaped
+// DirectVulkan integration-gpu cases red on the push build while the pull build stayed green.
+//
+// WHAT THIS PINS IS "NOTHING AT ALL", NOT "LESS". No create, no respecify, no params, no entry
+// on the drain list - and the FRONTEND's own dirty flag still set, which is the state the legacy
+// pull path reads and the one whose loss no pixel comparison on this side can see. The applier's
+// belt (ResourceEmit.EveryP4aFamilyEntryPointDeclinesWhenNoBackendRegisteredTheConsumer) is
+// under this and is asserted here to have caught NOTHING: if it had, the gate would be the thing
+// that failed.
+TEST(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier) {
+    TextureScope scope;
+    {
+        ScopedNoResourceOps noConsumer;
+
+        // All four families, because all four ride the one signal (D-D1: a texture and a
+        // renderbuffer ARE resource rows, and the other three name texture handles).
+        EXPECT_FALSE(
+            MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem));
+        EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemFramebuffer, kMGPipeSubsystemFramebuffer));
+        EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemSamplers, kMGPipeSubsystemSamplers));
+        EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemPrograms, kMGPipeSubsystemPrograms));
+        // And the P2/P3a families are NOT narrowed by it - their bits are outside
+        // kMGPipeP4aFamilySubsystems, which is what makes "nothing that emits today changes"
+        // checkable rather than asserted. The bit is set here because TextureScope sets only
+        // the two this suite needs, and restored before anything else runs.
+        const Uint64 savedPush = MG_Config::Features.PipePush;
+        MG_Config::Features.PipePush |= kMGPipeSubsystemVertexInput;
+        EXPECT_TRUE(MGPipeP4aFamilyEmits(kMGPipeSubsystemVertexInput, kMGPipeSubsystemVertexInput));
+        MG_Config::Features.PipePush = savedPush;
+
+        const auto texture = MakeTexture2D(41, 32);
+        const MGPipeHandle handle = Textures().FindTexture(*texture);
+        // THE HANDLE IS STILL MINTED, deliberately: the mint is unconditional (PipeFill.cpp),
+        // costs one free-list pop and emits nothing, and other families name a texture by
+        // handle whether or not this family is switched on. What the gate withholds is the
+        // EMISSION, never the identity.
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+
+        EXPECT_FALSE(MGPipeHandleIsPublished(MGPipeKind::Texture, handle))
+            << "a create was published to an applier no backend reads";
+        EXPECT_EQ(Textures().CreateCount(), 0u);
+        EXPECT_EQ(Textures().RespecifyCount(), 0u);
+        EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
+
+        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                        IntVec3{8, 8, 1});
+        EXPECT_EQ(Textures().DrainListSize(), 0u) << "a level was queued for a drain that has no consumer";
+        EXPECT_EQ(Textures().SubDataCount(), 0u);
+        // THE ONE THAT MATTERED. The frontend's flag is what Magma's legacy path uploads from,
+        // and clearing it on an acceptance nobody would read is the whole of the defect.
+        EXPECT_TRUE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0))
+            << "the level's dirty flag was cleared on a backend whose legacy path still owes the "
+               "upload, so those texels exist nowhere";
+
+        EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 0u)
+            << "the client emitted anyway and the applier's belt caught it; the GATE is what must "
+               "have stopped it";
+    }
+
+    // ---- and with a consumer registered, the same sequence lands ----
+    EXPECT_TRUE(MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem));
+    const auto consumed = MakeTexture2D(42, 32);
+    const MGPipeHandle live = Textures().FindTexture(*consumed);
+    ASSERT_FALSE(MGPipeHandleIsNull(live));
+    EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::Texture, live));
+    EXPECT_GT(Textures().CreateCount(), 0u);
+    consumed->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                     IntVec3{8, 8, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 1u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 1u);
+    EXPECT_EQ(Textures().RefusedSubDataCount(), 0u);
+    EXPECT_EQ(MGPipeApplier().RefusedNoConsumer, 0u);
+    EXPECT_FALSE(consumed->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
 }
 
 // ============================ M4 ============================
@@ -1623,6 +1722,20 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MOBILEGL_PIPE_PUSH
+    // ID-39: A BACKEND IS PRESENT, for the whole binary. Since ID-39 every P4a-family entry
+    // point in MG_Pipe/PipeApply.cpp declines a record - and the client's own gate in
+    // MG_Impl/Pipe/PipeFill.cpp emits none at all - when no backend has registered
+    // MGPipeResourceOps, because acceptance is a contract with the emitter and an accepted
+    // record nothing reads makes the client clear a dirty flag the legacy pull path still owed.
+    // Every case in this suite is about the arm where a backend DOES consume the records, which
+    // is the shipped DirectGLES configuration, so the suite installs the same signal that
+    // backend installs. The table is empty because none of its hooks is on a texture path: a
+    // non-buffer resource row is stored and returned, never dispatched.
+    // WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheApplier takes it away again.
+    static const MGPipeResourceOps kConsumerPresent{};
+    MGPipeSetResourceOps(&kConsumerPresent);
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
