@@ -3718,6 +3718,7 @@ TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
     MG_State::GLState::SetStateObjectDeathOps(&recording);
 
     Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> expected;
+    Uint64 bufferLifetimeId = 0;
     {
         auto program = MakeShared<MG_State::GLState::ProgramObject>(0u);
         auto renderbuffer = MakeShared<MG_State::GLState::RenderbufferObject>(0u);
@@ -3733,10 +3734,25 @@ TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
         expected.emplace_back(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId());
         expected.emplace_back(MG_Pipe::MGPipeKind::VertexElementsCso, vertexArray->GetLifetimeId());
 
+        // P3a, and it is DELIBERATELY NOT in `expected`: the buffer is the seventh re-keyed
+        // class and the only one whose death does not travel on this notice. The catalogue
+        // has a call for it - resource_destroy - so no seventh NotifyStateObjectDestroyed
+        // raiser was added (D-L). StateObjectDeathNotice.h exists for kinds that have NO
+        // such call, and a buffer raising one too would be two death signals for one object,
+        // i.e. a slot freed twice and a successor's twin dropped under it.
+        auto bufferObject = MakeShared<MG_State::GLState::BufferObject>(0u);
+        bufferLifetimeId = bufferObject->GetLifetimeId();
+
         EXPECT_TRUE(notices.empty()) << "a live object announced its own death";
     }
 
     MG_State::GLState::SetStateObjectDeathOps(previous);
+
+    EXPECT_EQ(std::find(notices.begin(), notices.end(),
+                        std::make_pair(MG_Pipe::MGPipeKind::Buffer, bufferLifetimeId)),
+              notices.end())
+        << "a BufferObject raised a state-object death notice; P3a routes buffer death through "
+           "resource_destroy instead (D-L), and both firing would free the slot twice";
 
     // Membership rather than a count or an order: every TextureObjectBase owns a private
     // SamplerObject (TextureObject.cpp), so tearing a texture down legitimately raises a
@@ -3877,6 +3893,62 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
                                      [] { return MakeShared<ProgramObject>(0u); });
     ExpectTheHandleArmDrivesThisKind("VertexElementsCso", VertexArrayImpl::g_backendVertexArrayObjects,
                                      [] { return MakeShared<VertexArrayObject>(0u); });
+
+    // P3a: the SEVENTH table, and the only one the helper above cannot drive - which is the
+    // point of it. Every other kind is a TwinRegistry whose GetOrCreate MINTS the handle off a
+    // frontend object's lifetime id from inside MG_Backend; this one is a bare BackendSlotTable
+    // that only ever receives a handle the CALL carried, so there is no HandleOf, no
+    // Find(object), no stateRef and no death notice. Its walk is the family's own:
+    // client mints -> backend twins by handle -> resource_destroy retires the twin -> the
+    // CLIENT frees the slot, in that order (D-L), and a successor at the recycled slot gets a
+    // Gen that leaves the predecessor's handle resolving to nothing.
+    {
+        using MobileGL::MG_Backend::DirectGLES::BufferImpl::g_backendBufferResources;
+        using MobileGL::MG_Backend::DirectGLES::BufferImpl::GLESBufferResource;
+        auto& table = g_backendBufferResources;
+
+        auto owner = MakeShared<BufferObject>(0u);
+        const MG_Pipe::MGPipeHandle first =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, owner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first))
+            << "Buffer: the client allocator minted no handle for a live buffer";
+        auto& firstTwin = table.GetOrCreate(first);
+        firstTwin = MakeShared<GLESBufferResource>();
+        const GLESBufferResource* const firstRaw = firstTwin.get();
+        EXPECT_EQ(table.FindByHandle(first), &firstTwin)
+            << "Buffer: the handle does not address the twin GetOrCreate handed back";
+
+        // resource_destroy: the twin comes OUT first (so the pool / delete / deferred-release
+        // decision is reached with the entry already retired), and only then does the client
+        // free the slot - the allocator forgets the lifetime id on Free.
+        const SharedPtr<GLESBufferResource> released = table.ReleaseByHandle(first);
+        EXPECT_NE(released, nullptr) << "Buffer: resource_destroy found no twin to retire";
+        EXPECT_EQ(table.FindByHandle(first), nullptr)
+            << "Buffer: the twin outlived its resource_destroy";
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, first);
+
+        auto successor = MakeShared<BufferObject>(0u);
+        const MG_Pipe::MGPipeHandle second =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, successor->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(second)) << "Buffer";
+        EXPECT_EQ(second.Slot, first.Slot)
+            << "Buffer: the freed slot was not handed back, so this walk did not exercise the "
+               "recycle it exists to test";
+        EXPECT_NE(second.Gen, first.Gen)
+            << "Buffer: Gen did not move on slot reuse - the predecessor's handle would resolve "
+               "to the successor's storage, which is the ABA the {slot, gen} key exists to stop";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "Buffer: the STALE handle resolved to a twin";
+
+        auto& secondTwin = table.GetOrCreate(second);
+        EXPECT_EQ(secondTwin, nullptr)
+            << "Buffer: a resource at a recycled slot inherited its predecessor's backend storage";
+        secondTwin = MakeShared<GLESBufferResource>();
+        EXPECT_EQ(table.FindByHandle(second), &secondTwin) << "Buffer";
+        EXPECT_NE(table.FindByHandle(second)->get(), firstRaw) << "Buffer";
+
+        table.ReleaseByHandle(second);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, second);
+    }
 }
 
 // The two-holder fix, end to end through the REAL Texture registry and the REAL destructor:
