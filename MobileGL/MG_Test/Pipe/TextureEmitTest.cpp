@@ -1644,6 +1644,110 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
 #endif
 }
 
+// THE OTHER HALF OF THE LEVEL-SCOPED ERASE KEY (wire review v2 MINOR-1, integrator grant).
+//
+// wire's C1 fix scopes a respecify's PendingUploads clear to the redefined entry, and the key is
+// the PAIR (UploadTarget, Level). The case above pins the LEVEL half: it respecifies level 1 and
+// checks that level 0's two entries survive. It cannot pin the UPLOAD TARGET half, because both
+// survivors are at a different LEVEL from the redefined one - so an erase that compared only the
+// level would still keep them, and the review measured exactly that: DELETING THE UploadTarget
+// COMPARISON FROM THE ERASE PREDICATE WAS GREEN ON ALL 74 APPLIER TESTS.
+//
+// This case is the missing half. Two cube FACES of the SAME level are pending at once - which is
+// the ordinary shape of building a cube map, six glTexImage2D calls at level 0 - and one of them
+// is redefined. The level number is therefore identical on both sides of the erase, so the only
+// thing that can distinguish the entry that must go from the entry that must stay is the upload
+// target. An erase keyed on the level alone drops BOTH, and those texels are gone for good: the
+// client cleared its dirty flags when the applier accepted them (D-D5 step 1), so there is
+// nothing left to re-emit from.
+//
+// The descriptor's InternalFormat moves on the redefining respecify, exactly as in the case
+// above, so this is a real storage redefinition and not ID-18 M4's metadata update - which
+// drops nothing at all and would make the case vacuous in the other direction.
+TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{11, 1};
+    const Uint8 texels[4096] = {};
+    MGPResourceDesc cube = TextureDesc(texture, 0, 131);
+    cube.Target = static_cast<Uint8>(MGPipeResourceTarget::TexCube);
+    MGPipeApplyResourceCreate(cube);
+
+    constexpr Uint16 kTexCube = static_cast<Uint16>(MGPipeResourceTarget::TexCube);
+    // The packed Target's two bytes (ID-12): low = the RESOURCE target, high = the per-call
+    // UPLOAD target, which for a cube map is the FACE. Both faces below name the same resource
+    // target and the same level and differ only in the face, which is the whole point.
+    const Uint16 positiveX = MGPipePackSubDataTarget(
+        kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX));
+    const Uint16 negativeX = MGPipePackSubDataTarget(
+        kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeX));
+    ASSERT_NE(positiveX, negativeX);
+    ASSERT_EQ(MGPipeSubDataResourceTargetOf(positiveX), MGPipeSubDataResourceTargetOf(negativeX))
+        << "the two faces must differ in the UPLOAD byte alone, or this case would be measuring "
+           "the resource target instead of the face";
+
+    auto faceDesc = [&](Uint32 internalFormat) {
+        MGPResourceDesc desc = cube;
+        desc.Width = 64;
+        desc.Height = 64;
+        desc.Levels = 1;
+        desc.InternalFormat = internalFormat;
+        return desc;
+    };
+    auto faceUpload = [&](Uint16 face) {
+        MGPSubData record = TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0);
+        record.Target = face;
+        return record;
+    };
+
+    // glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X, level 0, data), then the same for -X. Espryt
+    // bails on both (a cube map with one face defined is not cube-complete), so both are still
+    // owed when the next call arrives.
+    const MGPRespecifiedLevel positiveXLevelZero{positiveX, 0};
+    MGPipeApplyResourceRespecify(faceDesc(0x8058u /*GL_RGBA8*/), nullptr, &positiveXLevelZero);
+    ASSERT_TRUE(MGPipeApplyResourceSubData(faceUpload(positiveX), texels));
+    const MGPRespecifiedLevel negativeXLevelZero{negativeX, 0};
+    MGPipeApplyResourceRespecify(faceDesc(0x8058u), nullptr, &negativeXLevelZero);
+    ASSERT_TRUE(MGPipeApplyResourceSubData(faceUpload(negativeX), texels));
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 2u)
+        << "the two faces of one level collapsed onto a single pending entry, so this case cannot "
+           "say anything about the erase key";
+
+    // glTexImage2D(GL_TEXTURE_CUBE_MAP_NEGATIVE_X, level 0) again, with a new internal format:
+    // -X's level 0 is redefined and +X's is NOT TOUCHED.
+    //
+    // THE SECOND-ADDED FACE IS THE ONE REDEFINED, AND THAT CHOICE IS THE WHOLE MUTATION
+    // SENSITIVITY. The erase walks PendingUploads in order and `break`s at the first entry the
+    // key matches, so a key that compared only the level would still remove exactly ONE entry -
+    // and if the redefined face were the first in the vector it would remove the RIGHT one, by
+    // the accident of insertion order, and this case would be green on a key with no upload-target
+    // comparison at all. Redefining the SECOND makes the level-only key erase +X, which is the
+    // face that had to survive: the count is still 1 and the identity is wrong, which is what the
+    // assertion below reads. (Measured: with the comparison deleted, the size assertion alone is
+    // green and the identity assertion is red.)
+    MGPipeApplyResourceRespecify(faceDesc(0x8051u /*GL_RGB8*/), nullptr, &negativeXLevelZero);
+
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
+        << "a respecify of ONE cube face's level 0 also dropped the OTHER face's pending upload "
+           "of the same level. The erase key is (UploadTarget, Level) and both entries carry "
+           "level 0, so an erase that compares the level alone cannot tell them apart - and the "
+           "face it never redefined loses its texels for good, because the client cleared that "
+           "level's dirty flag when the applier accepted it (D-D5 step 1).";
+    EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].UploadTarget, positiveX)
+        << "the entry that survived the respecify of GL_TEXTURE_CUBE_MAP_NEGATIVE_X's level 0 is "
+           "not the +X face it never named. Both entries carry level 0 and differ only in the "
+           "upload-target byte of the packed Target (ID-12), so an erase keyed on the level alone "
+           "removes whichever of the two it reaches first - here +X - and the face the application "
+           "actually redefined keeps a pending upload describing storage that no longer exists, "
+           "while the face it did not redefine has lost its texels.";
+    EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].Level, 0u);
+    EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].UnionBox.W, 64u)
+        << "the untouched face's box was rewritten by the other face's redefinition";
+#endif
+}
+
 // D-D5 step 1 says the client clears its dirty flag "only for levels whose record the applier
 // ACCEPTED", and the call is the only thing that can say so: a dead or stale handle is a
 // counted no-op and a corrupt record is a Fatal that deliberately moves NO counter, so in a
