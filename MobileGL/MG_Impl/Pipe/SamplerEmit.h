@@ -44,6 +44,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 #include <MG_State/GLState/SamplerState/SamplerObject.h>
@@ -63,12 +64,23 @@ namespace MobileGL::MG_Pipe {
     // operator switching samplers off has to get the whole family's legacy arm rather than two
     // thirds of it.
     //
-    // WHAT THE BIT DOES AND DOES NOT DO, said plainly because it is not what a reader expects:
-    // it is the honest statement of what this build emits for, and it feeds
-    // EmittedCallSuppliesTheWholeField's guard. It is NOT the emission gate - the validate
-    // point's `wants()` asks MGPipeSubsystemForDirty and the runtime MOBILEGL_PIPE_PUSH mask,
-    // so these emitters go live the moment their bodies exist and the mask carries bit 11. The
-    // A/B that switches this family off is the MASK, not this constant.
+    // WHAT THE BIT DOES, and it really is a gate - c0b changed this and the note that used to
+    // say the opposite was true only against the contract commit. The validate point's
+    // `wants()` (PipeFill.cpp) now asks FOUR things: the bit maps to a subsystem, the
+    // operator's MOBILEGL_PIPE_PUSH mask carries it, `kMGPipeWiredSubsystems` carries it -
+    // i.e. this constant is non-zero - and the dirty bit fired. The birth hooks' own gate
+    // (`FamilyIsLive`) is the same pair one level in, so the client paths and the validate
+    // point cannot disagree. So an emitter with a body and this constant still 0 is called by
+    // nothing and emits nothing, and flipping the constant is what switches the family on.
+    //
+    // IT IS ALSO A COMPILE-TIME CONTRACT. While it is non-zero, PipeFill.cpp's `if constexpr`
+    // seam instantiates the forward to this family's entry points - EmitSamplerCso and
+    // EmitSamplerView below - so a missing or misspelled one is a build error in this file's
+    // own commit rather than a surprise at the merge.
+    //
+    // The A/B that switches this family off at RUNTIME is still the mask; this constant is
+    // what a build declares it emits for, and it feeds EmittedCallSuppliesTheWholeField's
+    // guard. ONE bit for the whole family, for the reason above.
     inline constexpr Uint64 kMGPipeWiredSamplerSubsystem = kMGPipeSubsystemSamplers;
 
     // ---------------------------------------------------------------------------------
@@ -152,11 +164,32 @@ namespace MobileGL::MG_Pipe {
     // reusing a handle, because a bare 64-bit equality would alias two different sampler
     // states onto one CSO and that is silent wrong filtering with no gate that can see it.
     //
-    // CAPACITY 256 IS ALSO A SAFETY BOUND, not only a size. One emission pass acquires at most
-    // kMGPipeMaxTextureUnits == 192 CSOs and touches every one of them, so LRU can only ever
-    // evict an entry from an EARLIER pass - a handle named in the tail of the record being
-    // built right now can never be the victim. The static_assert below is what keeps that true
-    // if either number is ever retuned.
+    // WHAT KEEPS A LIVE HANDLE OUT OF THE LRU's REACH IS A REFERENCE COUNT, not the capacity
+    // (ID-17). The capacity argument - "one pass acquires at most kMGPipeMaxTextureUnits == 192
+    // CSOs and touches every one of them, so LRU can only evict an entry from an EARLIER pass"
+    // - closes the INTRA-PASS case only, and the case that matters is the other one: a
+    // MGPTextureParams record published in an earlier pass names its texture's BuiltinSampler
+    // for as long as that texture's parameters do not move, the applier deliberately does not
+    // resolve that handle, and an eviction is not a parameter change, so nothing re-emits and
+    // nobody refuses. With more than 256 distinct live sampler values - a CTS sampler sweep, a
+    // scene with many filter/wrap/border combinations - the rarely-touched built-in samplers
+    // are the FIRST victims.
+    //
+    // So every Acquire takes a REFERENCE and Release drops one; LRU considers only entries
+    // whose count is 0; and when every entry is pinned the cache MINTS BEYOND CAPACITY and
+    // counts it (Counters::OverCapacityMints). Growing is the safe direction - a slot too many
+    // costs memory, a handle pulled out from under a live record costs correctness - and the
+    // count is a recorded number rather than a gate, so a workload that pins more than 256
+    // values is visible instead of being wrong.
+    //
+    // WHO HOLDS A REFERENCE: package B's EmitTextureParams for a texture's built-in sampler
+    // (released when the texture dies or when a parameter change makes it re-acquire), and
+    // this file's own bind_sampler_states for every CSO a unit is currently bound to. Anything
+    // that acquires a handle it will still name after it returns must hold one.
+    //
+    // THE CAPACITY ITSELF IS STILL A SIZING BOUND worth asserting: a cache that could not hold
+    // one whole emission pass would over-capacity-mint on every single pass, which is a
+    // silently unbounded cache rather than a 256-entry one.
     //
     // THE SLOT IS ALLOCATED WITHOUT A LIFETIME ID, deliberately: a content-addressed CSO
     // belongs to a VALUE and not to a frontend object, so ~SamplerObject must not free it -
@@ -164,10 +197,16 @@ namespace MobileGL::MG_Pipe {
     // resolves nothing for such an id and correctly frees nothing; the only death path for
     // these slots is the LRU eviction below, which is client-side and therefore
     // backend-neutral on day one.
+    //
+    // PACKAGE D MUST BE TOLD, and it is the one consequence of that choice that reaches the
+    // server: NotifyStateObjectDestroyed(SamplerCso, lifetimeId) arrives from ~SamplerObject
+    // with NO HANDLE BEHIND IT, every time. A backend must NOT key a sampler twin on a
+    // SamplerObject's lifetime id. The twin's life is create_sampler_state -> the LRU's
+    // delete_sampler_state and nothing else.
     inline constexpr SizeT kMGPipeSamplerCsoCacheCapacity = 256;
     static_assert(kMGPipeSamplerCsoCacheCapacity > kMGPipeMaxTextureUnits,
-                  "one emission pass touches every unit's CSO, so the cache must be able to "
-                  "hold a whole pass without evicting a handle that pass is about to name");
+                  "a cache that cannot hold one whole emission pass would mint over capacity on "
+                  "every pass; correctness against eviction is the reference count, not this bound");
 
     class MGPipeSamplerCsoCache {
     public:
@@ -177,45 +216,81 @@ namespace MobileGL::MG_Pipe {
             Uint64 Hits = 0;        // a probe that found a live entry and passed the memcmp
             Uint64 Collisions = 0;  // a hash hit the memcmp REJECTED - the reason it exists
             Uint64 Evictions = 0;   // LRU evictions, each one a delete_sampler_state
+            Uint64 Releases = 0;    // reference drops
+            // Mints made with the cache already full and EVERY entry referenced. A recorded
+            // number and not a gate (ID-17): growing past 256 is the safe direction, and this
+            // is what makes it visible instead of silent.
+            Uint64 OverCapacityMints = 0;
         };
 
-        // The handle for `params`' value. Mints and emits create_sampler_state on a miss and
-        // emits delete_sampler_state for whatever it evicts to make room. `payloadBytes`
-        // accumulates what went on the wire.
+        // The handle for `params`' value, AND A REFERENCE ON IT. Mints and emits
+        // create_sampler_state on a miss and emits delete_sampler_state for whatever it evicts
+        // to make room. `payloadBytes` accumulates what went on the wire.
+        //
+        // EVERY Acquire TAKES A REFERENCE and every caller owes exactly one Release for it
+        // (ID-17). A caller that only wants a transient handle still has to release it, and a
+        // caller that keeps naming the handle in a published record must hold its reference for
+        // as long as that record stands - that is what stops the LRU pulling the handle out
+        // from under it, because an eviction is not a parameter change and nothing re-emits.
         //
         // THIS IS ALSO PACKAGE B's SEAM. MGPTextureParams::BuiltinSampler names the CSO that
         // carries the SamplerParameters of the SamplerObject every ITextureObject owns, and a
         // null handle there is Fatal{ProtocolCorruption} rather than "no sampler". TextureEmit.h
-        // acquires it from here, so the texture's built-in sampler and a glBindSampler'd
-        // sampler object with the same value share one CSO and one server-side twin - which is
-        // exactly the sharing that makes content addressing the right answer for this kind.
+        // acquires it from here - taking a reference it holds until the texture dies or a
+        // parameter change makes it re-acquire, at which point it releases the previous handle -
+        // so the texture's built-in sampler and a glBindSampler'd sampler object with the same
+        // value share one CSO and one server-side twin, which is exactly the sharing that makes
+        // content addressing the right answer for this kind.
         MGPipeHandle Acquire(const SamplerParameters& params, Uint64& payloadBytes) {
-            ++m_counters.Acquisitions;
             SamplerParameters canon;
             MGPipeCanonicaliseSamplerParameters(params, canon);
-            const Uint64 hash = MGPipeHashSamplerParameters(canon);
-            for (SizeT i = 0; i < m_entries.size(); ++i) {
-                if (m_entries[i].Hash != hash) continue;
-                if (std::memcmp(&m_entries[i].Params, &canon, sizeof(canon)) != 0) {
-                    // A 64-bit collision between two DIFFERENT sampler states. Reusing the
-                    // handle would filter one state with the other's parameters, so the entry
-                    // is dropped and the caller mints - correctness first, and the counter
-                    // says how often it happened.
-                    ++m_counters.Collisions;
-                    Evict(i);
-                    break;
-                }
-                m_entries[i].LastUsed = ++m_clock;
-                ++m_counters.Hits;
-                return m_entries[i].Cso;
-            }
-            return Mint(hash, canon, payloadBytes);
+            return AcquireCanonical(MGPipeHashSamplerParameters(canon), canon, payloadBytes);
         }
 
-        // "Does the applier hold a create_sampler_state record for exactly this handle?" A
-        // slot is not evidence of a record - a backend twin table mints one through
-        // MGPipeSlots().Acquire whether or not this client was ever asked to emit - so the
-        // death paths ask this rather than guessing from the slot.
+        // A TEST SEAM, and the only reason it is public. The collision branch below - the
+        // memcmp confirm, the Collisions counter and the probe that keeps going past a
+        // rejected entry - cannot be reached from Acquire without manufacturing a genuine
+        // 64-bit XXH64 collision, so without this the whole branch is uncovered and the case
+        // named for it proves something else. It hashes nothing and simply uses the hash it is
+        // given; production code has no reason to call it.
+        MGPipeHandle AcquireWithForcedHashForTest(const SamplerParameters& params, Uint64 forcedHash,
+                                                  Uint64& payloadBytes) {
+            SamplerParameters canon;
+            MGPipeCanonicaliseSamplerParameters(params, canon);
+            return AcquireCanonical(forcedHash, canon, payloadBytes);
+        }
+
+        // Drops one reference. The entry stays - a released value is still worth reusing - it
+        // merely becomes eligible for the LRU again. Releasing a handle this cache never handed
+        // out, or releasing one twice, is a no-op rather than an underflow: the death paths that
+        // call it are idempotent by contract and a second call must not corrupt the count.
+        void Release(MGPipeHandle handle) {
+            if (MGPipeHandleIsNull(handle)) return;
+            for (Entry& entry : m_entries) {
+                if (entry.Cso != handle) continue;
+                if (entry.RefCount > 0) --entry.RefCount;
+                ++m_counters.Releases;
+                return;
+            }
+        }
+
+        // How many live references this cache is holding for `handle`. Diagnostics and unit
+        // cases; nothing on the emission path asks.
+        Uint32 RefCountOf(MGPipeHandle handle) const {
+            if (MGPipeHandleIsNull(handle)) return 0;
+            for (const Entry& entry : m_entries) {
+                if (entry.Cso == handle) return entry.RefCount;
+            }
+            return 0;
+        }
+
+        // "Does this cache still hold a create_sampler_state record for exactly this handle?"
+        //
+        // IT IS NOT THE DEATH PATH's AUTHORITY, and that changed at c0b: the six death helpers
+        // read A's publication latch (MGPipeHandleIsPublished, PipeMutation.h), which is one
+        // answer per {kind, slot, gen} written by whatever emitted the create. This stays
+        // because it is the CACHE's own question - "is this value still resident here" - which
+        // is a different question and is what a unit case reads.
         Bool RecordIsPublished(MGPipeHandle handle) const {
             if (MGPipeHandleIsNull(handle)) return false;
             for (const Entry& entry : m_entries) {
@@ -228,8 +303,16 @@ namespace MobileGL::MG_Pipe {
         // FreshlyPrimed arm: MGPipeApplierReset is a make-current and does NOT drop object
         // records, so a sampler CSO the applier holds outlives a context switch. Dropping the
         // cache there would leak the applier's record and re-mint a value it already has.
+        //
+        // IT DROPS THE PUBLICATION LATCH FOR EVERY ENTRY IT FREES. The slots go back with no
+        // delete_sampler_state behind them, so a latch left standing would make a future death
+        // helper - on the recycled slot at the same generation - emit a delete for a record
+        // that never existed, which is the refusal the applier counts.
         void ResetForTest() {
-            for (const Entry& entry : m_entries) MGPipeSlots().Free(MGPipeKind::SamplerCso, entry.Cso);
+            for (const Entry& entry : m_entries) {
+                MGPipeNoteHandleUnpublished(MGPipeKind::SamplerCso, entry.Cso);
+                MGPipeSlots().Free(MGPipeKind::SamplerCso, entry.Cso);
+            }
             m_entries.clear();
             m_clock = 0;
         }
@@ -243,18 +326,58 @@ namespace MobileGL::MG_Pipe {
             Uint64 Hash = 0;
             Uint64 LastUsed = 0;
             MGPipeHandle Cso = kMGPipeNullHandle;
+            // THE PIN. Non-zero means some record that is still standing names this handle, so
+            // the LRU may not take it (ID-17).
+            Uint32 RefCount = 0;
             // THE CANONICAL BYTES, not the caller's. This is the memcmp's other operand and it
             // has to have the same deterministic padding the probe's copy has.
             SamplerParameters Params{};
         };
 
+        MGPipeHandle AcquireCanonical(Uint64 hash, const SamplerParameters& canon, Uint64& payloadBytes) {
+            ++m_counters.Acquisitions;
+            for (SizeT i = 0; i < m_entries.size(); ++i) {
+                if (m_entries[i].Hash != hash) continue;
+                if (std::memcmp(&m_entries[i].Params, &canon, sizeof(canon)) != 0) {
+                    // A 64-bit collision between two DIFFERENT sampler states. Reusing the
+                    // handle would filter one state with the other's parameters, so this entry
+                    // is not a match - and the probe KEEPS GOING rather than evicting and
+                    // giving up. Evicting here would be a second eviction path the reference
+                    // count would have to police for no gain (the colliding entry may be
+                    // pinned, and it may even be one the record being built right now names),
+                    // and stopping here would miss a LATER entry with the same hash whose bytes
+                    // really do match and mint a duplicate CSO for a value the cache holds.
+                    ++m_counters.Collisions;
+                    continue;
+                }
+                m_entries[i].LastUsed = ++m_clock;
+                ++m_entries[i].RefCount;
+                ++m_counters.Hits;
+                return m_entries[i].Cso;
+            }
+            return Mint(hash, canon, payloadBytes);
+        }
+
         MGPipeHandle Mint(Uint64 hash, const SamplerParameters& canon, Uint64& payloadBytes) {
             if (m_entries.size() >= kMGPipeSamplerCsoCacheCapacity) {
-                SizeT victim = 0;
-                for (SizeT i = 1; i < m_entries.size(); ++i) {
-                    if (m_entries[i].LastUsed < m_entries[victim].LastUsed) victim = i;
+                // THE LRU VICTIM IS CHOSEN AMONG UNREFERENCED ENTRIES ONLY. A referenced entry
+                // is named by a record that is still standing - a texture's BuiltinSampler, a
+                // bound sampler state - and nothing re-emits when a handle stops being valid,
+                // so evicting one is a silent corruption with no gate that can see it.
+                SizeT victim = m_entries.size();
+                for (SizeT i = 0; i < m_entries.size(); ++i) {
+                    if (m_entries[i].RefCount != 0) continue;
+                    if (victim == m_entries.size() || m_entries[i].LastUsed < m_entries[victim].LastUsed) {
+                        victim = i;
+                    }
                 }
-                Evict(victim);
+                if (victim < m_entries.size()) {
+                    Evict(victim);
+                } else {
+                    // EVERY ENTRY IS PINNED, so the cache grows past its capacity and says so.
+                    // A recorded number, not a gate (ID-17).
+                    ++m_counters.OverCapacityMints;
+                }
             }
 
             const MGPipeHandle cso = MGPipeSlots().Allocate(MGPipeKind::SamplerCso);
@@ -281,11 +404,19 @@ namespace MobileGL::MG_Pipe {
             entry.Hash = hash;
             entry.LastUsed = ++m_clock;
             entry.Cso = cso;
+            // THE MINT IS ITSELF AN ACQUIRE, so the caller owes one Release for it exactly as
+            // it would for a hit. Anything else would make the first acquirer of a value the
+            // one caller whose handle the LRU could take.
+            entry.RefCount = 1;
             std::memcpy(static_cast<void*>(&entry.Params), &canon, sizeof(canon));
             // The applier is handed the CACHE's copy, so the pointer stays valid for the whole
             // call and the bytes it stores are provably the bytes the memcmp will confirm
             // against later.
             MGPipeApplyCreateSamplerState(desc, &m_entries.back().Params);
+            // THE CREATE ACTUALLY WENT OUT, so the publication latch is taken here and nowhere
+            // else (contract-v2 §3.1). It is what the six death helpers read, and without it a
+            // delete_sampler_state can never go out for this kind.
+            MGPipeNoteHandlePublished(MGPipeKind::SamplerCso, cso);
 
             ++m_counters.Mints;
             payloadBytes += sizeof(MGPSamplerDesc) + sizeof(SamplerParameters);
@@ -296,7 +427,13 @@ namespace MobileGL::MG_Pipe {
             return cso;
         }
 
+        // ONLY EVER CALLED WITH AN UNREFERENCED ENTRY - see Mint's victim choice. That is the
+        // whole of ID-17's ruling: a handle a standing record names cannot be taken, because
+        // the applier does not resolve MGPTextureParams::BuiltinSampler and an eviction is not
+        // a parameter change, so nothing would refuse and nothing would re-emit.
         void Evict(SizeT index) {
+            MOBILEGL_ASSERT(m_entries[index].RefCount == 0,
+                            "a referenced sampler CSO was evicted; the LRU must skip pinned entries");
             MGPHandleOnly handle{};
             handle.Handle = m_entries[index].Cso;
             handle.Kind = static_cast<Uint32>(MGPipeKind::SamplerCso);
@@ -306,7 +443,19 @@ namespace MobileGL::MG_Pipe {
             // here - a content-addressed CSO has no frontend object whose death is being
             // announced, which is precisely why this eviction is the only death path it has.
             MGPipeApplyDeleteSamplerState(handle);
+            // AND THE LATCH GOES WITH THE DELETE. This is the "an emitter that drops a record
+            // for its own reasons calls MGPipeNoteHandleUnpublished" half of the publication
+            // protocol (contract-v2 §3.1): the record is gone, so a death helper reaching this
+            // slot after it is recycled must not emit a second delete for it.
+            MGPipeNoteHandleUnpublished(MGPipeKind::SamplerCso, m_entries[index].Cso);
             MGPipeSlots().Free(MGPipeKind::SamplerCso, m_entries[index].Cso);
+            // A COPY-ASSIGNMENT, which does NOT carry padding - the same trap Mint's memcpy
+            // exists for, one level along. It is safe here only because every entry's padding
+            // was already made deterministically zero by that memcpy, so the assignment's
+            // memberwise copy of Params has nothing indeterminate to propagate and Vector's own
+            // growth memmoves a trivially copyable type. An Entry built any other way would
+            // break the cache's "the bytes stored are the bytes compared" invariant here rather
+            // than at the mint, which is much harder to see.
             m_entries[index] = m_entries.back();
             m_entries.pop_back();
             ++m_counters.Evictions;
@@ -599,6 +748,13 @@ namespace MobileGL::MG_Pipe {
         // suppressor slot: GetTextureBindGeneration() bumps on a redundant re-bind - 26.2
         // rebinds the same sampler at every texture-unit switch - so without it this would be
         // a several-hundred-byte variable-length record per batch.
+        // A BOUND SAMPLER STATE HOLDS A REFERENCE ON ITS CSO FOR AS LONG AS IT IS BOUND
+        // (ID-17). The set the applier holds is "the last set as received" and outlives the
+        // pass that sent it, so a handle in it must not become the LRU's victim; the reference
+        // is what makes that true. The reconciliation below is one pass over the unit array:
+        // Acquire has already taken a reference for every unit in the new set, so a unit whose
+        // handle did not move gives that duplicate back, a unit whose handle moved gives back
+        // the one it used to hold, and a unit that fell outside the window gives back its own.
         Uint64 EmitSamplerStates(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
@@ -606,11 +762,23 @@ namespace MobileGL::MG_Pipe {
                                : Min(static_cast<Uint32>(maxTouched) + 1u, kMGPipeMaxTextureUnits);
 
             Uint64 bytes = 0;
+            MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
             for (Uint32 unit = 0; unit < count; ++unit) {
                 const auto& sampler = ctx.GetTextureUnitObject(static_cast<Int>(unit)).GetSamplerObject();
-                m_states[unit] = sampler ? MGPipeSamplerCsoCacheInstance().Acquire(
-                                               sampler->GetAllSamplerParameters(), bytes)
-                                         : kMGPipeNullHandle;
+                m_states[unit] =
+                    sampler ? cache.Acquire(sampler->GetAllSamplerParameters(), bytes) : kMGPipeNullHandle;
+            }
+            for (Uint32 unit = 0; unit < kMGPipeMaxTextureUnits; ++unit) {
+                const MGPipeHandle held = m_stateRefs[unit];
+                const MGPipeHandle now = unit < count ? m_states[unit] : kMGPipeNullHandle;
+                if (held == now) {
+                    // The same CSO as last time: give back the duplicate reference this pass's
+                    // Acquire took and keep the one that was already held.
+                    if (unit < count) cache.Release(now);
+                    continue;
+                }
+                cache.Release(held);
+                m_stateRefs[unit] = now;
             }
 
             const Uint64 hash = MGPipeSamplerStateSetContentHash(m_states.data(), 0, count);
@@ -679,6 +847,12 @@ namespace MobileGL::MG_Pipe {
             m_lastView.Samples = static_cast<Uint16>(texture.GetSamples() < 0 ? 0 : texture.GetSamples());
             m_lastView.FixedSampleLocations = texture.HasFixedSampleLocations() ? 1 : 0;
             MGPipeApplyCreateSamplerView(m_lastView);
+            // THE CREATE WENT OUT, so the publication latch is taken (contract-v2 §3.1). The
+            // texture's death helper reads it, and without it delete_sampler_view can never go
+            // out - the C-1 leak, one kind later. Re-taking it on a re-issue is right and
+            // cheap: the latch is keyed {kind, slot, gen} and the re-issue is on the same
+            // handle, so this writes the answer it already held.
+            MGPipeNoteHandlePublished(MGPipeKind::SamplerViewCso, handle);
             ++m_viewCreates;
             payloadBytes += sizeof(MGPSamplerView);
 
@@ -690,11 +864,56 @@ namespace MobileGL::MG_Pipe {
             return handle;
         }
 
-        // C-1's question for this kind, and the answer the texture's death helper needs:
-        // MGPipeEmitSamplerViewCsoDestroyAndFree must not emit delete_sampler_view for a slot
-        // a backend twin table minted through MGPipeSlots().Acquire while this client was
-        // never asked to publish anything - which is exactly what a push lane with the sampler
-        // bit clear runs, and what the applier's resolver counts as a refusal.
+        // ---- THE TWO CONTRACT ENTRY POINTS THIS FAMILY OWES (contract-v2 §3.4) ----
+        //
+        // PipeFill.cpp's birth hooks forward here through an `if constexpr` seam keyed on
+        // kMGPipeWiredSamplerSubsystem, so while that constant is non-zero these two must
+        // exist and be spelled exactly like this or the build fails in this file's own commit.
+        // The hook has already applied BOTH gates (the operator's mask and the wired constant);
+        // what belongs here is the family's HANDLE RULE and its publication, which the contract
+        // deliberately does not pick for us because the three families disagree about identity.
+        //
+        // MINTING A SAMPLER CSO AT CONSTRUCTION TIME CONTENT-ADDRESSES THE DEFAULT PARAMETERS,
+        // and that is correct rather than wasteful: the cache dedupes, so a thousand
+        // freshly-created SamplerObjects share ONE create_sampler_state, and the moment the
+        // application sets a parameter the next acquire content-addresses the new value and
+        // this object simply stops naming the default entry. It is one create_sampler_state per
+        // distinct default-valued sampler, not one per object.
+        //
+        // THE REFERENCE THIS TAKES IS DROPPED IMMEDIATELY. A birth is not a standing record: no
+        // MGPTextureParams and no bind_sampler_states names this handle yet, so pinning the
+        // entry here would keep the default-parameter value un-evictable for the life of the
+        // process for no reader's benefit. Whoever later names the handle in a record takes its
+        // own reference through its own Acquire.
+        void EmitSamplerCso(SamplerObject& sampler) {
+            Uint64 bytes = 0;
+            MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
+            cache.Release(cache.Acquire(sampler.GetAllSamplerParameters(), bytes));
+        }
+
+        // The birth half of D-F2's one-view-per-texture rule, and it is a thin wrapper on
+        // purpose: AcquireSamplerView below is the whole handle rule - the identity-addressed
+        // mint off the texture's lifetime id, the version-first skip and the publication - and
+        // a second copy of any of it here would be a second authority. The texture handle is
+        // resolved exactly as EmitSamplerViews resolves it, and the byte count is discarded
+        // because a birth is not a validate-point emission and has no payload budget to report.
+        void EmitSamplerView(ITextureObject& texture) {
+            Uint64 bytes = 0;
+            const MGPipeHandle textureHandle =
+                MGPipeSlots().Acquire(MGPipeKind::Texture, texture.GetLifetimeId());
+            AcquireSamplerView(texture, textureHandle, bytes);
+        }
+
+        // The emitter's OWN record memo for a sampler view - "have I already published a
+        // create_sampler_view at this slot, for this generation".
+        //
+        // IT IS NOT WHAT THE DEATH PATH ASKS, and that changed at c0b (contract-v2 §3.1/D17):
+        // MGPipeEmitSamplerViewCsoDestroyAndFree reads A's publication latch
+        // (MGPipeHandleIsPublished), which is one answer per {kind, slot, gen} that every
+        // emitter writes and all six death helpers read - P4a has six kinds behind four
+        // emitters and one kind with no frontend object at all, so a per-emitter predicate has
+        // no well-defined owner. This stays because the VERSION-FIRST SKIP needs it: it is the
+        // same latch AcquireSamplerView consults before it hashes or copies anything.
         Bool RecordIsPublished(MGPipeHandle handle) const {
             if (MGPipeHandleIsNull(handle)) return false;
             const SizeT slot = handle.Slot;
@@ -703,6 +922,12 @@ namespace MobileGL::MG_Pipe {
             return latch.RecordLive && latch.RecordGen == handle.Gen;
         }
 
+        // The memo's other half, for a caller that knows the applier has dropped this record.
+        // NO PRODUCTION CALLER TODAY, and that is stated rather than implied: the death path
+        // goes through the contract's latch, not through here. It is kept because the memo
+        // above needs a way to be told, and because leaving the latch standing SELF-HEALS
+        // anyway - the slot's Gen moves on reuse, so the `RecordGen == handle.Gen` test in
+        // RecordIsPublished and in AcquireSamplerView already refuses a stale entry.
         void NoteRecordDestroyed(MGPipeHandle handle) {
             if (MGPipeHandleIsNull(handle)) return;
             const SizeT slot = handle.Slot;
@@ -718,7 +943,20 @@ namespace MobileGL::MG_Pipe {
         // and it deliberately does NOT drop the object records. The sampler CSOs and the
         // sampler views are object records, so re-publishing them here would move their Serial
         // for nothing, and no P4a emitter may have a re-publication path.
-        void Reset() { MGPipeProgramOpaqueUnitsShared().Invalidate(); }
+        //
+        // THE BOUND-SET REFERENCES DO GO, and that is not an exception to the rule above: they
+        // are pins on WORKING STATE, not object records. MGPipeApplierReset clears the three
+        // unit windows, so after this call no bind_sampler_states set names those CSOs any
+        // more and holding their references would pin cache entries no record is entitled to.
+        // The records themselves - the create_sampler_state the cache emitted - are untouched.
+        void Reset() {
+            MGPipeProgramOpaqueUnitsShared().Invalidate();
+            MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
+            for (MGPipeHandle& held : m_stateRefs) {
+                cache.Release(held);
+                held = kMGPipeNullHandle;
+            }
+        }
 
         void ResetCounters() { m_viewSets = m_stateSets = m_viewCreates = 0; }
 
@@ -751,6 +989,11 @@ namespace MobileGL::MG_Pipe {
 
         Array<MGPBoundView, kMGPipeMaxTextureUnits> m_views{};
         Array<MGPipeHandle, kMGPipeMaxTextureUnits> m_states{};
+        // THE REFERENCES bind_sampler_states IS HOLDING, one per unit (ID-17). Not the same
+        // array as m_states: that one is the record's tail and is rebuilt from live context
+        // state at every pass, while this one is the pin the applier's standing set is entitled
+        // to and it only moves when a unit's CSO really does.
+        Array<MGPipeHandle, kMGPipeMaxTextureUnits> m_stateRefs{};
         MGPSamplerViews m_lastViews{};
         MGPSamplerStates m_lastStates{};
         MGPSamplerView m_lastView{};

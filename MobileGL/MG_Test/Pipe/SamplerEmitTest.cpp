@@ -545,7 +545,10 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
     X(SamplerEmit, AnUnchangedTextureReIssuesNothing)                                               \
     X(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted)                                           \
     X(SamplerEmit, AnUnchangedSetEmitsNothing)                                                      \
-    X(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing)
+    X(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing)                                    \
+    X(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves)                                  \
+    X(SamplerEmit, AReferencedCsoIsNeverTheLruVictim)                                               \
+    X(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -721,20 +724,47 @@ namespace {
     }
 
     // The memcmp confirm exists because a bare 64-bit equality would alias two DIFFERENT
-    // sampler states onto one CSO - silent wrong filtering with no gate that can see it. Two
-    // states whose hashes happen to agree cannot be manufactured here, so the property is
-    // driven the other way: two states that differ in ONE field never share a handle, however
-    // small the difference is.
+    // sampler states onto one CSO - silent wrong filtering with no gate that can see it.
+    //
+    // A GENUINE XXH64 COLLISION CANNOT BE MANUFACTURED, so this case drives the branch through
+    // the cache's forced-hash test seam instead. Without it the case could not go red for its
+    // own name: two states that differ by one float ULP have different hashes, the confirm is
+    // never consulted, and the memcmp branch, the Collisions counter and the probe's
+    // continuation past a rejected entry were all completely uncovered.
     TEST(SamplerEmit, AHashCollisionDoesNotAliasTwoSamplerStates) {
         EmitterScope scope;
         Uint64 payload = 0;
-        SamplerParameters base = DistinctParameters();
-        const MGPipeHandle first = Cache().Acquire(base, payload);
-        base.maxLod = base.maxLod + 0.0009765625f; // one representable step, nothing else moves
-        const MGPipeHandle second = Cache().Acquire(base, payload);
-        EXPECT_NE(first, second);
-        EXPECT_EQ(Cache().GetCounters().Collisions, 0u)
-            << "a genuine collision would have been rejected by the memcmp, not accepted";
+        SamplerParameters first = DistinctParameters();
+        SamplerParameters second = DistinctParameters();
+        second.maxLod = second.maxLod + 0.0009765625f; // one representable step, nothing else moves
+        ASSERT_NE(std::memcmp(&first, &second, sizeof(SamplerParameters)), 0);
+
+        // ONE hash for two different values, which is exactly what a collision is.
+        constexpr Uint64 kForcedHash = 0x0123456789ABCDEFull;
+        const MGPipeHandle a = Cache().AcquireWithForcedHashForTest(first, kForcedHash, payload);
+        const MGPipeHandle b = Cache().AcquireWithForcedHashForTest(second, kForcedHash, payload);
+        EXPECT_NE(a, b) << "reusing the handle would filter one state with the other's parameters";
+        EXPECT_EQ(Cache().GetCounters().Collisions, 1u) << "and the rejection is counted, not silent";
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+        EXPECT_EQ(Cache().Size(), 2u);
+
+        // AND THE PROBE KEEPS GOING PAST THE REJECTED ENTRY rather than stopping at the first
+        // hash match: the first value is still resident behind the colliding one, so asking for
+        // it again is a HIT and not a third mint. Stopping at the first match would mint a
+        // duplicate CSO for a value the cache already holds.
+        const MGPipeHandle again = Cache().AcquireWithForcedHashForTest(first, kForcedHash, payload);
+        EXPECT_EQ(again, a);
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+        EXPECT_EQ(Cache().GetCounters().Hits, 1u);
+
+        // The ordinary path, for completeness: two states that differ in ONE field never share
+        // a handle and never reach the confirm at all.
+        Cache().ResetForTest();
+        Cache().ResetCounters();
+        const MGPipeHandle plainFirst = Cache().Acquire(first, payload);
+        const MGPipeHandle plainSecond = Cache().Acquire(second, payload);
+        EXPECT_NE(plainFirst, plainSecond);
+        EXPECT_EQ(Cache().GetCounters().Collisions, 0u);
     }
 
     // ============================ D-F2: the sampler view ============================
@@ -867,6 +897,9 @@ namespace {
     }
 
     TEST(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing) {
+        // THE SCOPE IS LOAD-BEARING and not decoration: without it this case's counter
+        // assertions would be reading whatever the previous case's destructor happened to
+        // leave, which is a suite-order dependence of exactly the class the padding bug was.
         EmitterScope scope;
         const SharedPtr<MG_State::GLState::SamplerObject>& sampler = Ctx().CreateSamplerObject(4131);
         ASSERT_TRUE(sampler);
@@ -887,6 +920,111 @@ namespace {
         Emitter().EmitSamplerStates(Ctx());
         EXPECT_EQ(Emitter().StateSetCount(), 1u);
         EXPECT_EQ(Cache().GetCounters().Mints, 1u) << "and it mints no second CSO either";
+
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(SharedPtr<SamplerObject>());
+    }
+
+    // ==================== ID-17: the reference count on a cache entry ====================
+
+    // A BOUND SAMPLER STATE HOLDS A REFERENCE WHILE IT IS BOUND. The set the applier holds is
+    // "the last set as received" and outlives the pass that sent it, so a handle in it must not
+    // become the LRU's victim - nothing re-emits bind_sampler_states when a CSO is evicted,
+    // because an eviction is not a state change and no dirty bit fires for it.
+    //
+    // AND THE REFERENCE DOES NOT ACCUMULATE. Every Acquire takes one, and this emitter runs
+    // once per firing of the sampler bit - which 26.2 makes happen at every texture-unit
+    // switch - so an emitter that took a reference per pass and never gave one back would pin
+    // every CSO it ever bound for the life of the process.
+    TEST(SamplerEmit, ABoundSamplerStateHoldsItsCsoUntilTheUnitMoves) {
+        EmitterScope scope;
+        const SharedPtr<SamplerObject>& sampler = Ctx().CreateSamplerObject(4137);
+        ASSERT_TRUE(sampler);
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(sampler);
+        Ctx().NoteTextureUnitTouched(2);
+
+        ASSERT_GT(Emitter().EmitSamplerStates(Ctx()), 0u);
+        const MGPipeHandle bound = Emitter().LastSamplerStateHandles()[2];
+        ASSERT_FALSE(MGPipeHandleIsNull(bound));
+        EXPECT_EQ(Cache().RefCountOf(bound), 1u) << "the applier's standing set names this handle";
+
+        Ctx().BumpTextureBindGeneration();
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_EQ(Cache().RefCountOf(bound), 1u) << "one binding is one reference, not one per pass";
+
+        // The unit stops naming it, and the reference goes with the binding rather than with
+        // the entry: the value is still worth caching, it is merely evictable again.
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(SharedPtr<SamplerObject>());
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[2]));
+        EXPECT_EQ(Cache().RefCountOf(bound), 0u);
+        EXPECT_TRUE(Cache().RecordIsPublished(bound)) << "released is not evicted";
+    }
+
+    // THE FINDING ID-17 RULES ON. MGPTextureParams::BuiltinSampler names a sampler CSO out of
+    // this cache, the applier deliberately does NOT resolve that handle (an unresolvable one is
+    // an ordering fact, not a corrupt one), and set_texture_params is re-emitted only when a
+    // texture's parameters move - so an LRU eviction of a built-in sampler's entry would leave
+    // a published record naming a handle whose slot has been re-handed out to a different
+    // value, with nothing that refuses, counts, logs or re-emits. The capacity argument closes
+    // only the intra-pass case; the reference count is what closes this one.
+    TEST(SamplerEmit, AReferencedCsoIsNeverTheLruVictim) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters pinnedParams = DistinctParameters();
+        const MGPipeHandle pinned = Cache().Acquire(pinnedParams, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(pinned));
+        ASSERT_EQ(Cache().RefCountOf(pinned), 1u);
+
+        // A CTS sampler sweep, in miniature: twice the cache's capacity in distinct values,
+        // none of which anything keeps naming. The LRU has to run, hard.
+        SamplerParameters filler = DistinctParameters();
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity * 2; ++i) {
+            filler.minLod = static_cast<float>(i) + 0.5f;
+            Cache().Release(Cache().Acquire(filler, payload));
+        }
+        ASSERT_GT(Cache().GetCounters().Evictions, 0u) << "the LRU really has to have run";
+        EXPECT_EQ(Cache().GetCounters().OverCapacityMints, 0u)
+            << "there were unreferenced entries to take, so nothing had to grow";
+
+        EXPECT_TRUE(Cache().RecordIsPublished(pinned))
+            << "a handle a standing record names is not the LRU's to take";
+        Uint64 second = 0;
+        EXPECT_EQ(Cache().Acquire(pinnedParams, second), pinned);
+        EXPECT_EQ(second, 0u) << "and it was a hit, not a re-mint under the same value";
+
+        Cache().Release(pinned);
+        Cache().Release(pinned);
+    }
+
+    // AND WHEN EVERY ENTRY IS PINNED THE CACHE GROWS AND SAYS SO. Growing is the safe
+    // direction - a slot too many costs memory, a handle pulled out from under a live record
+    // costs correctness - and OverCapacityMints is a RECORDED NUMBER rather than a gate, so a
+    // workload that pins more than the capacity is visible instead of being wrong.
+    TEST(SamplerEmit, AFullyPinnedCacheMintsBeyondItsCapacityAndCountsIt) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters params = DistinctParameters();
+        Vector<MGPipeHandle> held;
+        for (SizeT i = 0; i < kMGPipeSamplerCsoCacheCapacity; ++i) {
+            params.minLod = static_cast<float>(i) + 0.5f;
+            held.push_back(Cache().Acquire(params, payload));
+        }
+        ASSERT_EQ(Cache().Size(), kMGPipeSamplerCsoCacheCapacity);
+        ASSERT_EQ(Cache().GetCounters().Evictions, 0u);
+        ASSERT_EQ(Cache().GetCounters().OverCapacityMints, 0u);
+
+        params.minLod = -12.5f; // one more distinct value, with nothing evictable
+        const MGPipeHandle extra = Cache().Acquire(params, payload);
+        EXPECT_FALSE(MGPipeHandleIsNull(extra));
+        EXPECT_EQ(Cache().Size(), kMGPipeSamplerCsoCacheCapacity + 1);
+        EXPECT_EQ(Cache().GetCounters().Evictions, 0u) << "no pinned entry may be taken";
+        EXPECT_EQ(Cache().GetCounters().OverCapacityMints, 1u) << "and the growth is counted";
+
+        for (const MGPipeHandle& handle : held) {
+            EXPECT_TRUE(Cache().RecordIsPublished(handle));
+            Cache().Release(handle);
+        }
+        Cache().Release(extra);
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH
