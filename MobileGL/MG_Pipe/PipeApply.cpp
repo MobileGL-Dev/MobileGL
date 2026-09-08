@@ -1615,6 +1615,15 @@ namespace MobileGL::MG_Pipe {
         ApplyBufferWrite("buffer_subdata_resident", record, bytes, /*resident=*/true);
     }
 
+    // THE FOUR BUFFER-ONLY CALLS, AND WHAT POLICES THAT. resource_flush_range,
+    // resource_readback and map_persistent resolve through ResolveResource - i.e. against
+    // g_applier.Resources and never the texture or renderbuffer table - which is right, because
+    // a mapped range, a readback and a persistent donation exist for buffers only. They are
+    // buffer-only BY CATALOGUE and not by check: MGPFlushRange and MGPReadback carry no kind
+    // at all, and map_persistent's MGPHandleOnly is not asked for one, so there is nothing here
+    // to compare and a mistyped record can only be caught where a discriminator exists.
+    // unmap_persistent is that place, and it Fatals - see there. If a later phase gives any of
+    // these three a kind, the gate belongs beside that field on the same terms.
     void MGPipeApplyResourceFlushRange(const MGPFlushRange& record, const void* bytes) {
         MGPipeResourceRecord* stored = ResolveResource("resource_flush_range", record.Res);
         if (stored == nullptr) return;
@@ -1751,8 +1760,21 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "unmap_persistent on kind %u",
-                        handle.Kind);
+        // THE SAME VERDICT resource_destroy GIVES, AND FOR THE SAME REASON. This is the only
+        // one of the four buffer-only calls that carries a discriminator at all, and an
+        // assertion is not a check: MOBILEGL_ASSERT compiles out at INFO, which is what all
+        // three gate builds and every shipped build are, so a mistyped record used to walk
+        // straight into ResolveResource and alias whatever BUFFER holds that slot - the three
+        // slot spaces being independent - which is exactly the failure resource_destroy's
+        // ResourceTableForKind Fatal exists to stop. Acting on another kind's storage is the
+        // corrupt-record verdict, not the dropped-call one, so it moves no refusal counter.
+        if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " unmap_persistent {slot=%u, gen=%u}: the persistent donation is the "
+                                 "buffer family's and the handle names another kind (%u)",
+                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            return;
+        }
         MGPipeResourceRecord* record = ResolveResource("unmap_persistent", handle.Handle);
         if (record == nullptr) return;
 
