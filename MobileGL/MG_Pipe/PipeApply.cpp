@@ -862,6 +862,53 @@ namespace MobileGL::MG_Pipe {
             // record was accumulated, so the texels are the server's now.
             ++stored->Serial;
         }
+
+        // ----------------------------------------------------------------------------
+        // P4a: the three kVarTail unit sets share one body.
+        //
+        // They differ in exactly one thing - what an entry IS - and in nothing else: the same
+        // window rule, the same bound, the same "the entries outside the window are not
+        // cleared", the same serial discipline. set_vertex_buffers wrote this arithmetic once
+        // already; a second, third and fourth copy of it would be three more places to get the
+        // Start + Count overflow wrong.
+        //
+        // THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED. The record is "the
+        // last set as received": a set that names four units has said nothing about the other
+        // 188, and clearing them would unbind textures the client never mentioned.
+        //
+        // THE ENTRY'S OWN Unit FIELD IS NOT POLICED, deliberately and for MGPVertexBuffer::
+        // BindingIndex's reason: the DESTINATION is Start + i, which is the window this
+        // function has already bounded, and the field beside it is the client's own label for
+        // the entry. Policing it would hand the emitter a contract this applier cannot justify
+        // - the two agree by construction or the emitter is broken in a way a unit test on the
+        // emitter's side is the right place to catch.
+        template <class Entry, class ArrayT>
+        Bool ApplyUnitWindow(const char* call, Uint32 start, Uint32 count, Uint64 contentHash,
+                             const Entry* tail, ArrayT& destination, Uint32& destinationStart,
+                             Uint32& destinationCount) {
+            const Uint64 capacity = destination.size();
+            const Uint64 end = Uint64{start} + Uint64{count};
+            const char* fault = nullptr;
+            if (end > capacity) {
+                fault = "the window runs past the merged texture-unit space";
+            } else if (count != 0 && tail == nullptr) {
+                fault = "a non-empty set carries no entries";
+            }
+            if (fault != nullptr) {
+                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                     " %s {start=%u, count=%u, hash=%llu}: %s (the applier holds %llu "
+                                     "entries)",
+                                     call, start, count, static_cast<unsigned long long>(contentHash),
+                                     fault, static_cast<unsigned long long>(capacity));
+                return false;
+            }
+            for (Uint32 i = 0; i < count; ++i) {
+                destination[start + i] = tail[i];
+            }
+            destinationStart = start;
+            destinationCount = count;
+            return true;
+        }
     } // namespace
 
     MGPipeApplierState& MGPipeApplier() { return g_applier; }
@@ -1828,16 +1875,144 @@ namespace MobileGL::MG_Pipe {
         ++g_applier.FramebufferSerial;
     }
 
+    // ================================================================================
+    // w2: sampler CSOs, sampler views and the three unit sets
+    // ================================================================================
+
     void MGPipeApplyCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters) {
-        (void)desc;
-        (void)parameters;
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
+                        "create_sampler_state named the reserved slot 0");
+        if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
+
+        // THE ONE BLOB RULE, on the family's own blob: a non-zero Parameters.Size must be
+        // exactly one SamplerParameters, and a zero means "this record does not declare its
+        // blob" - which is what a monolith emission is, because the value rides beside the
+        // record through the companion pointer. Either way the bytes read are bounded by the
+        // TYPE and not by the declared length, so the length is a cross-check and never the
+        // safety property.
+        const char* fault = nullptr;
+        if (desc.Parameters.Size != 0 && desc.Parameters.Size != sizeof(SamplerParameters)) {
+            fault = "the declared blob length is not one SamplerParameters";
+        } else if (parameters == nullptr) {
+            fault = "the record declares no parameters and carries none";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_sampler_state {slot=%u, gen=%u}: %s (one SamplerParameters is "
+                                 "%llu bytes, the blob declares %llu)",
+                                 desc.Cso.Slot, desc.Cso.Gen, fault,
+                                 static_cast<unsigned long long>(sizeof(SamplerParameters)),
+                                 static_cast<unsigned long long>(desc.Parameters.Size));
+            return;
+        }
+
+        MGPipeSamplerCsoRecord* recordAt =
+            RecordAt(g_applier.SamplerCsos, desc.Cso.Slot, kMGPipeMaxSamplerCsoSlots);
+        if (recordAt == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_sampler_state {slot=%u, gen=%u}: the slot is outside the record "
+                                 "table's bound (%u)",
+                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxSamplerCsoSlots);
+            return;
+        }
+        MGPipeSamplerCsoRecord& record = *recordAt;
+        // A CREATE STARTS THE RECORD OVER AND LEAVES Serial AT 0; A RE-ISSUE ON A LIVE IDENTITY
+        // COUNTS UP. The first half is what stops a recycled slot contributing one field of its
+        // predecessor, and it is why a fresh backend twin starting its own synced serial at 0
+        // agrees with a fresh record without either side publishing anything. The second is how
+        // a value change travels on a handle whose Gen moves only on slot reuse - and it is a
+        // mutation, so it moves the serial.
+        if (!record.Live || record.Gen != desc.Cso.Gen) {
+            record = MGPipeSamplerCsoRecord{};
+            record.Gen = desc.Cso.Gen;
+        } else {
+            ++record.Serial;
+        }
+        record.Live = true;
+        // BY VALUE, INCLUDING borderColorForm. All three border representations are always
+        // numerically populated, so the value alone cannot say which driver entry point to use,
+        // and the backend's redundancy filter compares all four. The three trailing padding
+        // bytes are why MOBILEGL_PIPE_VERIFY compares this FIELD BY FIELD through
+        // PipeFields.def's MGP_FIELDS_SamplerParameters rather than as bytes.
+        record.Params = *parameters;
     }
 
-    void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerCso),
+                        "delete_sampler_state on kind %u", handle.Kind);
+        MGPipeSamplerCsoRecord* record =
+            ResolveObject(g_applier.SamplerCsos, "delete_sampler_state", handle.Handle);
+        if (record == nullptr) return;
 
-    void MGPipeApplyCreateSamplerView(const MGPSamplerView& view) { (void)view; }
+        // Dropped whole, generation kept, for resource_destroy's reason: the client allocator
+        // owns the Gen bump and takes it on the next handout of the slot, so a server-side bump
+        // here would put the two identities out of step.
+        //
+        // AND THE UNIT SET IS NOT SWEPT. bind_sampler_states is "the last set as received" and
+        // the client re-emits the whole window from its own resolved set at the next verb, so
+        // walking 192 entries here to blank a handle the next set is about to overwrite would
+        // buy nothing and would break the one rule the window has.
+        const Uint32 gen = record->Gen;
+        *record = MGPipeSamplerCsoRecord{};
+        record->Gen = gen;
+    }
 
-    void MGPipeApplyDeleteSamplerView(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyCreateSamplerView(const MGPSamplerView& view) {
+        MOBILEGL_ASSERT(view.Cso.Slot >= kMGPipeFirstAllocatableSlot,
+                        "create_sampler_view named the reserved slot 0");
+        if (view.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
+
+        MGPipeSamplerViewRecord* recordAt =
+            RecordAt(g_applier.SamplerViewCsos, view.Cso.Slot, kMGPipeMaxSamplerViewSlots);
+        if (recordAt == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_sampler_view {slot=%u, gen=%u}: the slot is outside the record "
+                                 "table's bound (%u)",
+                                 view.Cso.Slot, view.Cso.Gen, kMGPipeMaxSamplerViewSlots);
+            return;
+        }
+        MGPipeSamplerViewRecord& record = *recordAt;
+        // RE-ISSUING ON THE SAME HANDLE IS HOW A RESTRICTION CHANGE TRAVELS - a view is
+        // identity-addressed one per texture object, minted off that object's lifetime id, and
+        // Gen moves only on slot reuse - so it bumps the serial and starts nothing over. AND IT
+        // DOES NOT REBIND: a re-issue on a view some unit is holding changes what that unit
+        // sees, which the serial already says; it must not make some other unit see it.
+        if (!record.Live || record.Gen != view.Cso.Gen) {
+            record = MGPipeSamplerViewRecord{};
+            record.Gen = view.Cso.Gen;
+        } else {
+            ++record.Serial;
+        }
+        record.Live = true;
+        record.View = view;
+
+        // THE TEXTURE'S OWN ViewCso IS WRITTEN HERE, and it is a SILENT lookup rather than a
+        // resolved one: the texture-resource bit and the sampler bit are independent, so a view
+        // arriving before - or without - the texture record is an ordering fact and not a
+        // refusal. When the record is there this is the back-pointer that lets a sync reach a
+        // texture's view without walking every view the applier holds.
+        MGPipeResourceRecord* texture = FindIn(g_applier.TextureResources, view.Texture);
+        if (texture != nullptr) texture->ViewCso = view.Cso;
+    }
+
+    void MGPipeApplyDeleteSamplerView(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerViewCso),
+                        "delete_sampler_view on kind %u", handle.Kind);
+        MGPipeSamplerViewRecord* record =
+            ResolveObject(g_applier.SamplerViewCsos, "delete_sampler_view", handle.Handle);
+        if (record == nullptr) return;
+
+        // The back-pointer goes first, while the record that names the texture still exists,
+        // and only if that texture still names THIS view - a texture whose view has already
+        // been re-minted must not have the new handle cleared out from under it.
+        MGPipeResourceRecord* texture = FindIn(g_applier.TextureResources, record->View.Texture);
+        if (texture != nullptr && texture->ViewCso == handle.Handle) {
+            texture->ViewCso = kMGPipeNullHandle;
+        }
+        const Uint32 gen = record->Gen;
+        *record = MGPipeSamplerViewRecord{};
+        record->Gen = gen;
+    }
 
     void MGPipeApplySetTextureParams(const MGPTextureParams& params) {
         // ADDRESSED BY RESOURCE AND BY NOTHING ELSE, which is the whole point of the call: a
@@ -1877,19 +2052,46 @@ namespace MobileGL::MG_Pipe {
         ++record->ParamsSerial;
     }
 
+    // The three of them, and NO STAGE DIMENSION on any of them: MobileGL's texture-unit space
+    // is one merged array of 192, the same unit may be sampled from two stages, and stage is
+    // derived server-side from the reflection archive only where the target API needs it.
+    //
+    // A NULL HANDLE IN A TAIL ENTRY IS LEGAL EVERYWHERE HERE and is not a refusal: a unit the
+    // program does not resolve carries a null view, a unit with no sampler object carries a
+    // null sampler CSO (the texture's built-in sampler applies then, exactly as today), and a
+    // unit with no texture carries a null resource. None of the three is resolved against a
+    // record either - a set is WORKING STATE, the records it names are OBJECT state, and the
+    // backend resolves the pair at its own sync point where both are current.
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
-        (void)hdr;
-        (void)tail;
+        if (!ApplyUnitWindow("set_sampler_views", hdr.Start, hdr.Count, hdr.ContentHash, tail,
+                             g_applier.BoundSamplerViews, g_applier.SamplerViewStart,
+                             g_applier.SamplerViewCount)) {
+            return;
+        }
+        ++g_applier.SamplerViewsSerial;
     }
 
     void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail) {
-        (void)hdr;
-        (void)tail;
+        if (!ApplyUnitWindow("bind_sampler_states", hdr.Start, hdr.Count, hdr.ContentHash, tail,
+                             g_applier.BoundSamplerStates, g_applier.SamplerStateStart,
+                             g_applier.SamplerStateCount)) {
+            return;
+        }
+        ++g_applier.SamplerStatesSerial;
     }
 
     void MGPipeApplySetShaderImages(const MGPShaderImages& hdr, const MGPImageView* tail) {
-        (void)hdr;
-        (void)tail;
+        // The image set carries InternalFormat and Access per entry and BOTH are live
+        // glBindImageTexture state the format-less image bake keys on, so they are stored as
+        // sent and recast on the server - the record carries the application's format, and the
+        // bind-format recast that turns a GL_RG32F bind into something 19 of 26 non-core
+        // formats on Adreno will accept is the backend's, not this applier's.
+        if (!ApplyUnitWindow("set_shader_images", hdr.Start, hdr.Count, hdr.ContentHash, tail,
+                             g_applier.BoundShaderImages, g_applier.ShaderImageStart,
+                             g_applier.ShaderImageCount)) {
+            return;
+        }
+        ++g_applier.ShaderImagesSerial;
     }
 
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
