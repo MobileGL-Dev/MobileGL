@@ -140,7 +140,7 @@ Flags：`kNeedsAck`（调用方等 server 确认；目录里目前无条目携�
 | `MGPClear` | 48 | Whole / Color / Depth / Stencil / DepthStencil 判别式 |
 | `MGPGlobalConstants` | 40 | `(ShaderCso, Version)` 键控，每 program 每帧至多一次 |
 | `MGPSubDataComplete` | 24 | 纹理拉取的正向终止符，可携带零个 region |
-| `ResidualValueBlock` | **1248** | 迁移期 Track V 载体，§9.4 |
+| `ResidualValueBlock` | **8**（P2 前 1248） | 迁移期 Track V 载体，§9.4 |
 
 每条 `kVarTail` 的 `set_*`（`SetVertexBuffers`、`SetSamplerViews`、`BindSamplerStates`、`SetShaderImages`、`SetShaderBuffers`、`SetStreamOutputTargets`）都带 `ContentHash`——与 `MGPFramebufferState` 同一模式，hash 未变就不发（§5.4）。
 
@@ -150,7 +150,7 @@ Flags：`kNeedsAck`（调用方等 server 确认；目录里目前无条目携�
 
 Blaze3D 每个 batch 用 `glEnable/glDisable(GL_BLEND)` 包住（Espryt 代码自己标它为最热路径），per-setter 推送会把每次冗余开关变成一次接口调用加一次 server 侧 CSO 查表，严格慢于今天。正确形态是 gallium `st_validate_state`。
 
-八个 validate 入口，由 `PipeCalls.def` 的 `kCtxVerb`/`kCtxObject` 条目生成：`ValidateForDraw`（20 个 draw 入口）、`ValidateForDispatch`、`ValidateForClear`、`ValidateForBlitOrCopy`、`ValidateForTextureOp`（GenerateMipmap / CopyTex* / BindImageTexture）、`ValidateForReadback`、`ValidateForXfbSpan`、`ValidateForQuery`。八个而不是四个，因为 `MG_Impl` 用到的 70 个表项里只有约 22 个是 draw/dispatch，其余 ~48 个（clear、blit、copy、回读、barrier、XFB 跨度、query/sync）很多自己就读 `pGLContext`。
+**九个** validate 类（P2 落地，`MGP_FILL_CLASS_LIST`，`MobileGL/MG_Pipe/FillPoints.def:146-147`）：`kDraw`（20 个 draw 入口）、`kDispatch`、`kClear`、`kBlitOrCopy`、`kTextureOp`（GenerateMipmap / CopyTex* / BindImageTexture）、`kReadback`、`kXfbSpan`、`kProgramOp`、`kQuery`。落地形态**不是**九个 `ValidateForX` 函数：`MGP_FILL(Verb)` 展开成唯一的 `MGPipeValidateForVerb(MGPipeVerb)`（`MobileGL/MG_Impl/Pipe/PipeFill.h:35`，宏在 `:84`），它已经恰好是每次经函数指针表调用之前的一条语句、位于每个提前返回之后（83 条语句覆盖 69 个 verb），verb 到类的映射由生成表回答。九个而不是四个，因为 `MG_Impl` 用到的 70 个表项里只有约 22 个是 draw/dispatch，其余 ~48 个（clear、blit、copy、回读、barrier、XFB 跨度、program op、query/sync）很多自己就读 `pGLContext`。
 
 **只有今天就在 GL 调用时刻分发的资源 op 在 GL 调用时刻推送**——即 `BufferBackendOps` 的七个 hook。纹理 subdata 不在此列（§6）。
 
@@ -169,7 +169,7 @@ Blaze3D 每个 batch 用 `glEnable/glDisable(GL_BLEND)` 包住（Espryt 代码�
 
 五个聚合世代全部落在既有 bump 点上（约 20 行），把对象类组的快门从"每 validate 走查 192 单元 / 84×4 绑定点 / 32 属性 / 40 attachment"降成一次 `Uint64` 比较；对象类不能靠轮询逐对象版本（没有聚合能回答"有没有哪张已绑定纹理动了"，这正是 Magma 不得不用有损 `sampledContentSum` 的原因）。
 
-完整性由 `scripts/gen_pipe_dirty_surface.py` 保证：枚举 `MG_Impl/GLImpl` 里每个 mutator → 必须 bump 的聚合世代，CI 重生成 + `git diff --exit-code`，未映射即失败（P1 起成为门）。**实测规模**：926 次 mutator 调用落在 73 个不同 mutator 上，其中 92 次（7 个 mutator，绝大多数 `RecordError`）位于同函数内也会到达后端的"即时发布点"，其余 834 次由紧随其后的 verb 发布——映射表是 73 条目的问题。
+完整性由 `scripts/gen_pipe_dirty_surface.py` 保证：枚举 `MG_Impl/GLImpl` 里每个 mutator → 必须 bump 的聚合世代，未映射、或映射行点名一个已不存在的 mutator 即失败（**P2 起成为门**：`pipe-gates` 跑 `--check` 与 `--self-test` 两半，`.github/workflows/test.yml:1601-1604`；`--self-test` 的 21 个阴性对照是让 `--check` 保持诚实的那一半，信息性的 `--summary` 步骤随之退役）。**实测规模**：926 次 mutator 调用落在 73 个不同 mutator 上，其中 92 次（7 个 mutator，绝大多数 `RecordError`）位于同函数内也会到达后端的"即时发布点"，其余 834 次由紧随其后的 verb 发布——映射表是 73 条目的问题。
 
 三个回绕 `Uint16` 在 tracker 边界加宽（`m_lastPushed[]` 是 tracker 自己的字段，不改 `MG_State`）；回绕在 tracker 本地无害（多一次重推，永不漏推），且被集合 hash 抑制器吞掉。
 
@@ -184,10 +184,10 @@ set_dynamic_state(MGPBlobRef dynamicChunks, Uint16 version)     // 只带动态�
 - 整块的理由：`RenderStateParameters` 是平凡可复制 POD，Espryt 自己 `static_assert` 并做 head/blend/tail 三段 memcmp，**字段顺序承重**（`ScissorBoxWrittenMask`、`ClipDistanceEnabledMask` 故意放在 tail 段）；拆成 blend/depth-stencil/rasterizer 三个 CSO 要手工维护 ~150 字段划分表且无绊线。
 - 子集身份的理由：整块内容寻址会让 `glViewport`/`glScissor`/`glBlendColor`/`glClearColor` 每次铸造新 CSO、冲掉 server 的 pipeline memo——`RenderState.h` 记录的那次回归。`RenderState.cpp` 里 viewport/scissor/line-width 族只 `++m_version`，`SET_CAPABILITY` 与 pipeline 相关 setter 才 `BumpVersions()`。
 - 动态子集：viewport、scissor、depth range、blend color、line width、polygon offset、stencil ref/write mask、clear 值、sample coverage、hints、point-size 族。
-- 划分只写在一处：`MG_Pipe/MGPipeRenderStateSpans.{h,cpp}`（P2）的 chunk 表 + `MGPipeComputePipelineSubsetHash()`，从 Magma 的 `ComputePipelineStateHash` 搬来，client 与两个后端共用；G7 的 `MG_Test` 遍历每个 `RenderState` public setter，断言 `pipelineSubsetHash 变 ⟺ m_pipelineStateVersion 变`。
+- 划分只写在一处，**P2 已落地**：`MG_Pipe/MGPipeRenderStateSpans.{h,cpp}` 的 chunk 表 + `MGPipeComputePipelineSubsetHash()`，从 Magma 的 `ComputePipelineStateHash` 搬来，client 与两个后端共用。表的形态是**头文件里的 16 个 `constexpr` 边界**（不是 15 个区间，因为两半完美交替：chunk 0 dynamic、chunk 1 pipeline……），每个边界都是一个 `offsetof` 或 `sizeof`；**7 个 pipeline chunk 共 396 B + 8 个 dynamic chunk 共 772 B = 1168**，总数、划分完整性与边界严格递增都是 `static_assert`（`MobileGL/MG_Pipe/MGPipeRenderStateSpans.h:190-191`）——一个缺口是编译错误，不是测试失败。G7 的 `MG_Test/Pipe/RenderStateSpansTest.cpp` 遍历每个 `RenderState` public setter，断言 `pipelineSubsetHash 变 ⟺ m_pipelineStateVersion 变`；把一个成员从 pipeline 半边挪到 dynamic 半边（划分仍完整，仍能编译）会让它点名那个 setter 变红（`scripts/g7_negative_control.sh`）。
 - server 侧：每 context 一份 working `RenderStateParameters`（1168 B），`bind` 与 `set_dynamic_state` 各把自己的 chunk 散射进去。**Espryt 的 `SyncRenderState`（693 行）拿到的仍是 `const RenderStateParameters&`，单 `Uint16` 早退、三段 memcmp 一行不动**；Magma 的 pipeline memo 键是 `cso.slot`，动态尾巴仍走 `ApplyDynamicDrawStateTail`。Espryt 的 head/blend/tail 划分（驱动侧增量）与 pipeline/dynamic 划分（线上与身份）是两回事，并存、各有绊线。
-- client 取值顺序：`m_pipelineStateVersion` 未变 → 复用上一个 CSO handle，零哈希；变了 → 对 pipeline 子集算 xxHash（~25-30 字，Magma 今天就在算）→ CSO map 探测 → 命中发 12 B bind，未命中发变化 chunk 的 create 再 bind；`m_version` 变而子集未变 → 只发 `set_dynamic_state`（~200 B）。
-- `FramebufferSrgb` 与 `DepthClamp` 今天**没有存储**（`glEnable` 被静默吞掉且不报错，六个后端读点恒为 false）；chunk 表冻结前要补真存储并把 `FramebufferSrgb` 划进 pipeline 半边（它改变 attachment/blend 的解释）——待拍板，见 `ROADMAP.md`。
+- client 取值顺序：`m_pipelineStateVersion` 未变 → 复用上一个 CSO handle，零哈希；变了 → 对 pipeline 子集算 xxHash（**396 B = 49.5 个 64-bit 字**，7 个 chunk 拼起来；Magma 今天就在算）→ CSO map 探测 → 命中发 12 B bind，未命中发变化 chunk 的 create 再 bind；`m_version` 变而子集未变 → 只发 `set_dynamic_state`（~200 B）。
+- **P2 已补真存储的三个 capability**：`FramebufferSrgb`、`DepthClamp` 与 `TextureCubeMapSeamless`——`RenderState::SetCapability` 的 `default:` 分支把这三个都静默吞掉（不存储也不报 `GL_INVALID_ENUM`，`FramebufferSrgb` 的六个后端读点恒为编译期 false，另两个零读点）。三个 `Bool` 落进 `ColorMasks` 与 `ClearColor` 之间那 3 字节的空洞（偏移 581/582/583，`MobileGL/MG_Pipe/MGPipeValueTypes.h:303-305`），所以 `sizeof(RenderStateParameters)` 仍是 1168 且**既有成员一个都没挪位**——Espryt 的 `kBlendSpanBegin`/`kBlendSpanEnd` 与整张手推偏移表因此仍然有效。三个都在 pipeline 半边（setter 都走 `BumpVersions()`）。
 
 ### 5.4 验证不变式、合并与抑制器
 
@@ -356,7 +356,7 @@ struct PipeInputs {
 
 ### 9.4 残余值块
 
-Track V 的 55% 不需要逐字段接口条目就能跑起来，所以 P2 发一个**显式临时**调用 `SetResidualValueState(MGPBlobRef)`，payload `ResidualValueBlock{RenderStateParameters, PixelStoreParameters, CapabilityBits, patch 三字段}`。三条纪律：退役是编译错误（`MGL_RESIDUAL_BLOCK_SIZE` 只降不升，`MobileGL/MG_Pipe/MGPipeTypes.h:535`，P13 变成 `static_assert(sizeof == 0)`）；布局逐成员 `offsetof` 断言且 split 下逐字段序列化（异质 POD 并集的 padding 差异 monolith verify 看不见）；只在 P2..P13 存在，`MOBILEGL_PIPE_STATS` 单独计一类字节（`ResidualValueBlock`，P0 已占位）。
+Track V 的 55% 不需要逐字段接口条目就能跑起来，所以 P2 发一个**显式临时**调用 `SetResidualValueState(MGPBlobRef)`，payload `ResidualValueBlock{RenderStateParameters, PixelStoreParameters, CapabilityBits, patch 三字段}`。三条纪律：退役是编译错误（`MGL_RESIDUAL_BLOCK_SIZE` 只降不升，`MobileGL/MG_Pipe/MGPipeTypes.h:546`，P13 变成 `static_assert(sizeof == 0)`）——P2 已把它从 **1248 棘轮到 8**：`create/bind_render_state` + `set_dynamic_state`、`set_pixel_pack_state`、`set_patch_state` 落地之后，块里只剩一个 `Uint64 CapabilityBits`；布局逐成员 `offsetof` 断言且 split 下逐字段序列化（异质 POD 并集的 padding 差异 monolith verify 看不见）；只在 P2..P13 存在，`MOBILEGL_PIPE_STATS` 单独计一类字节（`ResidualValueBlock`，P0 已占位）。
 
 ### 9.5 21 条身份 memo 的重键
 
@@ -501,7 +501,7 @@ server 没有第二份 `BufferObject`，所以不存在"staging → server 侧 s
 1. **接口纯度三道门**（只跑非 verify 构建）：**A 门 include 图**——disaggregated 配置编译 `MG_Backend` 时把 `MG_State/GLState` 从 include 搜索路径移除（`nm --undefined-only` 对"只 include 不调用"是瞎的，而 `RenderState.h → FramebufferObject.h → TextureObject.h` 正是这种耦合），依赖 P0.5；**B 门符号**——`nm --undefined-only libMobileGLServer.so | grep -E 'MG_State::GLState::|glslang'` 为空；**C 门未声明**——`grep -c 'pGLContext' MG_Backend/` == 0。外加 debug 断言"每个后端 memo 键都是 `{slot, gen}`，永不是裸前端指针"，由 `HandleRecycleScenario` 支撑（重键前必须在至少一个后端上是红的）。
 2. **语义影子比对 `MOBILEGL_PIPE_VERIFY=1`**——决定性的一条：两套状态模型活在同一地址空间，tracker 再用 `SnapshotFromGLContext()` 填一份 `PipeInputs`，G4 比对器逐字段、每 draw 比对，打印第一个分歧字段与 draw 序号。抓 tracker 忘推的字段、**dirty 位触发得太少**（危险方向）、两条路径变换不一致的值。第三种 CI 模式，40 个 trace + 全部集成测试，~5–10× 慢，永不出货。逐字段而非 `memcmp`（padding 会 false-DIFFER）。**保留模式**：消费即清的组（纹理 dirty rect）发射后无法重算，verify 时 tracker 保留清除前的集合并比对发射出去的 `(UnionBox, RegionCount, Regions[])`。**活过 P13**。
 3. **行为 A/B**：40 个 trace 在 `{monolith-pull, monolith-push, split}` 下 SSIM ≥ 0.99（默认阈值）；`ctest -L integration-gpu` 在 `DirectGLES.` 与 `DirectGLES.Pipe.`/`DirectGLES.Split.`（DirectVulkan 同）之间逐名相同；单元测试全绿；CTS 逐后端 conformance 在 0.5 pp 内（行 = GL 版本/扩展，列 = 状态计数，rate = Pass/(Pass+Fail)，NS 不进分母）。`TextureUploadShapeScenario` 把逐纹理逐帧的上传形状（box vs N region、作业数）录金标比对——+6 ms 悬崖由形状相等把关，SSIM 对它完全不敏感。逐名功能基线是"P1 出口的重构后 monolith"（P1 出口先用 verify 证明等价于 `81b17c0b`）；`81b17c0b` 只作性能锚点。
-4. **monolith 性能不回归**：两台设备 reboot-clean、同热窗口、配对 A/B，`tools/bench.sh` + trace replay `--benchmark` 逐帧 JSON；**指标是逐线程 CPU 时间**，p50 与 p99；**绝对阈值**——tracker 每 draw 的 ns 公布并设上限（真实拉取基线只有每 draw 6.5–9.3 次 accessor，相对噪声阈值会平凡通过）；Blaze3D blend-toggle 微基准单列；关掉 CSO 内容寻址的负面对照。
+4. **monolith 性能**：两台设备 reboot-clean、同热窗口、配对 A/B，`tools/device_bench/bench.sh` + trace replay `--benchmark` 逐帧 JSON（P2 起 `benchmark.json` 除 `frameTimesMs[]` 外还带 `frameCpuTimesMs[]`，任意分位数在主机侧算）；定频与设备档案在同一处：`tools/device_bench/pin_device.sh` 与 `tools/device_bench/devices/*.env`（`odinlite`、`xiaomi-adreno830`、`oppo-mali`；未经核验的档案带 `PROFILE_VERIFIED=0`，脚本默认拒跑，两台战役设备的核验记录在 `docs/Disaggregated/devices/pin-verification-2026-09-07.md`）。**指标是逐线程 CPU 时间**，p50 与 p99；tracker 每 draw 的**绝对 ns** 公布（真实拉取基线只有每 draw 6.5–9.3 次 accessor，相对噪声阈值会平凡通过）；Blaze3D blend-toggle 微基准单列；关掉 CSO 内容寻址的负面对照。**口径（2026-09-08 起）**：这一条对着 pull 臂**记录**而不阻塞——push 比 pull 多约 10% 逐线程 CPU 已被接受，绝对 ns 上限降为记录项，专门的优化阶段排在路线图之后。
 5. **覆盖 + poison + 句柄纪律**：G6 重生成 0 UNMAPPED；`gen_pipe_dirty_surface.py` 重生成 0 未映射 mutator；逐 verb 世代 poison；G7 setter 一致性测试；`ResidualValueBlock` 的 `offsetof` 断言与 P13 的 `sizeof == 0`。
 
 两条幸存的字节级等式：`MOBILEGL_BUILD_DISAGGREGATED=OFF` 时 `nm --defined-only libMobileGL.so | grep MG_Remote` 为空且链接行不增加库；`nm -D libMobileGL.so | grep mobilegl_server_main` 在 RelWithDebInfo 里命中。符号与 `.text` 漂移每阶段作为信息性指标发布。
@@ -565,7 +565,7 @@ MobileGL/MG_Remote/                仅 MOBILEGL_BUILD_DISAGGREGATED
 - `MobileGLServer`：桌面 `add_executable` 链接 `MobileGL_s`；Android `add_executable` 改名 `lib*.so` 链接共享 `MobileGL`，由 AGP 打进 `jniLibs`。
 - `MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>`（P5 起在 `ConfigLoader.cpp` 解析），免费换来 ctest `ENVIRONMENT` 变体、trace-replay 的 `setenv` 块、FCL 用户可编辑 env、plugin APK 的 V2 开关表、`/data/local/tmp` CTS 路径。
 - 测试接线陷阱：ctest `ENVIRONMENT` 是替换而非追加、`;` 必须转义、property 覆盖 job env，必须用 `mgl_itest_join_environment(... ${MGL_ITEST_COMMON_ENV})` 构造；`add_trace_replay_test` 加 `SPLIT` 后缀（否则与同 case+backend 重名）并加 `-DTRACE_TRANSPORT=` 给 `run_trace_case.cmake` 消费。
-- CI（`.github/workflows/test.yml:809` `pipe-gates`，P0 已落地）：`gen_pipe.py` 重生成 + diff；`MG_Backend`/`MG_State` 下禁止 stdio 插桩的 grep 门；`gen_pipe_dirty_surface.py --summary`（信息性，P1 成门）；`check_doc_citations.py`（警告级，文档定稿后 `--strict`）。独立 job `flatc-check`。后续：`include-graph-check`（P0.5）、`monolith-symbol-report`。
+- CI（`.github/workflows/test.yml:1538` `pipe-gates`，P0 已落地）：`gen_pipe.py` 重生成 + diff；`MG_Backend`/`MG_State` 下禁止 stdio 插桩的 grep 门；`gen_pipe_dirty_surface.py --check` + `--self-test`（**P2 起成为门**，`.github/workflows/test.yml:1601-1604`，取代原来信息性的 `--summary` 步骤）；`check_doc_citations.py`（警告级，文档定稿后 `--strict`）。独立 job `flatc-check`。已落地：`include-graph-check`（P0.5）、`monolith-symbol-report`、`build-linux-verify` / `integration-verify` / `retrace-verify`（P1）。
 
 ## 附 A：开关
 
@@ -577,15 +577,16 @@ CMake：
 | `MOBILEGL_BUILD_SERVER_SPIKE` | OFF（仅 Android） | 已落地（spike A，非出货） |
 | `MOBILEGL_BUILD_DISAGGREGATED_INPROC` | OFF | 计划（P5） |
 | `MOBILEGL_PIPE_VERIFY` | OFF | 计划（P1；构建期开关，编译进 `SnapshotFromGLContext()` 与 G4 比对器，P13 后保留） |
-| `MOBILEGL_PIPE_LEGACY_MEMOS` | ON（P2..P13） | 计划（编译期臂） |
+| `MOBILEGL_PIPE_LEGACY_MEMOS` | ON（P2..P13） | 已落地（P2；`CMakeLists.txt:36`，OFF 时不编译 pre-handle 臂；`MOBILEGL_PIPE_PUSH=OFF` 会把它强制回 ON 并 `message(STATUS)`，`CMakeLists.txt:476-479`，因为 pull 构建里 pre-handle 臂就是唯一的实现） |
 | `MOBILEGL_FLATC_EXECUTABLE` | 空 | 已落地（只服务 `flatc-check`） |
 | `MOBILEGL_BAKED_INTERNAL_SHADERS` | ON（P7+） | 计划 |
 
-运行时，MGPipe（`MobileGL/Config.h:319-358`，`MobileGL/ConfigLoader.cpp:245-256`，P0 已落地）：
+运行时，MGPipe（`MobileGL/Config.h:319-398`，`MobileGL/ConfigLoader.cpp:247-278`；P0 已落地，P2 扩了 push 位图的默认值与两个对照旋钮）：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `MOBILEGL_PIPE_PUSH` | 0 | 子系统位图（0 = 全 pull），含一位关闭 CSO 内容寻址；十进制或 `0x` |
+| `MOBILEGL_PIPE_PUSH` | pull 构建 `0`；**push 构建 `0x7f`**（`kMGPipeSubsystemsMigratedAtP2`，`MobileGL/ConfigLoader.cpp:254`） | 子系统位图，十进制或 `0x`；位按 ROADMAP 顺序分配、永不复用（`MobileGL/MG_Pipe/MGPipe.h:72-85`）：`0x01` 渲染状态、`0x02` pixel pack、`0x04` patch state、`0x08` vertex attrib defaults、`0x10` residual values、`0x20` Espryt slots（Track H）、`0x40` Magma vertex input（Track H）；位 7..62 留给后续阶段。**位 63 不是子系统而是行为**：`kMGPipeBehaviourNoCsoContentAddressing` 关掉 client 侧 CSO 内容寻址（每次 pipeline 版本变化都铸新 CSO、永不探测 map），即 P2 的负面对照。`0` = 全 pull，但 P2 之后只有在 `MOBILEGL_PIPE_LEGACY_MEMOS` 编进了 pre-handle 臂时才是有效对照 |
+| `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` | 0 | 负面对照 C（push 构建才有，`MobileGL/Config.h:360-371`）：故意打掉句柄身份，让 `HandleRecycle` 的 ABA 臂重现旧的 A-B-A 污染。它变绿即为控制失效 |
 | `MOBILEGL_PIPE_VERIFY` | 0 | 逐 draw 逐字段影子比对 |
 | `MOBILEGL_PIPE_STATS` | 0 | 边界计数器（§附 B） |
 | `MOBILEGL_PIPE_LEGACY_MEMOS` | ON | 三态读取，只有显式 falsy 才关 |

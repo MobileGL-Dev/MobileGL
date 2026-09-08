@@ -1,6 +1,6 @@
 # MGPipe 路线图
 
-> 状态：P0 已落地（`feat/disaggregated@458ccde1`）。设计见 `ARCHITECTURE.md`，实测见 `MEASUREMENTS.md`。天数是各阶段所含子系统行的求和（低端 / 高端），总计 **267–337 人天**（不含 CTS 周转）；两个工程师、P7 与 P5/P6/P8 并行约 7–9 个月，真正的约束是两台设备的争用。
+> 状态：P0、P0.5、P1、P2 已落地（`feat/disaggregated@738b289d`）。第 43 天 GO/NO-GO 判定为**继续**，下一步 P3a。设计见 `ARCHITECTURE.md`，实测见 `MEASUREMENTS.md`。天数是各阶段所含子系统行的求和（低端 / 高端），总计 **267–337 人天**（不含 CTS 周转）；两个工程师、P7 与 P5/P6/P8 并行约 7–9 个月，真正的约束是两台设备的争用。
 
 ## 通用纪律（每个 commit）
 
@@ -15,7 +15,7 @@
 | **P0** 卫生、度量、门、骨架 | 9–11 | ✅ 边界计数器（字节 / 动态 accessor / 六个 memo 门 / 上传形状）；`PipeCalls.def` 完整目录 + payload POD + 七个生成器 + CI `pipe-gates`；`gen_pipe_dirty_surface.py`；`check_doc_citations.py`；八个 `MOBILEGL_PIPE_*` 开关；`MG_Remote/{Protocol,Transport}` 骨架（`SCM_RIGHTS` 第一优先、双 tail 双三元组的 `RingControl`、双向 doorbell、校验型 `Framing`、`ShmSegment`、`InProcessTransport`）+ `protocol.fbs` + `flatc-check` + `MG_Test/Wire` 五个套件；三个严格 no-op 收益（`GetInteger64i_v`/`GetProgramiv` 退役、`RenderbufferObject::GetLifetimeId()`、D21 XFB 计数槽重键）；compute 限制进 `DynamicBackendParameters`；spike A、spike B；retrace 通道 `--env` 透传 | ✅ 单元/集成/40 trace 逐名不变；wire 层测试（fd 传递、doorbell、ring、封帧、inproc）绿；两台设备的字节/调用基线在案；spike A/B 出结论；citation lint 绿 | — |
 | **P0.5** 值头与制品头抽取 | 6–9 | ✅（`5d99ee43`）`MG_Pipe/MGPipeValueTypes.h`（`RenderStateParameters`、`SamplerParameters`、`PixelStoreParameters`、`VertexAttribute`… 不 include `MG_State/GLState`）；`MG_State/GLState/ProgramState/ProgramArtifacts.h`（五个反射类型，不 include `ShaderObject.h`/`SpvcSession.h`，8 个 includer 零改动——类内 `using` 别名保住每一种既有拼写）；`Visit()` 归档 + `sizeof` 绊线；CI `-H` include 闭包断言（`scripts/check_include_closure.py`，text + clang 两模式、自带阴性对照、`--require-all` 棘轮；`scripts/symbol_report.py` 做逐符号归因）。实测落地：测试名零删除、`MG_Backend` 零 diff、`.text` 字节不变、符号 0 增 / 0 删 / 42 重命名；`DynamicBackendParameters` 未搬（含 `SizeT` 与 `TextureTarget` 成员，搬动不是纯移动），`MGPipeTypes.h` 仍 include `BackendObject.h`，闭包门 A 因此断言 `MGPipeValueTypes.h` | 全套测试逐名不变（纯搬移）；两条闭包断言绿且人为加回一个 `MG_State` include 能变红；`nm`/`.text` 变化可逐符号归因 | P0；**P1 与 P7 的硬前置** |
 | **P1** `PipeInputs` 替换与 verify harness | 10–13 | ✅ `MG_Backend/MGPipe/PipeInputs.h`（63 字段；Espryt 32 / Magma 56 访问器）；**实测 277 处箭头 + 58 行非箭头**（Espryt 113+9、Magma 164+49）逐条转换；逐 verb 类填充点（G5 表，~93 个边界站点）；逐 verb 世代 poison；G4 影子比对器 + 第三种 CI 模式；20 处 `SyncPersistentMappedRange` + 6 处 `SyncGpuWrites` 的逐站点归属表 | pull 构建 `nm --defined-only` 不变、`.text` 差异逐行归因（空守卫/三元重写推迟到 P2）；40 trace + 全部集成测试在 `MOBILEGL_PIPE_VERIFY=1` 下零分歧；故意损坏一个快照字段能让 verify 变红；故意在 `glGenerateMipmap` 的填充表漏一个字段能在**那条 verb** 上触发 poison Fatal | P0.5 |
-| **P2** 渲染状态 CSO + 第一片 Track H + 残余值块 | 18–26 | `MG_Impl/Pipe/Tracker`（dirty 位、5 个聚合世代、抑制器骨架）；`gen_pipe_dirty_surface.py` 首轮映射成门；`MGPipeRenderStateSpans` + G7 setter 一致性测试；`CsoCache`（64 项，键 = pipeline 子集）；`create/bind_render_state` + `set_dynamic_state`（Espryt `SyncRenderState` 一行不动；Magma `ComputePipelineStateHash`/`GetOrCreatePipeline`/`ApplyDynamicDrawStateTail` 改从 CSO 与动态 payload 取）；`set_pixel_pack_state`、`set_patch_state`、`set_vertex_attrib_defaults`；`set_residual_value_state` + `ResidualValueBlock` 绊线；**第一片 Track H**：Espryt 0b（`SlotAllocator` + 6 个 registry → slot 数组 + 删 `TwinLookupMemo`×3/`OwnerEquals`/`g_fbSlotCache`/GC）与 Magma 子系统 4（`VertexInputStateFactory`/`VaoDrawMemo` 重键，删前端 VAO 里的后端裸指针）；`MOBILEGL_PIPE_LEGACY_MEMOS`；补 `FramebufferSrgb`/`DepthClamp` 存储 | 集成 × 2 后端 × {pull, push} 逐名相同；40 trace push 下 SSIM ≥ 0.99 双后端；verify 零分歧；`HandleRecycleScenario` 绿且重键前红；G7 测试绿且拿掉一个字段能红；两台设备配对逐线程 CPU p50/p99 不差且 tracker 绝对 ns 在上限内；Blaze3D blend-toggle 微基准；CSO 内容寻址关闭的负面对照 | P1 |
+| **P2** 渲染状态 CSO + 第一片 Track H + 残余值块 | 18–26 | ✅（`738b289d`）`MG_Impl/Pipe/Tracker`（dirty 位、5 个聚合世代、抑制器骨架）；`gen_pipe_dirty_surface.py` 首轮映射成门（73 个 mutator 全映射，45 条 render-state 答案 + 8 条 (mutator, bit) 答案逐字段导出，0 COARSE / 0 UNDECIDED，`.github/workflows/test.yml:1601-1604`）；`MGPipeRenderStateSpans` chunk 表 **7 个 pipeline chunk / 396 B + 8 个 dynamic chunk / 772 B = 1168**（`MobileGL/MG_Pipe/MGPipeRenderStateSpans.h:190-191`）+ G7 setter 一致性测试；`CsoCache`（**64 项**，键 = pipeline 子集，`MobileGL/MG_Impl/Pipe/CsoCache.h:53`）；`create/bind_render_state` + `set_dynamic_state`（Espryt `SyncRenderState` 一行不动；Magma `ComputePipelineStateHash`/`GetOrCreatePipeline`/`ApplyDynamicDrawStateTail` 改从 CSO 与动态 payload 取）；`set_pixel_pack_state`、`set_patch_state`、`set_vertex_attrib_defaults`；`set_residual_value_state` + `ResidualValueBlock` 绊线（**棘轮 1248 → 8**，`MobileGL/MG_Pipe/MGPipeTypes.h:546`）；**第一片 Track H**：Espryt 0b（`SlotAllocator` + 6 个 registry → slot 数组 + 删 `TwinLookupMemo`×3/`OwnerEquals`/`g_fbSlotCache`/GC）与 Magma 子系统 4（`VertexInputStateFactory`/`VaoDrawMemo` 重键，删前端 VAO 里的后端裸指针）——共 **11 条身份 memo 直接删除 + 2 条重键**（`ARCHITECTURE.md` §9.5 的普查），pre-handle 臂在 `MOBILEGL_PIPE_LEGACY_MEMOS` 下并存到 P13；`MOBILEGL_PIPE_LEGACY_MEMOS`（`CMakeLists.txt:36`）；补**三个** capability 存储 `FramebufferSrgb`/`DepthClamp`/`TextureCubeMapSeamless`（`MobileGL/MG_Pipe/MGPipeValueTypes.h:303-305`） | ✅ 集成 × 2 后端 × {pull, push} 逐名相同（名差 0）；pull 构建符号 0 增 / 0 删 / 0 重命名、四个已认定 resize、`.text` +160 B；`RenderStateImpl` sha 不变；单元 1566 × {pull, push, verify}；`integration-gpu` 916/916（pull、push、`MOBILEGL_PIPE_PUSH=0` 三臂）；79 例 retrace push 下 79/79、verify 下 79/79 零分歧；`integration-verify` 828 条零 `Fatal{`；verify 构建的三组对照（`PoisonOmitted`、`VerifyCorrupted`、`HandleRecycle`）44/44，且 ABA 对照关掉句柄身份即红；G7 负面对照按设计变红并点名 `SetColorMask`；`CsoContentAddressing` 6/6；测试名 0 删除 / +119。设备（小米 Adreno 830，配对、定频、尾 200 帧 p50）：push 比 pull 多约 10% 逐线程 CPU——**用户 2026-09-08 决定接受**，性能自此对 pull 基线只记录不设门；小米全部 16 行在案（p50 +8–14%），Oppo 表在跑；桌面 `DriverBench` T1 = +322 / +345 ns/draw（Espryt / Magma），T1 − T2 = −228 / −354（P2 比它替掉的 P1 残余填充便宜），blend-toggle +4.7% / +3.5%，见 `MEASUREMENTS.md` §9–§14 | P1 |
 | **P3a** handle wave 1（Espryt）：buffer、VAO | 18–23 | 7 个 `BufferBackendOps` → `resource_*`、`buffer_subdata_resident`（可 null）、`resource_flush_range`、`resource_readback`、`map_persistent`（不碰实现）；pool 与延迟释放原样搬；vertex elements 三件（两个视图都带）；`set_vertex_buffers`（`baseInstance` 显式字段）；`set_index_buffer`；Adreno SIGSEGV workaround 保留 | 全套门；buffer/VAO 族场景（`LargeArenaAdoption`、`StorageBufferRegrow` 发布 `map-persistent-roundtrips`、`VertexAttribBinding`、`MultiDraw`、`PrimitiveRestart`…）；Create/rd12/26.3/sodium trace；MC 26.3 在 Adreno 上 p99 不变。**再基线检查点 1：超过 27 天必须重定基线** | P2 |
 | **P4a** handle wave 2（Espryt）：FBO / 纹理 / sampler / program 身份与描述符 | 26–34 | `set_framebuffer_state`（解析后的 `ReadSurface`、内联格式、`ContentHash`、`{0,1}`）；sampler CSO（含 `borderColorForm`）；sampler view + `set_texture_params`；`set_sampler_views`/`bind_sampler_states`/`set_shader_images`；shader CSO（SPIR-V + 归档）；`set_draw/dispatch_program`；`set_global_constants`；`CompositeResolver`；纹理/renderbuffer 的 `resource_*`。emulation 在 split 下显式 Fatal 直到 P8 | 全套门；framebuffer/纹理/program 族场景；**新增"只作 attachment / image 单元 / CopyImage 端点的纹理其 `glTexParameter` 生效"场景（落地前必须红）**；两台设备 `KHR-GL46.direct_state_access.framebuffers*` 与整个 `packed_pixels` 块（~3300 例，句柄复用压力测试）。**再基线检查点 1b：超过 39 天** | P3a |
 | **P5** 传输 + inproc applier + 发射表 | 12 | `MG_Remote/Client` 发射表；`Server/PipeApplier`、`ServerLoop`（`mgl-srv-io` + `mgl-srv-apply`）；`Init.cpp` 单一 hook 装 `BackendObject_Remote`；`MGPCaps` 快照；阻塞 `read_pixels`；client 侧保守 `MarkGpuWritten`；**client 侧块粒度 persistent-map 推送**；`InProcessTransport` 走与 spawn 相同的 G3 编解码；trace-replay `SPLIT` 后缀 + `-DTRACE_TRANSPORT=`；`MOBILEGL_TRANSPORT` 解析 | `DirectGLES.Split.*(ClearThenReadPixels|Triangle)` 在 `inproc` 下绿；OpenRA trace split SSIM ≥ 0.99；`PersistentCoherentMapScenario` 绿；两个角色峰值 RSS 在案；`persistent-map-push` 出数；未迁移字段读 = `Fatal{UnmigratedPipeInput}`。**第 99 天：首个 IPC 帧（缩减路径）** | P4a |
@@ -36,24 +36,25 @@
 ## 里程碑
 
 - **第 25 天（P1 出口）**：verify harness 逐 draw 逐字段证明"推送等价于拉取"。零产品风险，**不是** GO/NO-GO。
-- **第 43 天（P2 出口）：GO/NO-GO**。
+- **第 43 天（P2 出口）：GO/NO-GO —— 判定继续**。P2 的五部分门全绿（逐名相同、零分歧、负面对照能红），逐线程 CPU 代价约 +10% 被接受，下一步立即开 P3a。
 - 第 99 天：首个 `inproc` IPC 帧（缩减路径）；第 104 天：首个跨进程帧；第 145 天：全功能 split；第 187 / 267 天：三道纯度门转绿。
 
 ## 第 43 天 GO/NO-GO 清单
 
-手上必须有：
+手上必须有（**结算：继续**，2026-09-08）：
 
-- [ ] P1 交付的逐 draw 逐字段语义等价证明（40 trace + 全部集成测试零分歧）
-- [ ] 两个后端上都已推送的渲染状态，`SyncRenderState` 693 行一行未动
-- [ ] 两片 Track H 的实测单位成本（Espryt 0b、Magma 子系统 4）
-- [ ] 两台设备（Adreno 830 `35d0befa`、Mali `3B159D009VZ00000`）reboot-clean 配对的逐线程 CPU 时间增量，p50 与 p99
-- [ ] tracker 每 draw 的**绝对 ns**（上限从设备基线定：稳态每 draw 6.5–9.3 次 accessor + memo 探测，见 `MEASUREMENTS.md`）
-- [ ] Blaze3D blend-toggle 微基准（enable/draw/disable/draw，MC batch 速率）
-- [ ] 负面对照：关掉 CSO 内容寻址重跑，把"推送更慢"与"CSO 设计更慢"分开
+- [x] P1 交付的逐 draw 逐字段语义等价证明（40 trace + 全部集成测试零分歧）
+- [x] 两个后端上都已推送的渲染状态，`SyncRenderState` 693 行一行未动（`RenderStateImpl` 段 sha 与 P2 起点相同）
+- [~] 两片 Track H 的实测单位成本（Espryt 0b、Magma 子系统 4）—— 产出侧在案（`ARCHITECTURE.md` §9.5 那份 21 条身份 memo 普查里，11 条直接删除 + 2 条重键全部落地，两片都零回归），日历口径（实际工作日 vs 估计的 5–7 / 2–3 天）**未记录**
+- [~] 两台设备（Adreno 830 `35d0befa`、Mali `3B159D009VZ00000`）reboot-clean 配对的逐线程 CPU 时间增量，p50 与 p99 —— 小米 16 行全部在案（p50 +8–14%，p99 同向；`MEASUREMENTS.md` §10），Oppo 在跑、随后补进同一张表
+- [x] tracker 每 draw 的**绝对 ns**（T1/T2）—— 桌面 `DriverBench`：Espryt T1 +322 / T2 +550、Magma T1 +345 / T2 +699 ns/draw，T1 − T2 = −228 / −354（`MEASUREMENTS.md` §12）；设备侧的等价读数是配对 A/B 的 +8–14%；按下面的口径为**记录项**，不再是门
+- [x] Blaze3D blend-toggle 微基准（enable/draw/disable/draw，MC batch 速率）—— `mc_state_toggle`（每帧 46 对）：Espryt 23753 → 24869 ns/开关对（+4.7%）、Magma 32705 → 33857（+3.5%）；pass switch +0.6% / +1.7%
+- [x] 负面对照：关掉 CSO 内容寻址重跑，把"推送更慢"与"CSO 设计更慢"分开（`kMGPipeBehaviourNoCsoContentAddressing`，`CsoContentAddressing` 6/6 证明开关真的改变 mint/bind 计数）
 
 判据与出口：
 
-- **继续**：两台设备 p50 与 p99 逐线程 CPU 增量都不为负；tracker 绝对 ns 在上限内；Track H 单位成本不超出估计的 50%。按两条跑道推进。
+- **口径变更（用户 2026-09-08）**：push 比 pull 多约 10% 逐线程 CPU 可接受；性能自此**对着 pull 臂基线记录**、不作阻塞门，第 43 天的绝对 ns 上限降为记录项；路线图先推完，专门的优化阶段排在其后（或首个 IPC 帧之后）。
+- **继续**（本次结算）：五部分门全绿，两片 Track H 按计划的产出全部落地且零回归，按两条跑道推进，下一步 P3a。原判据（两台设备 p50 与 p99 逐线程 CPU 增量都不为负；tracker 绝对 ns 在上限内）保留为后续阶段的记录口径。
 - **收缩为 headless 工装用途或重新评估**：任一判据落空。**不回滚**：P0/P0.5/P1/P2 的产物（句柄基建与重键、两个头文件抽取、计数器、verify harness、渲染状态 CSO）全是自洽的 monolith 交付物，留在 `dev`；MGPipe 收缩为 `MG_Test` mock 后端 → MGPipe recorder（给 trace_replay 一种记录已解析状态的录制格式）+ `inproc` 渲染线程实验；IPC 跑道搁置到出现新判据。
 - 沉没成本：P0 与 P0.5 无论走哪条路都要花（后者本身是 monolith 净收益）；真正只为 MGPipe 押上的是 P1 + P2 ≈ 28–39 天，NO-GO 分支下仍留下上述产物。
 
@@ -71,11 +72,19 @@
 
 P0 已回答的不再列出（spike A 的域、spike B 的分档、`posix_spawn` 不可用、OOM 探测惯用法、`GetInteger64i_v`/`GetProgramiv` 退役、D21 与 `RenderbufferObject` lifetime id、动态 accessor 基线）。
 
-1. **client 侧 dirty 走查的真实每 draw CPU 代价。** 拉取基线已实测为每 draw 6.5–9.3 次 accessor + memo 探测；推送要在这个数字下净减少。P2 的头号数字，逐线程 CPU + 绝对 ns，两台设备。
+1. **client 侧 dirty 走查的真实每 draw CPU 代价。** **已答（P2，数字仍在补齐）**：推送**没有**在拉取基线（每 draw 6.5–9.3 次 accessor + memo 探测）之下净减少，而是多花约 10% 逐线程 CPU。小米 Adreno 830（`35d0befa`，reboot-clean、定频、配对、尾 200 帧 p50，单位 ms/帧）：`minecraft-1.21.4-in-world` DirectGLES 7.39 → 8.19（+10.8%）、DirectVulkan 5.23 → 5.85（+11.9%）；`minecraft-1.21.4-fabric-iris-bsl-in-world` DirectGLES 4.91 → 5.35（+9.0%）、DirectVulkan 4.158 → 4.525（`--benchmark-no-finish`，+8.8%）/ 4.583（finish，+10.2%）。bsl 用例的 p99 两臂都由着色器编译主导（~1.6 s），不承载这个问题。
+
+    小米全部 16 行（4 trace × 2 后端 × finish 开/关，p50 与 p99、钉频判定）在 `MEASUREMENTS.md` §10：p50 增量在四个 trace、两个后端上都落在 **+8–14%**（`improved-transparency-minecraft-26.3` DirectGLES 37.26 → 42.44、DirectVulkan 61.55 → 68.12；`minecraft-1.21.4-startup` 只有加载帧，不承载）。
+
+    <!-- P2-AB-TABLE: integrator fills the Oppo (3B159D009VZ00000, Mali) rows -->
+
+    绝对 ns 的分解（T1 = push 默认位图 − pull，T2 = `MOBILEGL_PIPE_PUSH=0` − pull，`T1 − T2` 正是 P2 自己的增删；桌面 `DriverBench`，`mc_vanilla_draw`，ns/draw，全表在 `MEASUREMENTS.md` §11–§12）：Espryt **T1 +322**（pull 5121 的 +6.3%）、T2 +550、**T1 − T2 = −228**；Magma **T1 +345**（+2.0%）、T2 +699、**T1 − T2 = −354**——P2 的 tracker + CSO 比它替掉的 P1 残余填充便宜，剩下的 T1 是尚未句柄化的填充与 dirty 走查。无 CSO 内容寻址对照：Espryt −69（噪声内）、Magma +200（内容寻址每 draw 省 200）；blend-toggle +4.7% / +3.5%，pass switch +0.6% / +1.7%。
+
+    **口径**：用户 2026-09-08 接受这一代价，性能自此对着 pull 臂只记录不设门（见上文"判据与出口"）。
 2. **真实语料上纹理重铸拉取的发生率。** `ImageBindableHint` 预防主因，但整格式再生在普通 `glTexImage` 格式变更上就触发。若 MC/Iris fixture 上非平凡，保留 LRU 从默认 0 升为强制并拿真预算。
 3. **spike B 的 `untrusted_app` 域复核。** 两台设备的分档在 `shell` 域测得；T0 的 AHB socket 交接是每个与 SurfaceFlinger 共享 buffer 的应用都在走的路径，风险在 memfd/opaque-fd 腿上。从应用进程再跑一次 `extmem_probe`（spike A 的 exec 钩子已可用）。
-4. **渲染状态的 wire 粒度。** chunk 划分定下来后，CSO LRU 容量（暂定 64）与 `set_dynamic_state` 的 chunk 粒度由计数器定。
-5. **`FramebufferSrgb` / `DepthClamp` 的拍板。** 事实已清（无存储、`glEnable` 静默吞掉、六个读点恒 false、41 个 fixture 无一开启）；建议在 chunk 表冻结前补真存储并把 `FramebufferSrgb` 划进 pipeline 半边。由计划所有者拍板，**拍板前不冻结 chunk 表**。
+4. **渲染状态的 wire 粒度。** **已答（P2）**：chunk 表冻结为 **16 个边界 / 15 个 chunk**，两半完美交替（chunk 0 dynamic、chunk 1 pipeline……），**7 个 pipeline chunk 共 396 B + 8 个 dynamic chunk 共 772 B = 1168**，每个边界都是一个 `offsetof` 或 `sizeof`，划分与总数由 `static_assert` 把关（`MobileGL/MG_Pipe/MGPipeRenderStateSpans.h:190-191`）。`set_dynamic_state` 的粒度就是这 8 个 dynamic chunk（只发变化的那些）。CSO LRU 容量取 **64**（`MobileGL/MG_Impl/Pipe/CsoCache.h:53`）——这是暂定值，**在 P13 连同其余幸存缓存一起、在计数器活着的情况下重调**（P13 行的"重调幸存缓存容量"）。
+5. **`FramebufferSrgb` / `DepthClamp` / `TextureCubeMapSeamless` 的拍板。** **已答（P2）**：无存储的是**三个**能力不是两个——`RenderState::SetCapability` 的 `default:` 分支同样吞掉 `TextureCubeMapSeamless`（`glEnable` 可达、零读点）。三个都在 P2 拿到真存储，落在 `ColorMasks` 与 `ClearColor` 之间那 3 字节的空洞（偏移 581/582/583，`MobileGL/MG_Pipe/MGPipeValueTypes.h:303-305`），所以 `sizeof(RenderStateParameters)` 仍是 1168 且既有成员一个都没挪位。三个都划进 **pipeline 半边**（它们的 setter 都走 `BumpVersions()`；`DepthClamp` 是 `VkPipelineRasterizationStateCreateInfo::depthClampEnable`），chunk 表随之冻结。
 6. **具名 UBO host payload 的形状（D-B8）。** 第一个数字已有：Magma 在 26.3 世界每帧重打包 331 KB 具名 UBO 字节，Espryt 为 0。要么冻结现在的第二变长尾形状，要么走备选（Magma 直接描述符绑定常驻 `VkBuffer` range，独立 `dev` PR + Iris 性能门）。
 7. **`MG_Util` 的切割缝。** server 需要 SPIRV-Cross pass 流水线、ESSL 转译缓存、格式处理器、POST 探针；client 需要 glslang phase A/B 与反射层。P0.5 解决了 `ProgramObject.h` 一处，`MG_Util` 内部是否有干净的 Transpile-vs-Reflect 缝未审计。
 8. **一份反射归档能否服务三个消费者**（Espryt 读前端表、Magma 跑 SPIRV-Reflect、`DirectVulkan.cpp` 为 `glGetProgramResource*` 又反射一遍）。

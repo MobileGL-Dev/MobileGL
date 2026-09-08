@@ -1,4 +1,4 @@
-# 实测记录（P0、P1）
+# 实测记录（P0、P1、P2）
 
 > 每张表都写明设备、提交与命令，以便复现。设备：`35d0befa` = Xiaomi 24129PN74C，Adreno 830，Android 16；`3B159D009VZ00000` = Oppo PLG110，Mali，Android 16（ColorOS）。设备运行日期 2026-09-05。设备锁协议照旧。
 
@@ -140,4 +140,147 @@ python3 tools/trace_replay/run_android_retrace_local.py \
 | 测试名 | 0 删除，+29 |
 
 **verify 构建的代价**：`integration-verify` 818 条在 4 路并行下约与 `integration-gpu` 同量级；79 例 retrace 在 4 路下约 20 分钟。
+
+---
+
+# P2 实测（`feat/disaggregated@738b289d`）
+
+> **口径变更（用户 2026-09-08）**：push 比 pull 多约 10% 逐线程 CPU 可接受；**性能自此对着 pull 臂记录，不作阻塞门**——pull 臂的数字就是此后的基准线，第 43 天的 tracker 绝对 ns 上限降为记录项；路线图先推完（下一步 P3a），专门的优化阶段排在其后（或首个 IPC 帧之后）。所以本部分把"门"与"记录"分开写：§9 是门，§10–§14 是记录与遗留判定。
+
+## 9. P2 验收门（合并点实测；一个在飞的修复落地后复核）
+
+| 门 | 结果 |
+|---|---|
+| G1 pull 构建符号 | 0 增 / 0 删 / 0 重命名；**4 处 resize**，全部事先认定：`RenderState::{RenderState, SetCapability, IsCapabilityEnabled}` 与 `_GLOBAL__sub_I_DirectGLES.cpp`（`g_syncedRenderStateParameters` 的静态初始化器）；`.text` **+160 B** |
+| G5 `SyncRenderState` 一行未动 | `DirectGLES.cpp` 里整个 `namespace RenderStateImpl` 的 sha 与 P2 起点**逐字节相同** |
+| G2 pull 与 push 逐名相同 | `ctest -N` 名集合**差 0** |
+| G14 测试名只增不删 | **0 删除，+119**（+115 的 P2 包 + ABA 世代覆盖的 4 条单元） |
+| 单元 | **1566** 全绿 × {pull, push, verify}（1562 + ABA 世代覆盖的 4 条 `MagmaPipeIdentity` 单元） |
+| `integration-gpu` | **916/916** pull、**916/916** push、**916/916** `MOBILEGL_PIPE_PUSH=0`（全 pull 臂） |
+| 渲染状态敏感子集 | **72/72** |
+| `integration-verify` | **828** 条，零 `Fatal{` |
+| 79 例 retrace | push 下 **79/79**；`MOBILEGL_PIPE_VERIFY=1` 下 **79/79 全部 armed，零分歧** |
+| G7 setter 一致性的负面对照 | 按设计变红并**点名 `SetColorMask`**（把一个成员从 pipeline 半边降到 dynamic 半边，划分仍完整、仍能编译） |
+| CSO 内容寻址对照 | `CsoContentAddressing` **6/6** |
+| verify 构建的三组对照 | `PoisonOmitted`、`VerifyCorrupted`、`HandleRecycle` 合计 **44/44** |
+
+## 10. 设备配对 A/B：逐线程 CPU（D.4.2）
+
+协议：reboot-clean、同热窗口、按项目协议定频（大核 1.96 / 小核 1.55 GHz、GPU 拉满、40 °C 门），两臂背靠背同一会话，一次一台设备（`run_android_retrace_local.py` 每棵树共用一个结果根，见 §5.2），`--benchmark-no-finish` 为主臂（P2 问的是 CPU）。数字取 `benchmark.json` 的 `frameCpuTimesMs[]` 尾 200 帧，主机侧算 p50/p99。`minecraft-1.21.1-neoforge-create-indirect-in-world` 不在设备 A/B 里（§5.5，基线就坏）。
+
+每格取 runner 自己的 "best of 3"（三次重复里平均墙钟帧时间最低的那次；`run_android_retrace_local.py` 的约定），p50 按设备的中位数规则、p99 为 nearest-rank，都在同一尾窗口上算；`tools/device_bench/pin_device.sh check` 在每次运行前后各跑一次，判定记在最后一列（P = 三个节点都在钉住的频率上；D = 大核被热管理钳在 1689600 kHz，脚本钉的是 1958400——用例前后两臂同一状态才可比）。APK 两臂出自 `55d2af9b`（P2 集成后、ABA 对照补丁前；差异只在负面对照臂）。
+
+小米 24129PN74C（`35d0befa`，Adreno 830，会话 reboot-clean 一次、整段钉频），单位 ms/帧：
+
+| trace | 后端 | finish | pull p50 | push p50 | Δ p50 | pull p99 | push p99 | Δ p99 | 钉频 pull / push |
+|---|---|---|---|---|---|---|---|---|---|
+| `minecraft-1.21.4-in-world` | DirectGLES | 关 | 7.392 | 8.187 | **+10.8%** | 11.086 | 13.192 | +19.0% | P/P |
+| `minecraft-1.21.4-in-world` | DirectGLES | 开 | 7.433 | 8.383 | **+12.8%** | 10.969 | 11.789 | +7.5% | P/P |
+| `minecraft-1.21.4-in-world` | DirectVulkan | 关 | 5.230 | 5.849 | **+11.8%** | 6.772 | 7.396 | +9.2% | P/P |
+| `minecraft-1.21.4-in-world` | DirectVulkan | 开 | 5.237 | 5.842 | **+11.6%** | 6.767 | 7.380 | +9.1% | P/P |
+| `improved-transparency-minecraft-26.3` | DirectGLES | 关 | 37.263 | 42.436 | **+13.9%** | 54.965 | 60.409 | +9.9% | P/P |
+| `improved-transparency-minecraft-26.3` | DirectGLES | 开 | 37.222 | 42.422 | **+14.0%** | 54.879 | 60.401 | +10.1% | P/P |
+| `improved-transparency-minecraft-26.3` | DirectVulkan | 关 | 61.549 | 68.118 | **+10.7%** | 79.403 | 88.111 | +11.0% | D/D（热钳，两臂同） |
+| `improved-transparency-minecraft-26.3` | DirectVulkan | 开 | 61.446 | 68.252 | **+11.1%** | 79.244 | 88.357 | +11.5% | D/D |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectGLES | 关 | 4.911 | 5.353 | **+9.0%** | 2314.8 | 2315.7 | 编译主导 | P/P |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectGLES | 开 | 4.972 | 5.370 | **+8.0%** | 2312.5 | 2322.2 | 编译主导 | P/P |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectVulkan | 关 | 4.158 | 4.525 | **+8.8%** | 1604.5 | 1624.2 | 编译主导 | P/P |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | DirectVulkan | 开 | 4.158 | 4.583 | **+10.2%** | 1614.0 | 1646.9 | 编译主导 | P/P |
+| `minecraft-1.21.4-startup` | DirectGLES | 关 | 0.941 | 1.068 | +13.5% | 1180.4 | 1291.2 | 加载主导 | D/D |
+| `minecraft-1.21.4-startup` | DirectGLES | 开 | 0.822 | 0.841 | +2.3% | 1271.6 | 1284.3 | 加载主导 | D/D |
+| `minecraft-1.21.4-startup` | DirectVulkan | 关 | 0.382 | 0.415 | +8.6% | 1463.0 | 1487.1 | 加载主导 | D/D |
+| `minecraft-1.21.4-startup` | DirectVulkan | 开 | 0.368 | 0.422 | +14.7% | 1485.4 | 1459.7 | 加载主导 | D/D |
+
+读法：**推送没有在拉取基线之下净减少**（那是开放问题 1 原本的期望），而是在四个 trace、两个后端上稳定多花 **8–14% 逐线程 CPU**（p50），p99 同向；finish 开与关两臂几乎一致，说明多出来的是客户端 CPU 而不是 GPU 时间。三点读数纪律：bsl 用例的 p99 两臂都由着色器编译主导（约 1.6–2.3 s），startup 用例只有 59 帧尾窗且 p99 是加载，两者的 p99 都不承载这个问题；26.3 的 DirectVulkan 两臂都在热钳下跑（大核 1689600 kHz），绝对值偏高但两臂同状态，相对差有效；`acc/draw` 两臂相同（accessor 计数还是 tracker 填充时的调用，P2 没改它的定义）。
+
+<!-- P2-AB-TABLE: integrator fills the Oppo (3B159D009VZ00000, Mali) rows -->
+
+## 11. tracker 的绝对 ns：上限与 T1/T2（D.4.3）
+
+**上限在跑之前钉死**（`ARCHITECTURE.md` §13.2 第 4 条要绝对阈值，因为相对噪声阈值会平凡通过）。推导：拉取基线是每 draw **6.5–9.3 次 accessor 调用加 memo 探测**（§3 的表：MC 1.21.4 in-world Espryt 9.28 / Magma 8.56 @ 91.6 draws/帧；improved-transparency 26.3 Espryt 8.44 / Magma 6.53 @ 1320 draws/帧）。按"一次未内联的 accessor 调用加一次 load"计价——6–10 周期，1.96 GHz 上约 4 ns——再加六次 memo 探测各约 2 ns，得到推送必须不差于的 **约 44 ns/draw**。因此：
+
+> **T1 ≤ 45 ns/draw（Adreno 830 `35d0befa`）、≤ 60 ns/draw（Mali `3B159D009VZ00000`）**。若开跑前的校准（pull 库的一次 DriverBench，`mc_vanilla_draw` 的 `ns_per_op` 减去 `native` 对照）显示这两台设备上的单次 accessor 价格与估计不同，则用**实测**价格按同一算术重推上限——但仍在测 push 臂之前钉死，不在之后。
+
+两个差值都要公布，分母是 `mc_vanilla_draw` 的 5495 draws/帧：**T1** = `ns_per_op(push, 默认位图) − ns_per_op(pull)`，即整个边界的每 draw 代价；**T2** = `ns_per_op(push, MOBILEGL_PIPE_PUSH=0) − ns_per_op(pull)`，即 P1 的残余填充本身，于是 **T1 − T2** 恰好隔离出 P2 加了什么、删了什么。`DriverBench` 只在 Linux 桌面构建，且它不链接 MobileGL——`dlopen` 一个 provider，所以同一个二进制同时量原生驱动与两个后端；这对 P2 够用，因为绝对 ns 是客户端 CPU 问题，而"两台设备"的要求落在 §10 的逐线程 CPU 上。
+
+## 12. Blaze3D blend-toggle 与 CSO 内容寻址负面对照（D.4.4 / D.4.5）
+
+**微基准用例已在树里并有存活门**：`mc_state_toggle` 就是 `glEnable(GL_BLEND); glBlendFuncSeparate; glDrawElements; glDisable(GL_BLEND); glDrawElements` × 46，按 vanilla 帧的真实速率（每帧 46 对开关、28 次 `glBlendFuncSeparate`）。`DriverBenchStateToggle` 这条 ctest 用 `PASS_REGULAR_EXPRESSION` 钉住该用例自己的 CSV 行、并把每帧 ops 列钉在 **46**，所以用例被改名、被删、改了每帧 ops 或干脆没打印，它都会红；`DriverBench` 遇到不认识的用例名现在返回 rc 2 并列出现有用例，而不是打个表头就 rc 0。
+
+**负面对照的开关是行为位 63**（`kMGPipeBehaviourNoCsoContentAddressing`，`MobileGL/MG_Pipe/MGPipe.h:83`）：它关掉 map 探测与句柄复用，**不关 CSO 记录**——否则量的是另一回事。开关不会烂掉，因为 `CsoContentAddressingScenario` 是常开的 ctest，钉住的数值契约是：一帧 8 对开关 = 16 draw；内容寻址臂 `csom ≤ 4` **且** `csom < csob`；位 63 臂 `csom == csob`；两臂都 `csob ≥ 16`；两帧连续开关的回读全绿且逐字节相同（要 `MOBILEGL_PIPE_STATS_PERIOD=1` 才读得到）。
+
+对照的意义是把"**推送更慢**"与"**CSO 设计更慢**"分开：若 T1 越界而对照不越界，代价在 tracker；两个都越界，代价在线上形状。
+
+**实测（桌面 llvmpipe / lavapipe，`~/w7/notes/tools/wsl_p2_bench.sh`：`DriverBench` Release 构建，240 帧，每臂 5 次重复取中位数；pull 库 = `build-linux`，push 库 = `build-push` 默认位图 `0x7f`）**，`ns_per_op`：
+
+| 臂 | `mc_vanilla_draw`（ns/draw） | `mc_state_toggle`（ns/开关对） | `mc_pass_switch`（ns/pass） |
+|---|---|---|---|
+| native（裸驱动对照） | 4771 | 22968 | 437759 |
+| Espryt pull | 5121 | 23753 | 443300 |
+| Espryt push | 5443 | 24869 | 446017 |
+| Espryt push，`MOBILEGL_PIPE_PUSH=0` | 5671 | 24584 | 443807 |
+| Espryt push，位 63（无 CSO 内容寻址） | 5374 | 24630 | 435454 |
+| Magma pull | 16900 | 32705 | 438406 |
+| Magma push | 17245 | 33857 | 446067 |
+| Magma push，`MOBILEGL_PIPE_PUSH=0` | 17599 | 34082 | 445006 |
+| Magma push，位 63 | 17444 | 34780 | 444758 |
+
+分解（`mc_vanilla_draw`，ns/draw）：
+
+| | Espryt | Magma |
+|---|---|---|
+| **T1** = push − pull（整个边界的每 draw 代价） | **+322**（pull 的 +6.3%） | **+345**（+2.0%） |
+| **T2** = push(`PIPE_PUSH=0`) − pull（P1 的残余填充本身） | +550 | +699 |
+| **T1 − T2**（P2 自己加的减的） | **−228** | **−354** |
+| 位 63 对照 − push（CSO 内容寻址的净值） | −69（在 5 次重复的离散内，≈ 0） | +200（内容寻址每 draw 省 200） |
+| blend-toggle（`mc_state_toggle`，ns/开关对） | +1116（+4.7%） | +1153（+3.5%） |
+| pass switch（`mc_pass_switch`） | +2716（+0.6%） | +7661（+1.7%） |
+
+读法：**P2 的净效果是负的**——tracker + CSO 比它替掉的 P1 残余填充便宜 228 / 354 ns/draw，两个后端一致；剩下的 T1（+322 / +345）是还没迁成句柄的那部分 `PipeInputs` 填充与 dirty 走查，随 P3a–P4a 逐子系统收缩。位 63 对照把"推送更慢"与"CSO 设计更慢"分开：Espryt 上 CSO 内容寻址不花钱也不省钱（`SyncRenderState` 本来就是 memo 化的），Magma 上省 200 ns/draw（pipeline 键从 CSO 句柄取，少一次哈希）。§11 钉的上限（T1 ≤ 45 ns/draw @ Adreno 830）是**设备**口径，`DriverBench` 只在桌面栈上跑（同一 draw 在 llvmpipe 上花 5.1 / 16.9 µs），两者不能直接比；设备上对应的读数是 §10 的 +8–14% p50——按 2026-09-08 的口径记录在案，不判门。
+
+## 13. 计数器读数
+
+**`resid=` 字节类（G10）已非零**，且棘轮已经压到底：`MGL_RESIDUAL_BLOCK_SIZE` 从 **1248 降到 8**（`MobileGL/MG_Pipe/MGPipeTypes.h:546`，只降不升是 `static_assert`），块里只剩 `Uint64 CapabilityBits`。桌面 push retrace，`minecraft-1.21.4-fabric-iris-bsl-in-world`，`MOBILEGL_PIPE_STATS_PERIOD=60`：
+
+```
+MGPipe stats: frames=120 window=60 draws=2293 draws/f=38.22 … resid=197.07 … cso[csom=8 csob=1415]
+```
+
+- **残余块发射率**：197.07 B/帧 ÷ 8 B × 60 帧 = **每 60 帧 1478 块，合每 draw 0.64 块**。（`CrossFrameBufferScenario` 那种"一个窗口 `resid=8.00`、其后全 `0.00`"是抑制器在起作用的最小形态，不是语料上的速率，别拿它当代表数。）
+- **`csom` / `csob`（新的两个调用类）**：同一窗口 **8 次铸造对 1415 次绑定**——CSO 内容寻址在真实语料上的复用比，也是位 63 对照要打掉的那件事。
+
+**六个 memo 门的 hit/miss、设备上的 `resid=` 与 `csom`/`csob`**：拉取侧的基线在 §3 的表里（`ers`/`etl`/`eub`/`mfp`/`mpm`/`mdt`）。推送臂的读数出自 §10 那批运行（`--env MOBILEGL_PIPE_STATS=1 --env MOBILEGL_PIPE_STATS_PERIOD=120`，取最后一个完整的 120 帧窗口；设备上只有 `mobilegl.log` 的周期行，`MOBILEGL_PIPE_STATS_FILE` 永远不会写，见 §5.1；finish 开/关两臂逐字相同，软件确定性），小米 `35d0befa`，push 臂：
+
+| trace | Espryt `ers` / `etl` / `eub`（hit/miss） | Magma `mfp` / `mpm` / `mdt`（hit/miss） | `resid=` B/帧 | `csom` / `csob`（每 120 帧） |
+|---|---|---|---|---|
+| `minecraft-1.21.4-in-world` | 6020/1850 · 6884/986 · 6962/908 | 0/7278 · 6030/1248 · 5928/1350 | 178.31 | 2 / 1719 |
+| `improved-transparency-minecraft-26.3` | 78960/1367 · 75378/4949 · 75199/5128 | 10740/68928 · 67660/1268 · 78800/868 | 185.36 | 0 / 1157 |
+| `minecraft-1.21.4-fabric-iris-bsl-in-world` | 113/133 · 85/161 · 82/164 | 0/177 · 86/91 · 81/96 | 370.67 | 1 / 122 |
+| `minecraft-1.21.4-startup` | 174/185 · 305/54 · 305/54 | 0/118 · 0/118 · 0/118 | 25.08 | 9 / 181 |
+
+读法：pull 臂的 `resid=` 恒为 0.00（残余块只在 push 下发射），push 臂每帧 25–371 B，即 8 字节块每帧 3–46 次，与桌面的 0.64 块/draw 同量级；CSO 内容寻址在稳态窗口里几乎不再铸造（in-world 2 次对 1719 次绑定，26.3 零铸造），只有 startup 在建状态时铸 9 次；六个 memo 门的形状与 §3 的拉取基线一致（Espryt 三门以 hit 为主；Magma 的 `mfp`（`MagmaDrawFastPath`）在拉取基线上就是 miss 为主——in-world 0/10994、26.3 21360/137036——P2 没有碰这个门）。
+
+**逐 dirty 位的触发率：未测。** 计数本身已实现（`MGPipeTracker` 的 `FireCount`/`WalkCount`，挂在 `PipeStats::Enabled()` 后面），但汇总行的格式里没有它们，所以没有任何东西把 18 个计数打出来。补法是给 `FormatWindowLine` 加一行，或从一个场景里经访问器读——两者都是 P3a 的顺带项。
+
+**每 draw payload 直方图：未测。** 24 桶已实现，但只在 teardown 的 JSON 里输出（`MOBILEGL_PIPE_STATS_FILE`），而 trace app 从不到达那次 teardown（§5.1），所以设备上取不到；桌面也没有记录过一次。
+
+## 14. 遗留判定
+
+**8 条静态过近似的填充行：全部保留，逐组给了理由**，写在 `MobileGL/MG_Pipe/FillPoints.def` 的表头注释里（就是 §7 那 9 处缺填充行里静态过近似的那 8 行）。理由三组同一条：这些行不是猜的，每一条都点名一条具体的后端路径，而能退役它们的证据只能是**动态**的——语料没走到某条路径，什么也证明不了，据此删行等于把一条罕见路径变成出货构建里的 `Fatal{UnmigratedPipeInput}`。三组分别是：`kReadback` + `IsTransformFeedback{Active,Paused}`（深度/模板回读仿真自己会画一个 draw 并暂停在飞的捕获，只在仿真被驱动条件触发时才走到）；`kTextureOp` / `kDispatch` + `IsCapabilityEnabled`（Magma 的 `GenerateMipmap` 与 `PrepareStorageImageTextures` 都经 `VkClearManager` 读 `GL_FRAMEBUFFER_SRGB`——**P2 给这个 capability 补了真存储之后，这一行从读编译期常量变成了读真状态，比以前更承重**）；`kBlitOrCopy` / `kTextureOp` + 着色器 blit 的 viewport 与顶点/缓冲绑定（`TryBlitToDefaultFramebufferWithShader` 是后端自有 program 的真 draw，同样是驱动条件决定的）。真正能退役一行的是 `MOBILEGL_PIPE_POISON_OMIT` 跑遍两台设备上完整的 `gl44to46` caselist——记为 P3a 的活，不在桌面语料这种撑不住的证据上做。
+
+**`integration` 的第二遍过滤（`MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1`，186 条）不进比对器**（`.github/workflows/test.yml:534`）。比对器的代价现在是已知的 5–10×，而这 186 条是 buffer/回读方向的过滤，P2 在那里什么也没改；**P3b 再复核**，这条决定记在这里而不是把 CI 里那句注释一直吊着。
+
+**Track H 单位成本的日历口径：未记录。** 产出侧在案（`ARCHITECTURE.md` §9.5 那份 21 条身份 memo 普查里的 11 条直接删除与 2 条重键全部落地，两片 Track H 零回归，pre-handle 臂在 `MOBILEGL_PIPE_LEGACY_MEMOS` 下并存到 P13），但两个包各自的实际工作日没有记，所以"不超出估计的 50%"这条判据这轮是按产出而不是按日历结算的。
+
+**句柄 ABA 对照的"重键前红"证据**（D.2）。修复前，`HandleRecycle` 的 28 条里有 1 条红——`AbaControl` 那条 VAO 用例看到的是替换对象的绿，而这个臂**期望**看到死对象的红：
+
+```
+$ ctest --test-dir build-push -R 'HandleRecycle' --no-tests=error -j 4 --output-on-failure
+96% tests passed, 1 tests failed out of 28
+  DirectVulkan.HandleRecycle.AbaControl.…AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexInput (Failed)
+  … [AbaControl expects the STALE object's pixels …]: 11625 of 11625 pixels (100%) are not red;
+  first offender at (2,2) is green
+```
+
+修好之后 32/32（多出来的四条是新增的 `AbaControlHandles` 臂，让对照能够到 P2 出货的 `{slot, gen}` 臂而不只是 pre-handle 臂），并且逐臂把判决打出来：`arm=Handles expected=FRESH observed=FRESH`、`arm=AbaControl expected=STALE observed=STALE`，两个臂都如此。**对照确实承重**：把 `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` 关掉，两个臂都变成 `observed=FRESH` 并**失败**——污染由被打掉的身份产生，别无他因，而退役的旧守卫与出货的 `{slot, gen}` 都能拦住它。
 

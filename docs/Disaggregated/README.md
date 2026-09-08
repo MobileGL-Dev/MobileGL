@@ -1,6 +1,8 @@
 # MGPipe：MobileGL 前后端拆分
 
-> 状态：**P0、P0.5、P1 已落地**（`feat/disaggregated`，基线 `dev@50fb1343`）。下一步 P2，第 43 天 GO/NO-GO。见 `ROADMAP.md`。
+> 状态：**P0、P0.5、P1、P2 已落地**（`feat/disaggregated@738b289d`，基线 `dev@50fb1343`）。第 43 天 GO/NO-GO 判定为**继续**，下一步 P3a。见 `ROADMAP.md`。
+>
+> 性能纪律（2026-09-08 起）：逐线程 CPU 与 tracker 绝对 ns **对着 pull 臂基线记录**，不再作阻塞门（push 比 pull 多约 10% 逐线程 CPU 已被接受），专门的优化阶段排在路线图推完之后。
 
 ## 是什么
 
