@@ -43,6 +43,32 @@ namespace MobileGL::MG_Pipe {
     // stop where it says it stops (MG_Test/ScopedPipeVerb.h).
     void MGPipeLeaveVerb();
 
+    // PipeFill.cpp. P3a D-H2.1: the DRAW's raw vertex-fetch base instance, which
+    // set_vertex_buffers now carries as an explicit field.
+    //
+    // It replaces an ambient process global the backend read at VAO sync time, which is a
+    // shape that cannot cross a pushed boundary. The client sends the raw value and never a
+    // pre-shifted offset: whether to emulate the fetch shift or let GL_EXT_base_instance do
+    // it is the SERVER's decision. It is also an input to set_vertex_buffers' content hash
+    // and to the tracker's bit-9 shutter, so a draw whose only change is its base instance
+    // still reaches the emitter and still goes out.
+    //
+    // Call it immediately before MGP_FILL at a draw entry point that takes a baseinstance.
+    // The validate point consumes and clears it, and MGPipeLeaveVerb clears it too, so a
+    // plain draw that follows a base-instanced one sees 0 again.
+    //
+    // [HANDED ON, not done here] The three GL entry points that owe this call are
+    // MG_Impl/GLImpl/Drawing/GL_Drawing.cpp's DrawElementsInstancedBaseVertexBaseInstance,
+    // DrawElementsInstancedBaseInstance and DrawArraysInstancedBaseInstance. That file is
+    // outside this package's ownership (C.5 assigns it to nobody and C.1 does not list it),
+    // so the setter, its consumption, its shutter and its hash all land here and the three
+    // one-line call sites are recorded for the integrator. Until they exist the emitted
+    // BaseInstance is 0 on every draw, which is what the tree does today.
+    void MGPipeSetPendingBaseInstance(Uint32 baseInstance);
+    // What the next set_vertex_buffers will carry. Exists for the unit gate, which drives
+    // the emitter without a draw entry point to set it.
+    Uint32 MGPipePendingBaseInstance();
+
     // PipeFill.cpp. Negative control B (P1 brief D6): the filler withholds the STAMP - never
     // the value - of `field` at `verb`, so that verb's read of it is
     // Fatal{UnmigratedPipeInput, "Field@Verb"} while every other verb is unaffected. The

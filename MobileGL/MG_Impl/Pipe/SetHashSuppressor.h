@@ -18,7 +18,15 @@
 // them answers it against a shape the backend rediscovered. P2 lands the MECHANISM and ONE
 // real consumer (SetVertexAttribDefaults) so the shape is pinned by a test rather than by a
 // plan; the other six slots exist, are unit-tested, and are wired by the phase that moves
-// the set they name.
+// the set they name. P3a wires the second, SetVertexBuffers.
+//
+// A WIRED SLOT PUTS A REQUIREMENT ON ITS HASH, and SetVertexBuffers is where that first
+// bites: the hash has to cover EVERY input the record carries, not only the set. Its
+// baseInstance is DRAW state and moves without the buffer set moving, so a hash over the
+// entries alone would suppress a record whose one changed field is the fetch shift and the
+// server would keep the previous one. MG_Impl/Pipe/VertexInputEmit.h's
+// MGPipeVertexBufferSetContentHash mixes Start, Count and BaseInstance in for exactly that
+// reason, and VertexInputEmit's base-instance pair is the test that says so.
 //
 // A hash of 0 is reserved for "never emitted", so the first emission always goes out; a
 // computed 0 is remapped to 1, which costs one collision in 2^64 an extra emission and
@@ -34,7 +42,7 @@ namespace MobileGL::MG_Pipe {
 
     // One slot per kVarTail set_* (ARCHITECTURE.md 5.1's call list).
     enum class MGPipeSuppressorSlot : Uint32 {
-        SetVertexBuffers = 0,     // P3b
+        SetVertexBuffers = 0,     // P3a - wired, and its hash includes BaseInstance
         SetSamplerViews,          // P3b
         BindSamplerStates,        // P3b
         SetShaderImages,          // P4b

@@ -302,10 +302,17 @@ namespace {
 
     // The five P2 emits for each name their own subsystem; the rest name none, which is what
     // makes MOBILEGL_PIPE_PUSH a per-subsystem A/B instead of one switch.
+    // THE NAME IS P2's AND IT STAYS. A test name is never removed (only added), so this case
+    // keeps the name it was born with and follows the phase constant instead of a literal
+    // five: what it has always asserted is "a bit names a subsystem if and only if this build
+    // emits a call for it", which is the property the emission gate and the residual-fill
+    // skip both rest on. P3a took the vertex-input family over, so the set it compares
+    // against is now kMGPipeDirtyEmittedAtP3a - and a bit that gained an arm without gaining
+    // an emitter, or the reverse, still fails here.
     TEST_F(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) {
         for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
             const auto bit = static_cast<MGPipeDirty>(i);
-            const Bool emitted = (kMGPipeDirtyEmittedAtP2 & MGPipeDirtyBit(bit)) != 0;
+            const Bool emitted = (kMGPipeDirtyEmittedAtP3a & MGPipeDirtyBit(bit)) != 0;
             EXPECT_EQ(MGPipeSubsystemForDirty(bit) != 0, emitted) << kMGPipeDirtyNames[i];
         }
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState), kMGPipeSubsystemRenderState);
@@ -313,6 +320,11 @@ namespace {
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState), kMGPipeSubsystemPatchState);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
                   kMGPipeSubsystemVertexAttribDefaults);
+        // P3a's three, one subsystem: an operator who clears bit 8 gets the whole legacy
+        // vertex-input arm rather than two thirds of it.
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements), kMGPipeSubsystemVertexInput);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers), kMGPipeSubsystemVertexInput);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer), kMGPipeSubsystemVertexInput);
     }
 
     TEST_F(TrackerWalk, TheFirstWalkOnAFreshContextPublishesEverything) {

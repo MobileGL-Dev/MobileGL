@@ -19,10 +19,10 @@
 // (ARCHITECTURE.md 5.1).
 //
 // WHAT IT DOES. One Uint32 dirty mask per verb, one bit per row of ARCHITECTURE.md 5.2,
-// computed by comparing a shutter against what the tracker last pushed. P2 EMITS for bits
-// 0..4 only (the value-class ones); bits 5..17 are computed, latched and counted so the
-// per-bit fire rate is a measurement rather than a plan, and their fields keep going
-// through the residual fill until P3a/P3b/P4a/P4b.
+// computed by comparing a shutter against what the tracker last pushed. P2 emitted for bits
+// 0..4 (the value-class ones); P3a adds bits 5, 9 and 10 - the vertex-input family - and the
+// rest are still computed, latched and counted so the per-bit fire rate is a measurement
+// rather than a plan, with their fields going through the residual fill until P3b/P4a/P4b.
 //
 // WHY EVERY SHUTTER OVER-FIRES. A bit that fires too often costs one extra push. A bit
 // that fires too rarely renders stale, and ARCHITECTURE.md 13.2 names that as the
@@ -61,14 +61,18 @@ namespace MobileGL::MG_Pipe {
         NewPixelPack,            // PixelStoreParameters (pack)         -> set_pixel_pack_state
         NewPatchState,           // the patch trio, NaN legal           -> set_patch_state
         NewVertexAttribDefaults, // glVertexAttrib* defaults            -> set_vertex_attrib_defaults
-        // ---- value class: computed and counted, emitted from P3a on ----
-        NewVertexElements,       // the bound VAO's attribute configuration
+        // ---- value class: NEW_VERTEX_ELEMENTS is emitted from P3a; the other three are
+        // still computed and counted, and are emitted from P3b/P4a on ----
+        NewVertexElements,       // the bound VAO's attribute configuration -> create/bind_vertex_elements
         NewShader,               // the current program's link version
         NewShaderBindings,       // image units, block bindings, uniform write set
         NewGlobalConstants,      // the default-uniform-block image
-        // ---- object class: computed and counted, emitted from P3b/P4b on ----
-        NewVertexBuffers,
-        NewIndexBuffer,
+        // ---- object class. THE FIRST TWO ARE P3a's, not P3b/P4b's: the roadmap puts
+        // set_vertex_buffers and set_index_buffer in the same phase as the vertex-elements
+        // trio, and this comment said otherwise until the commit that wired them. The rest
+        // are still computed and counted only. ----
+        NewVertexBuffers,        // -> set_vertex_buffers (P3a)
+        NewIndexBuffer,          // -> set_index_buffer   (P3a)
         NewFramebuffer,
         NewSamplerViews,
         NewSamplers,
@@ -86,11 +90,18 @@ namespace MobileGL::MG_Pipe {
         return Uint32{1} << static_cast<Uint32>(bit);
     }
 
-    // The five P2 emits for.
+    // The five P2 emits for. Each phase's constant survives as the next phase's A/B control
+    // and as what a test compares the subsystem map against, so none of them is edited in
+    // place when a later phase takes more bits over.
     inline constexpr Uint32 kMGPipeDirtyEmittedAtP2 =
         MGPipeDirtyBit(MGPipeDirty::NewRenderState) | MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
         MGPipeDirtyBit(MGPipeDirty::NewPixelPack) | MGPipeDirtyBit(MGPipeDirty::NewPatchState) |
         MGPipeDirtyBit(MGPipeDirty::NewVertexAttribDefaults);
+
+    // The three P3a adds: the vertex-input family, all on one subsystem.
+    inline constexpr Uint32 kMGPipeDirtyEmittedAtP3a =
+        kMGPipeDirtyEmittedAtP2 | MGPipeDirtyBit(MGPipeDirty::NewVertexElements) |
+        MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers) | MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer);
 
     inline constexpr const char* kMGPipeDirtyNames[kMGPipeDirtyCount] = {
         "NEW_RENDER_STATE",
@@ -127,8 +138,16 @@ namespace MobileGL::MG_Pipe {
             return kMGPipeSubsystemPatchState;
         case MGPipeDirty::NewVertexAttribDefaults:
             return kMGPipeSubsystemVertexAttribDefaults;
+        // P3a's three, all one subsystem: create/bind_vertex_elements, set_vertex_buffers
+        // and set_index_buffer are the vertex-input family and an operator switching it off
+        // has to get the whole family's legacy arm, not two thirds of it.
+        // PipeFill.cpp's SubsystemForEmitter carries the pairing static_asserts.
+        case MGPipeDirty::NewVertexElements:
+        case MGPipeDirty::NewVertexBuffers:
+        case MGPipeDirty::NewIndexBuffer:
+            return kMGPipeSubsystemVertexInput;
         default:
-            // Bits 5..17 have no call of their own until P3a/P3b/P4a/P4b, so there is no
+            // The remaining bits have no call of their own until P3b/P4a/P4b, so there is no
             // subsystem to switch and the residual fill keeps supplying their fields.
             return 0;
         }
@@ -136,10 +155,18 @@ namespace MobileGL::MG_Pipe {
 
     // A COMPOSITE shutter, for the bits whose "did anything move" is more than one counter.
     // It is a hash, so two different states can in principle collide and cost a MISSED fire.
-    // That is acceptable for bits 5..17 and only for them: nothing consumes those bits in
-    // P2, and P3 replaces each with its own exact shutter as it takes the subsystem over.
-    // The five bits P2 EMITS for are never composed - they are widened counters and byte
+    // The five bits P2 emits for are never composed - they are widened counters and byte
     // compares, neither of which can collide.
+    //
+    // P3a's three ARE composed, so the risk is now real rather than academic, and it is
+    // accepted with its size stated: each mix takes a 64-bit input into a 64-bit
+    // accumulator, so two DIFFERENT vertex configurations collide with probability ~2^-64
+    // per pair, and the inputs are a monotone lifetime id, a monotone configuration version
+    // and a widened slot version - none of which an application can steer. The alternative,
+    // comparing the whole 32-attribute configuration byte for byte on every verb, is the
+    // per-draw cost the shutter exists to avoid. The narrowing that removes the composition
+    // for bit 10 - its own slot version plus the bound object's identity - is what this
+    // phase already did to the one shutter that was composed over an unrelated aggregate.
     inline constexpr Uint64 MGPipeMixShutter(Uint64 accumulator, Uint64 value) {
         accumulator ^= value + 0x9e3779b97f4a7c15ull + (accumulator << 6) + (accumulator >> 2);
         return accumulator;
@@ -240,12 +267,39 @@ namespace MobileGL::MG_Pipe {
             const Uint64 textureParams = ctx.GetAnyTextureParamsGeneration();
             const Uint64 buffers = ctx.GetAnyBufferChangeGeneration();
 
-            now[Index(MGPipeDirty::NewVertexBuffers)] =
-                MGPipeMixShutter(ctx.GetAnyVaoAttributeGeneration(), vaoIdentity);
-            // The index buffer lives in the bound VAO's element slot and P2 has no cheap
-            // shutter for that slot alone, so it shares the buffer aggregate and over-fires
-            // on any buffer write anywhere. P3b narrows it when it takes the subsystem over.
-            now[Index(MGPipeDirty::NewIndexBuffer)] = MGPipeMixShutter(buffers, vaoIdentity);
+            // Bit 9. The VAO attribute aggregate mixed with the bound VAO's identity is
+            // already exact for the SET - it is bumped by all three Bump*Version functions,
+            // which are the only writers of an attribute's format, buffer or enable state -
+            // and a driver-id re-mint that moves no client counter is caught server-side by
+            // the backend's own id generation.
+            //
+            // THE PENDING BASE INSTANCE IS MIXED IN, and this is a deviation from the design
+            // note that said "keep the shutter" (recorded in client-v1.md): the draw's
+            // baseInstance is now an EXPLICIT field of set_vertex_buffers and a
+            // ContentHash input, and it moves neither the attribute aggregate nor the VAO
+            // identity. Without it here, a draw whose only change is its base instance would
+            // never reach the emitter at all and the server would keep the previous fetch
+            // shift - which is the same silently-wrong-geometry the backend's
+            // baseInstanceDirty flag exists to prevent, one level further out. It fires
+            // extra only on the draws that actually carry one.
+            now[Index(MGPipeDirty::NewVertexBuffers)] = MGPipeMixShutter(
+                MGPipeMixShutter(ctx.GetAnyVaoAttributeGeneration(), vaoIdentity), m_pendingBaseInstance);
+            // Bit 10, NARROWED (P3a, D-I). It used to mix the whole buffer-CONTENT aggregate
+            // with the VAO identity and therefore fired on any buffer write anywhere; what
+            // it guards is one binding slot, so it now reads that slot's own version and the
+            // identity of what is bound to it. The version is a WRAPPING Uint16 bumped only
+            // on a real change, so it goes through the widened counter at this boundary; the
+            // bound object's lifetime id joins it because identity is what closes the wrap
+            // hole. The VAO identity stays in the mix because the element slot BELONGS to
+            // the bound VAO - switching VAOs switches slots.
+            Uint64 indexShutter = 0;
+            if (vao) {
+                const auto& indexSlot = vao->GetIndexBufferBindingSlot();
+                const auto& indexObject = indexSlot.GetBoundObject();
+                indexShutter = MGPipeMixShutter(m_indexSlotVersion.Observe(indexSlot.GetVersion()),
+                                                indexObject ? indexObject->GetLifetimeId() : 0);
+            }
+            now[Index(MGPipeDirty::NewIndexBuffer)] = MGPipeMixShutter(vaoIdentity, indexShutter);
             now[Index(MGPipeDirty::NewFramebuffer)] = MGPipeMixShutter(
                 ctx.GetAnyFramebufferAttachmentGeneration(),
                 m_framebufferBind.Observe(
@@ -315,6 +369,8 @@ namespace MobileGL::MG_Pipe {
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
+            m_indexSlotVersion.Reset();
+            m_pendingBaseInstance = 0;
             m_pack = PixelStoreParameters{};
             m_patch = PatchTrio{};
             m_staged = RenderStateParameters{};
@@ -368,6 +424,19 @@ namespace MobileGL::MG_Pipe {
         AttribDefaults& StagedAttribDefaults() { return m_stagedAttribs; }
         const AttribDefaults& StagedAttribDefaults() const { return m_stagedAttribs; }
 
+        // ---- P3a D-H2: the draw's vertex-FETCH base instance ----
+        //
+        // It lives HERE rather than in a file static because bit 9's shutter has to see it:
+        // an ambient process global cannot cross a pushed boundary, and the value is now an
+        // explicit field of set_vertex_buffers and an input to its content hash, so a draw
+        // whose only change is its base instance has to reach the emitter. Set immediately
+        // before the fill at the three *BaseInstance draw entry points; CONSUMED and cleared
+        // by the validate point once it has been emitted, so a plain draw that follows one
+        // sees 0 again whether or not anything called MGPipeLeaveVerb in between.
+        void SetPendingBaseInstance(Uint32 baseInstance) { m_pendingBaseInstance = baseInstance; }
+        Uint32 PendingBaseInstance() const { return m_pendingBaseInstance; }
+        void ClearPendingBaseInstance() { m_pendingBaseInstance = 0; }
+
     private:
         static constexpr SizeT Index(MGPipeDirty bit) { return static_cast<SizeT>(bit); }
 
@@ -383,6 +452,12 @@ namespace MobileGL::MG_Pipe {
         // The draw framebuffer BINDING slot version, widened for the same reason: a Uint16
         // that wrapped would let a composite shutter repeat and cost a missed fire.
         MGPipeWidenedCounter m_framebufferBind;
+        // The BOUND VAO's element-array slot version, widened for the same reason. One
+        // counter over a slot that changes with the bound VAO: a stale high word can only
+        // ADD a fire, never drop one, and the VAO identity in the same mix is what makes a
+        // switch between two VAOs differ whatever their slot versions read.
+        MGPipeWidenedCounter m_indexSlotVersion;
+        Uint32 m_pendingBaseInstance = 0;
         // Bits 2 and 3 are BitwiseEqual shutters, not counters.
         PixelStoreParameters m_pack{};
         PatchTrio m_patch{};

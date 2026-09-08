@@ -20,6 +20,7 @@
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/Tracker.h>
+#include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeMutation.h>
@@ -770,6 +771,21 @@ namespace MobileGL::MG_Pipe {
         ctx->RecordError(code, Move(info));
     }
 
+    // P3a D-H2.1. The draw's RAW vertex-fetch base instance, set immediately before the fill
+    // at the three *BaseInstance draw entry points. It replaces the ambient process global
+    // the backend used to read, which is a shape that cannot cross a pushed boundary; the
+    // value travels as an explicit field of set_vertex_buffers and the SERVER decides
+    // whether to emulate the fetch shift or let GL_EXT_base_instance do it.
+    //
+    // Indirect draws pass nothing: none of the three sites is in an indirect loop, per-command
+    // base instances are resolved server-side out of the indirect commands, and the client
+    // emits 0 for every indirect path.
+    void MGPipeSetPendingBaseInstance(Uint32 baseInstance) {
+        MGPipeTrackerInstance().SetPendingBaseInstance(baseInstance);
+    }
+
+    Uint32 MGPipePendingBaseInstance() { return MGPipeTrackerInstance().PendingBaseInstance(); }
+
     void MGPipeLeaveVerb() {
         PipeInputs& inputs = gPipeInputs;
 #if MOBILEGL_PIPE_POISON
@@ -778,6 +794,11 @@ namespace MobileGL::MG_Pipe {
         ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
         MGPipeFillAccess::SetVerb(inputs, MGPipeVerb::kVerbCount);
+        // The pending base instance belongs to the verb that was about to run, so leaving
+        // one drops it. The validate point clears it too, after the emission consumed it -
+        // the two together are what make a plain draw after a base-instanced one see 0
+        // again, and neither of them relies on the other being called.
+        MGPipeTrackerInstance().ClearPendingBaseInstance();
     }
 
 
@@ -898,7 +919,8 @@ namespace MobileGL::MG_Pipe {
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
                                                   kMGPipeSubsystemVertexAttribDefaults |
-                                                  kMGPipeSubsystemResources;
+                                                  kMGPipeSubsystemResources |
+                                                  kMGPipeSubsystemVertexInput;
 
         // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
         // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason
@@ -919,10 +941,30 @@ namespace MobileGL::MG_Pipe {
         //     retiring that pull is blocked on A teaching the applier to switch on
         //     ValueClass. EmitVertexAttribDefaults checks rather than trusts, and repairs the
         //     mirror when the applier's write does not reproduce the value.
+        //
+        //   GetBoundVertexArray is P3a's row, and Coverage.def asks for the decision to be
+        //     taken HERE, deliberately, rather than inherited from the row's presence. THE
+        //     ANSWER IS NO, and it is not a matter of degree: the field's storage is a
+        //     SharedPtr<VertexArrayObject> - a frontend heap reference - and the call that
+        //     supplies it, bind_vertex_elements, carries an eight-byte {slot, gen} handle
+        //     and nothing else. The applier stores that handle in
+        //     MGPipeApplierState::BoundVertexElements; it has no way to produce the pointer,
+        //     and P3a deliberately does not give it one (a payload never contains a pointer,
+        //     and the whole point of the conversion is that the server stops holding
+        //     frontend references). Skipping the pull would leave m_boundVertexArray null on
+        //     every draw of every push build - which is not a subtle staleness, it is every
+        //     backend read of the bound VAO reading nothing.
+        //
+        //     So the row is EMITTED-AND-STILL-PULLED, exactly like GetPixelStoreParameters:
+        //     the call goes out because the server needs the format, and the field keeps
+        //     coming through the residual fill because the mirror is a pointer only the
+        //     client can hold. What retires the pull is not a better applier - it is P8,
+        //     where the backend stops reading a frontend VAO at all.
         constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
             switch (field) {
             case MGPipeInputField::GetPixelStoreParameters:
             case MGPipeInputField::GetCurrentVertexAttribute:
+            case MGPipeInputField::GetBoundVertexArray:
                 return false;
             default:
                 return true;
@@ -1274,33 +1316,27 @@ namespace MobileGL::MG_Pipe {
             return payloadBytes;
         }
 
-        // ---- P3a's three vertex-input emitters. STUBS AT THE CONTRACT COMMIT. ----
+        // ---- P3a's three vertex-input emitters (D-G3, D-H3, D-I) ----
         //
-        // They exist here, and are called from the validate point below, for the same reason
-        // the applier's fourteen entry points exist as stubs: this file's enum-coupled block
-        // is the contract commit's and everything else in it belongs to the commit that
-        // fills the bodies in, so the two must not have to touch the same lines. What lands
-        // here is the SHAPE - three functions, in the emission order the design fixes
-        // (elements, then buffers, then index, after the four P2 emitters) - and the bodies
-        // replace `return 0` without moving a call site.
+        // The shape - three functions in the fixed order elements, then buffers, then index,
+        // after the four P2 emitters - is the contract commit's, so that the commit which
+        // fills the bodies in does not also have to edit the validate point. All three now
+        // have bodies and MGPipeSubsystemForDirty maps their bits onto the vertex-input
+        // subsystem, so `wants()` can be true.
         //
-        // THEY ARE UNREACHABLE, not merely empty: MGPipeSubsystemForDirty maps NEW_VERTEX_
-        // ELEMENTS / _BUFFERS / _INDEX_BUFFER onto no subsystem yet, so `wants()` is false
-        // for all three whatever MOBILEGL_PIPE_PUSH says. Returning 0 keeps them out of the
-        // payload histogram, which must not gain a bucket for bytes nobody sent.
+        // Everything they do lives in MG_Impl/Pipe/VertexInputEmit.h; what is here is the
+        // adaptation to the validate point's byte-counting contract.
         Uint64 EmitVertexElements(GLContext& ctx) {
-            (void)ctx;
-            return 0;
+            return MGPipeVertexInputEmitterInstance().EmitVertexElements(ctx);
         }
 
         Uint64 EmitVertexBuffers(GLContext& ctx) {
-            (void)ctx;
-            return 0;
+            MGPipeTracker& tracker = MGPipeTrackerInstance();
+            return MGPipeVertexInputEmitterInstance().EmitVertexBuffers(ctx, tracker.PendingBaseInstance());
         }
 
         Uint64 EmitIndexBuffer(GLContext& ctx) {
-            (void)ctx;
-            return 0;
+            return MGPipeVertexInputEmitterInstance().EmitIndexBuffer(ctx);
         }
     } // namespace
 
@@ -1369,6 +1405,10 @@ namespace MobileGL::MG_Pipe {
             MGPipeCsoCacheInstance().Reset();
             MGPipeApplierReset();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
+            // P3a: and the vertex-input emitter's latches, for the same reason - they say
+            // "this handle has already published this configuration" about an applier whose
+            // vertex-elements records the reset above has just dropped.
+            MGPipeVertexInputEmitterInstance().Reset();
             g_residualDue = true;
         }
 
@@ -1399,6 +1439,11 @@ namespace MobileGL::MG_Pipe {
         if (wants(MGPipeDirty::NewIndexBuffer)) {
             payloadBytes += EmitIndexBuffer(*ctx);
         }
+        // CONSUMED, so the next verb starts from zero. The tracker's bit-9 shutter read it
+        // above and EmitVertexBuffers put it on the wire; leaving it set would give the next
+        // draw the previous draw's fetch shift, which is the exact defect the explicit field
+        // exists to remove.
+        tracker.ClearPendingBaseInstance();
 
         // ---- step 4: the residual fill, for what an emitted call did NOT supply ----
         const Bool applierDerives = ApplierDerivesRenderStateFields();
