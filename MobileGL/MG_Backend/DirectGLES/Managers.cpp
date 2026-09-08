@@ -214,7 +214,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             case MG_Pipe::MGPipeKind::ShaderCso:
                 PrgramImpl::g_backendProgramObjects.DestroyByLifetimeId(lifetimeId);
                 break;
-#if MOBILEGL_PIPE_PUSH
             case MG_Pipe::MGPipeKind::SamplerViewCso:
                 // P4a (D-I1, D5): the sixth kind, and the only one whose notice names a
                 // lifetime id that belongs to ANOTHER object - a sampler view is minted off its
@@ -233,7 +232,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // even a double release is a pointer reset.
                 SamplerViewImpl::BackendSamplerViewTable::OnFrontendObjectDestroyed(lifetimeId);
                 break;
-#endif
             case MG_Pipe::MGPipeKind::VertexElementsCso:
                 // P3a C-1: this is now the SECOND path, not the only one. The client speaks the
                 // whole death itself (MGPipeEmitVertexElementsDestroyAndFree: delete the
@@ -6974,13 +6972,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // and the bytes-per-texel it just derived - the same two numbers,
                             // from the other side of the wire.
 #if MOBILEGL_PIPE_PUSH
+                            // m-2: THE PITCH IS THE LEVEL'S (D-D3), so every region of one level
+                            // states the same one - and v1 read Regions.front() and would have
+                            // strided the rest at the first one's pitch, silently, if a record
+                            // ever disagreed. This is the assert the review asked for rather than
+                            // a per-region loop feeding per-region strides: a record whose regions
+                            // disagree is corrupt, not a shape the upload planner should learn.
+                            // On disagreement the carried pair is DROPPED and the level's own
+                            // extent times bpp is used, which is what the legacy arm computes.
+                            Bool pendingStridesAgree = true;
+                            if (pendingUpload != nullptr && !pendingUpload->Regions.empty()) {
+                                const auto& firstRegion = pendingUpload->Regions.front();
+                                for (const auto& region : pendingUpload->Regions) {
+                                    if (region.SrcRowStride == firstRegion.SrcRowStride &&
+                                        region.SrcSliceStride == firstRegion.SrcSliceStride) {
+                                        continue;
+                                    }
+                                    pendingStridesAgree = false;
+                                    MGLOG_E_ONCE("MGPipe: texture %u level %u carries regions with two "
+                                                 "different level pitches (%u/%u and %u/%u) - a pitch is "
+                                                 "the LEVEL's, so the carried pair is dropped and the "
+                                                 "extent is used instead",
+                                                 stateTextureObject->GetExternalIndex(),
+                                                 static_cast<Uint>(level), firstRegion.SrcRowStride,
+                                                 firstRegion.SrcSliceStride, region.SrcRowStride,
+                                                 region.SrcSliceStride);
+                                    break;
+                                }
+                            }
                             const SizeT carriedRowBytes =
-                                (pendingUpload != nullptr && !pendingUpload->Regions.empty() &&
+                                (pendingUpload != nullptr && pendingStridesAgree &&
+                                 !pendingUpload->Regions.empty() &&
                                  pendingUpload->Regions.front().SrcRowStride != 0)
                                     ? static_cast<SizeT>(pendingUpload->Regions.front().SrcRowStride)
                                     : 0;
                             const SizeT carriedSliceBytes =
-                                (pendingUpload != nullptr && !pendingUpload->Regions.empty() &&
+                                (pendingUpload != nullptr && pendingStridesAgree &&
+                                 !pendingUpload->Regions.empty() &&
                                  pendingUpload->Regions.front().SrcSliceStride != 0)
                                     ? static_cast<SizeT>(pendingUpload->Regions.front().SrcSliceStride)
                                     : 0;
@@ -7049,6 +7077,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                        static_cast<SizeT>(rect.lo.y()) * levelRowBytes +
                                        static_cast<SizeT>(rect.lo.x()) * bpp;
                             };
+// m-1 / D-D3, "carried, never inferred": MGPSubRegion::SrcOffset is the byte offset of that
+// region's origin into the level shadow - the same number the lambda above derives from the
+// origin and the two strides - and on the handle arm it is READ rather than re-derived. Every
+// site that uses it is inside `subRectEligible`, which requires uploadData == mipData, so the
+// base the offset is relative to is the level shadow itself and never a conversion buffer.
+//
+// A MACRO AND NOT A SECOND LAMBDA, for DV-9's measured reason: this function's nine ErrorLopper
+// lambdas are mangled ...::$_N BY POSITION, so one more renumbers every one of them and moves
+// the PULL build's symbol set, whose admitted-change set is EMPTY. The pull expansion is the
+// pre-P4a call with one pair of parentheses. #undef'd with the rest.
+#if MOBILEGL_PIPE_PUSH
+#define MGB_RECT_SRC_PTR(idx, rect)                                                                                    \
+    ((pendingUpload != nullptr && static_cast<SizeT>(idx) < pendingUpload->Regions.size())                              \
+         ? static_cast<const Uint8*>(uploadData) +                                                                     \
+               static_cast<SizeT>(pendingUpload->Regions[static_cast<SizeT>(idx)].SrcOffset)                            \
+         : rectShadowPtr(rect))
+#else
+#define MGB_RECT_SRC_PTR(idx, rect) (rectShadowPtr(rect))
+#endif
                             // Unpack-ring staging plan, decided ONCE for whichever branch
                             // below runs: either every glTexSubImage of this level sources
                             // from the ring or none does, so the pixel-unpack binding is
@@ -7073,7 +7120,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                     const auto& rect = dirtyRects[r];
                                     stagingBlocks[r] = {
-                                        rectShadowPtr(rect),
+                                        MGB_RECT_SRC_PTR(r, rect),
                                         static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
                                         static_cast<SizeT>(rect.hi.y() - rect.lo.y()),
                                         static_cast<SizeT>(std::max(rect.hi.z() - rect.lo.z(), 1)),
@@ -7168,7 +7215,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat,
                                             glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
-                                                       : static_cast<const void*>(rectShadowPtr(rect)));
+                                                       : static_cast<const void*>(MGB_RECT_SRC_PTR(r, rect)));
                                     }
                                     // The surrounding ScopedDefaultUnpackState shadow says 0.
                                     if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -7212,7 +7259,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             static_cast<GLsizei>(rect.hi.z() - rect.lo.z()), glFormat,
                                             glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
-                                                       : static_cast<const void*>(rectShadowPtr(rect)));
+                                                       : static_cast<const void*>(MGB_RECT_SRC_PTR(r, rect)));
                                     }
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
@@ -7495,6 +7542,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #undef MGB_LEVEL_NEEDS_UPLOAD
 #undef MGB_LEVEL_UPLOAD_DONE
+#undef MGB_RECT_SRC_PTR
 #undef MGB_STORAGE_FORMAT
 #undef MGB_STORAGE_BASE_SIZE
 #undef MGB_STORAGE_LEVELS
@@ -8009,7 +8057,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // float one: two integer borders that differ above 2^24 (16777216 and 16777217, say)
             // collapse onto the same float, so a float-only comparison would skip the second sync and
             // leave the driver holding the first value forever.
+#if MOBILEGL_PIPE_PUSH
+            // m-3: GATED, because on the handle arm an unreadable border means the CSO record is
+            // missing and the block below is skipped with the refusal already named - so v1's
+            // unconditional initialiser was a live frontend read on a switched-over path whose
+            // value nothing then used. The value a skipped block sees is the cache's own, which
+            // cannot make the condition true.
+            const auto borderColorForm = borderColorReadable ? MGB_TEXPARAM_BORDER_FORM : m_cacheBorderColorForm;
+#else
             const auto borderColorForm = MGB_TEXPARAM_BORDER_FORM;
+#endif
             if (!isMultisampleTarget &&
 #if MOBILEGL_PIPE_PUSH
                 borderColorReadable &&
