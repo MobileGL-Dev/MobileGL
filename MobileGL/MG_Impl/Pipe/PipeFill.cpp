@@ -995,36 +995,35 @@ namespace MobileGL::MG_Pipe {
                           MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
                       "set_vertex_attrib_defaults and NEW_VERTEX_ATTRIB_DEFAULTS must name one subsystem");
 
-        // P3a's pairing, in the two halves the contract commit can actually state.
+        // P3a's pairing, now stated as the SAME EQUALITY the four above are (contract-review
+        // m4, closed here).
         //
-        // The four above compare the two maps directly, which is only possible once BOTH
-        // sides name the subsystem. MGPipeSubsystemForDirty is MG_Impl/Pipe/Tracker.h's and
-        // its bit 5 / 9 / 10 arms land with the client emitters, not here - so the direct
-        // form would fail at this commit for a reason that is not a defect. What is stated
-        // instead is exactly as strong in the direction that matters:
+        // It was written with an escape hatch - `MGPipeSubsystemForDirty(...) == 0 ||` - because
+        // at the contract commit Tracker.h's bit 5 / 9 / 10 arms did not exist yet and the
+        // direct form would have failed for a reason that was not a defect. That hatch was
+        // explicitly conditional on the dirty half being unmapped, and the dirty half is now
+        // mapped (Tracker.h:145-148), so it is removed: leaving it would mean a later edit that
+        // unmapped one of these bits again passed silently, which is precisely what these
+        // assertions exist to catch.
         //
-        //   (a) the emitter half names the vertex-input subsystem, so a later edit that moved
-        //       it onto a different one fails here;
-        //   (b) the two maps AGREE OR THE DIRTY HALF IS NOT MAPPED YET. The escape hatch is
-        //       the not-yet-mapped case only: the moment Tracker.h maps NEW_VERTEX_ELEMENTS
-        //       onto anything at all, this becomes the equality the four above are;
-        //   (c) and while the dirty half is unmapped the subsystem is NOT in
-        //       kMGPipeWiredSubsystems below, so no field can be skipped on the strength of a
-        //       call nobody emits. (c) is what makes (b)'s hatch safe rather than convenient.
+        // AND ALL THREE COMPARE AGAINST SubsystemForEmitter, not against the constant. Two of
+        // them named kMGPipeSubsystemVertexInput directly, which asks a different and weaker
+        // question: it pins the dirty half to a constant instead of pinning the two MAPS to
+        // each other, so an emitter row moved onto another subsystem would still satisfy them
+        // while the emission gate and the residual-fill skip had begun to disagree. C.5's trap
+        // is exactly that kind of near-miss. bind_vertex_elements is the family's only
+        // Coverage.def emitter row, so it is the emitter side of all three.
         static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) ==
                           kMGPipeSubsystemVertexInput,
                       "bind_vertex_elements must name the vertex-input subsystem");
-        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) == 0 ||
-                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) ==
-                              SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
                       "bind_vertex_elements and NEW_VERTEX_ELEMENTS must name one subsystem");
-        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) == 0 ||
-                          MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) ==
-                              kMGPipeSubsystemVertexInput,
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
                       "set_vertex_buffers and NEW_VERTEX_BUFFERS must name one subsystem");
-        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) == 0 ||
-                          MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) ==
-                              kMGPipeSubsystemVertexInput,
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
                       "set_index_buffer and NEW_INDEX_BUFFER must name one subsystem");
         // The two vertex views' capacity is one number on both sides of the boundary. This is
         // the one translation unit that sees the frontend constant and the MG_Pipe one, so it

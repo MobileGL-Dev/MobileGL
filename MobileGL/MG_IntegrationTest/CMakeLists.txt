@@ -892,6 +892,24 @@ gtest_discover_tests(MobileGLIntegrationTest
 # table, and LookupVaoDrawMemo); it steers nothing on DirectGLES, and a lane that configured it
 # there would be a permanent skip claiming to be a control.
 #
+# SO THE BUFFER ABA's CORRUPTION EVIDENCE IS MAGMA-ONLY, AND THAT IS RECORDED RATHER THAN LEFT
+# AS AN ABSENCE (gates m10, closed here as a statement rather than as a lane). P3a re-keys the
+# BUFFER on DirectGLES - resource_* now dispatches by handle - so the obvious next move is a
+# DirectGLES `.AbaControl` lane over ABufferAtARecycledAddressDoesNotInheritItsPredecessorsContents.
+# It is not a registration-only change and it is therefore not made here: the knob has exactly
+# one consumer in the tree (MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h's
+# MagmaPipeAbaControlDefeatsIdentity, which is what the MGL_ITEST_MAGMA_ABA probe above looks
+# for), so a DirectGLES lane would run with the knob inert, fail to reproduce the corruption it
+# asserts, and go RED in an always-on integration-gpu lane - the exact failure mode the header
+# of HandleRecycleScenario.cpp records this file already having had once.
+#
+# What that costs, stated so the next reader does not have to re-derive it: on DirectGLES the
+# buffer case's Handles arm proves the re-key does NOT alias, and nothing proves the reproducer
+# could still see an aliasing that was reintroduced there. The positive control for that is a
+# Features.PipeHandleAbaControl consumer over Espryt's resource slot table - one `if` in
+# GetOrCreate / FindByHandle, the way MagmaPipeClaimSlotMemos is Magma's - and it belongs with
+# whoever next touches that table, not with a lane registration.
+#
 # It gets TWO lanes, because there are two arms and the control has to reach the one P2 SHIPS.
 # `AbaControl` is D18's lane verbatim (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) and defeats the
 # lifetime-id/address guards; `AbaControlHandles` runs the handle arm (MOBILEGL_PIPE_LEGACY_MEMOS=0,

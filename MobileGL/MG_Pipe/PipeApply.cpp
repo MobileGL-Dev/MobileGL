@@ -628,6 +628,20 @@ namespace MobileGL::MG_Pipe {
         g_applier.VertexBufferCount = 0;
         g_applier.VertexFetchBaseInstance = 0;
         g_applier.IndexBuffer = MGPIndexBuffer{};
+        // m6 / wire n6, written down rather than left to be rediscovered: THIS counter is
+        // per-applier and is zeroed at every make-current, while MG_Util::PipeStats' `mpr` -
+        // emitted from the CLIENT at MG_Impl/Pipe/PipeFill.cpp's MGPipeEmitMapPersistent - is
+        // process-wide and is windowed by EndFrame. The two therefore disagree across a context
+        // switch, by design and not by accident: this one answers "how many round trips has THIS
+        // applier been asked for since it was last reset", which is what a unit case driving the
+        // applier directly wants, and PipeStats' answers "how many did the process take in this
+        // window", which is what a lane reading a log line wants.
+        //
+        // WHICH ONE THE GATES ASSERT ON, because that was the open question: G10
+        // (StorageBufferRegrow) and G12 read PipeStats' `mpr` out of the lane's own log through
+        // MG_IntegrationTest/Harness/PipeStatsWindow.h - they cannot link this symbol at all, on
+        // Android or anywhere else - so a make-current inside a scenario cannot silently reset
+        // what they measure. Nothing outside MG_Test reads the member below.
         g_applier.MapPersistentRoundtrips = 0;
         // THE TWO SERIALS ADVANCE; THEY ARE NOT ZEROED. They are MGGens, and an MGGen that
         // walks backwards is not one. There are exactly three things a reset can do to a
