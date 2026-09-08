@@ -2773,6 +2773,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // rather than trusting a record nothing checked.
         static Bool g_fboRecordsTrusted = false;
 
+        // A9 (the review's MAJOR-4, and it is PACKAGE D's fix, not this file's): every call
+        // site of this function in DirectGLES.cpp is paired with
+        // FramebufferImpl::InvalidateFramebufferBindingCache() - all six, verified - but that
+        // function lives in Managers.cpp (D's file for the whole phase) and has three further
+        // callers this package cannot reach: MG_Test/SanityTest.cpp's ScopedStateGuardMocks::
+        // ResetShadows and ScopedBackendTwinMocks' ctor and dtor. Those three clear the
+        // pre-handle trio and leave g_fboSyncedSerials and g_fboRecordsTrusted stale across a
+        // GLES function-table swap - harmless while every arm declines, but on the integrated
+        // tree with bit 9 set a fixture can be entered with the records trusted and a memo
+        // claiming a target is synced, so BindCurrentFBO would bind from a record while the
+        // mock table is installed. THE FIX IS TO CALL THIS FROM INSIDE
+        // InvalidateFramebufferBindingCache so no caller can forget; it is one line in D's
+        // file and it is on D's rework list.
         static void InvalidateFramebufferHandleArmMemos() {
             for (auto& memo : g_fboSyncedSerials) memo.valid = false;
             g_fboRecordsTrusted = false;
@@ -3943,9 +3956,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //   stop on every arm, it is one #if away and this comment is where to say so.
             if (record->GlobalConstants.size() < static_cast<SizeT>(program->GetUBOSize())) {
 #if MOBILEGL_PIPE_POISON || MOBILEGL_PIPE_VERIFY
-                MGLOG_F("MGPipe: Fatal{ProtocolCorruption} A program record does not describe the "
-                        "binding it names: the ShaderCso record {slot %u, gen %u} carries a %llu-byte "
-                        "global-constant block for a %llu-byte default uniform block.",
+                MGLOG_F("MGPipe: Fatal{ProtocolCorruption} "
+                        "A program record does not describe the binding it names: the ShaderCso "
+                        "record {slot %u, gen %u} carries a %llu-byte global-constant block for a "
+                        "%llu-byte default uniform block.",
                         static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
                         static_cast<unsigned long long>(record->GlobalConstants.size()),
                         static_cast<unsigned long long>(program->GetUBOSize()));
@@ -3991,8 +4005,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // SyncCurrentFBO immediately before this, so the records have just been
                 // checked against the two bindings.
                 if (EsprytDrawFramebufferHandlesEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
-                    const auto& st = MG_Pipe::MGPipeApplier();
-                    const MG_Pipe::MGPFramebufferState& record = st.DrawFramebuffer;
+                    const MG_Pipe::MGPFramebufferState& record =
+                        BoundFramebufferRecord(FramebufferTarget::Draw);
+                    // P4a decline-site F7: unreachable - g_fboRecordsTrusted implies both
+                    //   handles are non-null (SyncCurrentFBOByRecord sets the latch only after
+                    //   it has rejected a null on either target, and it runs immediately before
+                    //   this in PrepareForDraw). At the verification round it becomes a
+                    //   MOBILEGL_ASSERT or is deleted; it must not become a silent decline that
+                    //   looks like a legitimate one.
                     if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
                         if (!g_broadcastMemoHandleValid || g_broadcastMemoContentHash != record.ContentHash) {
                             Uint enabledDrawBuffers = 0;
@@ -4156,17 +4176,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // IsDefault byte, rather than the bound object's address and a comparison against
         // pDefaultFramebufferInfo->defaultFBO.
         if (EsprytDrawFramebufferHandlesEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
-            const auto& st = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPFramebufferState& record =
-                target == FramebufferTarget::Draw ? st.DrawFramebuffer : st.ReadFramebuffer;
+            const MG_Pipe::MGPFramebufferState& record = BoundFramebufferRecord(target);
             // The record's own handle is the "has this binding ever been described" test, not
             // FramebufferSerial - which MGPipeApplierReset advances whether or not anything
             // was ever emitted (see SyncCurrentFBOByRecord). The trust latch above is the
             // other half: it says the sync that ran a moment ago found these two records
             // describing these two bindings.
+            // P4a decline-site F5: unreachable, same argument as F7 above - the trust latch
+            //   implies a non-null handle on both targets. Becomes a MOBILEGL_ASSERT or is
+            //   deleted at the verification round.
             if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
                 if (record.IsDefault == 0) {
                     auto* twinEntry = FramebufferImpl::g_backendFramebufferObjects.FindByHandle(record.Fbo);
+                    // P4a decline-site F6: S - already loud, and it KEEPS this shape at the
+                    //   verification round: binding nothing is exactly what the pre-handle arm
+                    //   does in the same situation, so the two arms stay at parity.
                     if (twinEntry && *twinEntry) {
                         (*twinEntry)->Bind(target);
                     } else {
@@ -4287,11 +4311,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         FramebufferImpl::g_fboSyncedBackendIdGenerations[(SizeT)target] =
             FramebufferImpl::g_attachmentBackendIdGeneration;
 #if MOBILEGL_PIPE_PUSH
-        // The handle arm's equivalent, and it is stamped per target for exactly the reason the
-        // memo is kept per target at all: this entry point syncs ONE binding and must not
-        // claim the other one is current too.
+        // P4a decline-site F9 / MINOR-3: THE HANDLE ARM'S MEMO IS INVALIDATED HERE, NOT
+        //   STAMPED, and it is done per target for the reason the memo is kept per target at
+        //   all - this entry point syncs ONE binding and must not say anything about the other.
+        //
+        //   A stamp would claim "this target reflects the applier's RECORD as of this serial",
+        //   and nothing on this path consulted the record: SyncAndBindFramebufferObject above
+        //   syncs the FRONTEND object out of the binding slot. I could not turn the stamp into
+        //   a wrong-pixel scenario (any edit to the framebuffer moves its ContentHash and hence
+        //   the serial), but it is an invariant break with no demonstrable failure, and the
+        //   honest form costs at most one extra sync on the next draw.
         if (EsprytDrawFramebufferHandlesEnabled()) {
-            FramebufferImpl::StampSyncedFramebufferSerial(target, MG_Pipe::MGPipeApplier().FramebufferSerial);
+            FramebufferImpl::InvalidateSyncedFramebufferSerial(target);
         }
 #endif
     }
