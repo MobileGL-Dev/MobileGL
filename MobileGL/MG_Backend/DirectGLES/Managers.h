@@ -20,6 +20,11 @@
 #if MOBILEGL_PIPE_PUSH
 // P3a: the vertex-input payload views the handle arm of the VAO twin consumes.
 #include <MG_Pipe/MGPipeTypes.h>
+// P4a: the RECORDS the five re-keyed twins read instead of the frontend object. The readers
+// below hand back pointers to them, and MGPipeResourceRecord::PendingUpload is a nested type,
+// so a forward declaration would not do. Push-only, like everything else P4a adds to this
+// header, so the pull build's include graph is unchanged (D-P).
+#include <MG_Pipe/PipeApply.h>
 #endif
 
 namespace MobileGL::MG_Backend::DirectGLES {
@@ -657,6 +662,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const Bool enabled = ResolveProgramSubsystemArm();
         return enabled;
     }
+
+    // ---- P4a: what the twins read INSTEAD of the frontend object ----
+    //
+    // One reader per record kind, all const, all null-on-miss, and all bounds-checked against
+    // the applier's own dense table rather than against a constant: a slot at or above the
+    // table's size simply has no record, which is the same answer as "not live" and is not a
+    // protocol error on THIS side (the applier already refused and counted the call that would
+    // have created it - PipeApply.h's RefusedObjectCalls).
+    //
+    // A NULL ANSWER IS NOT A FALL-BACK TO THE FRONTEND. On a family's handle arm, quietly
+    // reaching into the frontend object again would hide a missing record behind a picture that
+    // still looks right, which is exactly what the subsystem A/B exists to expose
+    // (MarkBufferGpuWritten's note, P3a). Every caller below either declines the work with a
+    // named MGLOG_E_ONCE or runs its family's LEGACY arm, decided by the family latch and
+    // never per record.
+    //
+    // The returned pointer is into a Vector the applier may grow, so it is valid only until the
+    // next applier call - the same rule the legacy arm's map-into pointers carried, and every
+    // caller here reads what it needs and lets go.
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureRecordForHandle(MG_Pipe::MGPipeHandle res);
+    const MG_Pipe::MGPipeResourceRecord* PipeRenderbufferRecordForHandle(MG_Pipe::MGPipeHandle res);
+    const MG_Pipe::MGPipeSamplerCsoRecord* PipeSamplerCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
+    const MG_Pipe::MGPipeSamplerViewRecord* PipeSamplerViewRecordForHandle(MG_Pipe::MGPipeHandle view);
+    // ShaderCso is the one kind whose slot space is split in two on the CLIENT side - the
+    // composite band lives in its own dense table so a single program-pipeline composite does
+    // not grow a 983040-entry vector (contract D13). The server never learns a handle is a
+    // composite: this reader hides the split behind one lookup, exactly as the wire does.
+    const MG_Pipe::MGPipeShaderCsoRecord* PipeShaderCsoRecordForHandle(MG_Pipe::MGPipeHandle cso);
+
+    // The pending-upload entry the applier accumulated for this (uploadTarget, level) of this
+    // texture record, or null (D-D5). SERVER-SIDE STATE, and that is the whole point: the
+    // client clears its own dirty flags at EMISSION for the levels the applier accepted, while
+    // Espryt's upload loop has bail arms - an incomplete texture returns early, a multisample
+    // target refreshes and skips - that today leave the frontend flag set. A naive move of the
+    // clear to the client would lose exactly those texels. The set survives any number of
+    // bails; ConsumePipeTextureUpload below is called ONLY where the level actually uploaded.
+    const MG_Pipe::MGPipeResourceRecord::PendingUpload* FindPipeTextureUpload(
+        const MG_Pipe::MGPipeResourceRecord& record, Uint16 uploadTarget, Uint16 level);
+    void ConsumePipeTextureUpload(MG_Pipe::MGPipeHandle res, Uint16 uploadTarget, Uint16 level);
 #endif
 
     namespace BufferImpl {
@@ -1621,6 +1665,61 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // single-level texture with a mipmapping filter), and an incomplete texture samples
             // (0, 0, 0, 1) rather than its contents.
             Bool m_forceSamplerResync = false;
+#if MOBILEGL_PIPE_PUSH
+            // ---- P4a's handle arm: the two prologues that decide WHETHER there is work and
+            // WHERE the values come from. Both answer null for "nothing to do", which covers
+            // three cases the caller treats identically and the callee names individually in
+            // the log: the record's serial has not moved, this texture has no record at all,
+            // or its params name a sampler CSO the applier does not hold.
+            //
+            // NEITHER FALLS BACK TO THE FRONTEND. On this arm the texture family is switched
+            // over, and quietly re-reading the object would hide a missing record behind a
+            // picture that still looks right - which is precisely what the subsystem A/B exists
+            // to expose (MarkBufferGpuWritten's note, P3a).
+            const SamplerParameters* ResolvePushedBuiltinSampler(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+            // Hands back the whole RECORD rather than its Params, because the parameter push
+            // reads two things from beside them: Desc.InternalFormat, which decides the two
+            // channel-widening swizzle compositions, and Params.BuiltinSampler, which is where
+            // the border colour lives (it is sampler state, GL 4.6 table 23.18, and P4a does
+            // not duplicate it onto MGPTextureParams).
+            const MG_Pipe::MGPipeResourceRecord* ResolvePushedTextureParams(
+                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
+
+            // ---- P4a's handle arm (D-B3). Three server-owned serials that REPLACE, on their
+            // own arm, the six frontend-version memos above; the legacy members stay beside
+            // them under MOBILEGL_PIPE_LEGACY_MEMOS because ARCHITECTURE.md:369 keeps the
+            // pre-handle arm compiled through P3a/P4a, and because clearing the family's bit
+            // has to run the pre-handle arm rather than a half-migrated one.
+            //
+            // Inside the guard, so the PULL build's BackendTextureObject is byte-for-byte the
+            // pre-P4a object and G1's admitted-resize set stays empty (D-P).
+            //
+            // 0 is never a real serial - the applier's counters start at 1 and only ever
+            // advance, including across a make-current (PipeApply.cpp's three-way argument) -
+            // so a zeroed memo is a guaranteed miss and a fresh twin owes a full sync.
+
+            // The resource record's Serial at the last completed mipmap sync. It replaces the
+            // whole cheap-gate trio (m_syncedShapeContextId / m_syncedShapeGeneration /
+            // m_syncedShapeParamsVersion) AND m_syncedContentVersion: the applier bumps it on
+            // every respecify and every sub-data it applies to this resource, which is exactly
+            // the union those four covered, without the coarse "any texture's churn re-opens
+            // every gate" behaviour the sampling-resolution generation had.
+            Uint64 m_syncedResourceSerial = 0;
+            // The record's ParamsSerial at the last SyncTextureParamsToBackend. Replaces
+            // m_syncedTextureParamsVersion; MGPTextureParams::ForceResync replaces
+            // m_forceTextureParamsResync and is consumed the same way - read, acted on, and
+            // NOT written back, because the client never clears a server flag and the server
+            // never clears the client's (D-E2, the D-D5 inversion applied to two bits).
+            Uint64 m_syncedParamsSerial = 0;
+            // The BuiltinSampler CSO record's Serial at the last SyncBuiltinSamplerToBackend,
+            // plus the handle it was read through - a texture whose params name a DIFFERENT
+            // CSO than last time has had its sampling state replaced wholesale even if the new
+            // CSO's serial happens to match, which is a real sequence under content addressing
+            // (two textures sharing one CSO, then one of them diverging).
+            Uint64 m_syncedBuiltinSamplerSerial = 0;
+            MG_Pipe::MGPipeHandle m_syncedBuiltinSampler = MG_Pipe::kMGPipeNullHandle;
+#endif
         };
 
         void ActivateTextureUnit(Uint unit);
