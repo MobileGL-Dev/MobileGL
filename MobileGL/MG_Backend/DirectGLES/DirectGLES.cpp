@@ -1833,12 +1833,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // meet except with vanishing probability - and a collision costs a spare rebuild.
         static Bool UnitBindingsEpochFromRecords(Uint64& out) {
             const auto& st = MG_Pipe::MGPipeApplier();
-            // P4a decline-site T2: S - flips to MGLOG_E_ONCE-then-decline at the verification
-            //   round. Once bits 10/11 are on and B/C have landed, a draw that reaches here
-            //   with neither window ever received is a seam defect, not a transitional state;
-            //   the gate tick below (MINOR-4) is what makes the decline countable in the
-            //   meantime.
-            if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return false;
+            // P4a decline-site T2: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, then
+            //   the decline. Bits 10 and 11 are on (the caller asked
+            //   SamplerSubsystemEnabled(), which refuses one without the other) and package C
+            //   has landed, so a draw that reaches here with NEITHER window ever received is a
+            //   seam defect: no set_sampler_views and no bind_sampler_states has ever been
+            //   applied for a draw that is about to read texture units. It declines to the
+            //   snapshot walk rather than refusing the draw, because the walk answers the same
+            //   question correctly and a wrong picture is not the failure mode here - a silent
+            //   permanent fallback is, and that is what the line is for. The caller's MINOR-4
+            //   gate tick still counts every one of these.
+            if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) {
+                MGLOG_E_ONCE("A sampler record does not describe the binding it names: neither a "
+                             "sampler-view nor a sampler-state window has ever been applied while "
+                             "the sampler subsystem bit is set; running the pre-handle unit-bindings "
+                             "snapshot walk.");
+                return false;
+            }
             // Local, because the tracker's MGPipeMixShutter lives in MG_Impl and no backend
             // translation unit may reach for it.
             const Uint64 mixed =
@@ -1850,8 +1861,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         static Uint64 CurrentUnitBindingsEpoch(Int maxTouchedUnit) {
 #if MOBILEGL_PIPE_PUSH
-            // P4a decline-site T1: M - the mask says this family is not switched on; stays
-            //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
+            // P4a decline-site T1: M - the mask says this family is not switched on, and it
+            //   IS D's SamplerSubsystemEnabled() now. Silent, confirmed at the verification
+            //   round: the mask's word is the one thing a decline may be quiet about.
             if (SamplerSubsystemEnabled()) {
                 Uint64 epochFromRecords = 0;
                 if (UnitBindingsEpochFromRecords(epochFromRecords)) {
@@ -2069,8 +2081,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P4a decline-site F8 (read list): K - not a behavioural decline but a memo-KEY
             //   selection. Both key shapes are correct and are held in separate fields, so a
             //   process that runs the version key before the first emission and the ContentHash
-            //   key after it never compares one against the other. No flip at the verification
-            //   round.
+            //   key after it never compares one against the other. NO FLIP TAKEN at the
+            //   verification round; the null check is wire v3's pointer accessor, not a new
+            //   decline.
             if (FramebufferSubsystemEnabled()) {
                 const auto* record = BoundFramebufferRecord(FramebufferTarget::Read);
                 if (record != nullptr && !MG_Pipe::MGPipeHandleIsNull(record->Fbo)) {
@@ -2216,7 +2229,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Bool fboRecordKeyed = false;
                 Uint64 fboContentHash = 0;
                 // P4a decline-site F8 (draw list): K - a memo-KEY selection, not a decline; see
-                //   the read list's F8 note above. No flip at the verification round.
+                //   the read list's F8 note above. No flip taken at the verification round.
                 if (FramebufferSubsystemEnabled()) {
                     const auto* drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
                     if (drawRecord != nullptr && !MG_Pipe::MGPipeHandleIsNull(drawRecord->Fbo)) {
@@ -2368,7 +2381,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Count is the "has this set ever arrived" test, never the serial: MGPipeApplierReset
         // advances the working-state serials whether or not anything was emitted.
         //
-        // WHY THE SEAM CHECK IS ONLY LOUD AT THE VALIDATE POINT (review MAJOR-3). The
+        // WHY THE SEAM CHECKS ARE ONLY LOUD AT THE VALIDATE POINT (review MAJOR-3). The
         // framebuffer seam logs unconditionally because SyncCurrentFBO only ever runs where the
         // records are current. This one does not have that property: SyncImageTextureBinding is
         // ALSO the eager funnel glBindImageTexture itself runs, and at that moment the newest
@@ -2378,29 +2391,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has been applied and a mismatch is therefore a mis-keyed emission - the same finding
         // against B/C the framebuffer line reports, in the same words, so one grep covers all
         // three seams.
+        // Set around BOTH sweeps in SyncImageTextureBindings - the record-driven one and the
+        // full pre-handle one - because I2's flip fires precisely when the record arm is NOT
+        // taken (ShaderImageCount == 0 sends the sweep down the wide path), so a latch that
+        // covered only the record arm would make that flip permanently unreachable.
         static Bool g_imageRecordSeamIsAuthoritative = false;
 
         static const MG_Pipe::MGPImageView* ResolveShaderImageRecord(
             Uint unit, const MG_State::GLState::ITextureObject* boundTexture) {
-            // P4a decline-site I1: M - the mask says this family is not switched on; stays
-            //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
+            // P4a decline-site I1: M - the mask says this family is not switched on, and it
+            //   IS D's SamplerSubsystemEnabled() now. Silent, confirmed at the verification
+            //   round - and it is what keeps I2 below quiet on a mask that never armed images.
             if (!SamplerSubsystemEnabled()) return nullptr;
             const auto& st = MG_Pipe::MGPipeApplier();
-            // P4a decline-site I2: S - flips to loud-once at the verification round, and only
-            //   when the current program declares images: a program with images and no pushed
-            //   set is a seam defect, while a program with none is the ordinary case.
-            if (st.ShaderImageCount == 0) return nullptr;
-            // P4a decline-site I3: M - a unit outside the received window has no pushed answer,
-            //   so the eager funnel uses the frontend binding; stays silent. (The SWEEP's
-            //   membership is a different question and is not this window - see
+            // P4a decline-site I2: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, under
+            //   the narrowest condition this site can actually test, which is STRONGER than
+            //   the review's "when the program declares images": the validate-point latch is
+            //   set (so this is the draw/dispatch sweep and not the eager glBindImageTexture
+            //   funnel, where an empty set legitimately precedes the first emission) AND the
+            //   caller has already established that this unit HOLDS an image texture
+            //   (SyncImageTextureBinding returns before this on a null one). A unit carrying an
+            //   image texture at a draw with no set_shader_images ever applied is exactly the
+            //   seam defect the review names, and a program that declares no images never
+            //   reaches here at all.
+            if (st.ShaderImageCount == 0) {
+                if (g_imageRecordSeamIsAuthoritative) {
+                    MGLOG_E_ONCE("An image record does not describe the binding it names: image unit "
+                                 "%u holds a texture at a draw and no set_shader_images has ever been "
+                                 "applied; running the pre-handle image bind.",
+                                 static_cast<unsigned>(unit));
+                }
+                return nullptr;
+            }
+            // P4a decline-site I3: M - a unit outside the received window has no pushed
+            //   answer, so the funnel uses the frontend binding. SILENT, CONFIRMED AT THE
+            //   VERIFICATION ROUND and deliberately not folded into I2's flip: nothing in the
+            //   contract pins the window's membership (A8), so a unit outside it is not
+            //   evidence of a defect the way an EMPTY set is. If A8's measurement ever lets C
+            //   document the membership, this is the site that becomes an assertion. (The
+            //   SWEEP's membership is a different question and is not this window - see
             //   SyncImageTextureBindings and review MAJOR-1.)
             if (unit < st.ShaderImageStart || unit - st.ShaderImageStart >= st.ShaderImageCount) return nullptr;
             // P4a decline-site I4: unreachable by PipeApply.h:461-464 (Start + Count above the
-            //   bound is Fatal{ProtocolCorruption} in the applier) - kept as defence, no flip.
+            //   bound is Fatal{ProtocolCorruption} in the applier) - kept as defence, no flip
+            //   taken at the verification round. Unlike F5/F7 it does NOT become an assertion:
+            //   those two are guarded by a latch this file sets and can reason about, while
+            //   this bound belongs to the applier, and an index test that survives into a
+            //   release build is the cheaper half of that division of labour.
             if (unit >= st.BoundShaderImages.size()) return nullptr;
             const MG_Pipe::MGPImageView& view = st.BoundShaderImages[unit];
-            // P4a decline-site I5: S - THE IMAGE SEAM, loud NOW at the validate point (MAJOR-3)
-            //   and silent at the eager funnel for the reason above. No further flip.
+            // P4a decline-site I5: S - THE IMAGE SEAM, loud at the validate point (MAJOR-3)
+            //   and silent at the eager funnel for the reason above. No further flip taken at
+            //   the verification round; it shares the latch with I2.
             if (view.Res != g_backendTextureObjects.HandleOf(boundTexture)) {
                 if (g_imageRecordSeamIsAuthoritative) {
                     MGLOG_E_ONCE("An image record does not describe the binding it names "
@@ -2599,7 +2641,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             {
                 const auto& st = MG_Pipe::MGPipeApplier();
                 // P4a decline-site I6: M - a set that never arrived means the full pre-handle
-                //   sweep below, which is the SAFE (wider) direction; stays silent.
+                //   sweep below, which is the SAFE (wider) direction. SILENT HERE, CONFIRMED AT
+                //   THE VERIFICATION ROUND, and it is silent here because I2 says it once per
+                //   process from inside that sweep, where the unit that actually holds an image
+                //   texture can be named. Two lines for one condition is how a grep's count
+                //   stops meaning anything.
                 if (SamplerSubsystemEnabled() && st.ShaderImageCount != 0) {
                     // P4a decline-site I7: the window/mark UNION (MAJOR-1, fixed here); no flip
                     //   remains at the verification round, only the A8 measurement above.
@@ -2619,9 +2665,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 #endif
+#if MOBILEGL_PIPE_PUSH
+            // The validate point either way: the only two callers are the draw gate and
+            // PrepareForCompute. See I2.
+            g_imageRecordSeamIsAuthoritative = true;
+#endif
             for (Uint unit = 0; unit < unitCount; ++unit) {
                 SyncImageTextureBinding(unit);
             }
+#if MOBILEGL_PIPE_PUSH
+            g_imageRecordSeamIsAuthoritative = false;
+#endif
         }
 
         // What the draw path last swept the image units against. A draw never swept them at all:
@@ -2871,7 +2925,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (auto& target : fboTargets) {
                 if (SyncedFramebufferSerialIsCurrent(target, st.FramebufferSerial)) continue;
 
-                const MG_Pipe::MGPFramebufferState& record = *BoundFramebufferRecord(target);
+                // Not a third accessor call: these are the two pointers F2 proved non-null a
+                // few lines up, so nothing here dereferences an unchecked result.
+                const MG_Pipe::MGPFramebufferState& record =
+                    target == FramebufferTarget::Draw ? *drawRecord : *readRecord;
                 if (record.IsDefault != 0) {
                     // The default framebuffer, said by the record rather than by comparing the
                     // bound object against pDefaultFramebufferInfo->defaultFBO - which is one
@@ -3022,8 +3079,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             // The handle arm first, and it declines rather than half-running: with no record
             // yet it hands the walk straight back to the pre-handle arm below, unchanged.
-            // P4a decline-site F1: M - the mask says this family is not switched on; stays
-            //   silent at the verification round (becomes D's FramebufferSubsystemEnabled()).
+            // P4a decline-site F1: M - the mask says this family is not switched on, and it
+            //   IS D's FramebufferSubsystemEnabled() now. Silent, confirmed at the
+            //   verification round.
             if (FramebufferSubsystemEnabled() && SyncCurrentFBOByRecord()) return;
 #endif
 
@@ -3896,17 +3954,49 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 table = &st.ShaderCsos;
                 index = handle.Slot;
             }
-            // P4a decline-site P2: S - flips to loud-once at the verification round, and the
-            //   round must distinguish the two bands: an out-of-range ORDINARY slot is "the
-            //   record has not arrived", while an out-of-range COMPOSITE index is a contract
-            //   bug (the composite table is dense and the band base is fixed).
-            if (index >= table->size()) return nullptr;
+            // P4a decline-site P2: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, and it
+            //   TELLS THE TWO BANDS APART as the review requires. An out-of-range ORDINARY slot
+            //   means the create_shader_state for this program never arrived - a client seam.
+            //   An out-of-range COMPOSITE index is a different finding entirely: that table is
+            //   dense and its band base is a fixed contract constant, so a handle above its end
+            //   is a mis-decoded slot, i.e. a CONTRACT-side bug, and saying "the record has not
+            //   arrived" about it would send the reader to the wrong package.
+            if (index >= table->size()) {
+                if (MG_Pipe::MGPipeIsCompositeShaderSlot(handle.Slot)) {
+                    MGLOG_E_ONCE("A program record does not describe the binding it names: composite "
+                                 "ShaderCso {slot %u, gen %u} decodes to band index %u but the "
+                                 "composite table holds %llu - the band base or the decode is wrong, "
+                                 "not the emission; running the frontend's own uniform block.",
+                                 static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                                 static_cast<unsigned>(index),
+                                 static_cast<unsigned long long>(table->size()));
+                } else {
+                    MGLOG_E_ONCE("A program record does not describe the binding it names: ShaderCso "
+                                 "{slot %u, gen %u} is above the applier's table of %llu record(s), so "
+                                 "no create_shader_state for it has been applied; running the "
+                                 "frontend's own uniform block.",
+                                 static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                                 static_cast<unsigned long long>(table->size()));
+                }
+                return nullptr;
+            }
             const MG_Pipe::MGPipeShaderCsoRecord& record = (*table)[index];
-            // P4a decline-site P3: S - flips to loud-once. This is ID-8's stale-generation
-            //   refusal and today it is indistinguishable from "no record at all"; on the
-            //   integrated tree a bound program whose record generation has moved is a death /
-            //   recycle seam defect and has to be named as one.
-            if (!record.Live || record.Gen != handle.Gen) return nullptr;
+            // P4a decline-site P3: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, and it
+            //   is ID-8's stale-generation refusal: every GetOrCreate(handle) in the phase owes
+            //   one. On this tree a bound program whose record is dead, or whose generation has
+            //   moved under the handle, is a death/recycle seam - the emitter kept handing out
+            //   a handle it had retired, or minted a successor at the slot and never described
+            //   it - and the two causes are named apart because they point at different halves
+            //   of the client.
+            if (!record.Live || record.Gen != handle.Gen) {
+                MGLOG_E_ONCE("A program record does not describe the binding it names: ShaderCso "
+                             "{slot %u, gen %u} finds a %s record (generation %u); running the "
+                             "frontend's own uniform block.",
+                             static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                             record.Live ? "live but differently-generationed" : "dead",
+                             static_cast<unsigned>(record.Gen));
+                return nullptr;
+            }
             return &record;
         }
 
@@ -3928,15 +4018,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
             const MG_State::GLState::ProgramObject* program) {
             // P4a decline-site P1: M - the mask says this family is not switched on, or there
-            //   is no current program at all; stays silent at the verification round (becomes
-            //   D's ProgramSubsystemEnabled()).
+            //   is no current program at all; it IS D's ProgramSubsystemEnabled() now. Silent,
+            //   confirmed at the verification round.
             if (!ProgramSubsystemEnabled() || program == nullptr) return nullptr;
             const MG_Pipe::MGPipeHandle handle = g_backendProgramObjects.HandleOf(program);
             const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(handle);
-            // P4a decline-site P4: S - folded into P2/P3 at the verification round; the two
-            //   reasons FindShaderCsoRecord can answer null are told apart there, not here.
+            // P4a decline-site P4: S - FOLDED INTO P2/P3 AT THE VERIFICATION ROUND, which is
+            //   what the review asked for and is why this one stays silent: both reasons
+            //   FindShaderCsoRecord can answer null have just spoken for themselves, with the
+            //   band and the generation named. A third line here would say less and fire on
+            //   every one of them.
             if (record == nullptr) return nullptr;
-            // P4a decline-site P5: S - THE PROGRAM SEAM, loud NOW (MAJOR-3) and in the same
+            // P4a decline-site P5: S - THE PROGRAM SEAM, loud (MAJOR-3) and in the same
             //   words as the framebuffer and image seams, so one grep polices all three. No
             //   further flip. Unlike the image seam this one has no eager funnel to be wrong
             //   at: the only caller is the global-UBO upload at the draw validate point, where
@@ -3951,13 +4044,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              static_cast<unsigned>(record->Desc.Cso.Gen));
                 return nullptr;
             }
-            // P4a decline-site P6: M, then S. The ~0u NEVER-UPLOADED SENTINEL is legitimate
-            //   before the first upload for this program. At the verification round it becomes
-            //   loud-once under the narrower condition the round can test: bit 12 on, and
-            //   GetUBOSize() > 0 && HasGlobalUboBlock() - a program that reaches a draw with a
-            //   default uniform block and no global constants ever uploaded is a seam defect.
-            if (record->GlobalConstantsVersion == ~Uint32{0}) return nullptr;
-            // P4a decline-site P7: S, and LOUD NOW (ID-19) - this one is not a missing record,
+            // P4a decline-site P6: M, then S - FLIPPED AT THE VERIFICATION ROUND, and the
+            //   condition the review names is already the CALLER'S, so the test is not repeated
+            //   here. The ~0u NEVER-UPLOADED SENTINEL is what the record starts at and is
+            //   legitimate before the first set_global_constants for a program. But the only
+            //   caller of this function is the global-UBO upload, which runs inside
+            //   `currentProgram->GetUBOSize() > 0 && backendProgram.HasGlobalUboBlock()` - so
+            //   reaching this line at all means bit 12 is on, this program HAS a default
+            //   uniform block, and it is being drawn with no global constants ever emitted for
+            //   it. That is the seam defect, and it says so.
+            if (record->GlobalConstantsVersion == ~Uint32{0}) {
+                MGLOG_E_ONCE("A program record does not describe the binding it names: ShaderCso "
+                             "{slot %u, gen %u} still carries the never-uploaded sentinel at a draw "
+                             "of a program with a %u-byte default uniform block; running the "
+                             "frontend's own uniform block.",
+                             static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
+                             static_cast<unsigned>(program->GetUBOSize()));
+                return nullptr;
+            }
+            // P4a decline-site P7: S, and LOUD (ID-19) - this one is not a missing record,
             //   it is PROTOCOL CORRUPTION. The upload copies GetUBOSize() bytes out of
             //   GlobalConstants, so a shorter block image is a read past the end of the
             //   applier's own buffer; no correct emitter can produce it, and quietly handing
@@ -4212,7 +4317,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const MG_Pipe::MGPFramebufferState& record = *recordPtr;
                 if (record.IsDefault == 0) {
                     auto* twinEntry = FramebufferImpl::g_backendFramebufferObjects.FindByHandle(record.Fbo);
-                    // P4a decline-site F6: S - already loud, and it KEEPS this shape at the
+                    // P4a decline-site F6: S - already loud, and it KEPT this shape at the
                     //   verification round: binding nothing is exactly what the pre-handle arm
                     //   does in the same situation, so the two arms stay at parity.
                     if (twinEntry && *twinEntry) {
@@ -4667,13 +4772,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Declines - falls through to the frontend walk - until the set has arrived, and the
         // COUNT says so rather than the serial (MGPipeApplierReset advances serials whether or
         // not anything was emitted).
-        // P4a decline-site S1: M - the mask says this family is not switched on; stays silent
-        //   at the verification round (becomes D's SamplerSubsystemEnabled()).
+        // P4a decline-site S1: M - the mask says this family is not switched on, and it IS
+        //   D's SamplerSubsystemEnabled() now. Silent, confirmed at the verification round.
         if (SamplerSubsystemEnabled()) {
             const auto& st = MG_Pipe::MGPipeApplier();
-            // P4a decline-site S2: S - flips to loud-once-then-the-frontend-walk at the
-            //   verification round; a draw that touches units with no bind_sampler_states ever
-            //   received is a seam defect once bit 11 is on and C has landed.
+            // P4a decline-site S2: S - FLIPPED AT THE VERIFICATION ROUND to loud-once, then
+            //   the frontend walk. Bit 11 is on (the enclosing SamplerSubsystemEnabled()) and
+            //   package C has landed, so a draw that touches texture units with no
+            //   bind_sampler_states ever applied is a seam defect. The frontend walk still
+            //   runs: it answers the same question correctly, and what this line exists to stop
+            //   is the SILENT permanent fallback, not the fallback.
+            if (st.SamplerStateCount == 0) {
+                MGLOG_E_ONCE("A sampler record does not describe the binding it names: a draw touches "
+                             "units 0..%d and no bind_sampler_states has ever been applied while the "
+                             "sampler subsystem bit is set; running the pre-handle sampler walk.",
+                             static_cast<int>(maxTouchedUnit));
+            }
             if (st.SamplerStateCount != 0) {
                 for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
                     const Uint32 index = static_cast<Uint32>(unit);
@@ -4710,7 +4824,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     //   left alone and deliberately NOT cached as a miss: the program pass
                     //   creates the twin later in the same draw and its Bind moves the shadow
                     //   row, which re-opens this memo. Parity with ResolveUnitSamplerBackend's
-                    //   null path; stays silent at the verification round.
+                    //   null path. SILENT, CONFIRMED AT THE VERIFICATION ROUND: this is a
+                    //   within-draw ORDERING fact, not a missing record, and the sampler
+                    //   family's own missing-record refusal lives in D's SyncToBackend.
                     if (auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(sampler);
                         slot && *slot) {
                         (*slot)->Bind(unit);
