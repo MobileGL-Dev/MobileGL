@@ -82,3 +82,13 @@ them: the pre/post pair must show the same scene, or the run is invalid.
 - **F3 off** for standard numbers (the F3 debug overlay multiplies per-draw
   overhead and skews backends differently).
 - The FPS overlay itself must be ON (it is what produces the FCLFPS lines).
+
+## Pinning on the two MGPipe campaign devices (2026-09-07)
+
+`bench.sh`'s `pin_freqs()` writes `/proc/ppm/policy/*` and `/proc/gpufreq/gpufreq_opp_freq`; **neither
+path exists on `35d0befa` (SM8750) nor on `3B159D009VZ00000` (MT6993, which dropped both legacy
+interfaces for `/proc/gpufreqv2/`)**. For those two devices run `bench.sh --no-pin` and pin with
+`tools/device_bench/pin_device.sh <serial> pin|unpin|check` (pure adb + su; exit 0 PINNED, 1 DRIFT,
+2 UNPINNED, so `check && measure` cannot measure unpinned). The profiles under `devices/` carry
+`PROFILE_VERIFIED=1` for the nodes and pins named in the file, not for `bench.sh`'s ability to drive
+them; the verification evidence is `docs/Disaggregated/devices/pin-verification-2026-09-07.md`.
