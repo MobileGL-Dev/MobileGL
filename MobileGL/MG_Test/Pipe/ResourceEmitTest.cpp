@@ -1323,6 +1323,154 @@ namespace {
 #endif
     }
 
+    // =====================================================================================
+    // P4a: the four resource entry points now BRANCH ON THE DESCRIPTOR'S TARGET.
+    //
+    // The slot spaces of kinds Buffer, Texture and Renderbuffer are independent - the client
+    // allocator is per kind - so one slot-indexed table would alias three live objects onto one
+    // record. These cases are about the branch and nothing else: which table a call lands in,
+    // that the three do not see each other, and that a target or a kind the catalogue does not
+    // name is refused rather than routed to whichever table came first. The texture family's
+    // own behaviour (parameters, the sub-data validator, the pending-upload set) is in
+    // TextureEmitTest beside the emitter cases it belongs with.
+    // =====================================================================================
+
+#if MOBILEGL_PIPE_PUSH
+    MGPResourceDesc TargetedDesc(MGPipeHandle res, MGPipeResourceTarget target, Uint32 width, Uint32 glName) {
+        MGPResourceDesc desc = BufferDesc(res, width, glName);
+        desc.Target = static_cast<Uint8>(target);
+        return desc;
+    }
+
+    MGPHandleOnly KindHandle(MGPipeHandle res, MGPipeKind kind) {
+        return MGPHandleOnly{res, static_cast<Uint32>(kind), 0};
+    }
+#endif
+
+    // ONE SLOT NUMBER, THREE LIVE OBJECTS, THREE RECORDS. This is the case that fails the
+    // instant the applier goes back to one table: every assertion below is about slot 7 being
+    // three different things at once, which is exactly what the client allocator hands out.
+    TEST(ResourceEmit, TheThreeResourceKindsKeepTheirOwnSlotSpaceAndDoNotSeeEachOther) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+        ApplierGuard guard;
+        const MGPipeHandle shared{7, 3};
+
+        MGPipeApplyResourceCreate(TargetedDesc(shared, MGPipeResourceTarget::Buffer, 0, 11));
+        MGPipeApplyResourceCreate(TargetedDesc(shared, MGPipeResourceTarget::Tex2D, 0, 22));
+        MGPipeApplyResourceCreate(TargetedDesc(shared, MGPipeResourceTarget::Renderbuffer, 0, 33));
+
+        ASSERT_GT(MGPipeApplier().Resources.size(), 7u);
+        ASSERT_GT(MGPipeApplier().TextureResources.size(), 7u);
+        ASSERT_GT(MGPipeApplier().RenderbufferResources.size(), 7u);
+        EXPECT_EQ(MGPipeApplier().Resources[7].Desc.GlNameForDiag, 11u);
+        EXPECT_EQ(MGPipeApplier().TextureResources[7].Desc.GlNameForDiag, 22u);
+        EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Desc.GlNameForDiag, 33u);
+
+        // A respecify of one of them moves ONE record's serial and one record's extent.
+        MGPipeApplyResourceRespecify(TargetedDesc(shared, MGPipeResourceTarget::Tex2D, 256, 22), nullptr);
+        EXPECT_EQ(MGPipeApplier().TextureResources[7].Desc.Width, 256u);
+        EXPECT_EQ(MGPipeApplier().TextureResources[7].Serial, 1u);
+        EXPECT_EQ(MGPipeApplier().Resources[7].Desc.Width, 0u) << "a texture respecify moved the buffer";
+        EXPECT_EQ(MGPipeApplier().Resources[7].Serial, 0u);
+        EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Serial, 0u);
+
+        // A renderbuffer restorage is the publication D-D2 asks for: the frontend raises no
+        // version for it, so the emission IS the notice, and the applier holds the new extent.
+        MGPipeApplyResourceRespecify(TargetedDesc(shared, MGPipeResourceTarget::Renderbuffer, 1024, 33),
+                                     nullptr);
+        EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Desc.Width, 1024u);
+        EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Serial, 1u);
+
+        // And a destroy takes the record its KIND names, and only that one.
+        MGPipeApplyResourceDestroy(KindHandle(shared, MGPipeKind::Texture));
+        EXPECT_FALSE(MGPipeApplier().TextureResources[7].Live);
+        EXPECT_EQ(MGPipeApplier().TextureResources[7].Gen, 3u) << "a destroy keeps the generation";
+        EXPECT_TRUE(MGPipeApplier().Resources[7].Live) << "a texture destroy dropped the buffer's record";
+        EXPECT_TRUE(MGPipeApplier().RenderbufferResources[7].Live);
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
+#endif
+    }
+
+    // Neither branch may fall through to a table it was not named. A target or a kind outside
+    // the catalogue would otherwise land in whichever table the code happened to reach first,
+    // and destroy a live object of a kind the call was never about.
+    TEST(ResourceEmit, AResourceTargetOrKindTheCatalogueDoesNotNameIsRefusedRatherThanRouted) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+        ApplierGuard guard;
+        const MGPipeHandle res{5, 1};
+
+        MGPResourceDesc unnamed = BufferDesc(res, 0, 44);
+        unnamed.Target = static_cast<Uint8>(MGPipeResourceTarget::Count);
+        ExpectRefusedNaming("resource_create {slot=5, gen=1, glName=44}: the descriptor names no resource "
+                            "target",
+                            [&unnamed]() { MGPipeApplyResourceCreate(unnamed); });
+        EXPECT_TRUE(MGPipeApplier().Resources.empty());
+        EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
+        EXPECT_TRUE(MGPipeApplier().RenderbufferResources.empty());
+
+        ExpectRefusedNaming("resource_respecify {slot=5, gen=1, glName=44}: the descriptor names no "
+                            "resource target",
+                            [&unnamed]() { MGPipeApplyResourceRespecify(unnamed, nullptr); });
+
+        const MGPHandleOnly wrongKind = KindHandle(res, MGPipeKind::SamplerCso);
+        ExpectRefusedNaming("resource_destroy {slot=5, gen=1}: the handle names no resource kind",
+                            [&wrongKind]() { MGPipeApplyResourceDestroy(wrongKind); });
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u)
+            << "a corrupt record is not a dropped call and must not be counted as one";
+#endif
+    }
+
+    // A texture's resource calls reach NO backend function pointer, and that is the structural
+    // decision the phase rests on rather than an omission: nothing in the texture family
+    // dispatches at GL-call time today, so the record IS the publication. A spy table that saw
+    // one of them would mean P4a had grown an op-table path nobody designed.
+    TEST(ResourceEmit, NoTextureOrRenderbufferResourceCallReachesTheBackendOpTable) {
+#if !MOBILEGL_PIPE_PUSH
+        GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+        ApplierGuard guard;
+        g_spy = SpyState{};
+        MGPipeSetResourceOps(&kSpyOps);
+        const MGPipeHandle texture{3, 1};
+        const MGPipeHandle renderbuffer{4, 1};
+        const Uint8 texels[64] = {};
+
+        MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 55));
+        MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 8, 55), nullptr);
+        MGPipeApplyResourceCreate(TargetedDesc(renderbuffer, MGPipeResourceTarget::Renderbuffer, 0, 66));
+        MGPipeApplyResourceRespecify(TargetedDesc(renderbuffer, MGPipeResourceTarget::Renderbuffer, 8, 66),
+                                     nullptr);
+        MGPSubData upload{};
+        upload.Res = texture;
+        upload.Target = static_cast<Uint16>(MGPipeResourceTarget::Tex2D);
+        upload.UnionBox = MGPBox{0, 0, 0, 4, 4, 1};
+        MGPipeApplyResourceSubData(upload, texels);
+        MGPipeApplyResourceDestroy(KindHandle(texture, MGPipeKind::Texture));
+        MGPipeApplyResourceDestroy(KindHandle(renderbuffer, MGPipeKind::Renderbuffer));
+
+        EXPECT_EQ(g_spy.Creates, 0u);
+        EXPECT_EQ(g_spy.Respecifies, 0u);
+        EXPECT_EQ(g_spy.SubDatas, 0u);
+        EXPECT_EQ(g_spy.Destroys, 0u);
+
+        // The same five calls on a BUFFER still dispatch, which is what proves the count above
+        // is the branch working rather than the table being uninstalled.
+        const MGPipeHandle buffer{3, 1};
+        MGPipeApplyResourceCreate(BufferDesc(buffer, 0, 77));
+        MGPipeApplyResourceRespecify(BufferDesc(buffer, 64, 77), nullptr);
+        MGPipeApplyResourceSubData(BufferWrite(buffer, 0, 16), texels);
+        MGPipeApplyResourceDestroy(BufferHandle(buffer));
+        EXPECT_EQ(g_spy.Creates, 1u);
+        EXPECT_EQ(g_spy.Respecifies, 1u);
+        EXPECT_EQ(g_spy.SubDatas, 1u);
+        EXPECT_EQ(g_spy.Destroys, 1u);
+#endif
+    }
+
 #if !MOBILEGL_PIPE_PUSH
     // G2 REQUIRES THE PULL AND PUSH ctest NAME SETS TO BE IDENTICAL, name for name, so a
     // push-only case cannot be ABSENT from a pull build - it has to be there and SKIP. This
