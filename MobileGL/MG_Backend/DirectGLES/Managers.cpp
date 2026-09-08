@@ -1946,7 +1946,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT size = static_cast<SizeT>(MG_Pipe::MGPipeSubDataBufferSize(record));
                 auto* resource = FindBufferResourceForHandle(res);
                 if (!resource) return;
-                if (bytes != nullptr) resource->hostBytes = static_cast<const Uint8*>(bytes) - offset;
+                // M-2: UNDER pendingMutex, because this line runs BEFORE the CanTouchGLNow()
+                // test below - i.e. on the arm D-A2 deliberately keeps reachable off the render
+                // thread - while every reader of hostBytes (Ops_H_Readback's drain, the
+                // kill-switch map arm of Ops_H_FlushRange, the ensure path, the fp64 narrowing)
+                // is on the render thread. It was the one member of this struct that the
+                // off-thread path touched with neither a lock nor an atomic: pendingRanges and
+                // pendingResidentWrites are under this mutex and syncedChangeSerial is an
+                // std::atomic read with acquire. The lock it is put under is deliberately THAT
+                // one and not a new one - the base and the queued range are one fact ("these
+                // bytes, at this base"), the drain takes this mutex to lift the ranges, and a
+                // drain that sees a range therefore sees the base that range was queued
+                // against. The store is kept on both arms rather than restricted to the
+                // CanTouchGLNow() one because Ops_H_Readback can drain with no draw in between,
+                // and the ensure path's republication (the 3c55e027 fix) is what runs at a draw.
+                if (bytes != nullptr) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->hostBytes = static_cast<const Uint8*>(bytes) - offset;
+                }
                 if (resource->pendingRespecify) return; // full re-upload pending anyway
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration ||
@@ -1994,7 +2011,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!resource) return;
                 const SizeT start = static_cast<SizeT>(record.Offset);
                 const SizeT end = start + static_cast<SizeT>(record.Size);
-                if (bytes != nullptr) resource->hostBytes = static_cast<const Uint8*>(bytes) - start;
+                // M-2, the second store site - same lock, same reason as Ops_H_SubData's.
+                if (bytes != nullptr) {
+                    const std::lock_guard<std::mutex> lock(resource->pendingMutex);
+                    resource->hostBytes = static_cast<const Uint8*>(bytes) - start;
+                }
                 if (resource->pendingRespecify) return;
                 if (!CanTouchGLNow() || resource->id == 0 ||
                     resource->contextGeneration != g_bufferContextGeneration ||
