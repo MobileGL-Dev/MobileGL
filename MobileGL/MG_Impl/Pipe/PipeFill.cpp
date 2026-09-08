@@ -363,8 +363,14 @@ namespace MobileGL::MG_Pipe {
         // COMPARE-AT-READ in every accessor (the stored value against a fresh read of the
         // live context at the moment the backend reads it - the arm that is real in P1: it
         // catches a value that changed between the verb boundary and the read).
-        PipeInputs g_snapshot{};    // the second arm
-        PipeInputs g_readScratch{}; // where the compare-at-read re-read lands
+        // LEAK-AT-EXIT STORAGE, for gPipeInputs' reason (MG_Backend/MGPipe/PipeInputs.h): a
+        // PipeInputs holds SharedPtrs to frontend objects in its O class, and these two are
+        // filled from the live context, so either can hold the LAST reference to a
+        // VertexArrayObject or a ProgramObject. Destroying them from __run_exit_handlers
+        // would run ~VertexArrayObject / ~BufferObject at exit, into a pipe and a backend
+        // that are already being torn down. References so the ~50 uses below need no edit.
+        PipeInputs& g_snapshot = *new PipeInputs();    // the second arm
+        PipeInputs& g_readScratch = *new PipeInputs(); // where the compare-at-read re-read lands
 
         // The read hook arms at the first fill (ArmVerify below), so it cannot see a read
         // made before that. That window is covered by the poison instead: MGP_INPUT_CHECK
@@ -1163,7 +1169,12 @@ namespace MobileGL::MG_Pipe {
         // Widening the probe to all 29 would re-implement the derivation to check it.
         Bool ApplierDerivesRenderStateFields() {
             static const Bool answer = [] {
-                static PipeInputs probe;
+                // Leak-at-exit, for gPipeInputs' reason: a PipeInputs is never destroyed by
+                // an exit handler. This one only ever carries render state, but the rule is
+                // stated over the TYPE rather than over each instance's current contents -
+                // an instance that grows an O-class write later must not become the next
+                // exit-time chain starter.
+                static PipeInputs& probe = *new PipeInputs();
                 constexpr Uint32 kSentinel = 0x5a5a5a5au;
                 MGPipeFillAccess::RenderStateOf(probe).ClearStencil = kSentinel;
                 MGPipeFillAccess::ClearStencilOf(probe) = 0u;

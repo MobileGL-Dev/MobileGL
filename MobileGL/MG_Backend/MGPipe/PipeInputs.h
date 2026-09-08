@@ -688,7 +688,22 @@ namespace MobileGL::MG_Pipe {
 
     // The single global the backends read through MGB_CTX (ARCHITECTURE.md 9.2). An inline
     // variable: no .cpp is needed for the definition.
-    inline PipeInputs gPipeInputs{};
+    //
+    // LEAK-AT-EXIT STORAGE, and it is the same rule Init.cpp and GlobalObjects.cpp state for
+    // pGLContext and pActiveBackendObject: "a process that exits without eglTerminate simply
+    // leaks the global singletons to the OS instead of running destructors during static
+    // teardown". This block breaks that rule if it is a value, because its O-class members
+    // are SharedPtrs to FRONTEND objects: a VertexArrayObject that the application deleted
+    // while it was bound has its last reference here, and destroying this block from
+    // __run_exit_handlers therefore runs ~VertexArrayObject -> ~BufferObject at exit. Those
+    // destructors are not exit-safe and cannot be made so - they reach the client's slot
+    // allocator, the resource tracker, the vertex-input emitter, the applier AND, through
+    // MGPipeApplyResourceDestroy, the backend's own twin tables, deferred-release queue,
+    // buffer pool and driver entry points, every one of which is either already destroyed or
+    // about to be. So the reference is never dropped: nothing here can start such a chain.
+    // A live context releases these SharedPtrs the ordinary way, at the fill point.
+    // (P3a; the exit-time heap corruption this closes is p3a-results/exit-order-v1.md.)
+    inline PipeInputs& gPipeInputs = *new PipeInputs();
 
     // Every field has storage or is forwarded, and nothing else.
 #define MGP_INPUT_COUNT_ONE(Field, Member) +1
