@@ -1982,6 +1982,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Bool unsynchronized = static_cast<Bool>(appAccess & BufferMappingAccessBit::Unsynchronized);
                 if (PREFER_MAP_BUFFER_RANGE_FOR_BUFFER_SYNC && (invalidate || unsynchronized) &&
                     resource->hostBytes != nullptr) {
+#ifdef TRACY_ENABLE
+                    ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
                     BindBufferId(TempBufferTarget, resource->id);
                     void* mappedData = g_GLESFuncs.glMapBufferRange(
                         TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
@@ -2014,7 +2017,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 if (!g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) return;
-                const SizeT size = std::min<SizeT>(static_cast<SizeT>(record.Size), resource->storageSize);
+                // The map below starts at record.Offset where the legacy arm mapped at literal
+                // zero, so the clamp has to be against what is left of the BACKEND store past
+                // that offset: the applier's BufferRangeFault checked the range against
+                // Desc.Width, and a store that is smaller than the descriptor (a respecify the
+                // backend has not applied yet) would otherwise be mapped past its end.
+                const SizeT readOffset = static_cast<SizeT>(record.Offset);
+                if (readOffset >= resource->storageSize) return;
+                const SizeT size =
+                    std::min<SizeT>(static_cast<SizeT>(record.Size), resource->storageSize - readOffset);
                 if (size == 0) return;
 
                 // Queued app writes must land in the backend store before it is read back, or
@@ -2268,12 +2279,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject) {
             if (bufferObject == nullptr) return MG_Pipe::kMGPipeNullHandle;
-            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer,
-                                                           bufferObject->GetLifetimeId());
+            // Through the table's own single-entry front memo rather than straight into
+            // MGPipeSlots().FindByLifetimeId, which is a hash lookup: this runs inside
+            // EnsureBufferResource (every SSBO / UBO / atomic / XFB / PBO / IBO bind), inside
+            // IsBufferDrawClean, and once per SSBO per draw through MarkBufferGpuWritten, where
+            // the legacy arm paid a pointer compare. HandleOf answers identically - the same
+            // allocator probe on a miss - and remembers the answer, which the minting overload
+            // was previously the only writer of. A null answer is deliberately never memoised
+            // (see the comment at HandleOf).
+            return g_backendBufferResources.HandleOf(bufferObject);
         }
 
         SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) { return ResourceWidthOf(res); }
         Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res) { return ResourceSerialOf(res); }
+        Uint CurrentBufferContextGeneration() { return g_bufferContextGeneration; }
 
         void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
             if (!bufferObject) return;
@@ -2298,6 +2317,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // kMGPipeWholeBuffer rather than as "zero ranges", because a zero count is the
             // shape a fully NARROWED announcement will legitimately have once P8/P9 build the
             // client's conservative set, and the two must not be the same record.
+            //
+            // THE OTHER HALF OF THE CONTRACT, which the range shape alone does not say: what
+            // this replaces, BufferObject::MarkGpuWritten, sets BOTH m_hasDefinedContent and
+            // m_gpuWritePending. The client's OnGpuWritten must set both too, or the next
+            // ResourceRespecify carries HasDefinedContent = 0, Ops_H_Respecify orphans instead
+            // of uploading, and the shader-written contents are dropped with nothing saying so.
             const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
             MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &whole);
         }
@@ -3925,6 +3950,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (indexBufferDirty) {
                 Bool indexBufferSynced = false;
                 if (!MG_Pipe::MGPipeHandleIsNull(st.IndexBuffer.Res)) {
+                    // RESOLVE ONLY, no ensure - unlike the legacy arm, which called
+                    // EnsureBufferResource here. PrepareForDraw runs SyncNeccessaryBuffers before
+                    // SyncCurrentVAO, so an INDEXED draw has already ensured this store; a
+                    // non-indexed draw whose IndexBufferSerial moved has not, and then this logs
+                    // once and leaves the binding alone. That is noisy rather than wrong: nothing
+                    // is stamped on the miss (indexBufferSynced stays false), so the next indexed
+                    // draw repairs it. Ensuring here would need the frontend object this arm
+                    // deliberately does not hold.
                     auto* backendResource = BufferImpl::FindBufferResourceForHandle(st.IndexBuffer.Res);
                     if (backendResource && backendResource->id != 0) {
                         BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, backendResource->id);

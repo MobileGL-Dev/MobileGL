@@ -745,6 +745,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // record. It is what the narrowed-fp64 memo keys its freshness on now that the
         // frontend change serial is gone from the backend's view.
         Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res);
+        // The ES context generation a twin's driver id must carry to be current. Its one
+        // consumer is the draw-clean probe's unit test, which has to build a twin that answers
+        // CLEAN to every question except the one under test - a case that cannot go red for
+        // that question otherwise. Push-only, like the rest of this block.
+        Uint CurrentBufferContextGeneration();
 #endif
 
         // Registered as the frontend's BufferBackendOps at backend init and on
