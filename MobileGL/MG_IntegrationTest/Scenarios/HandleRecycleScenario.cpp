@@ -703,10 +703,28 @@ void main() { oColor = texture(uTex, vUv); }
             // creates several. The composite round creates three ShaderCsos - two stage programs
             // and the composite they are flattened into - but only ONE of the three is a band
             // slot, so the band's answer is 1 and the ordinary space's would have been 3.
+            // `warmUpRounds` is how many rounds run BEFORE the baseline is taken, and for one
+            // kind it is not two.
+            //
+            // A CONTENT-ADDRESSED KIND'S SLOT IS NOT THE OBJECT'S (D-F1, ID-17's reference-count
+            // ruling). SamplerCso is minted by a CACHE keyed on the parameter block: destroying
+            // the frontend sampler releases its REFERENCE, and the entry then stays in the cache,
+            // unreferenced, until LRU eviction at capacity 256. So a churn over N DISTINCT
+            // parameter sets legitimately retains N slots however many objects carried them, and
+            // "48 objects, 14 slots not returned" is the cache working, not P3a's C-1 leak.
+            // Asserting the flat count there measures the cache's capacity policy and calls it a
+            // leak - which is exactly what this case did on the tree where package C landed.
+            //
+            // The fix is not a weaker assertion but a warmer cache: run enough warm-up rounds to
+            // walk EVERY distinct content once, so that the baseline is taken with the cache full
+            // and the measured churn re-uses entries that already exist. The three assertions
+            // below then say something STRONGER than they could for a per-object kind - a warm
+            // content-addressed cache must not grow AT ALL under churn - and an unbounded leak,
+            // which is what C-1 is about, still moves every one of them.
             using ChurnRound = std::function<void(bool checkPixels, const std::function<void()>& observe)>;
             void AssertChurnReturnsEverySlot(PipeSlotKind kind, SlotSpace space, const char* kindName,
                                              const char* owner, unsigned maxInFlight,
-                                             const ChurnRound& round) {
+                                             const ChurnRound& round, unsigned warmUpRounds = 2u) {
                 // THE LANE'S OWN PIN, not the arm (F-m4). The Legacy and AbaControl lanes run
                 // MOBILEGL_PIPE_PUSH=0 and really have no allocator to leak from; the Handles
                 // lanes and DirectVulkan.HandleRecycle.AbaControlHandles. all pin the shipping
@@ -749,8 +767,12 @@ void main() { oColor = texture(uTex, vUv); }
                     unsigned live = 0;
                     if (ReadSpaceLiveCount(kind, space, &live) && live > peakLive) peakLive = live;
                 };
+                // The first round checks pixels; the rest only churn. Two is the floor and the
+                // default (see the parameter's note): the first mints the one-off slots any draw
+                // needs and the second proves the steady state has been reached.
+                ASSERT_GE(warmUpRounds, 2u) << "the warm-up has to reach a steady state";
                 round(/*checkPixels=*/true, observe);
-                round(/*checkPixels=*/false, observe);
+                for (unsigned i = 1; i < warmUpRounds; ++i) round(/*checkPixels=*/false, observe);
                 peakLive = 0;
 
                 unsigned liveBefore = 0;
@@ -2064,6 +2086,17 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // sampler CSOs are CONTENT-addressed at capacity 256 (D-F1), so 48 identical samplers
             // would legitimately be ONE CSO and the case would assert nothing about the death
             // path. The LOD bias moves per round, which changes the hash and nothing else.
+            //
+            // ...AND THE SET IS FINITE ON PURPOSE, which is the other half of the same argument.
+            // The bias cycles through kDistinctSamplerContents values, so the churn walks a
+            // CLOSED content space; the warm-up below walks all of it once before the baseline is
+            // taken, and every measured round then asks the cache for an entry it already holds.
+            // Without that, the case measured the cache filling up - one retained slot per
+            // distinct parameter block, which is C's design (ID-17) and not a death-path defect -
+            // and reported it as P3a's C-1 leak. Measured on the tree where C landed: 48 rounds,
+            // 14 slots retained, i.e. the distinct contents minus the two the warm-up had already
+            // interned. With the whole space warm the same churn must move nothing at all.
+            constexpr int kDistinctSamplerContents = 16;
             int round = 0;
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::SamplerCso, SlotSpace::Ordinary, "SamplerCso", "C (clientsp)",
@@ -2096,7 +2129,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                     observe();
                     glBindSampler(0, 0);
                     glDeleteSamplers(1, &sampler);
-                });
+                },
+                /*warmUpRounds=*/static_cast<unsigned>(kDistinctSamplerContents) + 2u);
 
             glBindTexture(GL_TEXTURE_2D, 0);
             GLuint cleanupTexture = texture;
