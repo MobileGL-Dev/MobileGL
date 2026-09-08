@@ -627,8 +627,6 @@ namespace MobileGL::MG_Pipe {
             case MGPipeFieldEmitter::CreateRenderState:
             case MGPipeFieldEmitter::SetDynamicState:
                 return kMGPipeSubsystemRenderState;
-            case MGPipeFieldEmitter::SetPixelPackState:
-                return kMGPipeSubsystemPixelPack;
             case MGPipeFieldEmitter::SetPatchState:
                 return kMGPipeSubsystemPatchState;
             case MGPipeFieldEmitter::SetVertexAttribDefaults:
@@ -650,9 +648,13 @@ namespace MobileGL::MG_Pipe {
         static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDynamicState) ==
                           MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState),
                       "set_dynamic_state and NEW_RENDER_STATE must name one subsystem");
-        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetPixelPackState) ==
-                          MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack),
-                      "set_pixel_pack_state and NEW_PIXEL_PACK must name one subsystem");
+        // set_pixel_pack_state has no emitter row on purpose (Coverage.def, above
+        // MGP_COVERAGE_EMITTED_LIST): it carries the PACK half of PipeInputs::m_pixelStore[2]
+        // only, so the field keeps going through the residual fill loop and no field may be
+        // skipped on its account. The NEW_PIXEL_PACK bit still names the subsystem the call
+        // belongs to, which is what the emission gate consults.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack) == kMGPipeSubsystemPixelPack,
+                      "NEW_PIXEL_PACK must name the pixel-pack subsystem");
         static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetPatchState) ==
                           MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState),
                       "set_patch_state and NEW_PATCH_STATE must name one subsystem");
