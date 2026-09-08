@@ -124,6 +124,22 @@ namespace MobileGL::MG_Pipe {
     // re-handed-out, or a backend object nobody releases.
     Bool MGPipeEmitResourceDestroyAndFree(MG_State::GLState::BufferObject& buffer);
 
+    // THE VERTEX-ELEMENTS CSO's DEATH, and it is BACKEND-NEUTRAL - which is the whole point.
+    // Before this, the only thing that ever returned a VertexElementsCso slot was DirectGLES'
+    // StateObjectDeathOps table; under any backend that installs none - DirectVulkan/Magma,
+    // which keeps its own age-reclaimed identity table on purpose - every VAO ever created
+    // held its slot and its ~1.3 KB applier record for the life of the process, on the shipped
+    // 0x1ff mask, and past 65536 slots every create_vertex_elements became a permanent
+    // Fatal{ProtocolCorruption}. The client mints the slot, so the client is where the death
+    // has to be spoken from.
+    //
+    // Takes the lifetime id and not the object for StateObjectDeathNotice.h's reason: the last
+    // SharedPtr has already dropped by the time this runs, and the lifetime id is what the
+    // slot allocator resolves the handle from. Returns whether delete_vertex_elements went
+    // out, i.e. whether the applier actually held a record - see the definition for why that
+    // is asked rather than assumed.
+    Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId);
+
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);

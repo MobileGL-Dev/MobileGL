@@ -8,8 +8,6 @@
 
 #include "VertexArrayObject.h"
 
-#include <MG_State/GLState/StateObjectDeathNotice.h>
-
 #include <atomic>
 #include <MG_Pipe/PipeMutation.h>
 
@@ -42,15 +40,24 @@ namespace MobileGL::MG_State::GLState {
 
 #if MOBILEGL_PIPE_PUSH
     VertexArrayObject::~VertexArrayObject() {
-        // P2 step e2: ANNOUNCE the death instead of leaving the backend to discover it in a
-        // garbage sweep. This is the last SharedPtr to this object dropping - not the
-        // glDelete* that only marks the name and leaves a still-bound object very much
-        // alive - so it is the exact moment the backend's twin, and the driver storage
-        // that twin owns, stop being reachable. The notice carries the lifetime id
-        // because the object no longer exists to be passed, and because the lifetime id
-        // is what the client slot allocator resolves the handle from. No-op unless a
-        // backend registered the ops (a pull build declares none at all).
-        NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::VertexElementsCso, m_lifetimeId);
+        // P2 step e2 / P3a C-1: ANNOUNCE the death instead of leaving the backend to discover
+        // it in a garbage sweep, and RETURN THE CLIENT'S OWN SLOT while doing it. This is the
+        // last SharedPtr to this object dropping - not the glDelete* that only marks the name
+        // and leaves a still-bound object very much alive - so it is the exact moment the
+        // backend's twin, the driver storage that twin owns, the applier's vertex-elements
+        // record and the {slot, gen} that names all three stop being reachable.
+        //
+        // ALL FOUR OF THOSE GO THROUGH ONE HELPER, and it is the client's rather than a
+        // backend's: the handle is minted by MGPipeVertexInputEmitter on every backend, so a
+        // death path that only exists inside a backend's death-ops table is no path at all
+        // under a backend that installs none - which is what DirectVulkan/Magma does on
+        // purpose, and what made every VAO leak a slot and a ~1.3 KB applier record for the
+        // life of the process on the shipped mask. The helper emits delete_vertex_elements,
+        // raises the notice (a no-op unless a backend registered the ops) and frees the slot,
+        // in that fixed order; MG_Pipe/PipeMutation.h and its definition say why each position
+        // is where it is. The buffer's death has exactly this shape one file over
+        // (BufferObject.cpp -> MGPipeEmitResourceDestroyAndFree).
+        MG_Pipe::MGPipeEmitVertexElementsDestroyAndFree(m_lifetimeId);
     }
 #endif
 

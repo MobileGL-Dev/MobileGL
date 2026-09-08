@@ -14,6 +14,9 @@
 // (CMakeLists.txt appends it to SOURCE_FILES there).
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/BufferState/BufferState.h>
+// C-1: the vertex-elements CSO's death path raises the backend notice from here, between the
+// applier's delete and the slot free, so that the whole order lives in one place.
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/PipeFill.h>
@@ -759,6 +762,57 @@ namespace MobileGL::MG_Pipe {
         // so a double free cannot skip a generation.
         tracker.Retire(handle);
         MGPipeSlots().Free(MGPipeKind::Buffer, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId) {
+        // C-1. THE SAME SHAPE AS MGPipeEmitResourceDestroyAndFree ABOVE, and for the same
+        // reason: whatever mints a handle owns the death of that handle, and the mint for this
+        // kind is MGPipeVertexInputEmitter::EmitVertexElements - i.e. the client, on every
+        // backend. Espryt's StateObjectDeathOps notice used to be the only free, so under a
+        // backend that installs none the slot and the applier's record leaked per VAO, for
+        // ever. It is now the SECOND, redundant path (Managers.cpp's
+        // OnFrontendStateObjectDestroyed) and it must stay idempotent, which it is: the
+        // notice resolves through the same lifetimeId -> slot map this function frees, and
+        // MGPipeSlotAllocator::Free refuses a slot that is not live at that generation.
+        // May be the null handle: no slot is minted for a VAO that no draw ever validated with
+        // and no backend twin table ever looked up. That case still raises the notice below -
+        // see there.
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId);
+
+        // ASKED, NOT ASSUMED. A slot is not evidence of a record: DirectGLES mints one from
+        // BackendSlotTable::GetOrCreate at every VAO sync, whether or not bit 8 asked this
+        // client to emit a create - the shipping 0x7f A/B control arm is exactly that
+        // configuration. delete_vertex_elements on a handle the applier has no record for is a
+        // refusal, and the refusal asserts (PipeApply.cpp's ResolveVertexElements), i.e. it
+        // stops a verify build.
+        MGPipeVertexInputEmitter& emitter = MGPipeVertexInputEmitterInstance();
+        const Bool published = emitter.RecordIsPublished(handle);
+        if (published) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::VertexElementsCso);
+            MGPipeApplyDeleteVertexElements(only);
+            emitter.NoteRecordDestroyed(handle);
+        }
+
+        // THE ORDER IS D-L's, WITH THE BACKEND NOTICE IN THE MIDDLE, and each of the three
+        // positions is load-bearing:
+        //   * the applier's record is dropped FIRST, while nothing else can have re-handed the
+        //     slot out, so a recycled slot cannot inherit a field;
+        //   * the death notice is raised SECOND, because it resolves the handle through the
+        //     allocator and a backend told after the Free below could no longer find its twin
+        //     - which would move the leak from the client to the driver VAO. It is raised
+        //     UNCONDITIONALLY, exactly as ~VertexArrayObject raised it before C-1: whether a
+        //     slot exists is this client's business, and a consumer that records notices (the
+        //     P2 e2 gate does) must not stop seeing this class announce itself;
+        //   * the slot goes back LAST. Espryt's notice frees it too; that Free and this one
+        //     are the same call on the same handle and the second is a no-op, because Free
+        //     bumps no generation (the bump rides the next handout) and refuses a slot that is
+        //     no longer live at this generation.
+        MG_State::GLState::NotifyStateObjectDestroyed(MGPipeKind::VertexElementsCso, lifetimeId);
+        if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(MGPipeKind::VertexElementsCso, handle);
         return published;
     }
 

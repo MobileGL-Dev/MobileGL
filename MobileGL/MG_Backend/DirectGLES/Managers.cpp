@@ -215,6 +215,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 PrgramImpl::g_backendProgramObjects.DestroyByLifetimeId(lifetimeId);
                 break;
             case MG_Pipe::MGPipeKind::VertexElementsCso:
+                // P3a C-1: this is now the SECOND path, not the only one. The client speaks the
+                // whole death itself (MGPipeEmitVertexElementsDestroyAndFree: delete the
+                // applier record, raise this notice, free the slot), because the slot is minted
+                // client-side on every backend and a backend that installs no death ops - which
+                // Magma deliberately does not - otherwise leaked the slot and the record per
+                // VAO for the life of the process. What is left here is the one thing only this
+                // side can do: drop the driver VAO the twin owns. It is raised while the handle
+                // still resolves, so OnFrontendObjectDestroyed's shared free (which the other
+                // five kinds still depend on) is simply the one that gets there first; the
+                // client's own Free right after it is then a no-op, because Free refuses a slot
+                // that is no longer live at that generation and the Gen bump rides the next
+                // handout rather than the free. Double release, no corruption, no abort.
                 VertexArrayImpl::g_backendVertexArrayObjects.DestroyByLifetimeId(lifetimeId);
                 break;
             default:

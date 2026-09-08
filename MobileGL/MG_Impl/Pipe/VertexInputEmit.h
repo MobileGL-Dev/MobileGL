@@ -288,12 +288,61 @@ namespace MobileGL::MG_Pipe {
         Uint64 VertexBufferSetCount() const { return m_bufferSets; }
         Uint64 IndexBufferSetCount() const { return m_indexSets; }
 
+        // ---- C-1: "does the applier hold a record for exactly this handle?" ----
+        //
+        // The CSO's death path (MGPipeEmitVertexElementsDestroyAndFree) needs that answer and
+        // MUST NOT GUESS IT FROM THE SLOT. A VertexElementsCso slot can exist with no record
+        // behind it, because a backend that keys its twins on the handle mints the slot itself
+        // (DirectGLES' BackendSlotTable::GetOrCreate -> MGPipeSlots().Acquire) whether or not
+        // bit 8 ever asked this client to emit anything - which is exactly what a
+        // MOBILEGL_PIPE_PUSH=0x7f lane runs. delete_vertex_elements on such a handle is a
+        // REFUSED call, and the applier's resolver asserts on a refusal
+        // (PipeApply.cpp's ResolveVertexElements), i.e. a stop in a verify build.
+        //
+        // Kept OUT of Reset(), unlike the create/bind latch beside it, and for the mirror
+        // image of Reset()'s own reason: "a fresh context is a fresh server" is true of the
+        // per-context half of this table, and object RECORDS are precisely what
+        // MGPipeApplierReset does not clear (PipeApply.h's two halves). This half tracks those
+        // records, so it lives exactly as long as they do.
+        Bool RecordIsPublished(MGPipeHandle handle) const {
+            if (MGPipeHandleIsNull(handle)) return false;
+            const SizeT slot = handle.Slot;
+            if (slot >= m_latch.size()) return false;
+            const Latch& latch = m_latch[slot];
+            return latch.RecordLive && latch.RecordGen == handle.Gen;
+        }
+
+        // The record named by `handle` is gone from the applier. Also drops the bound-handle
+        // memo when it named it, so the client's idea of BoundVertexElements and the applier's
+        // (which MGPipeApplyDeleteVertexElements just cleared for the same handle) stay in
+        // step rather than diverging until the next bind happens to correct it.
+        void NoteRecordDestroyed(MGPipeHandle handle) {
+            if (MGPipeHandleIsNull(handle)) return;
+            const SizeT slot = handle.Slot;
+            if (slot < m_latch.size() && m_latch[slot].RecordGen == handle.Gen) {
+                m_latch[slot] = Latch{};
+            }
+            if (m_boundHandle == handle) {
+                m_boundHandle = kMGPipeNullHandle;
+                m_boundLifetimeId = 0;
+            }
+        }
+
         // A fresh context is a fresh server: the applier's records are gone, so every latch
         // this emitter holds describes objects the server no longer has. Called from the
         // validate point's FreshlyPrimed arm beside MGPipeApplierReset and the suppressor's
         // InvalidateAll, for the same reason they are.
+        //
+        // The PER-CONTEXT half only - see RecordIsPublished above for why RecordLive/RecordGen
+        // survive. Re-creating a configuration the applier already holds is a bounded
+        // over-fire (MGPipeApplyCreateVertexElements starts the record over); forgetting that
+        // it holds one at all would leak the record and its slot at the object's death.
         void Reset() {
-            m_latch.clear();
+            for (Latch& latch : m_latch) {
+                latch.Published = false;
+                latch.Gen = 0;
+                latch.ConfigVersion = 0;
+            }
             m_boundHandle = kMGPipeNullHandle;
             m_boundLifetimeId = 0;
         }
@@ -302,9 +351,16 @@ namespace MobileGL::MG_Pipe {
 
     private:
         struct Latch {
+            // The PER-CONTEXT half: "has this emitter told THIS server about this handle's
+            // configuration". Cleared by Reset() at every make-current.
             Bool Published = false;
             Uint32 Gen = 0;
             Uint32 ConfigVersion = 0;
+            // The RECORD half: "does the applier hold a create_vertex_elements record at this
+            // slot, for this generation". Lives as long as the record does - see
+            // RecordIsPublished.
+            Bool RecordLive = false;
+            Uint32 RecordGen = 0;
         };
 
         static MGPHandleOnly HandleOnly(MGPipeHandle handle) {
@@ -345,6 +401,10 @@ namespace MobileGL::MG_Pipe {
             latch.Published = true;
             latch.Gen = handle.Gen;
             latch.ConfigVersion = configVersion;
+            // THE ONE PRODUCER of the record half: a create that reached the applier is the
+            // only thing that makes delete_vertex_elements a legal call for this handle.
+            latch.RecordLive = true;
+            latch.RecordGen = handle.Gen;
             return sizeof(MGPVertexElements) + kAttribBytes + kBindingBytes;
         }
 
