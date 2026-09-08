@@ -3728,22 +3728,19 @@ void main() {
         // its own is recycled, and a slot matched on a recycled address hands the new VAO
         // the dead one's resolved bindings.
         const Uint64 lifetimeId = vao->GetLifetimeId();
-#if MOBILEGL_PIPE_PUSH
-        // Negative control C (P2 brief D18): with MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1 the
-        // lifetime-id half of the compare is defeated, leaving the recycled address as the
-        // whole key - exactly the state this table was in before the ABA fix. That is what
-        // lets HandleRecycleScenario.AbaControl assert the WRONG pixels and so prove that its
-        // reproducer still reproduces.
-        const Bool compareLifetimeId = !MG_Config::Features.PipeHandleAbaControl;
-#else
-        constexpr Bool compareLifetimeId = true;
-#endif
+        // Negative control C has NO consumer here. It is answered once, ahead of both arms, by
+        // the early return above, so a run that reaches this line has the knob off and the
+        // lifetime-id half of the compare is unconditional. A fourth consumer here would be a
+        // second site deciding the same question - what MagmaPipeAbaControlDefeatsIdentity
+        // exists to prevent - and a trap: narrow that early return later and this one would
+        // silently return to D18's retired semantics. If it is ever narrowed, ask the accessor
+        // here rather than re-reading MG_Config::Features.
         VaoDrawMemo& first = m_vaoDrawMemoTable[index];
-        if (first.vaoKey == vao && (!compareLifetimeId || first.vaoLifetimeId == lifetimeId)) {
+        if (first.vaoKey == vao && first.vaoLifetimeId == lifetimeId) {
             return &first;
         }
         VaoDrawMemo& second = m_vaoDrawMemoTable[index ^ 1u];
-        if (second.vaoKey == vao && (!compareLifetimeId || second.vaoLifetimeId == lifetimeId)) {
+        if (second.vaoKey == vao && second.vaoLifetimeId == lifetimeId) {
             return &second;
         }
         // Miss: recycle a slot. Prefer an empty one; otherwise evict the entry whose

@@ -477,8 +477,12 @@ void main() { oColor = texture(uTex, vUv); }
         // ------------------------------------------------------------------------------------
         // 1. The vertex array. This is the case the AbaControl knob targets: DirectVulkan keys
         //    VertexInputStateFactory's cache on the attribute's buffer identity and VaoDrawMemo
-        //    on the VAO's, and BOTH the VAO and the buffer are recycled here so that a key built
-        //    out of raw addresses matches while the bytes behind it do not.
+        //    on the VAO's. Only the VAO is recycled here: both buffers are created before the
+        //    window and neither is deleted inside it, because buffer traffic in the window moves
+        //    VkBufferManager's slice-epoch counter and that gate is not an identity gate (see
+        //    the two MakeQuadBuffer calls). What is recycled is the GL NAME; the heap block is
+        //    not handed back, which is why the knob - not the allocator - constructs the
+        //    AbaControl arms' collision.
         // ------------------------------------------------------------------------------------
         TEST_F(HandleRecycleScenario, AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexInput) {
             if (!Ready()) return;
