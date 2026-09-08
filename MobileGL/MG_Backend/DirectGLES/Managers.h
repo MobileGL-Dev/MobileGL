@@ -428,6 +428,51 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return nullptr;
         }
 
+        // P4a (D-B1): resolve-or-create BY THE HANDLE THE CALL CARRIED. This is the shape P3a
+        // already runs for the buffer family through BackendBufferResourceTable, lifted onto
+        // the five registries that still mint their own handles off a frontend lifetime id -
+        // the debt SlotTables.h records against itself at the top of that file.
+        //
+        // POINTER, not the reference GetOrCreate(StatePtr) returns, and that is deliberate:
+        // this call has THREE ways to decline and every one of them has to be visible to the
+        // caller rather than answered with a parked twin.
+        //   * the legacy arm is running, so there is no slot table to index;
+        //   * the slot is past the table's sanity bound (a corrupt 32-bit slot must not decide
+        //     a vector resize);
+        //   * the generation is BEHIND the live entry's. SlotTables.h:301-321 is the whole
+        //     argument: forward is a recycle and resets the twin, BACKWARD is refused, because
+        //     adopting it would destroy the incumbent LIVE twin's driver ids and then stamp the
+        //     slot back to the dead object's generation - the shape commit d7655247 fixed.
+        // The refusal is SILENT here and gets its release-build voice at the per-kind resolver
+        // in Managers.cpp, exactly as GetOrCreateBufferResourceForHandle gives P3a's.
+        BackendPtr* GetOrCreateByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (!EsprytSlotTablesEnabled()) return nullptr;
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+            if (handle.Slot >= SlotTable::kMaxHandleSlot) return nullptr;
+            const Uint32 liveGen = m_slotTable.LiveGenAt(handle.Slot);
+            if (liveGen != 0 && liveGen > handle.Gen) return nullptr;
+            return &m_slotTable.GetOrCreate(handle);
+        }
+
+        // The generation of the LIVE entry at this slot, or 0. It exists so a caller can
+        // DIAGNOSE, in a release build where MOBILEGL_ASSERT is inert, the refusal above
+        // performs silently.
+        Uint32 LiveGenAt(Uint32 slot) const {
+            if (!EsprytSlotTablesEnabled()) return 0;
+            return m_slotTable.LiveGenAt(slot);
+        }
+
+        // The death half of GetOrCreateByHandle, for a kind whose announcement is its own
+        // destroy CALL rather than the shared death notice. Hands the twin OUT rather than
+        // destroying it in place, so the caller reaches whatever the driver id owes - a
+        // delete, a pool enrolment, a deferred release - with the entry already retired and a
+        // re-entrant GetOrCreate from the twin's destructor cannot resurrect it. The SLOT is
+        // not freed: for a handle-keyed kind the CLIENT frees it after the destroy returns.
+        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
+            if (!EsprytSlotTablesEnabled()) return BackendPtr{};
+            return m_slotTable.ReleaseByHandle(handle);
+        }
+
         // P2 step e2. STATIC, because a death notice is about an object and not about a
         // registry instance: it is answered by EVERY table of this kind that exists - this
         // registry's own, and any by-value copy of it a fixture or a context reset is holding
@@ -550,6 +595,68 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #else
     template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
     using TwinRegistry = StateBackendObjectRegistry<StateObject, BackendObject>;
+#endif
+
+#if MOBILEGL_PIPE_PUSH
+    // ---- P4a (D-K3): one arm resolver per family, beside BufferImpl's two ----
+    //
+    // Four bits and therefore four resolvers, for P3a's reason one level out: a framebuffer
+    // path that regressed, a texture path that regressed, a sampler path that regressed and a
+    // program path that regressed are four different findings, and clearing one must not
+    // disarm the other three.
+    //
+    // THE RESOLUTION IS LAZY, at the first use, and never at bring-up. Backend context creation
+    // runs inside eglMakeCurrent and the integration harness pre-flights exactly that sequence
+    // in a FORKED CHILD; a child that dies on a signal is reported as "no usable GPU" and every
+    // scenario in the lane is SKIPPED - the lane goes green having run nothing, on the very
+    // pair of env vars the A/B is driven with, which is what ROADMAP.md:7 forbids. So a stop
+    // has to land in a test body, i.e. at the first lookup. That is what the inline latches
+    // below give: a guard-variable load and a perfectly-predicted branch per consult, and the
+    // arm dispatch folds into the caller (SlotTables.h's EsprytSlotTablesEnabled argument
+    // verbatim - every one of these is consulted on the per-draw path).
+    //
+    // ALL FOUR CAN REACH NoArm and all four STOP there rather than skipping green, because
+    // every one of the four legacy arms is compiled under MOBILEGL_PIPE_LEGACY_MEMOS:
+    //   framebuffer  - the four g_fboSynced* arrays and StampSyncedFBO;
+    //   texture      - the twin's m_prevTextureInfo / m_syncedContentVersion cheap-gate trio;
+    //   samplers     - UnitSamplerLookupMemo's WeakPtr arm and SamplerPassMemo's raw
+    //                  BackendSamplerObject* rows;
+    //   programs     - g_programTwinLookupMemo.
+    //
+    // THREE OF THEM CARRY A DEPENDENCY (MGPipe.h, D-K2) and it is diagnosed and REFUSED here
+    // rather than half-run, the bit-8-requires-bit-7 shape ResolveVertexInputSubsystemArm
+    // already ships: bit 11 requires bit 10, bit 9 requires bit 10, bit 10 requires bit 7. The
+    // mirror pairs (10 without 11, 10 without 9, 7 without 10) are all FINE and are said so out
+    // loud, because an unreachable branch that says something different is how the reachable
+    // one drifts. Bit 12 depends on nothing: a ShaderCso handle names no texture and no buffer.
+    //
+    // ResolveFramebufferSubsystemArm additionally carries D-C3's bring-up refusal: the wire
+    // array is MGPFramebufferState::Color[8] and GetDynamicParameters().MaxColorAttachments is
+    // the driver's RAW ES cap, which is not clamped to 8 on this path. A driver reporting more
+    // would silently truncate the record, so the bit is refused with one MGLOG_E naming the cap
+    // and the legacy arm runs. Widening the payload is a wire change nobody has evidence for;
+    // truncating silently is the bug class this phase is closing.
+    Bool ResolveFramebufferSubsystemArm();
+    Bool ResolveTextureResourceSubsystemArm();
+    Bool ResolveSamplerSubsystemArm();
+    Bool ResolveProgramSubsystemArm();
+
+    inline Bool FramebufferSubsystemEnabled() {
+        static const Bool enabled = ResolveFramebufferSubsystemArm();
+        return enabled;
+    }
+    inline Bool TextureResourceSubsystemEnabled() {
+        static const Bool enabled = ResolveTextureResourceSubsystemArm();
+        return enabled;
+    }
+    inline Bool SamplerSubsystemEnabled() {
+        static const Bool enabled = ResolveSamplerSubsystemArm();
+        return enabled;
+    }
+    inline Bool ProgramSubsystemEnabled() {
+        static const Bool enabled = ResolveProgramSubsystemArm();
+        return enabled;
+    }
 #endif
 
     namespace BufferImpl {
@@ -2230,6 +2337,73 @@ namespace MobileGL::MG_Backend::DirectGLES {
         extern TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso>
             g_backendSamplerObjects;
     } // namespace SamplerImpl
+
+#if MOBILEGL_PIPE_PUSH
+    namespace SamplerViewImpl {
+        // P4a (D-F2/D-F3): the SIXTH Espryt twin table, and the only one of the six whose kind
+        // has no frontend object at all. MobileGL has no sampler-view class: GL binds a texture
+        // to a unit and the sampler uniform's type, the mipmap-completeness predicates and
+        // IsUndefinedDefaultTexture decide what the shader sees. Gallium's one-view-per-slot IS
+        // that resolved form, the resolution moves to the CLIENT (ARCHITECTURE.md:206), and
+        // create_sampler_view carries the restrictions the resolution had to read.
+        //
+        // So this twin owns NO DRIVER ID. There is nothing in ES to create for a view; the id
+        // the unit binds is the texture's, and it lives on BackendTextureObject. What this twin
+        // is, is the server's MEMO of one resolved view: the record it was built from, keyed on
+        // that record's serial, plus the two BACKEND-SPECIFIC POST-PROCESSINGS
+        // ARCHITECTURE.md:206 keeps on the server and which act on the already-resolved set.
+        // Espryt's is the raw-depth-fetch sampler substitution; Magma's feedback-loop detection
+        // is its own and is not here.
+        //
+        // A twin with no driver id still earns a table: it is what turns "re-derive the
+        // substitution decision for every sampled unit of every draw" into one serial compare,
+        // and it is the slot space the client's per-texture SamplerViewCso handle indexes.
+        // There is deliberately no destructor: nothing here owns a GPU object, so the teardown
+        // sentinel's whole reason (a twin destructor must not call into an unloaded driver)
+        // does not apply and the default one is correct in every teardown order.
+        struct BackendSamplerViewObject {
+            // The view record as last synced, verbatim. Reading it here rather than re-asking
+            // the applier is what lets a caller hold the twin across another applier call.
+            MG_Pipe::MGPSamplerView View{};
+            // The applier record's Serial this memo was built from. 0 = never synced, and 0 is
+            // never a real serial (the applier's counters start at 1), so a zeroed memo is a
+            // guaranteed miss.
+            Uint64 SyncedSerial = 0;
+            // Espryt's post-processing, decided from the RESOLVED set: the view's
+            // InternalFormat answers IsDepthFormatInternalFormat and the sampler CSO record's
+            // SamplerParameters answer compareMode / minFilter / mipmapMode / magFilter. The
+            // decision is re-derived when either serial moves; the sampler serial is kept
+            // beside it so a sampler mutation alone re-derives it.
+            Uint64 SyncedSamplerSerial = 0;
+            Bool NeedsRawDepthFetchSampler = false;
+        };
+
+        // Handle-keyed ONLY, exactly like P3a's BackendBufferResourceTable: the StateObject
+        // parameter names ITextureObject because the template names one and because the view is
+        // minted off the TEXTURE's lifetime id (D-F2: one view per ITextureObject), which is
+        // what makes HandleOf below resolve at all. Not one member that would dereference it is
+        // instantiated - no Find(StateObject*), no ForEachLive - and the handle overloads never
+        // look at it.
+        using BackendSamplerViewTable = BackendSlotTable<MG_State::GLState::ITextureObject,
+                                                        BackendSamplerViewObject,
+                                                        MG_Pipe::MGPipeKind::SamplerViewCso>;
+        extern BackendSamplerViewTable g_backendSamplerViews;
+
+        // Resolve-or-create / resolve-only by the handle the call carried. Neither touches
+        // MGPipeSlots(): the handle ARRIVED, already minted by the side that owns minting.
+        BackendSamplerViewObject* GetOrCreateSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
+        BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
+
+        // MONOLITH GLUE, and named as such, the HandleOfBuffer shape: the SamplerViewCso handle
+        // of a texture this backend is looking at through a frontend object. Legal only because
+        // the view is minted off the texture's own lifetime id; under a real split neither the
+        // object nor its lifetime id exists on this side and the handle has to arrive in the
+        // payload (which, for every path P4a switches over, it does - this is for the paths
+        // P3b/P4b still owns).
+        MG_Pipe::MGPipeHandle HandleOfSamplerViewForTexture(
+            const MG_State::GLState::ITextureObject* textureObject);
+    } // namespace SamplerViewImpl
+#endif
 
     namespace RenderbufferImpl {
         class BackendRenderbufferObject {
