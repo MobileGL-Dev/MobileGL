@@ -214,6 +214,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             case MG_Pipe::MGPipeKind::ShaderCso:
                 PrgramImpl::g_backendProgramObjects.DestroyByLifetimeId(lifetimeId);
                 break;
+#if MOBILEGL_PIPE_PUSH
+            case MG_Pipe::MGPipeKind::SamplerViewCso:
+                // P4a (D-I1, D5): the sixth kind, and the only one whose notice names a
+                // lifetime id that belongs to ANOTHER object - a sampler view is minted off its
+                // texture's id, one per ITextureObject, so ~TextureObjectBase raises this arm
+                // and the texture arm above from the same id. That is legal precisely because
+                // the two kinds have separate slot spaces, and it is why the two arms are
+                // written out separately rather than folded: the allocator resolves
+                // (kind, lifetimeId), so each finds its own slot or nothing.
+                //
+                // IDEMPOTENT, like every arm here. This is the REDUNDANT SECOND PATH: the
+                // client's MGPipeEmitSamplerViewCsoDestroyAndFree emits delete_sampler_view,
+                // raises this notice and frees the slot, in that order. Whichever of the two
+                // frees first wins; the other resolves nothing, because the allocator erases
+                // its lifetimeId -> slot mapping on Free and OnFrontendObjectDestroyed answers
+                // false for a handle it cannot resolve. This twin owns no driver id at all, so
+                // even a double release is a pointer reset.
+                SamplerViewImpl::BackendSamplerViewTable::OnFrontendObjectDestroyed(lifetimeId);
+                break;
+#endif
             case MG_Pipe::MGPipeKind::VertexElementsCso:
                 // P3a C-1: this is now the SECOND path, not the only one. The client speaks the
                 // whole death itself (MGPipeEmitVertexElementsDestroyAndFree: delete the
@@ -3483,6 +3503,239 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void UploadRingOnPresent() { RingOnPresent(g_uploadRing); }
     } // namespace BufferImpl
+
+#if MOBILEGL_PIPE_PUSH
+    // ---- P4a (D-K3): the four family arm resolvers, beside BufferImpl's two ----
+    //
+    // They reuse BufferImpl's ClassifyPipeSubsystemArm / StopOnArmlessPipeSubsystem unchanged:
+    // one voice for "the operator left no arm at all", so the six families cannot disagree
+    // about what an armless verdict means or about whether it stops.
+    //
+    // Every one of the four answers legacyArmSurvivesLegacyMemos = FALSE, because every one of
+    // the four pre-handle arms is compiled under MOBILEGL_PIPE_LEGACY_MEMOS (Managers.h names
+    // them per family). So all four can reach NoArm and all four stop with the named
+    // Fatal{PipeLegacyMemosDisabled, ...} rather than running the very arm the operator asked
+    // to have taken away and handing back a result measured on it.
+    namespace {
+        // Shared by the three dependent families, so the refusal reads the same way three times
+        // and a future fourth cannot invent a different wording. Returns true when the
+        // dependency is missing, having said so once.
+        Bool PipeSubsystemDependencyMissing(Uint64 mask, Uint64 dependencyBit, const char* what) {
+            if ((mask & dependencyBit) != 0) return false;
+            MGLOG_E("MGPipe: %s - REFUSING the dependent bit and running the legacy arm. "
+                    "Set both bits, or clear both",
+                    what);
+            return true;
+        }
+
+        // The release-build VOICE for StateBackendObjectRegistry::GetOrCreateByHandle's two
+        // silent refusals, shared by the five kinds P4a re-keys so the wording cannot drift
+        // between them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer
+        // family, lifted into one template because five copies of it is five chances to write
+        // one of them differently.
+        //
+        // WHY A VOICE AT ALL: the table asserts, and MOBILEGL_ASSERT compiles out at INFO -
+        // which all three gate builds and every shipped build are - so an object that silently
+        // stops being twinned is exactly the failure mode the refusal exists to replace.
+        //
+        // Returns null on the legacy arm too, so a caller that reaches this without checking
+        // its family's arm gets nothing rather than a twin the legacy arm would never see.
+        template <typename Registry>
+        typename Registry::BackendPtr* AdoptTwinByHandle(Registry& registry, MG_Pipe::MGPipeHandle handle,
+                                                         const char* kindName) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+            if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
+                MGLOG_E_ONCE("MGPipe: %s handle slot %u is past the backend table's %u bound - "
+                             "refusing to twin it",
+                             kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
+                return nullptr;
+            }
+            const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
+            if (liveGen != 0 && liveGen > handle.Gen) {
+                // SlotTables.h:301-321: forward is a recycle and resets the twin, BACKWARD is
+                // refused, because adopting it would release the incumbent LIVE twin's driver
+                // id and then stamp the slot back to the dead object's generation, after which
+                // the incumbent's own FindByHandle refuses it and it is silently handed a
+                // fresh, empty twin - a leak AND an object that loses its storage with no
+                // diagnostic. That is the shape commit d7655247 fixed on the buffer side.
+                MGLOG_E_ONCE("MGPipe: %s handle {%u, %u} names a generation BEHIND the live "
+                             "twin's %u - refusing rather than dropping the incumbent's driver "
+                             "object",
+                             kindName, handle.Slot, handle.Gen, liveGen);
+                return nullptr;
+            }
+            return registry.GetOrCreateByHandle(handle);
+        }
+    } // namespace
+
+    Bool ResolveFramebufferSubsystemArm() {
+        const Uint64 mask = MG_Config::Features.PipePush;
+        const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemFramebuffer) != 0;
+        Bool refused = false;
+        if (bitSet) {
+            // BIT 9 REQUIRES BIT 10. Every MGPSurface::Res in the record names a Texture or a
+            // Renderbuffer handle, and only bit 10 puts twins in those two slot tables; without
+            // it every attachment lookup would miss and the walk would leave the driver
+            // framebuffer holding whatever the last owner attached. The mirror pair (bit 10 set,
+            // bit 9 clear) is FINE: the legacy FBO sync reaches the texture twin through
+            // SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
+            refused = PipeSubsystemDependencyMissing(
+                mask, MG_Pipe::kMGPipeSubsystemTextureResources,
+                "kMGPipeSubsystemFramebuffer (bit 9) is set but kMGPipeSubsystemTextureResources "
+                "(bit 10) is clear; MGPSurface::Res names a Texture or Renderbuffer handle and "
+                "only bit 10 populates those slot tables");
+            // D-C3: the wire array is Color[8] and this is the driver's RAW ES cap, which is
+            // NOT clamped to 8 on the GLES path (ValidateColorAttachmentInRange rejects at or
+            // above it, and BackendObject_DirectGLES publishes it verbatim). Every campaign
+            // device reports 8 and ES 3.2's minimum is 8 - but a driver reporting more would
+            // make the record silently truncate, and truncating silently is the bug class this
+            // phase is closing, while widening the payload is a wire change nobody has evidence
+            // for. So: refuse the bit, name the cap, run the legacy arm.
+            if (!refused &&
+                static_cast<Uint32>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 0)) >
+                    MG_Pipe::kMGPipeMaxColorAttachments) {
+                MGLOG_E("MGPipe: this driver reports GL_MAX_COLOR_ATTACHMENTS = %d, above "
+                        "MGPFramebufferState::Color[%u]'s wire width - REFUSING "
+                        "kMGPipeSubsystemFramebuffer (bit 9) rather than truncating the record, "
+                        "and running the legacy framebuffer arm",
+                        g_GLESCapabilities.MaxColorAttachments, MG_Pipe::kMGPipeMaxColorAttachments);
+                refused = true;
+            }
+        }
+        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
+            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            /*legacyArmSurvivesLegacyMemos=*/false);
+        if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
+            BufferImpl::StopOnArmlessPipeSubsystem(
+                "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemFramebuffer (bit 9) clear (or refuses "
+                "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle g_fboSynced* arm");
+        }
+        const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
+        MGLOG_D("MGPipe: Espryt framebuffer family runs the %s arm", enabled ? "handle" : "legacy");
+        return enabled;
+    }
+
+    Bool ResolveTextureResourceSubsystemArm() {
+        const Uint64 mask = MG_Config::Features.PipePush;
+        const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemTextureResources) != 0;
+        Bool refused = false;
+        if (bitSet) {
+            // BIT 10 REQUIRES BIT 7. A buffer texture's MGPResourceDesc::BufferForTexBuffer
+            // names a Buffer handle and only bit 7 puts twins in the resource slot table, so
+            // with bit 7 clear every glTexBuffer would resolve to no storage at all. The mirror
+            // pair (bit 7 set, bit 10 clear) is FINE and is P3a's shipped configuration.
+            refused = PipeSubsystemDependencyMissing(
+                mask, MG_Pipe::kMGPipeSubsystemResources,
+                "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemResources "
+                "(bit 7) is clear; a buffer texture's BufferForTexBuffer names a Buffer handle "
+                "and only bit 7 populates the resource slot table");
+        }
+        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
+            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            /*legacyArmSurvivesLegacyMemos=*/false);
+        if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
+            BufferImpl::StopOnArmlessPipeSubsystem(
+                "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemTextureResources (bit 10) clear (or "
+                "refuses it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables the pre-handle texture "
+                "cheap-gate trio");
+        }
+        const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
+        MGLOG_D("MGPipe: Espryt texture-resource family runs the %s arm", enabled ? "handle" : "legacy");
+        return enabled;
+    }
+
+    Bool ResolveSamplerSubsystemArm() {
+        const Uint64 mask = MG_Config::Features.PipePush;
+        const Bool bitSet = (mask & MG_Pipe::kMGPipeSubsystemSamplers) != 0;
+        Bool refused = false;
+        if (bitSet) {
+            // BIT 11 REQUIRES BIT 10, and this is the pair G12 drives at 0x9ff. Every
+            // MGPBoundView::Texture and every MGPImageView::Res names a Texture handle, and
+            // only bit 10 puts one in the slot table; without it every per-unit lookup would
+            // miss and the walk would `continue` WITHOUT unbinding - i.e. every draw would
+            // sample through whatever the unit last held, which is exactly the shape the
+            // bit-8-without-bit-7 refusal exists to prevent one family over. The mirror pair
+            // (bit 10 set, bit 11 clear) is FINE.
+            refused = PipeSubsystemDependencyMissing(
+                mask, MG_Pipe::kMGPipeSubsystemTextureResources,
+                "kMGPipeSubsystemSamplers (bit 11) is set but kMGPipeSubsystemTextureResources "
+                "(bit 10) is clear; every MGPBoundView::Texture and MGPImageView::Res names a "
+                "Texture handle and only bit 10 populates that slot table");
+        }
+        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
+            bitSet && !refused, MG_Config::Features.PipeLegacyMemos,
+            /*legacyArmSurvivesLegacyMemos=*/false);
+        if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
+            BufferImpl::StopOnArmlessPipeSubsystem(
+                "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemSamplers (bit 11) clear (or refuses "
+                "it) and MOBILEGL_PIPE_LEGACY_MEMOS=0 disables UnitSamplerLookupMemo's WeakPtr "
+                "arm and SamplerPassMemo's raw-pointer rows");
+        }
+        const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
+        MGLOG_D("MGPipe: Espryt sampler family runs the %s arm", enabled ? "handle" : "legacy");
+        return enabled;
+    }
+
+    Bool ResolveProgramSubsystemArm() {
+        // Bit 12 depends on NOTHING, and that is said out loud rather than left as an absence:
+        // a ShaderCso handle names no texture and no buffer, the archive rides beside the
+        // record as a companion pointer, and the eight extra inputs the server still
+        // specialises on (D-H5) are read from state this backend already holds.
+        const Bool bitSet = (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemPrograms) != 0;
+        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
+            bitSet, MG_Config::Features.PipeLegacyMemos, /*legacyArmSurvivesLegacyMemos=*/false);
+        if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
+            BufferImpl::StopOnArmlessPipeSubsystem(
+                "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemPrograms (bit 12) clear and "
+                "MOBILEGL_PIPE_LEGACY_MEMOS=0 disables g_programTwinLookupMemo");
+        }
+        const Bool enabled = verdict == BufferImpl::PipeSubsystemArmVerdict::Handles;
+        MGLOG_D("MGPipe: Espryt program family runs the %s arm", enabled ? "handle" : "legacy");
+        return enabled;
+    }
+
+    namespace SamplerViewImpl {
+        BackendSamplerViewTable g_backendSamplerViews;
+
+        BackendSamplerViewObject* GetOrCreateSamplerViewForHandle(MG_Pipe::MGPipeHandle view) {
+            if (MG_Pipe::MGPipeHandleIsNull(view)) return nullptr;
+            // The table refuses both of these itself; this is the release-build VOICE for the
+            // refusal, because MOBILEGL_ASSERT compiles out at INFO and a view that silently
+            // stops being twinned is the failure mode the refusal exists to replace. Same shape
+            // as GetOrCreateBufferResourceForHandle's.
+            if (view.Slot >= BackendSamplerViewTable::kMaxHandleSlot) {
+                MGLOG_E_ONCE("MGPipe: sampler-view handle slot %u is past the backend table's %u "
+                             "bound - refusing to twin it",
+                             view.Slot, BackendSamplerViewTable::kMaxHandleSlot);
+                return nullptr;
+            }
+            const Uint32 liveGen = g_backendSamplerViews.LiveGenAt(view.Slot);
+            if (liveGen != 0 && liveGen > view.Gen) {
+                MGLOG_E_ONCE("MGPipe: sampler-view handle {%u, %u} names a generation BEHIND the "
+                             "live twin's %u - refusing rather than dropping the incumbent",
+                             view.Slot, view.Gen, liveGen);
+                return nullptr;
+            }
+            auto& twin = g_backendSamplerViews.GetOrCreate(view);
+            if (!twin) twin = MakeShared<BackendSamplerViewObject>();
+            return twin.get();
+        }
+
+        BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view) {
+            auto* twin = g_backendSamplerViews.FindByHandle(view);
+            return twin ? twin->get() : nullptr;
+        }
+
+        MG_Pipe::MGPipeHandle HandleOfSamplerViewForTexture(
+            const MG_State::GLState::ITextureObject* textureObject) {
+            // Through the table's own single-entry front memo rather than straight into
+            // MGPipeSlots().FindByLifetimeId, which is a hash lookup. HandleOf answers
+            // identically - the same allocator probe on a miss - and remembers the answer; a
+            // null answer is deliberately never memoised (SlotTables.h, at HandleOf).
+            return g_backendSamplerViews.HandleOf(textureObject);
+        }
+    } // namespace SamplerViewImpl
+#endif
 
     namespace VertexArrayImpl {
         namespace {
