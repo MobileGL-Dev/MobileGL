@@ -14,9 +14,18 @@
 // forgets to publish renders stale, and no purity gate can see it.
 //
 // So the surface is enumerated MECHANICALLY. scripts/gen_pipe_dirty_surface.py scans
-// MG_Impl/GLImpl for every pGLContext-> mutator call and, with --check, fails if a scanned
-// mutator has no row here or a row here names a mutator the scan no longer finds. Both
-// directions, so a deleted mutator cannot leave a stale row behind either.
+// MG_Impl/GLImpl AND MG_State/GLState for every pGLContext-> mutator call and every
+// MGP_NOTE_MUTATION site, and, with --check, fails if a scanned mutator has no row here or a
+// row here names a mutator the scan no longer finds. Both directions, so a deleted mutator
+// cannot leave a stale row behind either.
+//
+// THE SECOND ROOT AND THE SECOND MECHANISM ARE P3a's, and they were not cosmetic: reading
+// MG_State/GLState found BumpSamplingResolutionGeneration, a mutator with no row at all
+// whose every caller lives in that directory, and reading MGP_NOTE_MUTATION brought
+// NoteUnitTouched - which no `pGLContext->` pattern can see, because every texture and
+// sampler bind routes through it rather than calling it through the context - inside the
+// gate. A notice site carries a FIELD name, so the mutator a row names is the ENCLOSING
+// function.
 //
 // ANSWERS. A row lists EVERY publisher that fires on EVERY path through that mutator,
 // and only those; several are joined with '|'. A publisher that fires on some paths but
@@ -134,14 +143,16 @@
 //                    that should have named one.
 //
 // KNOWN BLIND SPOTS OF THE SCANNER, recorded here rather than left implicit
-// (gen_pipe_dirty_surface.py's own notes plus its scan root):
+// (gen_pipe_dirty_surface.py's own notes plus its scan roots):
 //   1. it matches braced function bodies textually, so a mutator inside a LAMBDA is
 //      attributed to the enclosing function;
-//   2. a mutation published through a HELPER the entry point calls reads as deferred here;
-//   3. the scan root is MG_Impl/GLImpl only, so the four MGP_NOTE_MUTATION sites in
-//      MG_State/GLState/TextureState/TextureState.h are outside it entirely.
+//   2. a mutation published through a HELPER the entry point calls reads as deferred here.
+//   3. CLOSED AT P3a. The scan root was MG_Impl/GLImpl only, so the four MGP_NOTE_MUTATION
+//      sites in MG_State/GLState/TextureState/TextureState.h were outside it entirely. The
+//      root is now both directories and the notice is a recognised publish mechanism; what
+//      that found is the two rows marked "P3a" below.
 // The gate is therefore a COMPLETENESS gate over what the scanner does see. The semantic
-// proof stays the MOBILEGL_PIPE_VERIFY lane, which is blind to none of the three.
+// proof stays the MOBILEGL_PIPE_VERIFY lane, which is blind to none of them.
 //
 // clang-format off
 
@@ -235,6 +246,29 @@
     X(SetCurrentVertexAttributeUint,      NEW_VERTEX_ATTRIB_DEFAULTS)                           \
     /* ---- object class ---- */                                                                \
     X(BumpTextureBindGeneration,          NEW_SAMPLER_VIEWS)                                    \
+    /* P3a, FOUND BY THE WIDENED SCAN ROOT and not by anything before it: every caller of  */   \
+    /* this one is inside MG_State/GLState (SamplerObject::BumpVersion for any sampler     */   \
+    /* parameter, TextureObjectBase's shape bump), which the scan did not read, so it had  */   \
+    /* no row at all while its sibling above did. NEW_SAMPLERS is the bit whose shutter    */   \
+    /* mixes the texture-params aggregate with exactly this generation, and the bump is    */   \
+    /* unconditional on every path that reaches it - the early-outs are in the setters     */   \
+    /* above it, which is the redundant-write guard this file's rule explicitly allows.    */   \
+    X(BumpSamplingResolutionGeneration,   NEW_SAMPLERS)                                         \
+    /* P3a, and the reason the scan now reads MGP_NOTE_MUTATION as a publish mechanism of  */   \
+    /* its own: this function is not a pGLContext-> mutator at all - every texture and     */   \
+    /* sampler bind entry point routes THROUGH it - and it moves two pushed PipeInputs     */   \
+    /* fields with two different answers.                                                   */  \
+    /*   GetTextureBindGeneration moves only on the bindingChanged arm, so NEW_SAMPLER_    */   \
+    /*     VIEWS fires on SOME of the paths that mutate and not all: a redundant re-bind   */   \
+    /*     of the object a unit already holds advances the high-water mark alone. That is  */   \
+    /*     precisely what kPulledPartialShutter is for.                                     */  \
+    /*   GetMaxTouchedTextureUnit has no shutter at all; it is in its verb class's may-read */  \
+    /*     mask and the residual fill copies it at every verb.                              */  \
+    /* Both are ALSO published inline by MGP_NOTE_MUTATION when the write happens inside a */   \
+    /* verb already in flight - a backend binding its own synthesised fallback texture -    */  \
+    /* which is the window no shutter and no pull can cover, and the reason those sites     */  \
+    /* had to come inside this gate rather than stay a recorded blind spot.                 */  \
+    X(NoteUnitTouched,                    kPulledPartialShutter|NEW_SAMPLER_VIEWS)              \
     /* NOT NEW_SO_TARGETS, and this one was false on EVERY path: GLContext::SetNamed        */  \
     /* TransformFeedbackBinding either binds a BufferState binding point (index == the      */  \
     /* bound XFB object) or writes a saved-bindings entry, and NEW_SO_TARGETS mixes the     */  \
@@ -249,6 +283,15 @@
     /* to carry one. Espryt 0b's delete_* / resource_destroy publishes the kinds     */         \
     /* that have a handle on the wire; programs, program pipelines and shaders have  */         \
     /* none in P2, so nothing publishes theirs - kUnpublishedDestroy, a known hole.  */         \
+    /* TWO OF THESE ROWS STOPPED BEING ASPIRATIONAL AT P3a, and the call that makes  */         \
+    /* each true is named rather than implied:                                       */        \
+    /*   MarkBufferObjectForDeletion -> resource_destroy (PipeCalls.def), emitted    */         \
+    /*     from ~BufferObject the moment the last reference drops - which is the     */        \
+    /*     glDelete* that only marks the name, followed by whatever unbind actually  */        \
+    /*     releases it - and followed IN THAT ORDER by the client freeing the slot.  */        \
+    /*   MarkVertexArrayForDeletion -> delete_vertex_elements, published through the */        \
+    /*     death notice ~VertexArrayObject already raises for the VertexElementsCso  */        \
+    /*     kind; the CSO handle is minted per frontend VAO off its lifetime id.      */        \
     X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
     X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
     X(MarkProgramForDeletion,             kUnpublishedDestroy)                                  \

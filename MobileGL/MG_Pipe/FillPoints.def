@@ -60,8 +60,14 @@
 // What WOULD retire a row: the poison build already answers "was this field read at this
 // verb" exactly (MOBILEGL_PIPE_POISON_OMIT withholds one field's stamp for one verb and a
 // read of it aborts naming the pair). Turning that into a retirement gate means running the
-// omission across the full CTS caselist on both devices, not the desktop corpus, and that is
-// recorded as P3a work rather than done here on evidence that cannot support it.
+// omission across the full CTS caselist on both devices, not the desktop corpus.
+//
+// P3a STATUS: still not done, and deliberately not done here. P3a is one of the five
+// architecture boundaries that owe a full gl44to46 caselist run on both devices, so the
+// omission sweep rides that run rather than duplicating it - the verdict lands with the
+// caselist result at the phase exit, off the critical path, and every row above stays in
+// place until it does. A row retired on desktop evidence would be retired on evidence that
+// cannot support it, which is the reason this item exists rather than a scheduling excuse.
 // ---------------------------------------------------------------------------------------
 //
 // gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.

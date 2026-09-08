@@ -18,6 +18,14 @@ script reports every place in MG_Impl/GLImpl where a GL entry point BOTH mutates
 state through pGLContext AND reaches the backend in the same function - those are the
 publish points, the ones that must map onto an aggregate generation.
 
+P3a widens the scan root to MG_State/GLState as well, and with it reads the OTHER publish
+mechanism: MGP_NOTE_MUTATION, which a state object spells when it moves a pushed PipeInputs
+field from inside a backend's own verb. Those sites carry a FIELD name rather than a mutator
+name and none of them is a `pGLContext->` call, so the scan attributes each to its ENCLOSING
+function - which is the name a DirtySurface.def row is written against. Until this, the four
+in TextureState.h were outside the gate entirely, which is the one of the three blind spots
+P2 recorded that a scan can actually close.
+
 P0 is the skeleton: it reports. P1 adds the mapping file and CI regenerates it with
 `git diff --exit-code` and zero unmapped mutators, the same shape as gen_pipe.py's G6.
 
@@ -51,13 +59,27 @@ import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCAN_ROOT = os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "GLImpl")
+# P3a WIDENS THE SCAN ROOT, and this is the one blind spot of the three the P2 review
+# recorded that a scan can actually close (DirtySurface.def's header keeps the other two).
+# `pGLContext->Set*` is not the only way a frontend mutation becomes observable: a state
+# object that moves a PUSHED PipeInputs field from inside a backend's own verb publishes it
+# with MGP_NOTE_MUTATION instead, and every one of those sites lives in MG_State/GLState -
+# which the scan did not read at all, so the four in TextureState.h were outside the gate
+# entirely. Reading both roots and both mechanisms is what makes "every mutation has an
+# answer" a claim over the whole surface rather than over one directory of it.
+SCAN_ROOTS = (os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "GLImpl"),
+              os.path.join(REPO_ROOT, "MobileGL", "MG_State", "GLState"))
 
 # The mutating half of GLContext's surface. Prefix-matched, per the plan's list.
 MUTATOR_PREFIXES = ("Add", "Set", "Mark", "Bump", "Allocate", "Truncate", "Record", "Notify",
                     "Begin", "End")
 
 MUTATOR_RE = re.compile(r"pGLContext->\s*((?:%s)\w*)\s*\(" % "|".join(MUTATOR_PREFIXES))
+# The SECOND publish mechanism (MG_Pipe/PipeMutation.h). It carries the FIELD, not a mutator
+# name, and it sits inside the state object rather than at a GL entry point - so the mutator
+# it belongs to is the ENCLOSING function, which is what needs a row here. Reading it is what
+# the widened root buys: MUTATOR_RE alone finds nothing at all under MG_State/GLState.
+NOTE_MUTATION_RE = re.compile(r"MGP_NOTE_MUTATION\(\s*(\w+)\s*\)")
 BACKEND_RE = re.compile(r"gBackendFunctionsTable\.GL\.(\w+)|pActiveBackendObject->\s*(\w+)")
 FUNCTION_RE = re.compile(r"(?:^|\n)[ \t]*(?:[A-Za-z_][\w:<>,&*\s]*?)\b(\w+)\s*\(([^;{}]*)\)\s*"
                          r"(?:const\s*)?(?:noexcept\s*)?\{")
@@ -150,6 +172,12 @@ def scan_file(path):
     all_mutators = [(m.group(1), line_of(masked, m.start())) for m in MUTATOR_RE.finditer(masked)]
     for name, start, end in function_bodies(masked):
         body = masked[start:end]
+        # The push-on-mutation notice: the enclosing function is the mutator, because that is
+        # what a row in DirtySurface.def names and what a reader of this report has to look
+        # up. It is DEFERRED-shaped by construction (a state object does not reach the
+        # backend), so it joins all_mutators and never the immediate publish points below.
+        for note in NOTE_MUTATION_RE.finditer(body):
+            all_mutators.append((name, line_of(masked, start + note.start())))
         mutators = [(m.group(1), line_of(masked, start + m.start())) for m in MUTATOR_RE.finditer(body)]
         if not mutators:
             continue
@@ -1495,12 +1523,13 @@ def analyse_snippet(text):
 
 
 def scan_all():
-    """(findings-per-file, {mutator: call count}) over the whole scan root."""
+    """(findings-per-file, {mutator: call count}) over every scan root."""
     sources = []
-    for root, _, files in os.walk(SCAN_ROOT):
-        for name in sorted(files):
-            if name.endswith((".cpp", ".h")):
-                sources.append(os.path.join(root, name))
+    for scan_root in SCAN_ROOTS:
+        for root, _, files in os.walk(scan_root):
+            for name in sorted(files):
+                if name.endswith((".cpp", ".h")):
+                    sources.append(os.path.join(root, name))
     sources.sort()
 
     per_file = []
@@ -1789,8 +1818,9 @@ def main():
                         help="run the canned negative controls; each must trip")
     args = parser.parse_args()
 
-    if not os.path.isdir(SCAN_ROOT):
-        sys.exit("missing %s" % SCAN_ROOT)
+    for scan_root in SCAN_ROOTS:
+        if not os.path.isdir(scan_root):
+            sys.exit("missing %s" % scan_root)
     if not os.path.isfile(DEF_PATH):
         sys.exit("missing %s" % DEF_PATH)
     if not os.path.isfile(RENDER_STATE_PATH):
@@ -1891,7 +1921,9 @@ def main():
             for mutator, line in finding["mutators"]:
                 print("      %-44s :%d  %s" % (mutator, line, mapping.get(mutator, "UNMAPPED")))
 
-    print("\ndirty-surface: %d files scanned under MG_Impl/GLImpl" % len(sources))
+    print("\ndirty-surface: %d files scanned under %s"
+          % (len(sources), " + ".join(os.path.relpath(root, REPO_ROOT).replace(os.sep, "/")
+                                      for root in SCAN_ROOTS)))
     print("dirty-surface: %d mutator calls in total, %d distinct mutators" % (deferred_mutators,
                                                                               len(distinct_all)))
     print("dirty-surface: %d of them sit in %d IMMEDIATE PUBLISH POINTS - functions that also "
