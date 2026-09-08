@@ -178,9 +178,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for all six - which is why the notice carries the kind rather than there being six
         // ops tables.
         //
+        // Each arm below names the registry GLOBAL of its kind, but DestroyByLifetimeId is
+        // static: it is answered by every table of that kind that exists at the moment - the
+        // global's own and any by-value copy a fixture or a context reset is holding - and
+        // the slot goes back once, after all of them have let go (SlotTables.h, the holder
+        // list). Naming one instance here is a spelling, not a choice of holder.
+        //
         // A notice that arrives after exit() has begun is dropped: past that point the twin's
         // destructor must not call into the driver (see InProcessTeardown()), and the process
-        // is about to hand every GPU object back anyway.
+        // is about to hand every GPU object back anyway. That twin is a deliberate leak, not
+        // garbage for a later collection - there is none on this arm.
         void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
             if (InProcessTeardown()) return;
             switch (kind) {

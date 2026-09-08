@@ -315,20 +315,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
         using BackendMap = UnorderedMap<StateObject*, Entry>;
         using iterator = typename BackendMap::iterator;
         using const_iterator = typename BackendMap::const_iterator;
+#if MOBILEGL_PIPE_PUSH
+        using SlotTable = BackendSlotTable<StateObject, BackendObject, kKind>;
+#endif
 
         BackendPtr& GetOrCreate(const StatePtr& stateObj) {
             MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
 
-            // Twin creation is the moment a driver-owned id starts needing a guarded
-            // destructor; cold path, so the once-guard costs nothing per draw. It is armed
-            // here, at the first insertion, on BOTH arms - a destructor hook on the table
-            // itself is wrong for the reason spelled out above InProcessTeardown().
-            EnsureProcessTeardownSentinel();
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
+                // The slot table arms the teardown sentinel itself, at its own first
+                // insertion (D13; SlotTables.h) - so a table used outside a registry arms
+                // it too, which is right: it is the twin, not the registry, that owns the
+                // driver id a guarded destructor exists for.
                 return m_slotTable.GetOrCreate(stateObj);
             }
 #endif
+            // Twin creation is the moment a driver-owned id starts needing a guarded
+            // destructor; cold path, so the once-guard costs nothing per draw. It is armed
+            // here, at the first insertion - a destructor hook on the table itself is wrong
+            // for the reason spelled out above InProcessTeardown().
+            EnsureProcessTeardownSentinel();
             // Sweep BEFORE the entry reference below exists: the map is open-addressed and an
             // erase relocates the rest of the probe cluster, so collecting once that reference
             // is taken would invalidate it. The sweep is therefore owed from an earlier call
@@ -417,15 +424,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return nullptr;
         }
 
-        // P2 step e2. The legacy arm cannot answer this at all - its key is the frontend heap
-        // ADDRESS and the object is already gone by the time the notice arrives - so there it
-        // is a no-op and the garbage sweep stays its only death signal. That asymmetry is not
-        // an oversight: it is the A/B the compile-time arm exists to make measurable
+        // P2 step e2. STATIC, because a death notice is about an object and not about a
+        // registry instance: it is answered by EVERY table of this kind that exists - this
+        // registry's own, and any by-value copy of it a fixture or a context reset is holding
+        // (SlotTables.h explains the holder list and why one holder was a leak).
+        //
+        // The legacy arm cannot answer this at all - its key is the frontend heap ADDRESS and
+        // the object is already gone by the time the notice arrives - so there it is a no-op
+        // and the garbage sweep stays its only death signal. That asymmetry is not an
+        // oversight: it is the A/B the compile-time arm exists to make measurable
         // (ARCHITECTURE.md 9.6), and announced-versus-discovered death is one of the things
         // being measured.
-        Bool DestroyByLifetimeId(Uint64 lifetimeId) {
+        static Bool DestroyByLifetimeId(Uint64 lifetimeId) {
             if (EsprytSlotTablesEnabled()) {
-                return m_slotTable.DestroyByLifetimeId(lifetimeId);
+                return SlotTable::OnFrontendObjectDestroyed(lifetimeId);
             }
             return false;
         }
@@ -454,13 +466,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The seven DirectGLES.cpp call sites drive the LEGACY arm and nothing else. On the
         // handle arm death is announced by the frontend object's destructor
         // (MG_State/GLState/StateObjectDeathNotice.h), so there is no garbage to collect on a
-        // tick and this is the predicted branch plus a return - which is how ROADMAP.md:18's
-        // "delete the GC" is delivered without deleting the legacy arm's own collector while
-        // that arm is still compiled beside it.
+        // tick, the slot table has no collector to forward to, and this is the predicted
+        // branch plus a return - which is how ROADMAP.md:18's "delete the GC" is delivered
+        // without deleting the legacy arm's own collector while that arm is still compiled
+        // beside it.
         void CollectGarbageIfNeeded() {
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
-                m_slotTable.CollectGarbageIfNeeded();
                 return;
             }
 #endif
@@ -474,10 +486,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         }
 
+        // Pre-P2 API, kept for the legacy arm. On the handle arm there is nothing it could
+        // collect: a twin leaves with its object's death notice, and a notice dropped during
+        // process teardown is a deliberate leak (SlotTables.h), not garbage awaiting a call.
         void CollectGarbageNow() {
 #if MOBILEGL_PIPE_PUSH
             if (EsprytSlotTablesEnabled()) {
-                m_slotTable.CollectGarbageNow();
                 return;
             }
 #endif

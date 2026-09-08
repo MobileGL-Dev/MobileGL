@@ -36,6 +36,7 @@
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/ShaderTranspiler/ShaderSourceProcessor.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Types.h>
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
@@ -46,8 +47,14 @@
 #include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <csignal>
+#include <chrono>
 #include <limits>
 #include <set>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 #if MOBILEGL_PIPE_PUSH
 namespace {
@@ -3215,6 +3222,86 @@ namespace {
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Query>;
     using FakeSharedKindSlotTable = MobileGL::MG_Backend::DirectGLES::
         BackendSlotTable<FakeStateObject, FakeBackendObject, MobileGL::MG_Pipe::MGPipeKind::Fence>;
+
+    // A log file path no other process and no other case can be writing to: the pid keeps two
+    // SanityTest processes on one host apart, the counter keeps two cases in one process apart.
+    std::filesystem::path UniqueScratchLogPath(const char* stem) {
+        static int counter = 0;
+#if defined(_WIN32)
+        const long pid = static_cast<long>(_getpid());
+#else
+        const long pid = static_cast<long>(::getpid());
+#endif
+        const auto ticks = std::chrono::steady_clock::now().time_since_epoch().count();
+        return std::filesystem::temp_directory_path() /
+               (std::string(stem) + "-" + std::to_string(pid) + "-" + std::to_string(++counter) +
+                "-" + std::to_string(ticks) + ".log");
+    }
+
+    // Points MobileGL's file log at `path` for the life of the guard and puts back whatever the
+    // operator had - the previous MOBILEGL_LOG_FILE_PATH, or none - on EVERY exit path,
+    // including a failed ASSERT. The log is closed on both sides of the switch, because Log.cpp
+    // reads the variable only when it opens the file.
+    struct ScopedLogFileRedirect {
+        explicit ScopedLogFileRedirect(const std::filesystem::path& path): m_path(path) {
+            if (const char* previous = std::getenv("MOBILEGL_LOG_FILE_PATH")) {
+                m_hadPrevious = true;
+                m_previous = previous;
+            }
+            std::filesystem::remove(m_path);
+            MobileGL::MG_Util::Debug::Close();
+            SetEnvVar("MOBILEGL_LOG_FILE_PATH", m_path.string().c_str());
+        }
+        ~ScopedLogFileRedirect() {
+            MobileGL::MG_Util::Debug::Close();
+            if (m_hadPrevious) {
+                SetEnvVar("MOBILEGL_LOG_FILE_PATH", m_previous.c_str());
+            } else {
+                UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
+            }
+            std::error_code ignored;
+            std::filesystem::remove(m_path, ignored);
+        }
+        ScopedLogFileRedirect(const ScopedLogFileRedirect&) = delete;
+        ScopedLogFileRedirect& operator=(const ScopedLogFileRedirect&) = delete;
+
+        // Everything written so far. Closes the log first so the last line is on disk.
+        std::string Contents() const {
+            MobileGL::MG_Util::Debug::Close();
+            std::ifstream logFile(m_path);
+            if (!logFile.good()) return {};
+            return std::string(std::istreambuf_iterator<char>(logFile), std::istreambuf_iterator<char>());
+        }
+
+    private:
+        std::filesystem::path m_path;
+        bool m_hadPrevious = false;
+        std::string m_previous;
+    };
+
+    // Sets the two knobs into the combination that leaves no twin-table arm at all -
+    // kMGPipeSubsystemEsprytSlots clear and PipeLegacyMemos false, which is what
+    // MOBILEGL_PIPE_PUSH=0 MOBILEGL_PIPE_LEGACY_MEMOS=0 in the environment produces - and
+    // restores MG_Config::Features on every exit path.
+    struct ScopedArmlessKnobPair {
+        ScopedArmlessKnobPair():
+            m_savedPush(MobileGL::MG_Config::Features.PipePush),
+            m_savedLegacy(MobileGL::MG_Config::Features.PipeLegacyMemos) {
+            MobileGL::MG_Config::Features.PipePush =
+                m_savedPush & ~MobileGL::MG_Pipe::kMGPipeSubsystemEsprytSlots;
+            MobileGL::MG_Config::Features.PipeLegacyMemos = false;
+        }
+        ~ScopedArmlessKnobPair() {
+            MobileGL::MG_Config::Features.PipePush = m_savedPush;
+            MobileGL::MG_Config::Features.PipeLegacyMemos = m_savedLegacy;
+        }
+        ScopedArmlessKnobPair(const ScopedArmlessKnobPair&) = delete;
+        ScopedArmlessKnobPair& operator=(const ScopedArmlessKnobPair&) = delete;
+
+    private:
+        MobileGL::Uint64 m_savedPush;
+        MobileGL::Bool m_savedLegacy;
+    };
 } // namespace
 
 // The property the whole slice exists for. The pre-P2 registry keyed twins on the frontend heap
@@ -3233,9 +3320,11 @@ TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothi
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle));
     EXPECT_EQ(table.LiveCount(), 1u);
 
-    // The frontend object dies and the slot is reclaimed - which is the only moment Gen moves.
+    // The frontend object dies and announces it (FakeStateObject is not one of the six re-keyed
+    // classes, so the notice its destructor would raise is raised by hand), and the slot is
+    // reclaimed - which is the only moment Gen moves.
     first.reset();
-    table.CollectGarbageNow();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xA1u));
     EXPECT_EQ(table.LiveCount(), 0u);
     EXPECT_EQ(table.FindByHandle(firstHandle), nullptr)
         << "a handle whose object is gone still resolved to a twin";
@@ -3254,6 +3343,9 @@ TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothi
     EXPECT_EQ(table.FindByHandle(firstHandle), nullptr);
     ASSERT_NE(table.FindByHandle(secondHandle), nullptr);
     EXPECT_EQ((*table.FindByHandle(secondHandle))->marker, 2);
+
+    second.reset();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xA2u));
 }
 
 // Gen moves on reuse and ONLY on reuse: a live object that is looked up again, or respecified,
@@ -3263,16 +3355,12 @@ TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
 
     FakeSlotTable table;
     auto object = MakeShared<FakeStateObject>(0xB1u);
-    // HandleOf caches whatever the allocator answered, INCLUDING the null handle - an object
-    // that is bound but never synced has no twin, and re-probing the hash for it every draw is
-    // exactly what the memo exists to avoid. What makes that safe is that GetOrCreate refreshes
-    // the memo, so a cached "no handle" can never outlive the twin's creation. Nothing pinned
-    // that; this does.
+    // An object that is bound but never synced has no twin and no handle; asking is a miss.
     EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(object.get())));
     table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
     const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle))
-        << "the memo went on answering the null handle it cached before the twin existed";
+        << "the memo went on answering a null handle after the twin was created";
 
     for (int i = 0; i < 8; ++i) {
         auto* slot = table.GetOrCreate(object) ? table.Find(object.get()) : nullptr;
@@ -3280,11 +3368,46 @@ TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
         EXPECT_TRUE(table.HandleOf(object.get()) == handle) << "handle moved on lookup " << i;
     }
     EXPECT_EQ(table.LiveCount(), 1u);
+
+    object.reset();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xB1u));
+}
+
+// The round-4 review's minor 8: HandleOf used to memoise a NULL answer, on the argument that
+// GetOrCreate refreshes the memo. That holds for ONE table. The allocator is per kind and the
+// memo is per table, so once a second holder of the kind can be the one that acquires, the first
+// table's cached "no handle" outlives the twin's creation and nothing on its own acquire path
+// ever corrects it - every Find through it is a miss for a twin that exists. This is that
+// configuration, and it must resolve.
+TEST(DirectGLESSlotTable, ANegativeLookupIsNotCachedAcrossAnotherHoldersAcquire) {
+    using namespace MobileGL;
+
+    FakeSharedKindSlotTable first;
+    FakeSharedKindSlotTable second;
+    auto object = MakeShared<FakeStateObject>(0xB2u);
+
+    // `first` asks before anyone has acquired: a miss, which must NOT be remembered.
+    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(first.HandleOf(object.get())));
+
+    // `second` is the holder that acquires.
+    second.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    const MG_Pipe::MGPipeHandle handle = second.HandleOf(object.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+
+    // `first` never acquired, so nothing on its own path refreshed its memo; it must still
+    // answer the handle the kind now has for this object.
+    EXPECT_TRUE(first.HandleOf(object.get()) == handle)
+        << "the first holder kept answering the null handle it cached before the second holder "
+           "acquired, so every lookup through it misses a twin that exists";
+
+    object.reset();
+    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xB2u));
 }
 
 // The lookup does not mutate the table, which is what lets SyncTextureObjectToBackend stop paying
-// a by-value copy plus a second Find to survive the registry's erase-inside-Find. A dead entry
-// stays put until the sweep, and a live entry's pointer is unaffected by looking up anything else.
+// a by-value copy plus a second Find to survive the registry's erase-inside-Find. An entry whose
+// object has gone stays put until the death notice arrives, and a live entry's pointer is
+// unaffected by looking up anything else.
 TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
     using namespace MobileGL;
 
@@ -3298,35 +3421,58 @@ TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
     ASSERT_NE(keptSlot, nullptr);
     const FakeBackendObject* keptTwin = keptSlot->get();
 
+    // The object goes but its notice is deliberately withheld for a moment, so that whatever
+    // changes between here and the notice is Find's doing. The registry's Find would have
+    // erased the expired entry here and relocated the rest of the probe cluster, invalidating
+    // keptSlot. This one answers what it answers and touches nothing.
     doomed.reset();
-    // The registry's Find would have erased the expired entry here and relocated the rest of the
-    // probe cluster, invalidating keptSlot. This one answers null and touches nothing.
     EXPECT_EQ(table.Find(kept.get()), keptSlot);
-    EXPECT_EQ(table.LiveCount(), 2u) << "Find reclaimed a slot; only the sweep may do that";
+    EXPECT_EQ(table.LiveCount(), 2u) << "Find reclaimed a slot; only a death notice may do that";
     EXPECT_EQ(keptSlot->get(), keptTwin);
 
-    table.CollectGarbageNow();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xC2u));
     EXPECT_EQ(table.LiveCount(), 1u);
     EXPECT_EQ(table.Find(kept.get())->get(), keptTwin);
+
+    kept.reset();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xC1u));
 }
 
 // ScopedDirectGLESTextureBindings saves a whole twin table by value, resets it with `= {}` and
-// restores it. The slot table has to keep that shape or the fixture stops isolating anything.
+// restores it. The slot table has to keep that shape or the fixture stops isolating anything -
+// and the saved copy is a HOLDER for as long as it exists, so a death announced while it is
+// held reaches it too (the round-4 review's minor 2, in the fixture's own shape).
 TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
     using namespace MobileGL;
 
+    const Uint32 holdersBefore = FakeSlotTable::HolderCount();
     FakeSlotTable table;
     auto object = MakeShared<FakeStateObject>(0xD1u);
     table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
     (*table.Find(object.get()))->marker = 7;
+    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
 
     const FakeSlotTable saved = table;
+    EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u)
+        << "the by-value copy did not register as a holder";
     table = {};
+    EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u)
+        << "the reset changed the holder count - a temporary's registration leaked or the "
+           "table's own was lost";
     EXPECT_EQ(table.Find(object.get()), nullptr) << "the reset left the twin reachable";
 
     table = saved;
     ASSERT_NE(table.Find(object.get()), nullptr);
     EXPECT_EQ((*table.Find(object.get()))->marker, 7);
+
+    // The object dies while BOTH the working table and the saved copy hold its twin. One
+    // notice, and neither may keep a live entry.
+    object.reset();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xD1u));
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ(table.LiveCount(), 0u);
+    EXPECT_EQ(saved.LiveCount(), 0u)
+        << "the saved copy kept the dead object's twin - the notice reached one holder only";
 }
 
 // The whole point of routing every twin through the client allocator: a table that keeps its own
@@ -3365,25 +3511,74 @@ TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin)
     EXPECT_EQ((*a.FindByHandle(handle))->marker, 1);
     EXPECT_EQ((*b.FindByHandle(handle))->marker, 2);
 
-    // TWO HOLDERS OF ONE SLOT is a real configuration, not a test artefact, and this is where
-    // the sharp edge is: whichever holder sweeps (or is told of the death) first returns the
-    // slot to the allocator while the other still names it. The allocator makes that SAFE -
-    // Free is generation-guarded and idempotent, and FindByHandle's Gen compare turns the
-    // other holder's now-stale handle into a miss - but not free: if the object is still alive
-    // the next resolution re-Acquires it onto a NEW slot, orphaning the first table's entry
-    // until its own sweep. Two such configurations exist or are landing: the
+    // TWO HOLDERS OF ONE SLOT is a real configuration, not a test artefact (the
     // ScopedDirectGLESTextureBindings fixture above holds a second live table of kind Texture
-    // for the length of a test, and package D's subsystem 4 re-keys VaoDrawMemo out of this
-    // same per-kind allocator. Flagged for the integrator rather than defended here, because
-    // the fix (a refcounted slot-ownership token) belongs with whoever owns both holders.
-    //
-    // The cleanup below is what keeps that out of the OTHER cases: object first, then both
-    // tables, so the slot is back on the free list and this kind's LiveCount is where it was.
+    // for the length of a test), and the death of the object is what makes it sharp: the
+    // allocator forgets the lifetime id on Free, so a notice delivered to ONE holder leaves
+    // the other with a live entry - and its twin's driver storage - that nothing can resolve
+    // and nothing sweeps. OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind below is the case
+    // for that; here the cleanup only has to leave the kind's LiveCount where it was.
     object.reset();
-    a.CollectGarbageNow();
-    b.CollectGarbageNow();
+    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xE1u));
     EXPECT_EQ(slots.LiveCount(kKind), liveBefore)
         << "the shared slot outlived both holders and the object";
+}
+
+// The round-4 review's minor 2, closed: one notice, EVERY holder. Before this the dispatcher
+// told one table per kind and DestroyByLifetimeId freed only a slot THIS table held, so with
+// the sweep retired the second holder kept a live entry, and the twin, for the life of the
+// process. Three holders here - two independent tables and a by-value copy, which is exactly
+// what the fixture makes - and a fourth that never twinned the object and must be untouched.
+TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
+    using namespace MobileGL;
+
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
+    auto& slots = MG_Pipe::MGPipeSlots();
+    const Uint32 liveBefore = slots.LiveCount(kKind);
+    const Uint32 holdersBefore = FakeSharedKindSlotTable::HolderCount();
+
+    FakeSharedKindSlotTable a;
+    FakeSharedKindSlotTable b;
+    FakeSharedKindSlotTable bystander;
+    auto object = MakeShared<FakeStateObject>(0xE2u);
+    auto uninvolved = MakeShared<FakeStateObject>(0xE3u);
+
+    a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    bystander.GetOrCreate(uninvolved) = MakeShared<FakeBackendObject>();
+    const FakeSharedKindSlotTable copyOfA = a; // the fixture's saved registry
+    EXPECT_EQ(FakeSharedKindSlotTable::HolderCount(), holdersBefore + 4u);
+
+    const MG_Pipe::MGPipeHandle handle = a.HandleOf(object.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    // Observers on the twins, so "dropped" means destroyed and not merely unreachable.
+    const std::weak_ptr<FakeBackendObject> twinA = *a.FindByHandle(handle);
+    const std::weak_ptr<FakeBackendObject> twinB = *b.FindByHandle(handle);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 2u);
+
+    // ONE notice. The object is still alive so that nothing but the notice can be at work.
+    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
+
+    EXPECT_EQ(a.FindByHandle(handle), nullptr) << "holder a kept the twin";
+    EXPECT_EQ(b.FindByHandle(handle), nullptr) << "holder b kept the twin";
+    EXPECT_EQ(copyOfA.LiveCount(), 0u) << "the by-value copy kept the twin";
+    EXPECT_EQ(a.LiveCount(), 0u);
+    EXPECT_EQ(b.LiveCount(), 0u);
+    EXPECT_TRUE(twinA.expired()) << "a's twin is unreachable but still allocated";
+    EXPECT_TRUE(twinB.expired()) << "b's twin is unreachable but still allocated";
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u) << "the slot was not returned exactly once";
+    EXPECT_FALSE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()))
+        << "a second notice for the same object found a slot to free";
+
+    // The holder that never twinned the object is exactly as it was.
+    EXPECT_EQ(bystander.LiveCount(), 1u);
+    ASSERT_NE(bystander.Find(uninvolved.get()), nullptr);
+
+    object.reset();
+    uninvolved.reset();
+    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xE3u));
+    EXPECT_EQ(bystander.LiveCount(), 0u);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore);
 }
 
 // The sweep and both of its drivers are RETIRED on this arm (ROADMAP.md:18's "delete the GC"),
@@ -3412,7 +3607,7 @@ TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutA
         // classes really do fire it is EveryReKeyedObjectClassAnnouncesItsOwnDeath below, and
         // that the registries answer it per kind is
         // EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm.
-        EXPECT_TRUE(table.DestroyByLifetimeId(object->GetLifetimeId()));
+        EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
     }
 
     EXPECT_EQ(peakLive, 1u)
@@ -3472,20 +3667,34 @@ TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
     EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u);
 
-    // The object is STILL ALIVE here, which is the point: the sweep's weak_ptr test cannot
-    // fire, so anything that changes is the notice's doing and nothing else's.
-    EXPECT_TRUE(table.DestroyByLifetimeId(object->GetLifetimeId()));
+    // The object is STILL ALIVE here, which is the point: there is no weak_ptr test anywhere
+    // that could fire, so anything that changes is the notice's doing and nothing else's.
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
     EXPECT_EQ(table.LiveCount(), 0u) << "the twin survived its own destroy notice";
     EXPECT_EQ(table.FindByHandle(handle), nullptr);
     EXPECT_EQ(table.Find(object.get()), nullptr);
     EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
         << "the slot was not returned to the allocator";
 
-    // Idempotent, and a table that does not hold the slot says so rather than freeing it out
-    // from under whoever does. Both matter once two holders of one kind exist.
-    EXPECT_FALSE(table.DestroyByLifetimeId(object->GetLifetimeId()));
-    FakeSlotTable other;
-    EXPECT_FALSE(other.DestroyByLifetimeId(object->GetLifetimeId()));
+    // Idempotent: the allocator no longer maps the id, so a repeated notice frees nothing and
+    // says so - and it says so for every holder, since the notice is about the object and not
+    // about a table.
+    EXPECT_FALSE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
+
+    // A slot minted for an object that NO table holds any more - the fixture's `table = {}`
+    // drops entries without freeing - still goes back when the object dies: the id is dead and
+    // cannot be acquired again, so keeping the slot would be the process-lifetime leak the
+    // review named.
+    auto orphaned = MakeShared<FakeStateObject>(0x1E2A0002ull);
+    {
+        FakeSlotTable transient;
+        transient.GetOrCreate(orphaned) = MakeShared<FakeBackendObject>();
+    }
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u);
+    orphaned.reset();
+    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0x1E2A0002ull))
+        << "a slot no holder had an entry for was left allocated";
+    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore);
 }
 
 // The firing side of e2, on ALL SIX re-keyed object classes - the round-3 review's MAJOR 3.
@@ -3670,6 +3879,39 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
                                      [] { return MakeShared<VertexArrayObject>(0u); });
 }
 
+// The two-holder fix, end to end through the REAL Texture registry and the REAL destructor:
+// a by-value copy of TextureImpl::g_backendTextureObjects - which is precisely what
+// ScopedDirectGLESTextureBindings keeps in `previousRegistry` for the length of a test - must
+// drop the twin on the same notice the registry global does, with no sweep and no second call.
+TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and cannot "
+                        "answer a death notice";
+    }
+
+    auto& registry = TextureImpl::g_backendTextureObjects;
+    SharedPtr<ITextureObject> texture = MakeShared<TextureObject2D>(0u);
+    auto& twin = registry.GetOrCreate(texture);
+    (void)twin;
+    const MG_Pipe::MGPipeHandle handle = registry.HandleOf(texture.get());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+
+    // The fixture's shape: copy the registry while the twin is live.
+    auto saved = registry;
+    ASSERT_NE(saved.FindByHandle(handle), nullptr) << "the copy did not carry the live entry";
+
+    // The real destructor raises the real notice; nothing else runs.
+    texture.reset();
+    EXPECT_EQ(registry.FindByHandle(handle), nullptr) << "the registry global kept the twin";
+    EXPECT_EQ(saved.FindByHandle(handle), nullptr)
+        << "the saved copy kept the dead texture's twin - the dispatcher told one holder only";
+    EXPECT_FALSE(registry.DestroyByLifetimeId(0)) << "sanity: a null id frees nothing";
+}
+
 // The gate on MAJOR 1 of the round-3 review. Commit d89fb684 raised
 // Fatal{PipeLegacyMemosDisabled} from inside InitDisplayAndContext(), i.e. from inside EGL
 // bring-up - and the integration harness pre-flights EGL bring-up in a FORKED CHILD, converting
@@ -3697,20 +3939,18 @@ TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane)
     EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, true), EsprytSlotArmVerdict::Legacy);
     EXPECT_EQ(MG_Backend::DirectGLES::ClassifyEsprytSlotArm(false, false), EsprytSlotArmVerdict::NoArm);
 
-    const Uint64 savedPush = MG_Config::Features.PipePush;
-    const Bool savedLegacy = MG_Config::Features.PipeLegacyMemos;
-    MG_Config::Features.PipePush = savedPush & ~MG_Pipe::kMGPipeSubsystemEsprytSlots;
-    MG_Config::Features.PipeLegacyMemos = false;
+    // Both guards restore on every exit path - a failed ASSERT included - so no later case in
+    // this binary runs on a mutated config or without the operator's file log, and the log
+    // path is unique per process and per case (the round-4 review's minor 5).
+    const ScopedArmlessKnobPair knobs;
     ASSERT_EQ(MG_Backend::DirectGLES::CurrentEsprytSlotArmVerdict(), EsprytSlotArmVerdict::NoArm);
-
-    const fs::path logPath = fs::temp_directory_path() / "mobilegl-espryt-armless-knobs.log";
-    fs::remove(logPath);
-    MG_Util::Debug::Close();
-    SetEnvVar("MOBILEGL_LOG_FILE_PATH", logPath.string().c_str());
+    const ScopedLogFileRedirect log(UniqueScratchLogPath("mobilegl-espryt-armless-knobs"));
 
     // Bring-up's half of the split. It must NAME the knobs and it must RETURN: this call is the
     // one InitDisplayAndContext() makes, and it runs inside the harness's forked pre-flight
     // child. If it ever stops again, this line takes the whole binary down and the case is red.
+    // (That the call SITE still makes this call and not the stopping one is
+    // EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping below.)
     MG_Backend::DirectGLES::DiagnoseEsprytSlotArm();
 
 #if !defined(_WIN32)
@@ -3721,19 +3961,9 @@ TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane)
                 ::testing::KilledBySignal(SIGABRT), "");
 #endif
 
-    MG_Util::Debug::Close();
-    UnsetEnvVar("MOBILEGL_LOG_FILE_PATH");
-    MG_Config::Features.PipePush = savedPush;
-    MG_Config::Features.PipeLegacyMemos = savedLegacy;
-
-    std::string contents;
-    {
-        std::ifstream logFile(logPath);
-        ASSERT_TRUE(logFile.good()) << "neither the diagnosis nor the fatal wrote a line an "
-                                       "operator could read";
-        contents.assign(std::istreambuf_iterator<char>(logFile), std::istreambuf_iterator<char>());
-    }
-    fs::remove(logPath);
+    const std::string contents = log.Contents();
+    ASSERT_FALSE(contents.empty()) << "neither the diagnosis nor the fatal wrote a line an "
+                                      "operator could read";
 
     EXPECT_NE(contents.find("PipeLegacyMemosDisabled"), std::string::npos) << contents;
     EXPECT_NE(contents.find("MOBILEGL_PIPE_PUSH"), std::string::npos) << contents;
@@ -3744,6 +3974,64 @@ TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane)
         << "the diagnosis was logged but the first-use stop was not: " << contents;
 #endif
 #endif // MOBILEGL_PIPE_LEGACY_MEMOS
+}
+
+// The round-4 review's minor 4: the case above pins the two FUNCTIONS, and nothing failed if
+// InitDisplayAndContext() (DirectGLES.cpp) was edited back to call the stopping one - which is
+// exactly the regression that produced the round-3 major. This pins the CALL SITE, by running
+// the real bring-up entry point under the armless pair.
+//
+// No display is needed: InitDisplayAndContext's twin-arm call is its first statement after
+// the context teardown, ahead of eglGetDisplay, so an EGL table whose eglGetDisplay answers
+// EGL_NO_DISPLAY takes bring-up through that call and straight back out with `false`. The
+// child must then EXIT with the code below. If the site stops again it dies of SIGABRT
+// instead, and the death test fails - naming both knobs - rather than skipping: in the
+// integration harness that same abort is what turned into a green lane that ran nothing.
+//
+// Not skipped in a build without the legacy arm either: there the verdict is Handles and
+// bring-up has nothing to diagnose, but it must still return, and this says so.
+TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping) {
+#if defined(_WIN32)
+    GTEST_SKIP() << "needs a forked death test";
+#else
+    using namespace MobileGL;
+
+    constexpr int kBringUpReturnedFalse = 0x51;
+    constexpr int kBringUpReturnedTrue = 0x52;
+
+    // The redirect is set up in the PARENT: the child inherits the environment and writes the
+    // file, the parent reads it once the child has gone, and the guard restores the operator's
+    // log path either way.
+    const ScopedLogFileRedirect log(UniqueScratchLogPath("mobilegl-espryt-armless-bringup"));
+
+    EXPECT_EXIT(
+        {
+            const ScopedArmlessKnobPair knobs;
+            MG_External::EGLFunctionsTable egl{};
+            egl.eglGetDisplay = +[](EGLNativeDisplayType) -> EGLDisplay { return EGL_NO_DISPLAY; };
+            MG_Backend::DirectGLES::SetEGLFuncsTable(egl);
+            const Bool ok = MG_Backend::DirectGLES::InitPbufferSurface(1, 1);
+            MG_Util::Debug::Close();
+            std::exit(ok ? kBringUpReturnedTrue : kBringUpReturnedFalse);
+        },
+        ::testing::ExitedWithCode(kBringUpReturnedFalse), "")
+        << "EGL bring-up under MOBILEGL_PIPE_PUSH with kMGPipeSubsystemEsprytSlots clear and "
+           "MOBILEGL_PIPE_LEGACY_MEMOS=0 did not RETURN: InitDisplayAndContext() is stopping "
+           "on the armless knob pair again instead of diagnosing it, and the integration "
+           "harness's forked pre-flight turns that stop into a lane that skips every scenario";
+
+#if MOBILEGL_PIPE_LEGACY_MEMOS
+    // And it diagnosed, by name, on the way through - the operator is told which two knobs
+    // they set before the first draw - without a Fatal{} anywhere in bring-up.
+    const std::string contents = log.Contents();
+    EXPECT_NE(contents.find("PipeLegacyMemosDisabled"), std::string::npos)
+        << "bring-up returned but did not diagnose the armless pair: " << contents;
+    EXPECT_NE(contents.find("MOBILEGL_PIPE_PUSH"), std::string::npos) << contents;
+    EXPECT_NE(contents.find("MOBILEGL_PIPE_LEGACY_MEMOS=0"), std::string::npos) << contents;
+    EXPECT_EQ(contents.find("Fatal{"), std::string::npos)
+        << "bring-up wrote a Fatal{} - the stop is back inside EGL bring-up: " << contents;
+#endif
+#endif
 }
 
 #else
@@ -3799,6 +4087,22 @@ TEST(DirectGLESSlotTable, AnArmlessKnobCombinationStopsInsteadOfSkippingTheLane)
 }
 
 TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, ANegativeLookupIsNotCachedAcrossAnotherHoldersAcquire) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopping) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
