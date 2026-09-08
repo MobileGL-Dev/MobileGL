@@ -2254,6 +2254,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stale as one built before a relink - while the sampler half, which really is
             // re-issued per draw, needs nothing of the sort.
             Uint32 GetSyncedImageUnitVersion() const { return m_syncedImageUnitVersion; }
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-B3, D-H5): the ShaderCso record's Serial this backend program was built
+            // from. It is what the draw path's nine-clause rebuild condition reads on the handle
+            // arm INSTEAD OF the two frontend versions above - one server-owned counter that
+            // moves on every create_shader_state the applier applies to this handle, including a
+            // RE-create on the same handle, which is how a relink travels (Gen moves only on slot
+            // reuse, never on a respecify).
+            //
+            // THE CLAUSE COUNT DOES NOT SHRINK, and a brief that treated create_shader_state as
+            // self-contained would produce a per-draw rebuild: the other eight inputs - the draw
+            // FBO's snorm/unorm clamp masks, the fragColor broadcast count, the storage-block
+            // binding signature, the atomic-counter set, the live image formats and the patch
+            // parameters - are all still specialised at the verb, from state this backend holds.
+            // 0 means "never stamped", which is a guaranteed miss (applier serials start at 1).
+            Uint64 GetSyncedShaderCsoSerial() const { return m_syncedShaderCsoSerial; }
+#endif
             // Whether the (unit, bound format) pairs this program's FORMAT-LESS image uniforms
             // resolve to are still the ones its ESSL was generated against.
             //
@@ -2353,6 +2369,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BufferImpl::UboRingAllocation m_globalUboRingAllocation;
             Uint32 m_syncedLinkVersion = ~0u;
             Uint32 m_syncedImageUnitVersion = ~0u;
+#if MOBILEGL_PIPE_PUSH
+            // P4a's replacement for the two above on the handle arm; see GetSyncedShaderCsoSerial.
+            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
+            Uint64 m_syncedShaderCsoSerial = 0;
+#endif
             // Image units addressed by the program's FORMAT-LESS image uniforms, and the digest
             // of the (unit, format) pairs the generated ESSL baked. Empty/0 for every program
             // that declares a format on all of its images, which is the overwhelming majority -
@@ -2466,6 +2487,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool m_isInitialized = false;
             SamplerParameters m_cacheSamplerParameters;
             Uint16 m_syncedSamplerVersion = 0;
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-B3): the SamplerCso record's Serial at the last completed sync. It replaces
+            // m_syncedSamplerVersion, which stays beside it because the pre-handle arm compiles
+            // under MOBILEGL_PIPE_LEGACY_MEMOS through P3a/P4a (ARCHITECTURE.md:369).
+            //
+            // The two are not interchangeable and that is the point: the frontend version is per
+            // OBJECT, while the serial is per CONTENT-ADDRESSED CSO, and two frontend samplers
+            // with identical parameters share one CSO and therefore one serial - so under the
+            // handle arm the second of them costs no driver call at all.
+            //
+            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
+            Uint64 m_syncedSamplerSerial = 0;
+#endif
         };
 
         void UnbindSampler(Uint unit);

@@ -11206,6 +11206,40 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ReseedShaderStorageBlockBindings(m_backendProgramId, *stateProgramObject);
             m_syncedLinkVersion = stateProgramObject->GetLinkVersion();
             m_syncedImageUnitVersion = stateProgramObject->GetImageUnitVersion();
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-B3): the ShaderCso record's Serial, stamped in the same breath as the two
+            // frontend versions it replaces. GetSyncedShaderCsoSerial() beside
+            // GetSyncedLinkVersion()/GetSyncedImageUnitVersion() is what the draw path's
+            // nine-clause rebuild condition reads on the handle arm; the clause COUNT does not
+            // shrink, its inputs move (D-H5).
+            //
+            // WHAT DOES *NOT* MOVE, and it is a design statement rather than an omission: the
+            // ARTEFACTS. D-H3 rules that in monolith all seven MGPBlobRefs are declared with
+            // Size 0 - "this record does not declare its blob" - and the LinkArtifacts /
+            // SpirvArtifacts ride beside the record through the entry point's companion
+            // pointers, so the applier stores the DESCRIPTOR and the identity and the server
+            // reads the frontend's own archive. That is what keeps the codec off the monolith
+            // hot path entirely, and it is why every artefact read above is still a read of
+            // stateProgramObject. The verify build is where the codec is exercised, by
+            // serialising, deserialising and field-comparing before storing.
+            if (ProgramSubsystemEnabled()) {
+                // MONOLITH GLUE: the ShaderCso handle of a program this backend still arrives
+                // holding. The reader hides the composite band, so a program-pipeline composite
+                // - which the server must never learn is one - resolves through the same call.
+                const MG_Pipe::MGPipeHandle cso = g_backendProgramObjects.HandleOf(stateProgramObject.get());
+                const auto* record = PipeShaderCsoRecordForHandle(cso);
+                if (record != nullptr) {
+                    m_syncedShaderCsoSerial = record->Serial;
+                } else {
+                    // NOT a fall-back and not a silent zero: a stamped 0 would make every later
+                    // serial compare fire for ever, which is the safe direction but hides the
+                    // missing record. Name it and leave the memo where it was.
+                    MGLOG_E_ONCE("MGPipe: program %u has no shader-CSO applier record on the handle "
+                                 "arm, so its synced serial cannot be stamped (handle {%u, %u})",
+                                 stateProgramObject->GetExternalIndex(), cso.Slot, cso.Gen);
+                }
+            }
+#endif
 
             m_isInitialized = true;
             MGLOG_D("Program sync completed. backend ID %u", m_backendProgramId);
@@ -11431,6 +11465,57 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
 
+            // P4a (D-F1): a SamplerObject is a pure 100-byte value with no driver-side per-object
+            // binding state, so its CSO is CONTENT-ADDRESSED on the client at capacity 256 and
+            // two identical samplers share one record. What that means here is that the record's
+            // server-owned Serial, not the frontend object's version, is what says the values
+            // moved - and that the values themselves cross byte for byte INCLUDING
+            // borderColorForm, which is why all four border comparands below are still compared.
+            //
+            // The whole arm choice is a preprocessor #if/#else so the PULL build's text is the
+            // pre-P4a text token for token (D-P).
+#if MOBILEGL_PIPE_PUSH
+            const SamplerParameters* pushedParams = nullptr;
+            if (SamplerSubsystemEnabled()) {
+                // MONOLITH GLUE: the SamplerCso handle of an object this backend still arrives
+                // holding. Under a real split it rides in the payload, and every path P4a
+                // switches over already carries it - this is for the paths that do not.
+                const MG_Pipe::MGPipeHandle cso = g_backendSamplerObjects.HandleOf(stateSamplerObject.get());
+                const auto* record = PipeSamplerCsoRecordForHandle(cso);
+                if (record == nullptr) {
+                    MGLOG_E_ONCE("MGPipe: sampler %u has no applier record on the handle arm, so its "
+                                 "parameters cannot be pushed (handle {%u, %u})",
+                                 stateSamplerObject->GetExternalIndex(), cso.Slot, cso.Gen);
+                    return;
+                }
+                if (m_isInitialized && m_syncedSamplerSerial != 0 && m_syncedSamplerSerial == record->Serial) {
+                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
+                            stateSamplerObject->GetExternalIndex());
+                    return;
+                }
+                m_syncedSamplerSerial = record->Serial;
+                pushedParams = &record->Params;
+            } else {
+#if !MOBILEGL_PIPE_LEGACY_MEMOS
+                // UNREACHABLE: ResolveSamplerSubsystemArm stops at its first call when the bit is
+                // clear and the pre-handle arm is not compiled. Kept, and kept loud.
+                MGLOG_E_ONCE("MGPipe: the sampler subsystem bit is clear and "
+                             "MOBILEGL_PIPE_LEGACY_MEMOS=0 removed the pre-handle sampler-version "
+                             "memo, so this configuration has no arm at all");
+                return;
+#else
+                Uint currentSamplerVersion = stateSamplerObject->GetVersion();
+                if (m_isInitialized && m_syncedSamplerVersion == currentSamplerVersion) {
+                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
+                            stateSamplerObject->GetExternalIndex());
+                    return;
+                }
+
+                m_syncedSamplerVersion = currentSamplerVersion;
+                pushedParams = &stateSamplerObject->GetAllSamplerParameters();
+#endif
+            }
+#else
             Uint currentSamplerVersion = stateSamplerObject->GetVersion();
             if (m_isInitialized && m_syncedSamplerVersion == currentSamplerVersion) {
                 MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
@@ -11439,11 +11524,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             m_syncedSamplerVersion = currentSamplerVersion;
+#endif
 
             MGLOG_D("Syncing sampler with backend ID %u to backend for state ID %u", m_backendSamplerId,
                     stateSamplerObject->GetExternalIndex());
 
+#if MOBILEGL_PIPE_PUSH
+            const SamplerParameters& samplerParams = *pushedParams;
+#else
             const auto& samplerParams = stateSamplerObject->GetAllSamplerParameters();
+#endif
 
 #define SYNC_SAMPLER_PARAM_IF_CHANGED(internalName, glName, type)                                                      \
     if (m_cacheSamplerParameters.internalName != samplerParams.internalName) {                                         \
