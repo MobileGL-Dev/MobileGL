@@ -1027,24 +1027,38 @@ gtest_discover_tests(MobileGLIntegrationTest
 # Registered in EVERY build, including the pull build where there is no CSO at all, so that
 # `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
 # pull build MGITEST_PIPE_PUSH_BUILD is absent and both cases skip saying so.
+#
+# THE MASK IS THE PHASE DEFAULT AND THE CONTROL IS BIT 63, and the two must not be confused. The
+# only thing these four lanes are an A/B about is `no CSO content addressing` (bit 63,
+# kMGPipeBehaviourNoCsoContentAddressing), which is what separates the On lane from the Off lane.
+# Every
+# other bit is the build's shipping mask, so it moves with the phase: it was 0x7f
+# (kMGPipeSubsystemsMigratedAtP2) and is now 0x1ff (kMGPipeSubsystemsMigratedAtP3a) for the same
+# reason MGL_ITEST_HANDLES_ARM_KNOBS above moved. Left pinned at 0x7f after P3a these lanes would
+# keep passing while running on a configuration nothing ships - bits 7 (resources) and 8 (vertex
+# input) cleared - which is the "still green, no longer measuring the shape that ships" failure
+# the Handles-arm comment above rejects. The counters they read (csom / csob) are render-state and
+# are steered by neither bit, so raising the mask is behaviour-preserving for what they assert;
+# what it buys is that a CSO regression that only shows up with the P3a subsystems on can reach
+# them. (contract-review-v1.md item 11, closed here for all three lane families.)
 mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
-    "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=no-content-addressing"
-    "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x80000000000001ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=content-addressed"
-    "MOBILEGL_PIPE_PUSH=0x7f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x1ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-content-addressed-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_CSO_LANE=no-content-addressing"
-    "MOBILEGL_PIPE_PUSH=0x800000000000007f" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_PIPE_PUSH=0x80000000000001ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
