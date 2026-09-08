@@ -16,6 +16,16 @@
 
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
+#if MOBILEGL_PIPE_VERIFY
+// THE ONE PLACE THE PROGRAM ARCHIVE'S CODEC IS CALLED, and it is compiled into the VERIFY
+// build only. In monolith the archive does not travel - MGPProgramDesc's seven blob refs are
+// declared with Size 0 and the two structs ride beside the record through the entry point's
+// companion pointers - so a push build pays nothing for it and the header keeps its forward
+// declarations. The verify build serialises, deserialises and compares before storing, which
+// makes the codec LIVE CODE WITH A GATE rather than dead code with a unit test.
+#include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -909,6 +919,91 @@ namespace MobileGL::MG_Pipe {
             destinationCount = count;
             return true;
         }
+
+        // ----------------------------------------------------------------------------
+        // P4a: the ShaderCso band split, mirrored from the allocator's.
+        //
+        // The composite band starts at 983040, so ONE program-pipeline composite in a
+        // slot-indexed vector would grow that vector to ~983k records of ~240 bytes each - a
+        // 236 MB spike on the first pipeline draw, which would be a defect this commit
+        // introduced rather than one it inherited. Both spaces are kept dense against their OWN
+        // high-water mark instead, exactly as MGPipeSlotAllocator keeps the band in a table of
+        // its own.
+        //
+        // THE SERVER STILL NEVER LEARNS A HANDLE IS A COMPOSITE. The split is an indexing detail
+        // on this side of the wire: create / bind / delete_shader_state and set_global_constants
+        // name a composite exactly as they name any other program, and none of them branches on
+        // it outside these two functions.
+        // ----------------------------------------------------------------------------
+        MGPipeShaderCsoRecord* ShaderCsoRecordAt(Uint32 slot) {
+            if (MGPipeIsCompositeShaderSlot(slot)) {
+                return RecordAt(g_applier.CompositeShaderCsos, slot - kMGPipeShaderCsoCompositeSlotBase,
+                                kMGPipeShaderCsoSlotLimit - kMGPipeShaderCsoCompositeSlotBase);
+            }
+            // The ordinary table is bounded by the BAND'S BASE and not by the slot limit: an
+            // ordinary program can never be handed a band slot (the allocator refuses it), so a
+            // slot at or above the base that is not a composite is out of range by definition.
+            return RecordAt(g_applier.ShaderCsos, slot, kMGPipeShaderCsoCompositeSlotBase);
+        }
+
+        MGPipeShaderCsoRecord* FindShaderCso(MGPipeHandle cso) {
+            if (MGPipeIsCompositeShaderSlot(cso.Slot)) {
+                return FindIn(g_applier.CompositeShaderCsos,
+                              MGPipeHandle{cso.Slot - kMGPipeShaderCsoCompositeSlotBase, cso.Gen});
+            }
+            return FindIn(g_applier.ShaderCsos, cso);
+        }
+
+        MGPipeShaderCsoRecord* ResolveShaderCso(const char* call, MGPipeHandle cso) {
+            MGPipeShaderCsoRecord* record = FindShaderCso(cso);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, cso.Slot, cso.Gen,
+                            kResourceRefusalNote);
+            if (record == nullptr) ++g_applier.RefusedObjectCalls;
+            return record;
+        }
+
+#if MOBILEGL_PIPE_VERIFY
+        // THE ARCHIVE'S ROUND TRIP, and it is a VERIFY-ONLY gate on a path that does not
+        // serialise anything in a shipped build. What it asks is the question a transport will
+        // ask on the first day it exists and nobody can ask afterwards: does the archive this
+        // client is publishing survive being turned into bytes and back? A field the codec
+        // skips in BOTH directions round-trips perfectly, which is why the unit suite reads the
+        // members back explicitly; what THIS adds is that it runs over every real program the
+        // verify lane links rather than over one hand-built instance.
+        void PinProgramArchiveRoundTrip(const MGPProgramDesc& desc,
+                                        const MG_State::GLState::LinkArtifacts& link,
+                                        const MG_State::GLState::SpirvArtifacts& spirv) {
+            Vector<Uint8> encoded;
+            MG_State::GLState::EncodeProgramArtifacts(link, spirv, encoded);
+            MG_State::GLState::LinkArtifacts decodedLink;
+            MG_State::GLState::SpirvArtifacts decodedSpirv;
+            Vector<Uint8> reencoded;
+            const char* fault = nullptr;
+            if (encoded.empty()) {
+                fault = "the encoder produced no bytes for a program that has artefacts";
+            } else if (!MG_State::GLState::DecodeProgramArtifacts(encoded.data(), encoded.size(),
+                                                                  decodedLink, decodedSpirv)) {
+                fault = "the archive this client would put on the wire does not decode";
+            } else {
+                MG_State::GLState::EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
+                if (reencoded != encoded) {
+                    fault = "the archive does not survive its own round trip";
+                } else if (decodedLink.program != nullptr) {
+                    // The live glslang TProgram is the one member the tables deliberately omit;
+                    // a decode that reconstructed one would be carrying the compiler front end
+                    // across a boundary that exists to keep it on this side.
+                    fault = "the decoded archive carries a live program object";
+                }
+            }
+            if (fault == nullptr) return;
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeVerifyDiffer")
+                                 " program-archive create_shader_state {slot=%u, gen=%u}: %s (%llu bytes "
+                                 "encoded, %llu re-encoded)",
+                                 desc.Cso.Slot, desc.Cso.Gen, fault,
+                                 static_cast<unsigned long long>(encoded.size()),
+                                 static_cast<unsigned long long>(reencoded.size()));
+        }
+#endif
     } // namespace
 
     MGPipeApplierState& MGPipeApplier() { return g_applier; }
@@ -2094,25 +2189,220 @@ namespace MobileGL::MG_Pipe {
         ++g_applier.ShaderImagesSerial;
     }
 
+    // ================================================================================
+    // w3: the shader CSO, the two program bindings and the default uniform block
+    //
+    // AND THE SERVER NEVER RE-LINKS. glslang lives entirely on the client and SPIRV-Cross
+    // entirely on the server, a file-level cut: what crosses is the per-stage SPIR-V and the
+    // reflection archive, never source, and there is no server-side compile pool to hand a
+    // failure back from. Link failure needs no synchronous return either - it is one error log
+    // plus a bind-program-0 empty draw today, GL_LINK_STATUS is never withdrawn, and the
+    // synchronous query is answered by the client out of its own ProgramObject.
+    //
+    // WHAT THE SERVER STILL SPECIALISES IS NOT THIS RECORD'S BUSINESS. A backend program
+    // depends on eight more inputs than the artefacts - the draw framebuffer's clamp masks and
+    // fragColor broadcast count, the storage-block binding signature, the live image formats,
+    // the patch parameters - and every one of them now arrives through ANOTHER record this
+    // applier holds. create_shader_state publishes the artefacts; the verb specialises.
+    // ================================================================================
+
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
                                       const MG_State::GLState::LinkArtifacts* link,
                                       const MG_State::GLState::SpirvArtifacts* spirv) {
-        (void)desc;
-        (void)link;
-        (void)spirv;
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
+                        "create_shader_state named the reserved slot 0");
+        if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
+
+        // THE ONE BLOB RULE, over seven blob refs at once. All seven are declared with Size 0 in
+        // monolith - "this record does not declare its blob" - and the artefacts ride beside the
+        // record through the two companion pointers, so a record that declares nothing AND
+        // carries nothing describes a program with no reflection and no SPIR-V, which is not a
+        // program. The declared lengths themselves cross-check nothing here: no other field of
+        // MGPProgramDesc describes how long a module or an archive is, so the rule is inert on
+        // this record by construction rather than by omission, and it becomes a real one when
+        // the transport that fills those refs in lands with the splitter that owns them.
+        const char* fault = nullptr;
+        if (link == nullptr || spirv == nullptr) {
+            fault = "the record declares no blobs and carries no artefacts";
+        } else if (desc.GlobalUboSize > kMGPipeMaxGlobalConstantsBytes) {
+            fault = "the default uniform block is larger than any program may declare";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_shader_state {slot=%u, gen=%u}: %s (stages=0x%x, "
+                                 "globalUboSize=%u, bound %u)",
+                                 desc.Cso.Slot, desc.Cso.Gen, fault, desc.StageMask, desc.GlobalUboSize,
+                                 kMGPipeMaxGlobalConstantsBytes);
+            return;
+        }
+
+        MGPipeShaderCsoRecord* recordAt = ShaderCsoRecordAt(desc.Cso.Slot);
+        if (recordAt == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_shader_state {slot=%u, gen=%u}: the slot is outside the record "
+                                 "table's bound (%u)",
+                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxShaderCsoSlots);
+            return;
+        }
+
+#if MOBILEGL_PIPE_VERIFY
+        // BEFORE STORING, so a lane that aborts here aborts on the record that was wrong rather
+        // than on the next one that reads it.
+        PinProgramArchiveRoundTrip(desc, *link, *spirv);
+#endif
+
+        MGPipeShaderCsoRecord& record = *recordAt;
+        // A RE-ISSUE ON THE SAME HANDLE IS HOW A RELINK TRAVELS: the handle is minted per
+        // frontend program and Gen moves only on slot reuse, so an existing record of the same
+        // identity keeps its serial and counts up from it, and a record of a different identity
+        // is a recycled slot and starts over.
+        if (!record.Live || record.Gen != desc.Cso.Gen) {
+            record = MGPipeShaderCsoRecord{};
+            record.Gen = desc.Cso.Gen;
+        } else {
+            ++record.Serial;
+            // A RELINK REPLACES THE DEFAULT UNIFORM BLOCK'S LAYOUT, so the image and the version
+            // keyed to the old one go with it - keeping them would leave a block sized to a
+            // layout that no longer exists, and the sentinel is exactly the value that says
+            // "nothing has been uploaded for this program". The client re-emits against the
+            // layout that now exists; the serial announces the clearing so a twin cannot match
+            // what it uploaded before the relink.
+            record.GlobalConstants.clear();
+            record.GlobalConstantsVersion = ~Uint32{0};
+            ++record.GlobalConstantsSerial;
+        }
+        record.Live = true;
+        // The DESCRIPTOR is what is stored, and the artefacts are not: in monolith the backend
+        // reads the frontend's own archive, and under split the descriptor is what the
+        // deserialised archive is attached to. Either way the applier owns identity, extent and
+        // order, and never content.
+        record.Desc = desc;
     }
 
-    void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
+                        "bind_shader_state on kind %u", handle.Kind);
+        // The null handle is legal and means "nothing bound", which is a GL state and not an
+        // error; a DEAD handle leaves the previous binding untouched and is counted, which is
+        // bind_render_state's precedent for the same question.
+        if (MGPipeHandleIsNull(handle.Handle)) {
+            g_applier.BoundShaderCso = kMGPipeNullHandle;
+            ++g_applier.ProgramBindingSerial;
+            return;
+        }
+        const MGPipeShaderCsoRecord* record = ResolveShaderCso("bind_shader_state", handle.Handle);
+        if (record == nullptr) return;
+        g_applier.BoundShaderCso = handle.Handle;
+        ++g_applier.ProgramBindingSerial;
+    }
 
-    void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
+                        "delete_shader_state on kind %u", handle.Kind);
+        // A COMPOSITE'S SLOT HAS TWO INDEPENDENT RELEASE PATHS - the pipeline cache's eviction
+        // and the composite program's own destructor - and both arrive here through one client
+        // helper. The second is a refusal: the record is already gone, so it is counted and
+        // dropped, which is the same defined no-op every other death notice gets and is why the
+        // double free is a proven no-op rather than a race.
+        MGPipeShaderCsoRecord* record = ResolveShaderCso("delete_shader_state", handle.Handle);
+        if (record == nullptr) return;
 
-    void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle) { (void)handle; }
+        const Uint32 gen = record->Gen;
+        *record = MGPipeShaderCsoRecord{};
+        record->Gen = gen;
 
-    void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) { (void)handle; }
+        // UNLIKE THE UNIT SETS, THE THREE PROGRAM BINDINGS ARE CLEARED. They are single handles
+        // rather than a window of "the last set as received", and each of them is resolved
+        // against the record that has just been dropped - leaving one behind would mean the
+        // next verb resolving a binding to a record this applier no longer has, which is the
+        // refusal counter firing for a state the applier itself created.
+        Bool cleared = false;
+        if (g_applier.BoundShaderCso == handle.Handle) {
+            g_applier.BoundShaderCso = kMGPipeNullHandle;
+            cleared = true;
+        }
+        if (g_applier.DrawProgram == handle.Handle) {
+            g_applier.DrawProgram = kMGPipeNullHandle;
+            cleared = true;
+        }
+        if (g_applier.DispatchProgram == handle.Handle) {
+            g_applier.DispatchProgram = kMGPipeNullHandle;
+            cleared = true;
+        }
+        if (cleared) ++g_applier.ProgramBindingSerial;
+    }
+
+    // TWO CALLS AND NOT ONE, because the frontend has two joins and two PipeInputs slots: a
+    // draw resolves GetProgramForDraw and a dispatch resolves GetProgramForDispatch, and a
+    // pipeline object flattened into a composite is the first of those and never the second.
+    void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
+                        "set_draw_program on kind %u", handle.Kind);
+        if (MGPipeHandleIsNull(handle.Handle)) {
+            g_applier.DrawProgram = kMGPipeNullHandle;
+            ++g_applier.ProgramBindingSerial;
+            return;
+        }
+        const MGPipeShaderCsoRecord* record = ResolveShaderCso("set_draw_program", handle.Handle);
+        if (record == nullptr) return;
+        g_applier.DrawProgram = handle.Handle;
+        ++g_applier.ProgramBindingSerial;
+    }
+
+    void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
+                        "set_dispatch_program on kind %u", handle.Kind);
+        if (MGPipeHandleIsNull(handle.Handle)) {
+            g_applier.DispatchProgram = kMGPipeNullHandle;
+            ++g_applier.ProgramBindingSerial;
+            return;
+        }
+        const MGPipeShaderCsoRecord* record = ResolveShaderCso("set_dispatch_program", handle.Handle);
+        if (record == nullptr) return;
+        g_applier.DispatchProgram = handle.Handle;
+        ++g_applier.ProgramBindingSerial;
+    }
 
     void MGPipeApplySetGlobalConstants(const MGPGlobalConstants& record, const void* bytes) {
-        (void)record;
-        (void)bytes;
+        // ON THE PROGRAM'S RECORD, not in the working state, and that is what makes it survive a
+        // make-current: the block is (ShaderCso, Version) keyed and belongs to the program, not
+        // to the context that last uploaded it.
+        MGPipeShaderCsoRecord* stored = ResolveShaderCso("set_global_constants", record.ShaderCso);
+        if (stored == nullptr) return;
+
+        // THE LENGTH IS THE PROGRAM'S OWN GlobalUboSize, which arrived on the create and was
+        // bounded there - so this call can only ever allocate what the create already declared,
+        // and the blob rule has a real field to cross-check against for once.
+        const Uint32 size = stored->Desc.GlobalUboSize;
+        const char* fault = nullptr;
+        if (record.Version == ~Uint32{0}) {
+            fault = "the version is the backends' never-uploaded sentinel, which no record may carry";
+        } else if (record.Blob.Size != 0 && record.Blob.Size != size) {
+            fault = "the declared blob length is not the program's own default uniform block size";
+        } else if (size > kMGPipeMaxGlobalConstantsBytes) {
+            fault = "the program's default uniform block is larger than any program may declare";
+        } else if (size != 0 && bytes == nullptr) {
+            fault = "a non-empty block carries no bytes";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " set_global_constants {slot=%u, gen=%u}: %s (version=%u, the program "
+                                 "declares %u bytes, the blob declares %llu)",
+                                 record.ShaderCso.Slot, record.ShaderCso.Gen, fault, record.Version, size,
+                                 static_cast<unsigned long long>(record.Blob.Size));
+            return;
+        }
+
+        if (size == 0) {
+            stored->GlobalConstants.clear();
+        } else {
+            const Uint8* image = static_cast<const Uint8*>(bytes);
+            stored->GlobalConstants.assign(image, image + size);
+        }
+        stored->GlobalConstantsVersion = record.Version;
+        // Its OWN serial, beside the record's: a block upload is not a relink, and a twin that
+        // memoises "which block image have I staged" must not be told the program moved.
+        ++stored->GlobalConstantsSerial;
     }
 
     // THE MONOLITH BODY IS A NO-OP AND THAT IS THE WHOLE OF IT: the emulation this names still
