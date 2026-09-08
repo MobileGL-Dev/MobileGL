@@ -265,6 +265,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    // P4a (D-F3, [correction]). THE RAW-DEPTH-FETCH SUBSTITUTION STAYS ON THE SERVER, and it
+    // keeps constructing a frontend SamplerObject inside MG_Backend to do it. That is
+    // deliberate and it is not this phase's to change: ARCHITECTURE.md assigns the two
+    // backend-specific post-processings of the resolved sampler set - this one and Magma's
+    // feedback-loop detection - to the server, acting ON the already-resolved set, and the
+    // ROADMAP puts "raw-depth-fetch sampler 原生化" in P3b/P4b beside Magma's placeholder
+    // textures. What P4a changes is only what the substitution READS: the resolved view's
+    // format answers IsDepthFormatInternalFormat and the sampler CSO record's parameters
+    // answer compareMode / minFilter / mipmapMode / magFilter.
+    //
+    // RECORDED HERE ON PURPOSE: this pair of file-static SharedPtrs is the largest surviving
+    // MG_State-type usage anywhere under MG_Backend/DirectGLES, and its owner is P3b/P4b - so
+    // the include-graph gate at P13 meets a known item rather than a surprise. The purity
+    // gates are unaffected either way: they grep for pGLContext under MG_Backend and for an
+    // MG_State type inside MGPipeResourceOps, and this is neither.
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler() {
         if (!g_rawDepthFetchSamplerState) {
             g_rawDepthFetchSamplerState = MakeShared<MG_State::GLState::SamplerObject>(0);
@@ -3634,6 +3649,60 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
         }
 
+#if MOBILEGL_PIPE_PUSH
+        // P4a e4 (D-H6, D-H7). The ShaderCso record behind a handle, WITH the composite band
+        // resolved: the band starts at kMGPipeShaderCsoCompositeSlotBase and the applier keeps
+        // it in a second dense table indexed by (slot - base), because one composite in the
+        // slot-indexed vector would grow it to ~983k records. The SERVER STILL NEVER LEARNS IT
+        // IS A COMPOSITE - a composite handle is an ordinary ShaderCso handle and every call
+        // names it as one; this is an indexing detail, and it lives in one place so that only
+        // one reader has to know it.
+        static const MG_Pipe::MGPipeShaderCsoRecord* FindShaderCsoRecord(MG_Pipe::MGPipeHandle handle) {
+            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
+            const auto& st = MG_Pipe::MGPipeApplier();
+            const Vector<MG_Pipe::MGPipeShaderCsoRecord>* table = nullptr;
+            Uint32 index = 0;
+            if (MG_Pipe::MGPipeIsCompositeShaderSlot(handle.Slot)) {
+                table = &st.CompositeShaderCsos;
+                index = handle.Slot - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase;
+            } else {
+                table = &st.ShaderCsos;
+                index = handle.Slot;
+            }
+            if (index >= table->size()) return nullptr;
+            const MG_Pipe::MGPipeShaderCsoRecord& record = (*table)[index];
+            if (!record.Live || record.Gen != handle.Gen) return nullptr;
+            return &record;
+        }
+
+        // The record whose GLOBAL CONSTANTS may be uploaded for this program, or null.
+        //
+        // Four things have to hold before the default uniform block is taken off a record
+        // rather than off the frontend program, and each of them is a way the two could
+        // legitimately disagree on a tree whose client half is mid-landing:
+        //
+        //   * the program has a handle at all, and the record at it is live;
+        //   * the record's own Desc names that same handle - the identity check, and the seam
+        //     where a mis-keyed emission becomes visible instead of becoming a wrong upload;
+        //   * the version is not the ~0u NEVER-UPLOADED SENTINEL, which the client must never
+        //     emit and which is what the record starts at;
+        //   * the block image is at least as long as the program says the block is, because
+        //     the upload copies GetUBOSize() bytes and a short record would read past it.
+        //
+        // Anything else and the frontend's own MapUBO answers, exactly as it does today.
+        static const MG_Pipe::MGPipeShaderCsoRecord* ResolveGlobalConstantsRecord(
+            const MG_State::GLState::ProgramObject* program) {
+            if (!EsprytDrawProgramHandlesEnabled() || program == nullptr) return nullptr;
+            const MG_Pipe::MGPipeHandle handle = g_backendProgramObjects.HandleOf(program);
+            const MG_Pipe::MGPipeShaderCsoRecord* const record = FindShaderCsoRecord(handle);
+            if (record == nullptr) return nullptr;
+            if (record->Desc.Cso != handle) return nullptr;
+            if (record->GlobalConstantsVersion == ~Uint32{0}) return nullptr;
+            if (record->GlobalConstants.size() < static_cast<SizeT>(program->GetUBOSize())) return nullptr;
+            return record;
+        }
+#endif
+
         void SyncCurrentProgram(const SharedPtr<MG_State::GLState::ProgramObject>& currentProgram) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -4262,17 +4331,64 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         g_unitSamplerWalkValid = false;
-        for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-            const auto& samplerObject = MGB_CTX->GetTextureUnitObject(unit).GetSamplerObject();
-            if (samplerObject) {
-                if (auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject)) {
-                    backendSampler->Bind(unit);
+#if MOBILEGL_PIPE_PUSH
+        Bool walkedFromRecords = false;
+        // P4a e4 (D-G2). THE WALK ITSELF READS THE APPLIER'S PER-UNIT HANDLE ARRAY.
+        //
+        // bind_sampler_states is the resolved answer to exactly the question this loop asks -
+        // which sampler CSO does each touched unit carry - so the handle IS the lookup: no
+        // GetTextureUnitObject per unit, no lifetime-id probe, and no UnitSamplerLookupMemo
+        // row to keep, because FindByHandle is already one array index. The memo below stays
+        // for the arm that still resolves through a frontend object.
+        //
+        // A NULL HANDLE MEANS "this unit has no sampler object", which is the record's way of
+        // saying what the frontend's null SharedPtr says, and it unbinds - the texture's own
+        // built-in sampler then applies, exactly as today. A handle whose twin does not exist
+        // yet is left alone and NOT cached as a miss, for the reason ResolveUnitSamplerBackend
+        // gives: the program pass creates the twin later in the same draw, and its Bind moves
+        // the shadow row and so re-opens this memo.
+        //
+        // Declines - falls through to the frontend walk - until the set has arrived, and the
+        // COUNT says so rather than the serial (MGPipeApplierReset advances serials whether or
+        // not anything was emitted).
+        if (EsprytDrawSamplerHandlesEnabled()) {
+            const auto& st = MG_Pipe::MGPipeApplier();
+            if (st.SamplerStateCount != 0) {
+                for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                    const Uint32 index = static_cast<Uint32>(unit);
+                    // Outside the received window there is no answer to replay: the var-tail
+                    // window IS the bound, and entries outside it are not cleared.
+                    if (index < st.SamplerStateStart || index - st.SamplerStateStart >= st.SamplerStateCount) {
+                        continue;
+                    }
+                    const MG_Pipe::MGPipeHandle sampler = st.BoundSamplerStates[index];
+                    if (MG_Pipe::MGPipeHandleIsNull(sampler)) {
+                        SamplerImpl::UnbindSampler(unit);
+                        continue;
+                    }
+                    if (auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(sampler);
+                        slot && *slot) {
+                        (*slot)->Bind(unit);
+                    }
                 }
-            } else {
-                // Symmetric with the bind above: a sampler object left on the unit by an earlier
-                // draw keeps being applied, and on a multisample texture - which takes no sampler
-                // object at all - the draw is rejected outright.
-                SamplerImpl::UnbindSampler(unit);
+                walkedFromRecords = true;
+            }
+        }
+        if (!walkedFromRecords)
+#endif
+        {
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
+                const auto& samplerObject = MGB_CTX->GetTextureUnitObject(unit).GetSamplerObject();
+                if (samplerObject) {
+                    if (auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject)) {
+                        backendSampler->Bind(unit);
+                    }
+                } else {
+                    // Symmetric with the bind above: a sampler object left on the unit by an
+                    // earlier draw keeps being applied, and on a multisample texture - which
+                    // takes no sampler object at all - the draw is rejected outright.
+                    SamplerImpl::UnbindSampler(unit);
+                }
             }
         }
         g_unitSamplerWalkContextId = keys.contextId;
@@ -4452,8 +4568,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("UpdateGlobalUBO", TRACY_ZONECOLOR_BACKEND);
 #endif
-                    const Uint32 uboContentVersion = currentProgram->GetUBOContentVersion();
+#if MOBILEGL_PIPE_PUSH
+                    // P4a e4 (D-H6): set_global_constants' counterpart. The version and the
+                    // block image come off the ShaderCso record when it carries them; the UBO
+                    // RING BELOW IS UNTOUCHED - it is on the Espryt do-not-touch list, keeps
+                    // its {contentVersion, ringGeneration, frameSerial, offset} allocation
+                    // key, keeps its glBufferSubData fallback and keeps accounting to
+                    // ByteClass::StageUboGlobal. What changes is where the version and the
+                    // bytes come from, and nothing else.
+                    //
+                    // The record covers the DEFAULT UNIFORM BLOCK ONLY. Named UBOs are the
+                    // block right after this one and they are P4b's (dirty bits 15-17), which
+                    // is why nothing here touches them.
+                    const MG_Pipe::MGPipeShaderCsoRecord* const globalConstants =
+                        PrgramImpl::ResolveGlobalConstantsRecord(currentProgram.get());
+#endif
+                    const Uint32 uboContentVersion =
+#if MOBILEGL_PIPE_PUSH
+                        globalConstants ? globalConstants->GlobalConstantsVersion :
+#endif
+                                        currentProgram->GetUBOContentVersion();
                     const SizeT uboSize = static_cast<SizeT>(currentProgram->GetUBOSize());
+                    // Substituted at the two upload sites rather than hoisted into a local:
+                    // MapUBO() is called there today and only there, and hoisting it would
+                    // call it on paths that skip the upload entirely.
+#if MOBILEGL_PIPE_PUSH
+#define MGB_UBO_BYTES                                                                    \
+    (globalConstants ? static_cast<const void*>(globalConstants->GlobalConstants.data()) \
+                     : static_cast<const void*>(currentProgram->MapUBO()))
+#else
+#define MGB_UBO_BYTES currentProgram->MapUBO()
+#endif
                     // Preferred path: write changed contents into a fresh slot of the
                     // shared persistent-mapped ring and bind it as a range. The GPU
                     // never reads bytes the CPU is writing, so the driver has no
@@ -4473,7 +4618,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             SizeT offset = 0;
                             if (BufferImpl::UboRingAllocate(bindSize, offset)) {
                                 std::memcpy(static_cast<Uint8*>(BufferImpl::UboRingMappedPtr()) + offset,
-                                            currentProgram->MapUBO(), uboSize);
+                                            MGB_UBO_BYTES, uboSize);
                                 if (MG_Util::PipeStats::Enabled()) {
                                     MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
                                                                  static_cast<Uint64>(uboSize));
@@ -4496,7 +4641,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
                             g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, currentProgram->GetUBOSize(),
-                                                        currentProgram->MapUBO());
+                                                        MGB_UBO_BYTES);
                             if (MG_Util::PipeStats::Enabled()) {
                                 MG_Util::PipeStats::AddBytes(
                                     MG_Util::PipeStats::ByteClass::StageUboGlobal,
@@ -4508,6 +4653,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0,
                                                          backendProgram.GetBackendGlobalUBOId());
                     }
+#undef MGB_UBO_BYTES
                 }
 
                 {
