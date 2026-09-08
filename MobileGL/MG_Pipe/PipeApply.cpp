@@ -419,6 +419,13 @@ namespace MobileGL::MG_Pipe {
             return &record;
         }
 
+        MGPipeVertexElementsRecord* FindVertexElements(MGPipeHandle cso) {
+            if (cso.Slot >= g_applier.VertexElementsCsos.size()) return nullptr;
+            MGPipeVertexElementsRecord& record = g_applier.VertexElementsCsos[cso.Slot];
+            if (!record.Live || record.Gen != cso.Gen) return nullptr;
+            return &record;
+        }
+
         // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are.
         //
         // A resource call is applied at the GL call that causes it, while MGPipeApplierReset
@@ -1034,29 +1041,189 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
-    // P3a: the five vertex-input entry points, STILL STUBS AT THIS COMMIT.
+    // P3a: the five vertex-input entry points (D-G, D-H, D-I).
     //
-    // They land in the commit that follows this one on the same branch. Nothing reaches them
-    // in the meantime and that is checked rather than hoped: their dirty bits map to no
-    // subsystem, the two subsystem bits are not in MG_Impl/Pipe/PipeFill.cpp's
-    // kMGPipeWiredSubsystems, and the emitters beside them are stubs that emit nothing.
+    // THESE FIVE DISPATCH TO NOBODY, and that is not an omission: MGPipeResourceOps is the
+    // RESOURCE family's table, and the vertex-input calls have no backend hook because the
+    // backend does not act on them when they arrive. It reads them at its own draw-time sync,
+    // out of the state below, which is what the three serials here are for - they are what
+    // retires the twin's wrapping-Uint16-plus-identity patches, so a compare that used to ask
+    // "is my Uint16 configuration version still the frontend's?" asks "is my Uint64 serial
+    // still the server's?" instead.
+    //
+    // Nothing emits them in this package either: their dirty bits map to no subsystem, the two
+    // subsystem bits are not in MG_Impl/Pipe/PipeFill.cpp's kMGPipeWiredSubsystems, and the
+    // emitters beside them are stubs. The state below is therefore correct and unread until
+    // the packages that wire both ends land.
     // ================================================================================
 
     void MGPipeApplyCreateVertexElements(const MGPVertexElements& desc, const void* blobBytes) {
-        (void)desc;
-        (void)blobBytes;
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
+                        "create_vertex_elements named the reserved slot 0");
+        if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
+
+        // THE COUNTS ARE CHECKED AGAINST THE BLOB BEFORE A BYTE OF IT IS TOUCHED, and the
+        // check is the record's own self-description: the blob is
+        // MGPVertexAttribWire[AttributeCount] immediately followed by
+        // MGPVertexBindingPointWire[BindingPointCount], so the two counts and the declared
+        // blob length are three statements of one fact and any disagreement between them makes
+        // the record unreadable. THIS is the reason the second view travels at all - a record
+        // that declares a BindingPointCount it does not carry would otherwise be a shape this
+        // gate had to police forever with nothing to police it against.
+        //
+        // Both counts are bounded by GL's attribute limit, which is also the size of the two
+        // arrays they are unpacked into, so the bound and the destination cannot drift apart.
+        const Uint64 attributeBytes = Uint64{desc.AttributeCount} * sizeof(MGPVertexAttribWire);
+        const Uint64 bindingBytes = Uint64{desc.BindingPointCount} * sizeof(MGPVertexBindingPointWire);
+        const Uint64 declared = attributeBytes + bindingBytes;
+        const char* fault = nullptr;
+        if (desc.AttributeCount > kMGPipeMaxVertexAttribs) {
+            fault = "the declared attribute count is above GL's attribute limit";
+        } else if (desc.BindingPointCount > kMGPipeMaxVertexAttribs) {
+            fault = "the declared binding-point count is above GL's attribute limit";
+        } else if (desc.Blob.Size != declared) {
+            fault = "the declared counts do not describe the blob's own byte length";
+        } else if (declared != 0 && blobBytes == nullptr) {
+            fault = "a non-empty blob carries no bytes";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_vertex_elements {slot=%u, gen=%u}: %s (attributes=%u, "
+                                 "bindingPoints=%u, that describes %llu bytes, blob declares %llu)",
+                                 desc.Cso.Slot, desc.Cso.Gen, fault, desc.AttributeCount,
+                                 desc.BindingPointCount, static_cast<unsigned long long>(declared),
+                                 static_cast<unsigned long long>(desc.Blob.Size));
+            return;
+        }
+
+        MGPipeVertexElementsRecord& record = RecordAt(g_applier.VertexElementsCsos, desc.Cso.Slot);
+        // A RE-CREATE ON THE SAME HANDLE IS HOW A CONFIGURATION CHANGE TRAVELS - the handle is
+        // minted per frontend vertex array and a generation moves only when a slot is reused -
+        // so an existing record of the same identity keeps its serial and counts up from it. A
+        // record of a DIFFERENT identity is a recycled slot and starts over, or the walks below
+        // would read the previous occupant's attributes out of the array's tail.
+        if (!record.Live || record.Gen != desc.Cso.Gen) {
+            record = MGPipeVertexElementsRecord{};
+            record.Gen = desc.Cso.Gen;
+        }
+
+        // Zeroed first, so a configuration that shrinks does not leave the entries above its
+        // new count describing the one before it. memcpy rather than a typed store because a
+        // blob pointer carries no alignment guarantee.
+        record.Attributes = {};
+        record.BindingPoints = {};
+        const Uint8* blob = static_cast<const Uint8*>(blobBytes);
+        if (attributeBytes != 0) {
+            std::memcpy(record.Attributes.data(), blob, static_cast<SizeT>(attributeBytes));
+        }
+        if (bindingBytes != 0) {
+            std::memcpy(record.BindingPoints.data(), blob + attributeBytes, static_cast<SizeT>(bindingBytes));
+        }
+        record.AttributeCount = desc.AttributeCount;
+        record.BindingPointCount = desc.BindingPointCount;
+        record.Live = true;
+        // Serial 0 means "never created", so the first create of an identity lands on 1 and a
+        // backend twin that has synced nothing can never accidentally match a live record.
+        ++record.ContentSerial;
+        // AND IT DOES NOT REBIND. A create on the bound handle changes what the binding points
+        // AT, which the serial already says; a create on any other handle must not steal the
+        // binding.
     }
 
-    void MGPipeApplyBindVertexElements(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyBindVertexElements(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::VertexElementsCso),
+                        "bind_vertex_elements on kind %u", handle.Kind);
+        // The null handle is legal and means "no vertex array bound" - GL's unbound state is a
+        // state, not an error, and the backend has a branch for it.
+        if (MGPipeHandleIsNull(handle.Handle)) {
+            g_applier.BoundVertexElements = kMGPipeNullHandle;
+            return;
+        }
+        const MGPipeVertexElementsRecord* record = FindVertexElements(handle.Handle);
+        MOBILEGL_ASSERT(record != nullptr, "bind_vertex_elements named a dead CSO {slot=%u, gen=%u}",
+                        handle.Handle.Slot, handle.Handle.Gen);
+        if (record == nullptr) return;
+        g_applier.BoundVertexElements = handle.Handle;
+    }
 
-    void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) { (void)handle; }
+    void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) {
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::VertexElementsCso),
+                        "delete_vertex_elements on kind %u", handle.Kind);
+        MGPipeVertexElementsRecord* record = FindVertexElements(handle.Handle);
+        if (record == nullptr) return;
+
+        // Dropped whole, generation kept, for resource_destroy's reason: the client allocator
+        // owns the Gen bump and takes it on the next handout of the slot. Emitted from ONE
+        // place - the frontend object's death notice - so there is no second path to keep in
+        // step with this one.
+        const Uint32 gen = record->Gen;
+        *record = MGPipeVertexElementsRecord{};
+        record->Gen = gen;
+        if (g_applier.BoundVertexElements == handle.Handle) {
+            g_applier.BoundVertexElements = kMGPipeNullHandle;
+        }
+    }
 
     void MGPipeApplySetVertexBuffers(const MGPVertexBuffers& hdr, const MGPVertexBuffer* tail) {
-        (void)hdr;
-        (void)tail;
+        // The window is the bound: Start + Count entries land in an array of exactly GL's
+        // attribute limit, and a var-tail header that describes more than its destination can
+        // hold is the same class of fault as a blob outside its segment.
+        const Uint64 end = Uint64{hdr.Start} + Uint64{hdr.Count};
+        const char* fault = nullptr;
+        if (end > kMGPipeMaxVertexAttribs) {
+            fault = "the window runs past GL's attribute limit";
+        } else if (hdr.Count != 0 && tail == nullptr) {
+            fault = "a non-empty set carries no entries";
+        }
+        if (fault != nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " set_vertex_buffers {start=%u, count=%u, hash=%llu}: %s (the applier holds "
+                                 "%u entries)",
+                                 hdr.Start, hdr.Count, static_cast<unsigned long long>(hdr.ContentHash),
+                                 fault, kMGPipeMaxVertexAttribs);
+            return;
+        }
+
+        // Copied into the window the record declares and nowhere else. The entries outside it
+        // are not cleared: this record is "the last set as received", and a set that names
+        // four entries has said nothing about the rest.
+        for (Uint32 i = 0; i < hdr.Count; ++i) {
+            g_applier.VertexBuffers[hdr.Start + i] = tail[i];
+        }
+        g_applier.VertexBufferStart = hdr.Start;
+        g_applier.VertexBufferCount = hdr.Count;
+
+        // THE RAW VALUE IS STORED, NOT A RESOLVED SHIFT, and the resolution is one step
+        // further out on purpose. Whether the fetch shift has to be emulated at all is a
+        // BACKEND CAPABILITY - a device with native base-instance support does it in hardware
+        // and shifts nothing - and emulation is server-owned, so the answer belongs to the
+        // backend arm that computes the per-attribute byte shift out of this value and each
+        // attribute's own stride and divisor. This applier is below MG_Backend and may not ask
+        // the question; storing the raw value keeps the one answer in the one place that can
+        // give it.
+        //
+        // The client sends it once per SET rather than per entry, and it is a ContentHash
+        // input: set_vertex_buffers is suppressed on an unchanged hash, so a base instance
+        // that moved while the buffer set did not would otherwise never arrive and the server
+        // would keep the previous shift.
+        g_applier.VertexFetchBaseInstance = hdr.BaseInstance;
+        ++g_applier.VertexBuffersSerial;
     }
 
-    void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record) { (void)record; }
+    void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record) {
+        // Stored verbatim, with no gate over it, and each of the three fields has its own
+        // reason to be taken as sent:
+        //   - Res may legitimately be the null handle: no element-array buffer is bound, which
+        //     is the state a client-memory index draw is in;
+        //   - Offset and IndexSize are the DRAW's, not the binding's, and are 0 and 0 until a
+        //     draw supplies them - so there is no extent here to check a range against, and
+        //     the draw verb overrides them anyway;
+        //   - it is an INDEPENDENT call and NOT a subset of the vertex-elements configuration
+        //     (D5): a rebind of the index slot must move this serial without touching the
+        //     configuration's, which is exactly what the backend's two separate compares need.
+        g_applier.IndexBuffer = record;
+        ++g_applier.IndexBufferSerial;
+    }
 
     void MGPipeDeriveRenderStateFields(PipeInputs& inputs) {
         // The derivation itself lives in MGPipeApplyAccess above, because that is the one

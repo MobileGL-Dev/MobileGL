@@ -187,9 +187,13 @@ namespace MobileGL::MG_Pipe {
         Array<MGPVertexBuffer, kMGPipeMaxVertexAttribs> VertexBuffers{};
         Uint32 VertexBufferStart = 0;
         Uint32 VertexBufferCount = 0;
-        // The RAW value the client sent (MGPVertexBuffers::BaseInstance) resolved by the
-        // server's own decision about whether to emulate the fetch shift. The client never
-        // pre-shifts an offset and never learns the answer: emulation is server-owned.
+        // The RAW value the client sent (MGPVertexBuffers::BaseInstance). It is NOT a resolved
+        // shift: whether the fetch shift has to be emulated at all is a backend capability - a
+        // device with native base-instance support shifts nothing - and emulation is
+        // server-owned, so the backend arm turns this into a per-attribute byte shift out of
+        // each attribute's own stride and divisor. This header sits below MG_Backend and may
+        // not ask that question. The client never pre-shifts an offset and never learns the
+        // answer.
         Uint32 VertexFetchBaseInstance = 0;
         // Server-owned MGGen, ++ on every applied set_vertex_buffers. It is what retires the
         // backend twin's wrapping-Uint16-plus-identity patches.
@@ -312,8 +316,9 @@ namespace MobileGL::MG_Pipe {
     // delete_vertex_elements: emitted from ONE place, the frontend object's death notice.
     void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle);
     // set_vertex_buffers: `tail` is hdr.Count MGPVertexBuffer entries starting at hdr.Start.
-    // hdr.BaseInstance is the DRAW's raw base instance; the applier resolves whether to shift
-    // and stores the answer in VertexFetchBaseInstance. Bumps VertexBuffersSerial.
+    // hdr.BaseInstance is the DRAW's raw base instance and is stored, unresolved, in
+    // VertexFetchBaseInstance - the decision whether to emulate the fetch shift is the
+    // backend's, for the reason written beside that member. Bumps VertexBuffersSerial.
     void MGPipeApplySetVertexBuffers(const MGPVertexBuffers& hdr, const MGPVertexBuffer* tail);
     // set_index_buffer: an independent call, NOT a subset of the vertex-elements
     // configuration. Bumps IndexBufferSerial.
