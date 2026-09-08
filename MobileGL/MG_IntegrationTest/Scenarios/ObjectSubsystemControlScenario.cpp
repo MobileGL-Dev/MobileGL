@@ -91,6 +91,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeApplyPeek.h"
 #include "../Harness/PipeStatsWindow.h"
 #include "../Harness/ScenarioFixture.h"
 
@@ -114,9 +115,21 @@ namespace MGITest {
         constexpr const char* kLaneRefused = "refused";
         // D-K2's FOURTH row (ID-15): bit 10 without bit 11. 0x5ff is 0x1ff plus bit 10.
         constexpr const char* kLaneRefusedTexture = "refused-texture";
+        // c0f's two halves (ID-39/ID-40), run at the phase default on BOTH backends: the client
+        // GATE (a P4a family emits only where a backend registered MGPipeResourceOps) and the
+        // applier's BELT (every P4a entry point refuses and counts RefusedNoConsumer when none
+        // did). One lane per backend, because the interesting one is the backend with NO
+        // consumer - Magma - and the other is the control that says the assertion is not
+        // vacuously true of a tree where nothing emits at all.
+        constexpr const char* kLaneConsumer = "consumer";
+        constexpr const char* kLaneNoConsumer = "no-consumer";
 
         bool LaneIsARefusalLane(const std::string& lane) {
             return lane == kLaneRefused || lane == kLaneRefusedTexture;
+        }
+
+        bool LaneIsAConsumerLane(const std::string& lane) {
+            return lane == kLaneConsumer || lane == kLaneNoConsumer;
         }
 
         constexpr int kInset = 2;
@@ -168,21 +181,53 @@ void main() { oColor = texture(uTex, vUv); }
         //   * at ERROR severity - the library writes "[<time>] [<os> <thread>/<TAG>]: <message>",
         //     one record per line (MG_Util/Debug/Log.cpp), and D-K2 asks for an MGLOG_E. A refusal
         //     that was demoted to a D or a W is a refusal an operator's log will not carry;
-        //   * carrying the word REFUS(ING) - so a line that merely mentions the two bits (a future
-        //     summary, a comment echoed into the log) is not mistaken for the decision;
-        //   * naming the bit that was SET and the bit it NEEDED, on that same line.
+        //   * carrying the helper's own decision clause, verbatim - so a line that merely
+        //     mentions the two bits (a future summary, a comment echoed into the log) is not
+        //     mistaken for the decision;
+        //   * naming the bit that was SET and the bit it NEEDED, on that same line, AND IN THAT
+        //     ORDER - see the direction check below.
         //
         // Espryt's text is one MGLOG_E from the helper the three dependent families share
         // (Managers.cpp, PipeSubsystemDependencyMissing): "MGPipe: <A> (bit N) is set but <B>
         // (bit M) is clear; <why> - REFUSING the dependent bit and running the legacy arm. Set
         // both bits, or clear both". Three spellings are accepted per bit - the constant's name,
-        // "(bit N)", and the hexadecimal mask - so the assertion pins the DECISION and not the
-        // prose around it.
-        bool LineNamesTheBit(const std::string& line, const std::vector<std::string>& spellings) {
+        // "(bit N)", and the hexadecimal mask - so the assertion pins the DECISION and the
+        // DIRECTION, and not the family-specific prose in <why>.
+        //
+        // THE DIRECTION IS THE HALF THIS FILE USED TO BE MISSING (review F-v2-m1). The first form
+        // of the matcher asked "does the line name bit A?" AND "does the line name bit B?", which
+        // is a SYMMETRIC conjunction: swapping the two arguments - exactly what separates the
+        // 0x5ff case from the 0x9ff one below, and what each of their comments claims to be
+        // doing - could not change the answer, and both cases went green on either line. A
+        // resolver that refused correctly but printed the MIRROR sentence would have been green
+        // on a refusal that told the operator the wrong dependency, which is the same class of
+        // "the log says something plausible" defect that made the whole-file substring search
+        // (F-M6) worthless one level up. The two resolvers are forty lines apart in one file,
+        // share this helper and differ only in the `what` string, so the copy-paste is one edit
+        // away at all times.
+        //
+        // What makes the direction readable is the sentence's own shape: the SET bit is named
+        // before " is set but " and the NEEDED bit between that and " is clear". So the check is
+        // four offsets in strictly increasing order, and it is the sentence Espryt emits rather
+        // than a re-statement of it.
+        constexpr const char* kSaysItRefused = "REFUSING the dependent bit and running the legacy arm";
+        constexpr const char* kSaysWhichIsSet = " is set but ";
+        constexpr const char* kSaysWhichIsClear = " is clear";
+
+        // The earliest offset at which any accepted spelling of one bit appears, or npos. The
+        // EARLIEST rather than any: a spelling that also occurs later in <why> (Espryt's
+        // bit-10-requires-bit-11 sentence says "only bit 11 mints sampler CSOs" in its reason)
+        // must not be able to satisfy an ordering the first occurrence does not.
+        std::size_t EarliestSpellingOffset(const std::string& line,
+                                           const std::vector<std::string>& spellings) {
+            std::size_t earliest = std::string::npos;
             for (const std::string& spelling : spellings) {
-                if (line.find(spelling) != std::string::npos) return true;
+                const std::size_t at = line.find(spelling);
+                if (at != std::string::npos && (earliest == std::string::npos || at < earliest)) {
+                    earliest = at;
+                }
             }
-            return false;
+            return earliest;
         }
 
         // The matching line, or an empty string. Returned rather than a bool so the case can print
@@ -196,10 +241,22 @@ void main() { oColor = texture(uTex, vUv); }
                 const std::string line = log.substr(
                     pos, newline == std::string::npos ? std::string::npos : newline - pos);
                 const bool atErrorSeverity = line.find("/ERROR]") != std::string::npos;
-                const bool saysItRefused = line.find("REFUS") != std::string::npos ||
-                                           line.find("refus") != std::string::npos;
-                if (atErrorSeverity && saysItRefused && LineNamesTheBit(line, bitThatWasSet) &&
-                    LineNamesTheBit(line, bitThatWasNeeded)) {
+                const std::size_t refusedAt = line.find(kSaysItRefused);
+                const std::size_t setAt = EarliestSpellingOffset(line, bitThatWasSet);
+                const std::size_t setClauseAt = line.find(kSaysWhichIsSet);
+                const std::size_t neededAt = EarliestSpellingOffset(line, bitThatWasNeeded);
+                const std::size_t clearClauseAt = line.find(kSaysWhichIsClear);
+                const bool everyPartIsThere =
+                    refusedAt != std::string::npos && setAt != std::string::npos &&
+                    setClauseAt != std::string::npos && neededAt != std::string::npos &&
+                    clearClauseAt != std::string::npos;
+                // "<set bit> ... is set but ... <needed bit> ... is clear", strictly in that
+                // order. Swapping the caller's two arguments breaks the chain, which is the
+                // whole of F-v2-m1.
+                const bool inTheRightDirection =
+                    everyPartIsThere && setAt < setClauseAt && setClauseAt < neededAt &&
+                    neededAt < clearClauseAt;
+                if (atErrorSeverity && inTheRightDirection) {
                     return line;
                 }
                 if (newline == std::string::npos) break;
@@ -390,6 +447,15 @@ void main() { oColor = texture(uTex, vUv); }
             if (!Ready()) return;
             SkipUnlessTheLaneIsAssertableHere(/*needsTheEmitters=*/true);
             if (IsSkipped()) return;
+            if (LaneIsAConsumerLane(m_lane)) {
+                GTEST_SKIP() << "the two consumer lanes run their own case instead "
+                                "(TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate). They "
+                                "are at the phase default on both backends and their subject is "
+                                "c0f's gate/belt pair, not the on/off A/B: on the backend with no "
+                                "consumer the emit[] bracket is structurally zero AT the default "
+                                "mask, which is neither the on-lane's expectation nor the "
+                                "off-lane's.";
+            }
             if (LaneIsARefusalLane(m_lane)) {
                 GTEST_SKIP() << "the refusal lanes run their own case instead (0x9ff -> "
                                 "ASamplerBitWithoutTheTextureBitIsRefusedAndNamed, 0x5ff -> "
@@ -465,9 +531,10 @@ void main() { oColor = texture(uTex, vUv); }
                     << window.line;
             } else {
                 FAIL() << "unknown " << kLaneMarker << " value '" << m_lane
-                       << "': the arms are on / off / refused / refused-texture. Reading an "
-                          "unrecognised name as any of them would make this lane assert another "
-                          "arm's expectation while claiming to test this one.";
+                       << "': the arms are on / off / refused / refused-texture / consumer / "
+                          "no-consumer. Reading an unrecognised name as any of them would make "
+                          "this lane assert another arm's expectation while claiming to test "
+                          "this one.";
             }
 
             // ... and the picture is the same whichever arm ran.
@@ -610,6 +677,16 @@ void main() { oColor = texture(uTex, vUv); }
         // unimplemented subsystem as a failure is what ID-2 forbids. Once the backend DOES name
         // them the case is a hard pin, which is the point - if D's texture-family resolver honours
         // the mask and does not carry this row, this entry is where that shows.
+        //
+        // WHAT THIS ARM DOES ON THE INTEGRATED TREE, corrected (review F-v2-m2). An earlier
+        // round's report told the integrator to expect this lane to go RED between esprytobj's
+        // integration and package D's rework, and to read that red as expected. That window does
+        // not exist: esprytobj v2 already carries D-K2's fourth row - Managers.cpp's
+        // ResolveTextureResourceSubsystemArm refuses bit 10 without bit 11 with the sentence this
+        // case matches - so the arm ARMS AND PASSES. A red here is therefore a real finding about
+        // that resolver (it stopped refusing, refused for the wrong reason, or printed the mirror
+        // sentence, which the direction check above is what catches) and must not be waved
+        // through as a sequencing artefact.
         // ------------------------------------------------------------------------------------
         TEST_F(ObjectSubsystemControlScenario, ATextureBitWithoutTheSamplerBitIsRefusedAndNamed) {
             if (!Ready()) return;
@@ -663,7 +740,15 @@ void main() { oColor = texture(uTex, vUv); }
                 << ", so the refusal cannot be read back. MOBILEGL_LOG_FILE_PATH is the only channel "
                    "this module has for the library's own report.";
             // The same line shape as the 0x9ff arm, with the two bits' roles swapped: the bit that
-            // was SET is the texture-resource one and the bit it NEEDED is the sampler one.
+            // was SET is the texture-resource one and the bit it NEEDED is the sampler one. The
+            // swap is now a REAL difference between the two cases: FindTheRefusalLine requires the
+            // set bit to be named before " is set but " and the needed bit after it (F-v2-m1), so
+            // this call and the 0x9ff one above accept disjoint sentences. Espryt's is
+            // "kMGPipeSubsystemTextureResources (bit 10) is set but kMGPipeSubsystemSamplers
+            // (bit 11) is clear; MGPTextureParams::BuiltinSampler is a SamplerCso handle, only
+            // bit 11 mints sampler CSOs, and the applier's verdict for a null one is
+            // Fatal{ProtocolCorruption} - REFUSING the dependent bit and running the legacy arm.
+            // Set both bits, or clear both" (Managers.cpp, ResolveTextureResourceSubsystemArm).
             const std::string refusal =
                 FindTheRefusalLine(log, TextureResourceBitSpellings(), SamplerBitSpellings());
             EXPECT_FALSE(refusal.empty())
@@ -687,6 +772,104 @@ void main() { oColor = texture(uTex, vUv); }
                 << "the refused configuration did not draw what every other lane draws. A refusal is "
                    "supposed to run the LEGACY arm, which is the arm that ships in a pull build - so "
                    "the pixels are the one thing it may not change.";
+
+            ReleaseTheWorkload();
+        }
+
+        // ------------------------------------------------------------------------------------
+        // c0f's GATE AND BELT, MEASURED TOGETHER (ID-39, ID-40).
+        //
+        // WHAT WENT WRONG AND WHY IT NEEDS A LANE. P4a's four families were wired without the
+        // gate P3a's buffers have had since PipeFill.cpp ~656: emission required the family's bit
+        // and nothing else. On Magma, which registers no MGPipeResourceOps, the client therefore
+        // emitted, THE APPLIER ACCEPTED, the client cleared its dirty flags on that acceptance -
+        // and Magma's legacy path then found nothing to upload. Sixty-six DirectVulkan cases went
+        // red at once, all texture-upload-shaped, and every one of them was green at 0x1ff. The
+        // fix has two halves that are deliberately independent: the client's gate (bit N AND
+        // wired AND a backend registered the ops) and the applier's belt (every P4a entry point
+        // returns accepted = false and counts RefusedNoConsumer when none did).
+        //
+        // THE ASSERTION IS THAT THE BELT NEVER FIRES, and it is the same assertion on both
+        // backends, which is what makes it worth having twice:
+        //
+        //   no-consumer (DirectVulkan, 0x1fff): the belt is the SAFETY NET. A non-zero count here
+        //     means a record reached the applier on a backend with no consumer - i.e. the client
+        //     gate leaked and only the belt stopped the dirty flag from being cleared. That is
+        //     ID-39's bug caught one layer later, and it is invisible in these pixels because the
+        //     belt does its job; the 66 red cases were in another suite entirely.
+        //   consumer (DirectGLES, 0x1fff): the CONTROL. Espryt registers the ops, so no entry
+        //     point may take the no-consumer arm at all. Without this lane a green above could
+        //     also mean "nothing is ever emitted anywhere", which is exactly what a gate that was
+        //     accidentally always-false would look like.
+        //
+        // A DELTA, not an absolute: the counter is process-global and other cases in this binary
+        // run before this one. MGPipeApplierReset also zeroes it, so a count that went DOWN is
+        // read as "the applier was reset and everything since is `after`" rather than as an
+        // underflow.
+        // ------------------------------------------------------------------------------------
+        TEST_F(ObjectSubsystemControlScenario, TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate) {
+            if (!Ready()) return;
+            // needsTheEmitters=false: the assertion is that a counter did NOT move, which is
+            // meaningful before the emitters land as well as after - and on the no-consumer lane
+            // it is meaningful precisely BECAUSE nothing may be emitted there.
+            SkipUnlessTheLaneIsAssertableHere(/*needsTheEmitters=*/false);
+            if (IsSkipped()) return;
+            if (!LaneIsAConsumerLane(m_lane)) {
+                GTEST_SKIP() << "runs only in the two consumer lanes (MGITEST_OBJECT_SUBSYSTEM_LANE="
+                             << kLaneConsumer << " / " << kLaneNoConsumer
+                             << "), which pin MOBILEGL_PIPE_PUSH at the phase default on the two "
+                                "backends. Every other lane configures a mask or a backend whose "
+                                "emission shape is a different question.";
+            }
+
+            unsigned long long before = 0;
+            if (!PeekPipeApplierRefusedNoConsumer(&before)) {
+                GTEST_SKIP() << "MGPipeApplierState::RefusedNoConsumer is out of reach here: there "
+                                "is no applier in a PULL build (it is #if MOBILEGL_PIPE_PUSH), and "
+                                "on Android this module links the shipping libMobileGL.so built "
+                                "-fvisibility=hidden. 'Could not look' is not 'did not fire'.";
+            }
+
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            RunTheWorkload();
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
+                << "the workload left a GL error behind on the " << m_lane << " lane";
+            const Image image = ReadPixels(Gl().Width(), Gl().Height());
+            Gl().EndFrame();
+
+            unsigned long long after = 0;
+            ASSERT_TRUE(PeekPipeApplierRefusedNoConsumer(&after))
+                << "the counter could be read before the workload and not after it";
+            // Down means MGPipeApplierReset ran inside the window, so everything still counted is
+            // what happened since - which is the number this case is about either way.
+            const unsigned long long fired = after >= before ? after - before : after;
+
+            std::cout << "[ ObjectSubsystemControl ] " << m_lane
+                      << " lane: applier RefusedNoConsumer " << before << " -> " << after
+                      << " over the workload (delta " << fired << ")" << std::endl;
+            RecordProperty("refused_no_consumer_delta", static_cast<int>(fired));
+
+            EXPECT_EQ(fired, 0u)
+                << "the applier's no-consumer BELT fired " << fired
+                << " time(s) during this workload on the " << m_lane
+                << " lane. The belt exists so that a P4a record arriving on a backend that "
+                   "registered no MGPipeResourceOps is refused rather than accepted - and an "
+                   "accepted record is what makes the client clear the dirty flags whose texels "
+                   "nobody then uploads (ID-39: sixty-six DirectVulkan cases, all texture-upload "
+                   "shaped). A non-zero count means the CLIENT'S GATE let an emission through and "
+                   "only the belt caught it: the two are supposed to agree, and PipeFill's "
+                   "P4aFamilyHasItsConsumer() is where they stopped.";
+
+            // The pixels, on both lanes, for the reason every arm of this file asserts them: a
+            // backend running its legacy path because no consumer is registered must draw exactly
+            // what a backend running the handle arm draws.
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
+                                       image.Height() - kInset, "green", 0.0,
+                                       "the sampled draw [" + m_lane + "]"))
+                << "the " << m_lane
+                << " lane did not draw what every other lane draws, so whatever the counter says, "
+                   "this configuration is not running the workload correctly.";
 
             ReleaseTheWorkload();
         }
