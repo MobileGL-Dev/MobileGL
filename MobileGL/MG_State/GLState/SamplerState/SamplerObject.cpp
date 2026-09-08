@@ -36,7 +36,22 @@ namespace MobileGL {
                 // because the object no longer exists to be passed, and because the lifetime id
                 // is what the client slot allocator resolves the handle from. No-op unless a
                 // backend registered the ops (a pull build declares none at all).
-                NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind::SamplerCso, m_lifetimeId);
+                //
+                // P4a D-I1: the notice is no longer raised directly - it is step 2 of the ONE
+                // client-side death helper for this kind, which emits delete_sampler_state
+                // first, raises the notice second and frees the slot last. Making the client
+                // the only death path is what stops a slot leaking under a backend that
+                // installs no death-ops table at all, and the backend's own notice becomes a
+                // redundant, idempotent second path rather than the only one.
+                //
+                // FOR A CONTENT-ADDRESSED SAMPLER CSO THIS HELPER CORRECTLY FREES NOTHING, and
+                // that is the design rather than a gap: the CSO belongs to a VALUE, not to this
+                // object (two identical SamplerObjects share one), so it is allocated with no
+                // lifetime id, the helper resolves nothing for this one, and the only death
+                // path for that slot is the CSO cache's LRU eviction - which is client-side and
+                // therefore backend-neutral on day one. What still goes out, unconditionally
+                // and exactly as before, is the notice.
+                MG_Pipe::MGPipeEmitSamplerCsoDestroyAndFree(m_lifetimeId);
             }
 #endif
 
