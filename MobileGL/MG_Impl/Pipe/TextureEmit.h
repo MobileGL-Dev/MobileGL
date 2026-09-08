@@ -27,28 +27,33 @@
 // HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
 //
 // ---------------------------------------------------------------------------------------
-// HOW MG_State REACHES THIS FILE, and it is a DEVIATION worth reading before the code.
+// HOW MG_State REACHES THIS FILE: IT DOES NOT, AND THAT IS THE POINT (c0b, ID-13).
 //
-// P3a's buffer family declares its emission points in MG_Pipe/PipeMutation.h and defines them
-// in MG_Impl/Pipe/PipeFill.cpp, so BufferObject.cpp sees a declaration and never the client's
-// tracker. P4a cannot copy that shape: BOTH of those files belong to the contract package for
-// the whole phase (no file is touched twice by two packages), and they carry no texture
-// emission declaration. The next-best arrangement, and the one used here, keeps the SAME
-// property one level in:
+// v1 of this package shipped a deviation - six free functions here, called from
+// TextureObject.cpp and RenderbufferObject.cpp - because at the contract TAG
+// MG_Pipe/PipeMutation.h declared only the six DEATH helpers and this package may not edit
+// A's files. c0b landed the BIRTH half, so the deviation is retired rather than carried:
+// MG_State now calls MGPipeMintTextureHandle / MGPipeEmitTextureResourceCreate /
+// ...ResourceRespecify / MGPipeEmitTextureParams / MGPipeNoteTextureLevelDirty and the two
+// renderbuffer twins, all DECLARED in MG_Pipe/PipeMutation.h and DEFINED in
+// MG_Impl/Pipe/PipeFill.cpp, which forwards to the entry points below through
+// ForwardWhenWired<kMGPipeWiredTextureSubsystem>. No MG_State translation unit includes this
+// header any more, which is the property check_include_closure.py's mutation-header probe
+// exists to keep.
 //
-//   * every texture emission point is a protected member of TextureObjectBase
-//     (TextureState/TextureObject.h, guarded by MOBILEGL_PIPE_PUSH, non-virtual, so the pull
-//     build's object layout and vtable are untouched) DECLARED there and DEFINED in
-//     TextureState/TextureObject.cpp - the ONE MG_State translation unit that includes this
-//     header. Every other texture .cpp - the cube's, the view's, the buffer texture's - calls
-//     the inherited helper and still sees only a declaration.
-//   * the renderbuffer half has no base class to hang helpers on and exactly one .cpp, so
-//     RenderbufferState/RenderbufferObject.cpp is the second and last such translation unit.
+// WHAT THIS FILE OWES THAT SEAM, and a mismatch is a compile error in this package's own
+// commit rather than a surprise at the merge (that is what the wired constant buys):
 //
-// So the client's tracker reaches exactly two MG_State translation units instead of zero. The
-// integrator can fold these six free functions into PipeMutation.h and PipeFill.cpp in one
-// mechanical commit once the phase's file ownership relaxes; nothing else has to move.
+//   EmitResourceCreate(ITextureObject&)      EmitResourceRespecify(ITextureObject&)
+//   EmitTextureParams(ITextureObject&)       NoteLevelDirty(ITextureObject&, Uint32, Uint32)
+//   EmitRenderbufferCreate(RenderbufferObject&)
+//   EmitRenderbufferRespecify(RenderbufferObject&)
+//
+// and the PUBLICATION LATCH is A's too: MGPipeNoteHandlePublished is called where a create
+// actually goes out and MGPipeHandleIsPublished is what the death helpers read, so this file
+// keeps no Published flag of its own.
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
@@ -72,38 +77,37 @@ namespace MobileGL::MG_Pipe {
     // emitters their bodies, with no file touched twice - and a Coverage.def row can never
     // silently drop a field on the floor before the call that carries it exists.
     //
-    // IT IS STILL 0, AND THAT IS A BLOCKED FLIP RATHER THAN AN UNFINISHED ONE. Unlike the other
-    // three P4a families, this one does not get four fresh apply entry points: the catalogue is
-    // closed and a texture rides P3a's OWN resource_create / resource_respecify /
-    // resource_subdata / resource_destroy rows. On a base without the wire package's `w1` those
-    // four have P3a's BUFFER bodies, and two of their properties make a texture record actively
-    // harmful rather than merely ignored:
+    // IT WAS 0 IN v1, AND THE THING THAT BLOCKED IT IS NOW IN THE TREE. Unlike the other three
+    // P4a families this one gets no fresh apply entry points - the catalogue is closed and a
+    // texture rides P3a's OWN resource_create / resource_respecify / resource_subdata /
+    // resource_destroy rows - so on a base without the wire package's per-kind record vectors
+    // and its texture branch, two properties made a texture record actively harmful rather than
+    // merely ignored: MGPipeApplierState::Resources was ONE slot-indexed vector, so a texture
+    // create at slot 12 overwrote the BUFFER record at slot 12; and SubDataBoxFault validated
+    // every record as the buffer half of MGPSubData, so a texture sub-data record was
+    // Fatal{ProtocolCorruption} on `record.Level != 0` alone. Both are closed on this base
+    // (three per-kind vectors, ApplyTextureUpload, SubDataTextureFault, and C1's level-scoped
+    // PendingUploads clear), so the constant is its own bit and the family is live.
     //
-    //   * MGPipeApplierState::Resources is ONE vector indexed by SLOT (D-B2 makes it three, one
-    //     per resource kind). Buffer, Texture and Renderbuffer slot spaces are independent, so
-    //     a texture create at slot 12 OVERWRITES the buffer record at slot 12, and the next
-    //     write to that buffer is refused against the texture's extent - a dropped content
-    //     write with no diagnostic beyond the refusal counter;
-    //   * SubDataBoxFault validates every record as the buffer half of MGPSubData, so a texture
-    //     sub-data record is Fatal{ProtocolCorruption} on `record.Level != 0` alone (D-D4's
-    //     drain cases and TextureTest.GetTexImageReadsALevelWhoseLowerLevelsWereNeverDefined
-    //     abort in a verify build, which is how this was found rather than argued).
-    //
-    // So the flip is `w1`'s to unblock and the integrator's to make, in the rebase of this
-    // branch onto the wire branch: change the 0 below to kMGPipeSubsystemTextureResources, and
-    // nothing else. The whole conversion is already gated by TextureEmit's cases, which arm the
-    // emitter directly (ArmForTest) and assert on the EMITTED records rather than on applier
-    // state - so the flip cannot land untested, and until it lands nothing this file builds
-    // reaches an applier that cannot hold it.
-    inline constexpr Uint64 kMGPipeWiredTextureSubsystem = 0;
+    // THE FLIP IS THE WHOLE SWITCH AND NOTHING ELSE MOVES: PipeFill.cpp ORs this constant into
+    // kMGPipeWiredSubsystems, static_asserts it is 0-or-its-own-bit, gates every birth hook on
+    // FamilyIsLive(kMGPipeSubsystemTextureResources, this), and gates DrainTextureSubData on
+    // the same OR. Bit 9 (framebuffer) REQUIRES bit 10 (D-K2), because every MGPSurface::Res
+    // names a texture or renderbuffer handle the applier must hold a record for - so this
+    // package may never be integrated with only one of the two constants set.
+    inline constexpr Uint64 kMGPipeWiredTextureSubsystem = kMGPipeSubsystemTextureResources;
+    static_assert(kMGPipeWiredTextureSubsystem == 0 ||
+                      kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
+                  "a family's wired constant is 0 or its own bit and nothing else");
 
-    // BOTH HALVES MATTER, exactly as MGPipeResourceSubsystemEnabled()'s two do. The bit is the
-    // operator's per-subsystem A/B; the emitter's arm is "has this build's texture family been
-    // switched on at all", and it is initialised from the constant above. There is no third
-    // half - no MGPipeResourceOps member and no backend op table (D-B1: every P4a call is an
-    // object record or working state the applier stores, and none of them dispatches to a
-    // backend function pointer) - which is what makes the A/B a pure configuration question
-    // rather than a bring-up-order one.
+    // BOTH HALVES MATTER, exactly as MGPipeResourceSubsystemEnabled()'s two do, and they are
+    // the SAME PAIR PipeFill.cpp's FamilyIsLive applies - the operator's per-subsystem A/B bit
+    // in MOBILEGL_PIPE_PUSH, and this build having wired the family at all. There is no third
+    // half: v1 carried a runtime `m_armed` latch so a unit case could drive the conversion on a
+    // base whose applier could not hold the record, and with the constant flipped that latch
+    // would only be able to LIE (PipeFill.cpp's gate does not consult it, so an unarmed emitter
+    // would still be driven by every frontend mutation). It is deleted; a case that wants the
+    // family off clears MG_Config::Features.PipePush, which is the switch the shipped build has.
     inline Bool MGPipeTextureSubsystemEnabled();
 
     // DO THE RECORDS THIS EMITTER BUILDS REACH THE APPLIER ON THIS BASE? It is the wired
@@ -144,43 +148,17 @@ namespace MobileGL::MG_Pipe {
                                       : MobileGL::TextureStorageType::Mipmap);
     }
 
-    // MGPSubData::Target, for a TEXTURE, and the packing is stated here because the payload has
-    // exactly one Uint16 for two facts the server needs: WHICH KIND of storage the destination
-    // is (the applier branches on it - a buffer target dispatches into MGPipeResourceOps, every
-    // other target stores and returns) and WHICH CUBE FACE / upload target the level belongs
-    // to, which is not derivable from the resource target at all.
+    // MGPSubData::Target's PACKING AND THE TWO DEPTH-STENCIL NUMBERS ARE THE CONTRACT'S NOW
+    // (ID-12 DV-2/DV-3, c0c): MGPipePackSubDataTarget / MGPipeSubDataResourceTargetOf /
+    // MGPipeSubDataUploadTargetOf and kMGPipeDepthStencilModeDepth/Stencil live in
+    // MG_Pipe/MGPipeTypes.h under exactly these names, with Uint32 arguments so the header
+    // stays backend-neutral. This package's copies were the same spelling in the same
+    // namespace - a redefinition - and are deleted; the packing argument they carried is
+    // stated where the definitions now are.
     //
-    //   low byte  = MGPipeResourceTarget          (0 == Buffer, and P3a's buffer records are
-    //                                              unchanged: their upload byte is 0 too, so a
-    //                                              buffer record still compares == 0 whole)
-    //   high byte = MobileGL::TextureUploadTarget (26 enumerators; a byte is ample)
-    //
-    // The buffer half of the encoding is what keeps this backward-compatible with
-    // MGPipeBuildSubDataRecord's `out.Target = kMGPipeResourceTargetBuffer`, so the applier's
-    // buffer branch can keep testing the whole field or only the low byte and be right either
-    // way.
-    inline constexpr Uint16 MGPipePackSubDataTarget(Uint32 resourceTarget,
-                                                    MobileGL::TextureUploadTarget uploadTarget) {
-        return static_cast<Uint16>((resourceTarget & 0xFFu) |
-                                   ((static_cast<Uint32>(uploadTarget) & 0xFFu) << 8));
-    }
-    inline constexpr Uint8 MGPipeSubDataResourceTargetOf(Uint16 packed) {
-        return static_cast<Uint8>(packed & 0xFFu);
-    }
-    inline constexpr Uint8 MGPipeSubDataUploadTargetOf(Uint16 packed) {
-        return static_cast<Uint8>((packed >> 8) & 0xFFu);
-    }
-    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer,
-                                          static_cast<MobileGL::TextureUploadTarget>(0)) ==
-                      kMGPipeResourceTargetBuffer,
-                  "a buffer sub-data record's Target must stay exactly kMGPipeResourceTargetBuffer");
-
-    // MGPTextureParams::DepthStencilMode. The frontend keeps a GLenum (GL_DEPTH_COMPONENT /
-    // GL_STENCIL_INDEX, 0x1902 / 0x1901) and the payload byte cannot hold one, so the two
-    // legal values are numbered - 0 is DEPTH_COMPONENT, which is also the GL initial value and
-    // therefore what a zero-initialised record already says.
-    inline constexpr Uint8 kMGPipeDepthStencilModeDepth = 0;
-    inline constexpr Uint8 kMGPipeDepthStencilModeStencil = 1;
+    // WHAT STAYS HERE is the GLenum -> byte translation, which is frontend knowledge: the
+    // frontend keeps GL_DEPTH_COMPONENT / GL_STENCIL_INDEX (0x1902 / 0x1901) and the payload
+    // byte cannot hold one.
     inline Uint8 MGPipeDepthStencilModeByte(GLenum mode) {
         return mode == GL_STENCIL_INDEX ? kMGPipeDepthStencilModeStencil : kMGPipeDepthStencilModeDepth;
     }
@@ -442,6 +420,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle AcquireTexture(Uint64 lifetimeId, ITextureObject* object) {
             const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, lifetimeId);
             Entry& entry = EntryFor(m_textures, handle);
+            RetireIfRecycled(entry, handle);
             entry.Texture = object;
             entry.Gen = handle.Gen;
             return handle;
@@ -452,6 +431,7 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle AcquireRenderbuffer(Uint64 lifetimeId) {
             const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Renderbuffer, lifetimeId);
             Entry& entry = EntryFor(m_renderbuffers, handle);
+            RetireIfRecycled(entry, handle);
             entry.Gen = handle.Gen;
             return handle;
         }
@@ -479,77 +459,68 @@ namespace MobileGL::MG_Pipe {
         // P4a get their producers here and in the framebuffer emitter: RENDER_TARGET and
         // DEPTH_STENCIL from an attachment point, SAMPLER from a resolved sampler view and
         // SHADER_IMAGE from a resolved image unit (the sampler package's two).
+        // A MASK CHANGE AFTER THE ALLOCATION IS A METADATA RESPECIFY (ID-18 M4), and without it
+        // the sticky half of D-A4 is a no-op for exactly the textures it was written for. The
+        // mask rides resource_create and every resource_respecify - and an IMMUTABLE texture has
+        // no further respecify, that being what immutable means - so for the canonical order
+        // `glTexStorage2D(...); glBindImageTexture(...)` the applier's record kept
+        // ImageBindableHint = 0 for ever and the PREVENTION half of the texture-remint stall
+        // class never fired. So a mask that actually MOVES re-emits the stored descriptor with
+        // the new mask: every storage-defining field is byte-identical to what the applier
+        // holds, which is exactly the shape wire applies as a METADATA UPDATE - the descriptor
+        // is replaced, no reallocation is acked, and NO pending upload is dropped, so a mask
+        // change arriving between a glTexSubImage2D and the sync that consumes it cannot eat
+        // the texels.
         void NoteTextureBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
             Entry& entry = EntryFor(m_textures, handle);
             const Uint16 before = entry.BindMask;
-            entry.BindMask = static_cast<Uint16>(before | bit);
+            const Uint16 now = static_cast<Uint16>(before | bit);
+            if (now == before) return;
+            entry.BindMask = now;
             // AN ImageBindableHint TRANSITION IS THE ONE THING THE CLIENT ASKS A RESYNC FOR
             // (D-E2): the widened-channel carrier needs a swizzle override that the frontend's
             // own params version does not move for, so the transition arms ForceResync on the
             // next set_texture_params rather than being silently folded into the descriptor.
+            // SamplerResync stays the SERVER's byte and is never set from here.
             if ((before & kMGPipeBindShaderImage) == 0 && (bit & kMGPipeBindShaderImage) != 0) {
                 entry.ForceParamsResync = true;
             }
+            RepublishMask(MGPipeKind::Texture, handle, entry);
         }
         void NoteRenderbufferBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
             Entry& entry = EntryFor(m_renderbuffers, handle);
-            entry.BindMask = static_cast<Uint16>(entry.BindMask | bit);
+            const Uint16 before = entry.BindMask;
+            const Uint16 now = static_cast<Uint16>(before | bit);
+            if (now == before) return;
+            entry.BindMask = now;
+            RepublishMask(MGPipeKind::Renderbuffer, handle, entry);
         }
         Uint16 TextureBindMask(MGPipeHandle handle) const { return MaskOf(m_textures, handle); }
         Uint16 RenderbufferBindMask(MGPipeHandle handle) const { return MaskOf(m_renderbuffers, handle); }
 
-        // ---- the publication latch (D-I1) ----
-        //
-        // The create is gated at its call site and the destroy inside the death helper, so the
-        // two ask the SAME question at two different moments. An object born while the
-        // subsystem bit was clear and destroyed after it was set would otherwise free its slot
-        // with the applier's record still Live, on a slot about to be handed out again. So the
-        // answer is LATCHED at the create and the destroy uses the latched one.
-        Bool TextureRecordIsPublished(MGPipeHandle handle) const {
-            return PublishedIn(m_textures, handle);
-        }
-        Bool RenderbufferRecordIsPublished(MGPipeHandle handle) const {
-            return PublishedIn(m_renderbuffers, handle);
-        }
-        void NoteTextureRecordDestroyed(MGPipeHandle handle) { Retire(m_textures, handle); }
-        void NoteRenderbufferRecordDestroyed(MGPipeHandle handle) { Retire(m_renderbuffers, handle); }
+        // ---- the three object calls (the entry points PipeFill.cpp forwards to) ----
 
-        // ---- the three object calls ----
-
-        void EmitTextureCreate(ITextureObject& texture) {
+        // resource_create, from TextureObjectBase's CONSTRUCTOR - so the DERIVED object does
+        // not exist yet and only members TextureObjectBase itself implements may be read.
+        // GetTarget(), GetExternalIndex() and GetLifetimeId() are all overridden ON THE BASE,
+        // so they dispatch to the base's own bodies here and read members the mem-init list has
+        // already written; GetStorageType() and GetUploadTargets() are NOT, so calling either
+        // would be undefined behaviour and the storage kind is derived from the target instead
+        // (exact, and re-checked at the first respecify where the object IS complete).
+        void EmitResourceCreate(ITextureObject& texture) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
-            Entry& entry = EntryFor(m_textures, handle);
-            const MGPResourceDesc desc = MGPipeBuildTextureResourceDesc(
-                texture, handle, entry.BindMask, /*storageDefined=*/false, kMGPipeNullHandle,
-                kMGPipeNullHandle, 0, 0);
-            entry.Published = true;
-            entry.LastDesc = desc;
-            entry.HasLastDesc = true;
-            NoteDesc(desc, /*isCreate=*/true);
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
-        }
-
-        // resource_create for a texture whose DERIVED object does not exist yet - the base
-        // constructor. Nothing virtual is touched: the target and the GL name are the two
-        // facts a create carries and both are plain members by then. See
-        // MGPipeTextureStorageKindForTarget for why the storage kind may not be asked for here.
-        void EmitTextureCreateFromBase(Uint64 lifetimeId, ITextureObject* object,
-                                       MobileGL::TextureTarget target, Uint externalIndex) {
-            const MGPipeHandle handle = AcquireTexture(lifetimeId, object);
             Entry& entry = EntryFor(m_textures, handle);
             MGPResourceDesc desc{};
             desc.Resource = handle;
-            desc.Target = static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(target));
-            desc.StorageKind = MGPipeTextureStorageKindForTarget(target);
+            desc.Target = static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(texture.GetTarget()));
+            desc.StorageKind = MGPipeTextureStorageKindForTarget(texture.GetTarget());
             desc.BindMask = entry.BindMask;
-            desc.GlNameForDiag = static_cast<Uint32>(externalIndex);
-            entry.Published = true;
-            entry.LastDesc = desc;
-            entry.HasLastDesc = true;
+            desc.ImageBindableHint = (entry.BindMask & kMGPipeBindShaderImage) != 0 ? 1 : 0;
+            desc.GlNameForDiag = static_cast<Uint32>(texture.GetExternalIndex());
             NoteDesc(desc, /*isCreate=*/true);
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
+            PublishCreate(MGPipeKind::Texture, handle, entry, desc);
         }
 
         // resource_respecify, from every storage-defining entry point. DEDUPED ON THE
@@ -559,9 +530,12 @@ namespace MobileGL::MG_Pipe {
         // this record carries). A byte compare of an 88-byte POD is cheaper than the emission
         // it avoids, and it is the same "version-first skip before anything expensive" shape
         // every other P4a emission takes.
-        void EmitTextureRespecify(ITextureObject& texture) {
+        void EmitResourceRespecify(ITextureObject& texture) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
-            Entry& entry = EntryFor(m_textures, handle);
+            // THE VIEW'S OWNER IS ACQUIRED FIRST, and no Entry& is held across it (m3): the
+            // owner's slot can be higher than this table's size, so AcquireTexture would
+            // resize() the vector out from under a reference taken before it. Every Entry&
+            // below is taken after the last call that can grow the table.
             MGPipeHandle viewOf = kMGPipeNullHandle;
             if (const auto& owner = texture.GetViewStorageOwner()) {
                 // ONE HOP ALWAYS REACHES STORAGE: glTextureView composes a view-of-a-view onto
@@ -590,6 +564,7 @@ namespace MobileGL::MG_Pipe {
                                   : static_cast<Uint64>(bufferTexture.GetBufferRangeSizeInBytes());
                 }
             }
+            Entry& entry = EntryFor(m_textures, handle);
             const MGPResourceDesc desc = MGPipeBuildTextureResourceDesc(
                 texture, handle, entry.BindMask, /*storageDefined=*/true, viewOf, bufferHandle, bufOffset,
                 bufSize);
@@ -598,21 +573,43 @@ namespace MobileGL::MG_Pipe {
             // subsystem bit was clear has no applier record, and every later respecify would be
             // REFUSED. A create rather than a respecify, because that is what the record's
             // absence means and because the applier starts a record over on a create.
-            if (!entry.Published) {
+            if (!MGPipeHandleIsPublished(MGPipeKind::Texture, handle)) {
                 const MGPResourceDesc createDesc = MGPipeBuildTextureResourceDesc(
                     texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf, bufferHandle,
                     bufOffset, bufSize);
-                entry.Published = true;
                 NoteDesc(createDesc, /*isCreate=*/true);
-                if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(createDesc);
+                PublishCreate(MGPipeKind::Texture, handle, entry, createDesc);
             }
-            entry.LastDesc = desc;
-            entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/false);
             // NO initial bytes: a texture's texels travel as resource_subdata out of the drain
             // list, never inside its storage definition. This is what keeps glTexImage2D's
             // "define the level and upload it" one allocation and one upload rather than two.
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceRespecify(desc, nullptr);
+            //
+            // AND THE MIRROR ONLY ADVANCES ON ACCEPTANCE (ID-18 M3): the dedupe above is a claim
+            // about what the APPLIER holds, so a refused respecify must leave LastDesc naming
+            // the descriptor that actually landed, or the next identical call is suppressed
+            // against a record that was never stored.
+            Bool accepted = ApplyRespecify(desc);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                if (!accepted) {
+                    // THE SECOND HALF OF THE SELF-HEAL, and the publication latch cannot give
+                    // it: the latch answers "did a create for this handle GO OUT", which stays
+                    // true after MGPipeApplierReleaseObjectRecords has dropped every object
+                    // record - the scope a served context's teardown takes while the frontend
+                    // objects live on in the share group. The applier's REFUSAL is the only
+                    // signal that says "I hold nothing for this handle", and the acceptance
+                    // return is what makes it visible from here at all. One retry, never a
+                    // loop: a descriptor the applier refuses on its own merits (a target that
+                    // names no resource kind) is refused again and the flags stay set.
+                    const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
+                        texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf,
+                        bufferHandle, bufOffset, bufSize);
+                    NoteDesc(healDesc, /*isCreate=*/true);
+                    PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
+                    accepted = ApplyRespecify(desc);
+                }
+            }
+            NoteRespecified(entry, desc, accepted);
         }
 
         void EmitTextureParams(ITextureObject& texture) {
@@ -628,15 +625,54 @@ namespace MobileGL::MG_Pipe {
                              texture.GetExternalIndex());
                 return;
             }
-            // THE BUILT-IN SAMPLER'S CSO SLOT IS KEYED ON THE SamplerObject's OWN LIFETIME ID,
-            // which is the same key ~SamplerObject's death helper resolves through
-            // (MGPipeEmitSamplerCsoDestroyAndFree). The CALL that fills the record -
-            // create_sampler_state - is the sampler package's; minting the handle is client
-            // state and is this record's to name.
+            // THE VERSION-FIRST SKIP, AND IT READS BOTH COUNTERS (clientsp-v2 rule 4, and it is
+            // the M2 defect stated as a rule): glTexParameter* moves GetTextureParamsVersion()
+            // AND lands on the built-in SamplerObject, but the three fields this record takes
+            // off that object - MinLod, MaxLod, LodBias - are ALSO reachable through paths that
+            // move only SamplerObject::GetVersion(). Latching on the texture's counter alone is
+            // what let glTexParameterf(GL_TEXTURE_MIN_LOD) go stale. ForceParamsResync is the
+            // third input because an ImageBindableHint transition moves neither counter.
+            const Uint16 paramsVersion = texture.GetTextureParamsVersion();
+            const Uint16 samplerVersion = sampler->GetVersion();
+            if (entry.HasParamsLatch && entry.ParamsVersion == paramsVersion &&
+                entry.SamplerVersion == samplerVersion && !entry.ForceParamsResync) {
+                return;
+            }
+            entry.HasParamsLatch = true;
+            entry.ParamsVersion = paramsVersion;
+            entry.SamplerVersion = samplerVersion;
+
+            // ID-14 / ID-17: THE BUILT-IN SAMPLER COMES FROM C's CONTENT-ADDRESSED CACHE and is
+            // never minted here. v1 took MGPipeSlots().Acquire(SamplerCso, the SamplerObject's
+            // lifetime id), which is a slot no create_sampler_state ever names - so on the
+            // integrated tree every texture's params record would have carried a handle the
+            // applier holds nothing for. The cache mints and emits create_sampler_state on a
+            // miss, so the texture's built-in sampler and a glBindSampler'd object with the
+            // same value share ONE CSO and one server-side twin.
+            //
+            // EVERY Acquire TAKES A REFERENCE AND THIS ENTRY OWES EXACTLY ONE. The reference is
+            // what stops the LRU pulling a handle out from under a standing MGPTextureParams
+            // record: the applier deliberately does not resolve BuiltinSampler, and an eviction
+            // is not a parameter change, so nothing would refuse and nothing would re-emit. The
+            // previous handle is released when the content moves it, and the last one when the
+            // slot is recycled (RetireIfRecycled) - which is the only moment this package can
+            // see a texture die, the death helper being A's.
+            MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
+            Uint64 samplerBytes = 0;
             const MGPipeHandle builtinSampler =
-                MGPipeSlots().Acquire(MGPipeKind::SamplerCso, sampler->GetLifetimeId());
+                cache.Acquire(sampler->GetAllSamplerParameters(), samplerBytes);
+            m_samplerCsoPayloadBytes += samplerBytes;
+            if (entry.BuiltinSampler == builtinSampler) {
+                // The value did not move, so the cache handed back the handle this entry
+                // already pins AND a second reference for it. Give that one straight back.
+                cache.Release(builtinSampler);
+            } else {
+                cache.Release(entry.BuiltinSampler); // a no-op for the null handle
+                entry.BuiltinSampler = builtinSampler;
+            }
+
             const MGPTextureParams params =
-                MGPipeBuildTextureParams(texture, handle, builtinSampler, entry.ForceParamsResync);
+                MGPipeBuildTextureParams(texture, handle, entry.BuiltinSampler, entry.ForceParamsResync);
             entry.ForceParamsResync = false;
             m_lastParams = params;
             ++m_paramSets;
@@ -649,11 +685,8 @@ namespace MobileGL::MG_Pipe {
             const MGPResourceDesc desc = MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle,
                                                                             entry.BindMask,
                                                                             /*storageDefined=*/false);
-            entry.Published = true;
-            entry.LastDesc = desc;
-            entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/true);
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
+            PublishCreate(MGPipeKind::Renderbuffer, handle, entry, desc);
         }
 
         // D-D2: THE RENDERBUFFER PUBLICATION HOLE, CLOSED BY EMISSION.
@@ -673,17 +706,26 @@ namespace MobileGL::MG_Pipe {
                                                                             entry.BindMask,
                                                                             /*storageDefined=*/true);
             if (entry.HasLastDesc && std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0) return;
-            if (!entry.Published) {
+            if (!MGPipeHandleIsPublished(MGPipeKind::Renderbuffer, handle)) {
                 const MGPResourceDesc createDesc = MGPipeBuildRenderbufferResourceDesc(
                     renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
-                entry.Published = true;
                 NoteDesc(createDesc, /*isCreate=*/true);
-                if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(createDesc);
+                PublishCreate(MGPipeKind::Renderbuffer, handle, entry, createDesc);
             }
-            entry.LastDesc = desc;
-            entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/false);
-            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceRespecify(desc, nullptr);
+            Bool accepted = ApplyRespecify(desc);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                if (!accepted) {
+                    // See the texture twin: the applier's refusal is the only thing that can
+                    // say "I hold no record for this handle" once the latch has been set.
+                    const MGPResourceDesc healDesc = MGPipeBuildRenderbufferResourceDesc(
+                        renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
+                    NoteDesc(healDesc, /*isCreate=*/true);
+                    PublishCreate(MGPipeKind::Renderbuffer, handle, entry, healDesc);
+                    accepted = ApplyRespecify(desc);
+                }
+            }
+            NoteRespecified(entry, desc, accepted);
         }
 
         // ---- the drain list (D-D4) ----
@@ -697,36 +739,32 @@ namespace MobileGL::MG_Pipe {
         // The per-slot key list is a short linear scan rather than a hash: a level count is
         // ~15, the cap on the rect list behind it is 96, and this runs on the glTexSubImage
         // path which has just memcpy'd texels.
-        void NoteLevelDirty(ITextureObject& texture, MobileGL::TextureUploadTarget uploadTarget, Uint level) {
+        // THE PARAMETER TYPES ARE THE CONTRACT'S (PipeMutation.h): Uint32 rather than
+        // MobileGL::TextureUploadTarget and Uint, because that declaration is the one door
+        // MG_State has into the client and it may not name a frontend enumeration.
+        //
+        // THERE IS NO CLEAN ARM, and that is a DECLARED DEVIATION rather than a dropped half.
+        // v1 carried a second entry point for MarkStorageDirty(..., false); the contract's hook
+        // has no `dirty` parameter, and asking A to widen it would put a second signature in
+        // MG_Pipe/PipeMutation.h for something the drain already collects. A level that goes
+        // clean stays on the list until the NEXT drain walks it, where
+        // `!mipmap->IsStorageDirty(...)` is the first test EmitOneLevel makes and returns
+        // "nothing owed", so the entry is dropped from both lists there. The cost is one
+        // IsStorageDirty call per cleaned level per drain, the list is bounded by the (texture,
+        // level) pairs dirtied since the last validate point, and a re-dirty before that drain
+        // is already covered by the entry still standing. What it must NOT be confused with is
+        // dropping the level's TEXELS: nothing here clears a dirty flag.
+        void NoteLevelDirty(ITextureObject& texture, Uint32 uploadTarget, Uint32 level) {
             if (m_draining) return;
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
             Entry& entry = EntryFor(m_textures, handle);
-            const Uint32 key = PackLevelKey(uploadTarget, level);
+            const Uint32 key = PackLevelKey(static_cast<MobileGL::TextureUploadTarget>(uploadTarget),
+                                            static_cast<Uint>(level));
             for (const Uint32 present : entry.DrainKeys) {
                 if (present == key) return;
             }
             entry.DrainKeys.push_back(key);
             m_drain.push_back(DrainEntry{handle, key});
-        }
-
-        // MarkStorageDirty(..., false) from outside the drain - a level respecified, truncated
-        // or explicitly marked clean. The entry stops describing anything and is dropped from
-        // the per-slot list; the global list is compacted at the next drain, which is where
-        // walking it is already paid for.
-        void NoteLevelClean(ITextureObject& texture, MobileGL::TextureUploadTarget uploadTarget, Uint level) {
-            if (m_draining) return;
-            const MGPipeHandle handle = FindTexture(texture);
-            if (MGPipeHandleIsNull(handle)) return;
-            const SizeT slot = handle.Slot;
-            if (slot >= m_textures.size()) return;
-            Entry& entry = m_textures[slot];
-            const Uint32 key = PackLevelKey(uploadTarget, level);
-            for (SizeT i = 0; i < entry.DrainKeys.size(); ++i) {
-                if (entry.DrainKeys[i] != key) continue;
-                entry.DrainKeys[i] = entry.DrainKeys.back();
-                entry.DrainKeys.pop_back();
-                return;
-            }
         }
 
         // The DRAIN, at the validate point: one resource_subdata per dirty (storage owner,
@@ -780,6 +818,20 @@ namespace MobileGL::MG_Pipe {
         Uint64 RespecifyCount() const { return m_respecifies; }
         Uint64 ParamCount() const { return m_paramSets; }
         Uint64 SubDataCount() const { return m_subDatas; }
+        // Records the applier REFUSED. The dirty flag survives one of these, which is the whole
+        // of D-D5 step 1 - so a case that wants to prove the flag survived asserts on this.
+        Uint64 RefusedSubDataCount() const { return m_refusedSubDatas; }
+        // What create_sampler_state put on the wire on this emitter's behalf, so the csob-blob
+        // accounting does not under-report 100 bytes per built-in sampler mint. set_texture_params
+        // itself returns no byte count - it is not emitted from the validate point's payload
+        // histogram - so this is where the cache's answer lands.
+        Uint64 SamplerCsoPayloadBytes() const { return m_samplerCsoPayloadBytes; }
+        MGPipeHandle BuiltinSamplerOf(MGPipeHandle handle) const {
+            const SizeT slot = handle.Slot;
+            if (MGPipeHandleIsNull(handle) || slot >= m_textures.size()) return kMGPipeNullHandle;
+            const Entry& entry = m_textures[slot];
+            return entry.Gen == handle.Gen ? entry.BuiltinSampler : kMGPipeNullHandle;
+        }
         SizeT DrainListSize() const { return m_drain.size(); }
 
         // A fresh context: what the server has is no longer what this emitter last sent. Only
@@ -792,25 +844,24 @@ namespace MobileGL::MG_Pipe {
         // uploads a context switch has not flushed yet.
         void Reset() {}
 
-        void ResetCounters() { m_creates = m_respecifies = m_paramSets = m_subDatas = 0; }
-
-        // ---- the arm (see kMGPipeWiredTextureSubsystem) ----
-        //
-        // "Does this build's texture family emit at all", initialised from the wired constant.
-        // It is a RUNTIME latch and not a constant only because the flip is blocked on the wire
-        // package's `w1` while the conversion below is finished: a unit case arms it, drives a
-        // frontend mutation and asserts on the record the emitter built, so the conversion is
-        // gated by a test on a base whose applier could not yet hold that record. Once the
-        // constant is flipped this stays true for the life of the process and ArmForTest is
-        // redundant rather than wrong.
-        Bool Armed() const { return m_armed; }
-        void ArmForTest(Bool armed) { m_armed = armed; }
+        void ResetCounters() {
+            m_creates = m_respecifies = m_paramSets = m_subDatas = 0;
+            m_refusedSubDatas = 0;
+            m_samplerCsoPayloadBytes = 0;
+        }
 
         // A unit fixture's per-case reset; the library never calls it. See
         // MGPipeResourceTracker::ResetForTest for the rule this restates: a texture handle and
         // the applier record it names are SHARE-GROUP OBJECT STATE, so nothing here is
         // per-context and no re-publication path exists or may exist.
         void ResetForTest() {
+            // EVERY REFERENCE THIS EMITTER OWES IS GIVEN BACK FIRST. A case that dropped the
+            // table without releasing would pin cache entries for the rest of the process and
+            // the next case's LRU would mint over capacity for reasons it cannot see.
+            for (Entry& entry : m_textures) {
+                MGPipeSamplerCsoCacheInstance().Release(entry.BuiltinSampler);
+                entry.BuiltinSampler = kMGPipeNullHandle;
+            }
             m_textures.clear();
             m_renderbuffers.clear();
             m_drain.clear();
@@ -819,7 +870,6 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc = MGPResourceDesc{};
             m_lastParams = MGPTextureParams{};
             m_lastSubData = MGPSubData{};
-            m_armed = (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
             ResetCounters();
         }
 
@@ -828,9 +878,19 @@ namespace MobileGL::MG_Pipe {
             ITextureObject* Texture = nullptr;
             Uint32 Gen = 0;
             Uint16 BindMask = 0;
-            Bool Published = false;
             Bool ForceParamsResync = false;
             Bool HasLastDesc = false;
+            // ID-14/ID-17: the CSO C's content-addressed cache handed this texture's BUILT-IN
+            // sampler, and the ONE reference this emitter owes a Release for. Null until the
+            // first set_texture_params. There is no Published flag beside it: c0b's
+            // {kind, slot, gen} latch is the one answer both halves read.
+            MGPipeHandle BuiltinSampler{};
+            // The version-first skip for set_texture_params, and it reads BOTH counters
+            // (clientsp-v2 rule 4): glTexParameter* moves GetTextureParamsVersion(), a write
+            // that lands on the built-in SamplerObject moves only SamplerObject::GetVersion().
+            Bool HasParamsLatch = false;
+            Uint16 ParamsVersion = 0;
+            Uint16 SamplerVersion = 0;
             MGPResourceDesc LastDesc{};
             Vector<Uint32> DrainKeys;
         };
@@ -857,15 +917,72 @@ namespace MobileGL::MG_Pipe {
             const SizeT slot = handle.Slot;
             return slot < table.size() ? table[slot].BindMask : Uint16{0};
         }
-        static Bool PublishedIn(const Vector<Entry>& table, MGPipeHandle handle) {
-            if (MGPipeHandleIsNull(handle)) return false;
-            const SizeT slot = handle.Slot;
-            return slot < table.size() && table[slot].Published && table[slot].Gen == handle.Gen;
+        // A SLOT THE ALLOCATOR HAS HANDED OUT AGAIN CARRIES ITS PREDECESSOR'S ENTRY, and every
+        // field in it is a lie about the new object (m4). The sticky BindMask is the one that
+        // bites: the framebuffer emitter ORs RENDER_TARGET / DEPTH_STENCIL into these entries
+        // whether or not the texture family is on, so a recycled slot's new texture inherited
+        // the dead one's mask and its first descriptor said so. The generation is what
+        // distinguishes them and the reset is here because AcquireTexture is the one door.
+        //
+        // IT IS ALSO THE ONLY MOMENT THIS PACKAGE CAN SEE A TEXTURE DIE. The death helper is
+        // A's (MGPipeEmitTextureDestroyAndFree) and does not forward to this emitter, so the
+        // built-in sampler's cache reference is dropped here - bounded by the number of live
+        // texture slots rather than unbounded, which is the shape ID-17 rule 3 names.
+        void RetireIfRecycled(Entry& entry, MGPipeHandle handle) {
+            if (entry.Gen == handle.Gen) return;
+            MGPipeSamplerCsoCacheInstance().Release(entry.BuiltinSampler);
+            entry = Entry{};
         }
-        static void Retire(Vector<Entry>& table, MGPipeHandle handle) {
-            const SizeT slot = handle.Slot;
-            if (slot >= table.size() || table[slot].Gen != handle.Gen) return;
-            table[slot] = Entry{};
+
+        // resource_create, and the LATCH IS TAKEN ONLY WHERE THE CREATE ACTUALLY WENT OUT
+        // (D-I1, c0b): MGPipeHandleIsPublished is what the death helper reads, so latching on
+        // a call the applier refused would emit a resource_destroy for a record that does not
+        // exist - a refused call the applier asserts on in a verify build.
+        void PublishCreate(MGPipeKind kind, MGPipeHandle handle, Entry& entry,
+                           const MGPResourceDesc& desc) {
+            Bool accepted = false;
+            Bool dispatched = false;
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                dispatched = true;
+                accepted = MGPipeApplyResourceCreate(desc);
+            }
+            if (dispatched && !accepted) return;
+            MGPipeNoteHandlePublished(kind, handle);
+            entry.LastDesc = desc;
+            entry.HasLastDesc = true;
+        }
+
+        static Bool ApplyRespecify(const MGPResourceDesc& desc) {
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                return MGPipeApplyResourceRespecify(desc, nullptr);
+            }
+            return false;
+        }
+
+        static void NoteRespecified(Entry& entry, const MGPResourceDesc& desc, Bool accepted) {
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                if (!accepted) return;
+            }
+            entry.LastDesc = desc;
+            entry.HasLastDesc = true;
+        }
+
+        // THE METADATA RESPECIFY (ID-18 M4). Every storage-defining field is the stored
+        // descriptor's own byte for byte - the record IS entry.LastDesc with a new mask - which
+        // is what makes the applier classify it as a metadata update: the descriptor is
+        // replaced so the mask and the hint take their new values, the serial advances, and no
+        // pending upload is dropped.
+        void RepublishMask(MGPipeKind kind, MGPipeHandle handle, Entry& entry) {
+            if (!MGPipeTextureSubsystemEnabled()) return;
+            // Nothing has described this object to the applier yet, so the create or the first
+            // respecify carries the new mask anyway - both read entry.BindMask.
+            if (!entry.HasLastDesc || !MGPipeHandleIsPublished(kind, handle)) return;
+            MGPResourceDesc desc = entry.LastDesc;
+            desc.BindMask = entry.BindMask;
+            desc.ImageBindableHint = (entry.BindMask & kMGPipeBindShaderImage) != 0 ? 1 : 0;
+            if (std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0) return;
+            NoteDesc(desc, /*isCreate=*/false);
+            NoteRespecified(entry, desc, ApplyRespecify(desc));
         }
 
         void NoteDesc(const MGPResourceDesc& desc, Bool isCreate) {
@@ -915,8 +1032,11 @@ namespace MobileGL::MG_Pipe {
 
             m_lastSubData = MGPSubData{};
             m_lastSubData.Res = pending.Handle;
+            // The contract's packer takes two Uint32s (c0c keeps MGPipeTypes.h backend-neutral),
+            // so the frontend enumeration is widened here rather than there.
             m_lastSubData.Target = MGPipePackSubDataTarget(
-                MGPipeResourceTargetForTextureTarget(texture->GetTarget()), uploadTarget);
+                static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture->GetTarget())),
+                static_cast<Uint32>(uploadTarget));
             m_lastSubData.Level = static_cast<Uint16>(level);
             // ALWAYS 1 ON THE CLIENT SIDE. The conversion fallbacks (the packed-norm, widened
             // and fallback upload preparers) are the server's and run there, so the bytes this
@@ -936,17 +1056,44 @@ namespace MobileGL::MG_Pipe {
             m_lastSubData.Blob.Offset = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow));
             m_lastSubData.Blob.Size = 0;
 
+            // THE REGION LIST IS THE CALL'S VARIABLE TAIL AND IT IS HANDED OVER (M1). v1 built
+            // m_regions, wrote its size into RegionCount and passed nothing, so on this base -
+            // where the applier's tail exists - every scattered upload would have declared N
+            // regions and supplied none (the applier faults on exactly that). A null tail is
+            // correct ONLY for the whole-level shape, where RegionCount is 0.
+            Bool accepted = false;
+            Bool dispatched = false;
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
-                MGPipeApplyResourceSubData(m_lastSubData, shadow);
+                dispatched = true;
+                accepted = MGPipeApplyResourceSubData(m_lastSubData, shadow,
+                                                      m_regions.empty() ? nullptr : m_regions.data());
             }
             ++m_subDatas;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ClientTextureUploadEmissions, 1);
             }
             bytes += sizeof(MGPSubData) + m_regions.size() * sizeof(MGPSubRegion);
-            // THE CLIENT CLEARS ITS OWN FLAG, and only now (D-D5's inversion): the record was
-            // accepted, the applier holds the shape, and MG_Impl contains no reader of this
-            // texture's dirty state at all - the frontend never reads it back.
+            // THE CLIENT CLEARS ITS OWN FLAG ONLY FOR A LEVEL THE APPLIER ACCEPTED (D-D5 step 1
+            // read literally; ID-18 M3). v1 cleared on DISPATCH - and, with the wired constant
+            // still 0, even on a call the `if constexpr` had discarded - so any refusal left the
+            // server with nothing and the client with a clean flag, and since MG_Impl contains
+            // no reader of a texture's dirty state the level simply stopped updating for the
+            // life of the texture. The two refusal paths are invisible from here without this
+            // answer: a dead or stale handle is a counted no-op and a corrupt record is a Fatal
+            // that deliberately moves no counter.
+            //
+            // A REFUSED LEVEL STAYS DIRTY AND STAYS ON THE DRAIN LIST, which is the safe
+            // direction and self-heals: the ordinary cause is a record the applier does not
+            // hold, and the next respecify's self-healing create gives it one. It is LOUD
+            // because a permanently refused level would otherwise re-emit once per verb for
+            // ever with nothing to show for it.
+            if (dispatched && !accepted) {
+                ++m_refusedSubDatas;
+                MGLOG_E_ONCE("MGPipe: resource_subdata for texture {slot=%u, gen=%u} level %u was refused; "
+                             "the level stays dirty and is retried at the next validate point",
+                             pending.Handle.Slot, pending.Handle.Gen, static_cast<Uint>(level));
+                return false;
+            }
             mipmap->MarkStorageDirty(uploadTarget, level, false);
             return true;
         }
@@ -965,7 +1112,8 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_respecifies = 0;
         Uint64 m_paramSets = 0;
         Uint64 m_subDatas = 0;
-        Bool m_armed = (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
+        Uint64 m_refusedSubDatas = 0;
+        Uint64 m_samplerCsoPayloadBytes = 0;
     };
 
     inline MGPipeTextureEmitter& MGPipeTextureEmitterInstance() {
@@ -978,107 +1126,33 @@ namespace MobileGL::MG_Pipe {
     }
 
     inline Bool MGPipeTextureSubsystemEnabled() {
-        return MGPipeTextureEmitterInstance().Armed() &&
+        return (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0 &&
                (MG_Config::Features.PipePush & kMGPipeSubsystemTextureResources) != 0;
     }
 
     // ---------------------------------------------------------------------------------
-    // The six entry points MG_State calls. See this file's header comment for why they are
-    // here rather than in MG_Pipe/PipeMutation.h.
+    // WHAT USED TO BE HERE, AND WHY IT IS NOT (c0b, ID-13)
     // ---------------------------------------------------------------------------------
-
-    // From TextureObjectBase's constructor. The mint is unconditional in a push build; the
-    // CALL is what the subsystem predicate gates.
-    inline void MGPipeMintAndCreateTexture(MG_State::GLState::ITextureObject* object, Uint64 lifetimeId,
-                                           MobileGL::TextureTarget target, Uint externalIndex) {
-        MGPipeTextureEmitter& emitter = MGPipeTextureEmitterInstance();
-        if (!MGPipeTextureSubsystemEnabled()) {
-            emitter.AcquireTexture(lifetimeId, object);
-            return;
-        }
-        emitter.EmitTextureCreateFromBase(lifetimeId, object, target, externalIndex);
-    }
-
-    inline void MGPipeEmitTextureRespecify(MG_State::GLState::ITextureObject& texture) {
-        if (!MGPipeTextureSubsystemEnabled()) return;
-        MGPipeTextureEmitterInstance().EmitTextureRespecify(texture);
-    }
-
-    inline void MGPipeEmitTextureParams(MG_State::GLState::ITextureObject& texture) {
-        if (!MGPipeTextureSubsystemEnabled()) return;
-        MGPipeTextureEmitterInstance().EmitTextureParams(texture);
-    }
-
-    inline void MGPipeNoteTextureLevelDirty(MG_State::GLState::ITextureObject& texture,
-                                            MobileGL::TextureUploadTarget uploadTarget, Uint level, Bool dirty) {
-        if (!MGPipeTextureSubsystemEnabled()) return;
-        MGPipeTextureEmitter& emitter = MGPipeTextureEmitterInstance();
-        if (dirty) {
-            emitter.NoteLevelDirty(texture, uploadTarget, level);
-        } else {
-            emitter.NoteLevelClean(texture, uploadTarget, level);
-        }
-    }
-
-    inline void MGPipeMintAndCreateRenderbuffer(MG_State::GLState::RenderbufferObject& renderbuffer) {
-        MGPipeTextureEmitter& emitter = MGPipeTextureEmitterInstance();
-        if (!MGPipeTextureSubsystemEnabled()) {
-            emitter.AcquireRenderbuffer(renderbuffer.GetLifetimeId());
-            return;
-        }
-        emitter.EmitRenderbufferCreate(renderbuffer);
-    }
-
-    inline void MGPipeEmitRenderbufferRespecify(MG_State::GLState::RenderbufferObject& renderbuffer) {
-        if (!MGPipeTextureSubsystemEnabled()) return;
-        MGPipeTextureEmitterInstance().EmitRenderbufferRespecify(renderbuffer);
-    }
-
-    // ---------------------------------------------------------------------------------
-    // STEP 1 OF THE THREE-STEP DEATH ORDER, and it is here rather than inside the contract's
-    // MGPipeEmitTextureDestroyAndFree for the same ownership reason the six entry points above
-    // are: MG_Impl/Pipe/PipeFill.cpp, where that helper lives, is the contract package's for
-    // the whole phase, and at the tag it hard-codes `published = false` with the note "the
-    // texture emitter publishes nothing yet". This client package cannot edit that line, so it
-    // supplies the answer from the destructor instead, one statement BEFORE the helper:
     //
-    //     ~TextureObjectBase / ~RenderbufferObject
-    //       -> MGPipeEmit<Kind>ResourceDestroy(lifetimeId)   // 1. the wire delete
-    //       -> MGPipeEmit<Kind>DestroyAndFree(lifetimeId)    // 2. the notice, 3. the slot
+    // v1 carried eight free functions - MGPipeMintAndCreateTexture, MGPipeEmitTextureRespecify,
+    // MGPipeEmitTextureParams, MGPipeNoteTextureLevelDirty, MGPipeMintAndCreateRenderbuffer,
+    // MGPipeEmitRenderbufferRespecify and the two ...ResourceDestroy halves - because at the
+    // contract tag MG_Pipe/PipeMutation.h declared no texture birth hook and
+    // MG_Impl/Pipe/PipeFill.cpp's death helpers hard-coded `published = false`. Every one of
+    // them is now A's:
     //
-    // which is EXACTLY the order PipeMutation.h fixes and not a variation on it: the applier's
-    // record is dropped while nothing can have re-handed the slot out, the death notice is
-    // raised while the handle still resolves, and the slot goes back last. The integrator can
-    // fold these two functions into the helpers' bodies in one mechanical commit once the
-    // phase's file ownership relaxes.
+    //   * the four MINTS and the nine EMISSIONS are declared in PipeMutation.h and defined in
+    //     PipeFill.cpp, which gates them on FamilyIsLive(bit, kMGPipeWiredTextureSubsystem) and
+    //     forwards to this class through ForwardWhenWired. MGPipeEmitTextureParams in
+    //     particular was a NAME COLLISION - the contract declares that exact signature - so
+    //     keeping the inline definition here would not have compiled at all;
+    //   * step 1 of the death order is inside MGPipeEmitTextureDestroyAndFree /
+    //     ...RenderbufferDestroyAndFree, which read MGPipeHandleIsPublished and emit the
+    //     resource_destroy themselves, so the destructors call ONE helper and not two;
+    //   * the publication latch is PipeFill.cpp's {kind, slot, gen} table, written by
+    //     PublishCreate above and read by those helpers.
     //
-    // PUBLISHED-GATED RATHER THAN SLOT-GATED, for the reason PipeFill.cpp states in full: a
-    // slot is not evidence of a record, because a backend twin table mints one through
-    // MGPipeSlots().Acquire whether or not the subsystem ever asked this client to emit a
-    // create - which is exactly what a MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs - and
-    // a resource_destroy on such a handle is a refused call the applier counts and asserts on.
-    inline Bool MGPipeEmitTextureResourceDestroy(Uint64 lifetimeId) {
-        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
-        MGPipeTextureEmitter& emitter = MGPipeTextureEmitterInstance();
-        if (!emitter.TextureRecordIsPublished(handle)) return false;
-        MGPHandleOnly only{};
-        only.Handle = handle;
-        only.Kind = static_cast<Uint32>(MGPipeKind::Texture);
-        if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceDestroy(only);
-        emitter.NoteTextureRecordDestroyed(handle);
-        return true;
-    }
-
-    inline Bool MGPipeEmitRenderbufferResourceDestroy(Uint64 lifetimeId) {
-        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
-        MGPipeTextureEmitter& emitter = MGPipeTextureEmitterInstance();
-        if (!emitter.RenderbufferRecordIsPublished(handle)) return false;
-        MGPHandleOnly only{};
-        only.Handle = handle;
-        only.Kind = static_cast<Uint32>(MGPipeKind::Renderbuffer);
-        if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceDestroy(only);
-        emitter.NoteRenderbufferRecordDestroyed(handle);
-        return true;
-    }
+    // The self-healing create in EmitResourceRespecify stays this file's: c0b provides no such
+    // path and it is what repairs a texture born while the subsystem bit was clear.
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH

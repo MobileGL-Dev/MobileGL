@@ -215,13 +215,11 @@ namespace MobileGL::MG_State::GLState {
         // that reaches the pull build is inside this guard, so the pull build's symbol set is
         // byte-for-byte the one it had before the phase.
         //
-        // DECLARED HERE AND DEFINED IN TextureObject.cpp, which is the ONE MG_State
-        // translation unit that includes the client's MG_Impl/Pipe/TextureEmit.h. Every other
-        // texture .cpp - the cube's, the view's, the buffer texture's - calls the inherited
-        // helper and still sees only a declaration, which is the same layering
-        // MG_Pipe/PipeMutation.h gives the buffer family (that header is the contract
-        // package's for the whole phase and carries no texture row, which is why the
-        // declaration lives here instead; see TextureEmit.h's header comment).
+        // DECLARED HERE AND DEFINED IN TextureObject.cpp, which calls the contract's own hooks
+        // in MG_Pipe/PipeMutation.h - the same door BufferObject.cpp uses, and no MG_State
+        // translation unit sees MG_Impl/Pipe/TextureEmit.h at all (c0b, ID-13). They stay
+        // members rather than free calls so the cube's, the view's and the buffer texture's
+        // translation units keep calling an inherited helper.
         //
         // resource_respecify. Called from BumpShapeVersion and from the three parameter
         // setters that move a DESCRIPTOR field without moving the shape (immutable levels,
@@ -230,9 +228,11 @@ namespace MobileGL::MG_State::GLState {
         void PipePublishDescriptor();
         // set_texture_params, from every mutator that bumps m_textureParamsVersion.
         void PipePublishParams();
-        // The sub-data DRAIN LIST. `dirty` false is a level going clean - a respecify, a
-        // truncation, or the emitter's own clear after an accepted record.
-        void PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel, Bool dirty);
+        // The sub-data DRAIN LIST's append, on a level's first dirty mark. There is no clean
+        // arm: the contract's hook (MG_Pipe/PipeMutation.h) carries no `dirty` flag, and a
+        // level that goes clean is collected at the next drain, where !IsStorageDirty is the
+        // first test EmitOneLevel makes.
+        void PipeNoteLevelDirty(TextureUploadTarget uploadTarget, Uint mipmapLevel);
 #endif
 
         const Uint m_externalIndex;

@@ -9,13 +9,10 @@
 #include "RenderbufferObject.h"
 #include <MG_Util/Metrics/TextureMetrics.h>
 #include <MG_State/GLState/StateObjectDeathNotice.h>
-#if MOBILEGL_PIPE_PUSH
-// The second and last MG_State translation unit that sees the client's texture emitter. A
-// renderbuffer has no base class to hang protected helpers on and exactly one .cpp, so the
-// include is the whole coupling; see MG_Impl/Pipe/TextureEmit.h's header comment for why the
-// declaration cannot live in MG_Pipe/PipeMutation.h this phase.
-#include <MG_Impl/Pipe/TextureEmit.h>
-#endif
+// The contract's own door, exactly as the texture half takes it (c0b): the four renderbuffer
+// hooks this file calls are declared in MG_Pipe/PipeMutation.h and defined in
+// MG_Impl/Pipe/PipeFill.cpp, so no MG_State translation unit includes the client's emitter.
+#include <MG_Pipe/PipeMutation.h>
 
 #include <atomic>
 
@@ -39,7 +36,12 @@ namespace MobileGL {
                 // shape with textures and buffers and nothing else - and its handle is minted
                 // whatever the subsystem bitmask says, because MGPSurface::Res names it out of the
                 // framebuffer subsystem.
-                MG_Pipe::MGPipeMintAndCreateRenderbuffer(*this);
+                // TWO CALLS AND NOT ONE (c0b): the mint is unconditional in a push build
+                // because a renderbuffer is named by handle out of the framebuffer subsystem
+                // whether or not its own family is switched on; the create is what the gate in
+                // PipeFill.cpp decides.
+                MG_Pipe::MGPipeMintRenderbufferHandle(*this);
+                MG_Pipe::MGPipeEmitRenderbufferResourceCreate(*this);
 #endif
             }
 
@@ -51,7 +53,8 @@ namespace MobileGL {
                 // still resolves - and the slot last. Steps 2 and 3 are the contract's helper;
                 // step 1 is this package's, one statement earlier, because the helper's file
                 // belongs to the contract package for the whole phase.
-                MG_Pipe::MGPipeEmitRenderbufferResourceDestroy(m_lifetimeId);
+                // All three steps are the contract's helper (c0b); v1's separate step-1 call
+                // is deleted, not kept, for the reason ~TextureObjectBase states in full.
                 MG_Pipe::MGPipeEmitRenderbufferDestroyAndFree(m_lifetimeId);
             }
 #endif
@@ -145,7 +148,7 @@ namespace MobileGL {
             // The emitter dedupes on the built descriptor, so glRenderbufferStorage's three-setter
             // sequence publishes once rather than three times.
             void RenderbufferObject::PipePublishDescriptor() {
-                MG_Pipe::MGPipeEmitRenderbufferRespecify(*this);
+                MG_Pipe::MGPipeEmitRenderbufferResourceRespecify(*this);
             }
 #endif
         } // namespace GLState
