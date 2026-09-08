@@ -399,14 +399,24 @@ namespace MobileGL::MG_Pipe {
         // P3a: resolving a handle, growing a slot table, and the bounds gate.
         // ----------------------------------------------------------------------------
 
-        // Grows a slot-indexed record table so `slot` is in it. Slot spaces are DENSE per
-        // kind - the allocator is a free list plus a high-water mark - which is exactly why
-        // the server's object table is an array a handle indexes rather than a map, and why
-        // this grows only when a new high-water mark arrives.
+        // Grows a slot-indexed record table so `slot` is in it, or returns NULL when the slot
+        // is outside the table's bound. Slot spaces are DENSE per kind - the allocator is a
+        // free list plus a high-water mark - which is exactly why the server's object table is
+        // an array a handle indexes rather than a map, and why this grows only when a new
+        // high-water mark arrives.
+        //
+        // AND WHY IT IS BOUNDED. `slot` is a client-supplied Uint32 that arrives in a payload,
+        // and this is the one number in the family that reaches an ALLOCATOR: unbounded, a
+        // corrupt 0xFFFFFFFE asks for a four-billion-entry vector from inside the same commit
+        // that polices Blob.Size, the destination range, Level, RegionCount and Start + Count.
+        // The bounds are kMGPipeMax{Resource,VertexElements}Slots (PipeApply.h) and a slot at
+        // or above one is the callers' Fatal{ProtocolCorruption}, with the identity in the
+        // line like its siblings - never a resize.
         template <class Record>
-        Record& RecordAt(Vector<Record>& records, Uint32 slot) {
+        Record* RecordAt(Vector<Record>& records, Uint32 slot, Uint32 slotLimit) {
+            if (slot >= slotLimit) return nullptr;
             if (slot >= records.size()) records.resize(static_cast<SizeT>(slot) + 1);
-            return records[slot];
+            return &records[slot];
         }
 
         // Null means "this applier does not have that resource": an out-of-range slot, a slot
@@ -426,15 +436,33 @@ namespace MobileGL::MG_Pipe {
             return &record;
         }
 
-        // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are.
+        // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are - and
+        // why it is nonetheless COUNTED rather than silently dropped.
         //
-        // A resource call is applied at the GL call that causes it, while MGPipeApplierReset
-        // runs at the first validate of a FRESH CONTEXT - so a buffer that outlives a context
-        // switch (a shared store, a worker context) legitimately reaches this applier with its
-        // record already dropped. Aborting a verify lane on a sequence that is legal would be
-        // a wire that fires for a reason it does not exist for, so the refusal is a DEFINED
-        // no-op: nothing is stored, nothing is dispatched, no serial moves, and the debug
-        // assertion names it. That is the shape bind_render_state already uses for a dead CSO.
+        // A make-current no longer takes the records with it (MGPipeApplierReset), so the
+        // shared-store case that used to arrive here every context switch does not arrive at
+        // all: a buffer that outlives a switch keeps its record and its writes keep landing.
+        // What is left is (a) a genuine protocol error - an unknown slot, a stale generation -
+        // and (b) ONE legal sequence, which is why this is still a no-op and not a wire:
+        //
+        //     the served context is torn down
+        //       -> MGPipeApplierReleaseObjectRecords()          (the applier goes away with it)
+        //       -> ~BufferObject / ~VertexArrayObject for every object the context still owns
+        //       -> resource_destroy / delete_vertex_elements, each naming a record that the
+        //          line above has already dropped.
+        //
+        // Every one of those death notices is legal, unavoidable and arrives after the
+        // records are gone, and a wire here would abort a verify lane on the ordinary shutdown
+        // of a context. So the refusal stays a DEFINED no-op - nothing stored, nothing
+        // dispatched, no serial moved, and the debug assertion names it, which is the shape
+        // bind_render_state already uses for a dead CSO.
+        //
+        // But MOBILEGL_ASSERT compiles out at INFO, which is what all three gate builds and
+        // every shipped build are, so a no-op alone would make case (a) - a dropped
+        // glBufferSubData - invisible in every build that matters. Both refusal paths
+        // therefore go through ResolveResource / ResolveVertexElements below, which COUNT into
+        // MGPipeApplierState::Refused{Resource,VertexInput}Calls. That is the observable: a
+        // legal sequence leaves it at 0 and a refused call moves it, in every build.
         //
         // The faults below are the other class entirely: a record that does not describe its
         // own bytes would have the BACKEND read or write outside a store, which is memory
@@ -442,6 +470,24 @@ namespace MobileGL::MG_Pipe {
         // for exactly this - Fatal{ProtocolCorruption} - and the record's identity in the line.
         constexpr const char* kResourceRefusalNote =
             "the record is not this applier's; the call is dropped, not applied";
+
+        // The two resolvers every entry point below uses. One place resolves, asserts and
+        // counts, so a call that forgets one of the three cannot exist.
+        MGPipeResourceRecord* ResolveResource(const char* call, MGPipeHandle res) {
+            MGPipeResourceRecord* record = FindResource(res);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, res.Slot, res.Gen,
+                            kResourceRefusalNote);
+            if (record == nullptr) ++g_applier.RefusedResourceCalls;
+            return record;
+        }
+
+        MGPipeVertexElementsRecord* ResolveVertexElements(const char* call, MGPipeHandle cso) {
+            MGPipeVertexElementsRecord* record = FindVertexElements(cso);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, cso.Slot, cso.Gen,
+                            kResourceRefusalNote);
+            if (record == nullptr) ++g_applier.RefusedVertexInputCalls;
+            return record;
+        }
 
         // Returns the fault, or null when [offset, offset+size) lies inside `width` bytes.
         // Written so nothing can overflow: `offset > width` is answered before the subtraction
@@ -467,6 +513,16 @@ namespace MobileGL::MG_Pipe {
             }
             if (record.Level != 0) return "the buffer half carries a mip level";
             if (record.RegionCount != 0) return "the buffer half carries sub-regions";
+            // THE BLOB RULE, and it is the SAME rule create_vertex_elements is held to
+            // (MGPipeTypes.h states it on both records): a declared blob length must be
+            // exactly the byte length the record's other fields describe, and a length of 0
+            // means "this record does not declare its blob" - which is what a monolith
+            // emission is, because the bytes travel beside the record through the entry
+            // point's companion pointer. So the gate is inert while the client leaves the
+            // field zero and becomes a real one on the first record a transport truncates.
+            if (record.Blob.Size != 0 && record.Blob.Size != MGPipeSubDataBufferSize(record)) {
+                return "the declared blob length is not the record's own byte size";
+            }
             return nullptr;
         }
 
@@ -492,9 +548,7 @@ namespace MobileGL::MG_Pipe {
         // fact that one of them is allowed to be absent, so a second copy of this arithmetic
         // would be a second place to get it wrong.
         void ApplyBufferWrite(const char* call, const MGPSubData& record, const void* bytes, Bool resident) {
-            MGPipeResourceRecord* stored = FindResource(record.Res);
-            MOBILEGL_ASSERT(stored != nullptr, "%s named {slot=%u, gen=%u}: %s", call, record.Res.Slot,
-                            record.Res.Gen, kResourceRefusalNote);
+            MGPipeResourceRecord* stored = ResolveResource(call, record.Res);
             if (stored == nullptr) return;
 
             const Uint64 offset = MGPipeSubDataBufferOffset(record);
@@ -550,22 +604,59 @@ namespace MobileGL::MG_Pipe {
         g_applier.ResidualDivergences = 0;
         g_applier.PatchCarrierComparisons = 0;
         g_applier.PatchCarrierDivergences = 0;
-        // P3a. A fresh context is a fresh server: the records describe objects the new
-        // context never made, and the three serials are per-context MGGens that must not
-        // carry a previous context's count into a twin's "have I synced this?" compare.
-        // The OP TABLE is deliberately NOT cleared here - it is installed and uninstalled by
+        // P3a. THIS RUNS AT EVERY CHANGE OF THE CURRENT CONTEXT, not once per fresh one:
+        // MGPipeTracker::Update resets itself whenever the context pointer moves and the
+        // emitter calls this from the walk that follows, so a make-current BACK to a context
+        // that is still alive lands here too. Everything cleared below is therefore something
+        // a returning context may not inherit, and nothing else is cleared.
+        //
+        // THE OBJECT RECORDS ARE NOT CLEARED. A GL object lives in a share group, not in a
+        // context: the buffer a returning context is about to write to is the same buffer with
+        // the same storage, and its record is where the extent and the mutation serial that
+        // D-A4 re-keys IsBufferDrawClean onto now live. Dropping them here made every
+        // glBufferSubData after a context switch resolve to nothing and be dropped, with the
+        // only trace an assertion that compiles out at INFO. They go at the object's own death
+        // (resource_destroy, delete_vertex_elements) and at MGPipeApplierReleaseObjectRecords.
+        //
+        // The OP TABLE is deliberately not cleared either - it is installed and uninstalled by
         // the backend's own bring-up and teardown, not by a state reset.
-        g_applier.Resources.clear();
-        g_applier.VertexElementsCsos.clear();
+        g_applier.RefusedResourceCalls = 0;
+        g_applier.RefusedVertexInputCalls = 0;
         g_applier.BoundVertexElements = kMGPipeNullHandle;
         g_applier.VertexBuffers = {};
         g_applier.VertexBufferStart = 0;
         g_applier.VertexBufferCount = 0;
         g_applier.VertexFetchBaseInstance = 0;
-        g_applier.VertexBuffersSerial = 0;
         g_applier.IndexBuffer = MGPIndexBuffer{};
-        g_applier.IndexBufferSerial = 0;
         g_applier.MapPersistentRoundtrips = 0;
+        // THE TWO SERIALS ADVANCE; THEY ARE NOT ZEROED. They are MGGens, and an MGGen that
+        // walks backwards is not one. There are exactly three things a reset can do to a
+        // version whose data it has just cleared:
+        //   - carry the count over: the twin's memo still matches state that is now empty, so
+        //     the very next draw reads clean over a cleared window. Wrong immediately;
+        //   - restart at 0: the counter then walks back up through every value it has already
+        //     stamped into a twin, and a VAO twin does NOT die with a make-current
+        //     (OnBackendContextDestroyed runs on destroy) and has no context generation beside
+        //     the serial - D-G4 deletes the identity patch that used to close exactly this
+        //     hole. Wrong later, and reliably, because a context whose per-activation call
+        //     count is stable lands on a stamped value every time;
+        //   - advance: the clearing is itself announced, no stamped value can ever recur, and
+        //     the first compare after the switch is a mismatch, which is the safe direction.
+        ++g_applier.VertexBuffersSerial;
+        ++g_applier.IndexBufferSerial;
+    }
+
+    void MGPipeApplierReleaseObjectRecords() {
+        // The served context is going away and this applier with it. Under split that is one
+        // applier per served context; in the monolith there is one applier behind every
+        // context, so nothing wires this - see PipeApply.h. The two serials advance here for
+        // MGPipeApplierReset's reason: state was cleared, and a twin that outlives it must not
+        // be able to match a value it has already seen.
+        g_applier.Resources.clear();
+        g_applier.VertexElementsCsos.clear();
+        g_applier.BoundVertexElements = kMGPipeNullHandle;
+        ++g_applier.VertexBuffersSerial;
+        ++g_applier.IndexBufferSerial;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
@@ -850,11 +941,19 @@ namespace MobileGL::MG_Pipe {
         // recycled address inherits its predecessor's contents. The generation is the client
         // allocator's answer to "is this still the same GL object", so it is taken from the
         // handle and nothing else survives.
-        MGPipeResourceRecord& record = RecordAt(g_applier.Resources, desc.Resource.Slot);
-        record = MGPipeResourceRecord{};
-        record.Gen = desc.Resource.Gen;
-        record.Live = true;
-        record.Desc = desc;
+        MGPipeResourceRecord* record = RecordAt(g_applier.Resources, desc.Resource.Slot, kMGPipeMaxResourceSlots);
+        if (record == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_create {slot=%u, gen=%u, glName=%u}: the slot is outside the "
+                                 "record table's bound (%u)",
+                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag,
+                                 kMGPipeMaxResourceSlots);
+            return;
+        }
+        *record = MGPipeResourceRecord{};
+        record->Gen = desc.Resource.Gen;
+        record->Live = true;
+        record->Desc = desc;
         // Serial stays 0: a create is not a mutation. The descriptor a create carries defines
         // no storage - that is the first respecify's job, and a backend tolerates a resource
         // that has none - and a fresh backend twin starts its own synced serial at 0, so the
@@ -865,9 +964,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes) {
-        MGPipeResourceRecord* record = FindResource(desc.Resource);
-        MOBILEGL_ASSERT(record != nullptr, "resource_respecify named {slot=%u, gen=%u}: %s",
-                        desc.Resource.Slot, desc.Resource.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* record = ResolveResource("resource_respecify", desc.Resource);
         if (record == nullptr) return;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
 
@@ -905,9 +1002,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyResourceFlushRange(const MGPFlushRange& record, const void* bytes) {
-        MGPipeResourceRecord* stored = FindResource(record.Res);
-        MOBILEGL_ASSERT(stored != nullptr, "resource_flush_range named {slot=%u, gen=%u}: %s",
-                        record.Res.Slot, record.Res.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* stored = ResolveResource("resource_flush_range", record.Res);
         if (stored == nullptr) return;
 
         const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
@@ -936,9 +1031,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyResourceReadback(const MGPReadback& record) {
-        MGPipeResourceRecord* stored = FindResource(record.Res);
-        MOBILEGL_ASSERT(stored != nullptr, "resource_readback named {slot=%u, gen=%u}: %s", record.Res.Slot,
-                        record.Res.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* stored = ResolveResource("resource_readback", record.Res);
         if (stored == nullptr) return;
 
         const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
@@ -951,6 +1044,9 @@ namespace MobileGL::MG_Pipe {
                                  static_cast<unsigned long long>(record.Size), stored->Desc.Width);
             return;
         }
+        // The readback READS the store this flag describes, so it is one of the calls whose
+        // answer would change silently the day a producer sets it (D-A4).
+        PinNoLiveHostWrites(*stored, record.Res, "resource_readback");
 
         // NO SERIAL MOVES. A readback does not mutate the resource; it produces host bytes out
         // of it. Bumping here would tell the backend twin its store had changed and buy a
@@ -974,9 +1070,7 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyResourceDestroy(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "resource_destroy on kind %u",
                         handle.Kind);
-        MGPipeResourceRecord* record = FindResource(handle.Handle);
-        MOBILEGL_ASSERT(record != nullptr, "resource_destroy named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
-                        handle.Handle.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* record = ResolveResource("resource_destroy", handle.Handle);
         if (record == nullptr) return;
 
         // The record is dropped WHOLE and the generation is kept. The client allocator owns
@@ -1007,10 +1101,13 @@ namespace MobileGL::MG_Pipe {
         // taken" it would be 0 by construction in monolith and could never go red.
         ++g_applier.MapPersistentRoundtrips;
 
-        MGPipeResourceRecord* record = FindResource(handle.Handle);
-        MOBILEGL_ASSERT(record != nullptr, "map_persistent named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
-                        handle.Handle.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* record = ResolveResource("map_persistent", handle.Handle);
         if (record == nullptr) return nullptr;
+        // THE ONE CALL A LATER PHASE ATTACHES THE PRODUCER TO. D-A4 and ARCHITECTURE.md name
+        // the persistent-map push as exactly where HasLiveHostWrites gets set, so this is the
+        // call the pin must sit on: a producer landing under it here is the semantic change
+        // the flag exists to announce, and the wire is what refuses to let it arrive unnamed.
+        PinNoLiveHostWrites(*record, handle.Handle, "map_persistent");
 
         // NO SERIAL MOVES and NO DESCRIPTOR CHANGES: the donation re-mints the backend's own
         // driver object, which is a server-local event that the backend's own id generation
@@ -1027,9 +1124,7 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::Buffer), "unmap_persistent on kind %u",
                         handle.Kind);
-        MGPipeResourceRecord* record = FindResource(handle.Handle);
-        MOBILEGL_ASSERT(record != nullptr, "unmap_persistent named {slot=%u, gen=%u}: %s", handle.Handle.Slot,
-                        handle.Handle.Gen, kResourceRefusalNote);
+        MGPipeResourceRecord* record = ResolveResource("unmap_persistent", handle.Handle);
         if (record == nullptr) return;
 
         // Never emitted by this phase's own paths - the donation is permanent for the store's
@@ -1062,17 +1157,25 @@ namespace MobileGL::MG_Pipe {
                         "create_vertex_elements named the reserved slot 0");
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
-        // THE COUNTS ARE CHECKED AGAINST THE BLOB BEFORE A BYTE OF IT IS TOUCHED, and the
-        // check is the record's own self-description: the blob is
-        // MGPVertexAttribWire[AttributeCount] immediately followed by
-        // MGPVertexBindingPointWire[BindingPointCount], so the two counts and the declared
-        // blob length are three statements of one fact and any disagreement between them makes
-        // the record unreadable. THIS is the reason the second view travels at all - a record
-        // that declares a BindingPointCount it does not carry would otherwise be a shape this
-        // gate had to police forever with nothing to police it against.
+        // THE COUNTS ARE CHECKED BEFORE A BYTE OF THE BLOB IS TOUCHED, and the check is the
+        // record's own self-description: the blob is MGPVertexAttribWire[AttributeCount]
+        // immediately followed by MGPVertexBindingPointWire[BindingPointCount]. THIS is the
+        // reason the second view travels at all - a record that declares a BindingPointCount
+        // it does not carry would otherwise be a shape this gate had to police forever with
+        // nothing to police it against.
         //
         // Both counts are bounded by GL's attribute limit, which is also the size of the two
         // arrays they are unpacked into, so the bound and the destination cannot drift apart.
+        // THE COUNTS ARE WHAT BOUNDS THE READ; the declared blob length is a cross-check.
+        //
+        // THE BLOB RULE IS THE SAME ONE resource_subdata IS HELD TO (SubDataBoxFault above,
+        // and MGPipeTypes.h states it on both records): a non-zero Blob.Size must be exactly
+        // the length the record's other fields describe, and a zero Blob.Size means "this
+        // record does not declare its blob" - which is what a monolith emission is, since the
+        // bytes travel beside the record through blobBytes and no MGPBlobRef is filled. One
+        // rule, both blob-carrying families: a transport that fills the field gets a real gate
+        // on the first truncated record, and a client that leaves it zero does not abort a
+        // verify build over a field it never used.
         const Uint64 attributeBytes = Uint64{desc.AttributeCount} * sizeof(MGPVertexAttribWire);
         const Uint64 bindingBytes = Uint64{desc.BindingPointCount} * sizeof(MGPVertexBindingPointWire);
         const Uint64 declared = attributeBytes + bindingBytes;
@@ -1081,8 +1184,8 @@ namespace MobileGL::MG_Pipe {
             fault = "the declared attribute count is above GL's attribute limit";
         } else if (desc.BindingPointCount > kMGPipeMaxVertexAttribs) {
             fault = "the declared binding-point count is above GL's attribute limit";
-        } else if (desc.Blob.Size != declared) {
-            fault = "the declared counts do not describe the blob's own byte length";
+        } else if (desc.Blob.Size != 0 && desc.Blob.Size != declared) {
+            fault = "the declared blob length is not the byte length the two counts describe";
         } else if (declared != 0 && blobBytes == nullptr) {
             fault = "a non-empty blob carries no bytes";
         }
@@ -1096,7 +1199,16 @@ namespace MobileGL::MG_Pipe {
             return;
         }
 
-        MGPipeVertexElementsRecord& record = RecordAt(g_applier.VertexElementsCsos, desc.Cso.Slot);
+        MGPipeVertexElementsRecord* recordAt =
+            RecordAt(g_applier.VertexElementsCsos, desc.Cso.Slot, kMGPipeMaxVertexElementsSlots);
+        if (recordAt == nullptr) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " create_vertex_elements {slot=%u, gen=%u}: the slot is outside the record "
+                                 "table's bound (%u)",
+                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxVertexElementsSlots);
+            return;
+        }
+        MGPipeVertexElementsRecord& record = *recordAt;
         // A RE-CREATE ON THE SAME HANDLE IS HOW A CONFIGURATION CHANGE TRAVELS - the handle is
         // minted per frontend vertex array and a generation moves only when a slot is reused -
         // so an existing record of the same identity keeps its serial and counts up from it. A
@@ -1139,9 +1251,9 @@ namespace MobileGL::MG_Pipe {
             g_applier.BoundVertexElements = kMGPipeNullHandle;
             return;
         }
-        const MGPipeVertexElementsRecord* record = FindVertexElements(handle.Handle);
-        MOBILEGL_ASSERT(record != nullptr, "bind_vertex_elements named a dead CSO {slot=%u, gen=%u}",
-                        handle.Handle.Slot, handle.Handle.Gen);
+        // A dead handle leaves the PREVIOUS binding untouched, which is bind_render_state's
+        // precedent for the same question, and is counted like every other refusal.
+        const MGPipeVertexElementsRecord* record = ResolveVertexElements("bind_vertex_elements", handle.Handle);
         if (record == nullptr) return;
         g_applier.BoundVertexElements = handle.Handle;
     }
@@ -1149,7 +1261,13 @@ namespace MobileGL::MG_Pipe {
     void MGPipeApplyDeleteVertexElements(const MGPHandleOnly& handle) {
         MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::VertexElementsCso),
                         "delete_vertex_elements on kind %u", handle.Kind);
-        MGPipeVertexElementsRecord* record = FindVertexElements(handle.Handle);
+        // A death notice on a record this applier does not have is the SAME refusal every
+        // other entry point makes, with the same verdict and the same counter: n1's
+        // inconsistency (a bare `return` with no assertion and no reason) is closed by routing
+        // it through the resolver rather than by giving it a private answer. It is also the
+        // one refusal a legal sequence produces - the teardown order beside
+        // kResourceRefusalNote - which is why it stays a no-op.
+        MGPipeVertexElementsRecord* record = ResolveVertexElements("delete_vertex_elements", handle.Handle);
         if (record == nullptr) return;
 
         // Dropped whole, generation kept, for resource_destroy's reason: the client allocator

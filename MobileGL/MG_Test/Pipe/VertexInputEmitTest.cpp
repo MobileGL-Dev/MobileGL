@@ -64,14 +64,23 @@ namespace {
 #endif
     }
 
-    // A FRESH CONTEXT IS A FRESH SERVER, and for this family that is not a nicety: the three
-    // serials are per-context MGGens and the backend's VAO twin decides "have I already
-    // synced this?" by comparing its own memo against them. A reset that carried a previous
-    // context's count over would let a twin believe it had synced a configuration it has
-    // never seen - the one shape the tracker's complete-state rule exists to forbid.
+    // A MAKE-CURRENT CLEARS THE WORKING STATE AND ADVANCES THE SERIALS, and for this family
+    // the difference between those two verbs is the whole of the rule. The backend's VAO twin
+    // decides "have I already synced this?" by comparing its own memo against the serials, and
+    // the twin does NOT die with a make-current - it is destroyed with the context, and D-G4
+    // deletes the wrapping-version-plus-identity patch that used to cover the gap. So there
+    // are three things a reset could do to a serial whose state it has just cleared and only
+    // one of them is right: carrying the count over lets a twin read clean over a cleared
+    // window immediately; RESTARTING AT 0 walks the counter back up through every value it has
+    // already stamped into a surviving twin, which is worse because it is silent and reliable;
+    // advancing announces the clearing and can never hand out a stamped value again.
     //
-    // The bound handle is null rather than "whatever was bound", the window is empty rather
-    // than 32 stale entries, and the fetch shift is 0 rather than the last draw's.
+    // So: the bound handle is null rather than "whatever was bound", the window is empty
+    // rather than 32 stale entries, the fetch shift is 0 rather than the last draw's - and the
+    // two serials have MOVED FORWARD. The applier's OBJECT records are a different scope
+    // entirely and are deliberately not touched here; ResourceEmit's
+    // TheObjectRecordsSurviveAMakeCurrentAndOnlyTheWorkingStateIsReset is where that is driven
+    // with live records in the table.
     TEST(VertexInputEmit, AResetApplierCarriesNoVertexInputStateOver) {
 #if !MOBILEGL_PIPE_PUSH
         GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
@@ -91,11 +100,14 @@ namespace {
         EXPECT_EQ(MGPipeApplier().VertexBufferStart, 0u);
         EXPECT_EQ(MGPipeApplier().VertexBufferCount, 0u);
         EXPECT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u);
-        EXPECT_EQ(MGPipeApplier().VertexBuffersSerial, 0u);
-        EXPECT_EQ(MGPipeApplier().IndexBufferSerial, 0u);
         EXPECT_EQ(MGPipeApplier().MapPersistentRoundtrips, 0u);
-        EXPECT_TRUE(MGPipeApplier().VertexElementsCsos.empty());
-        EXPECT_TRUE(MGPipeApplier().Resources.empty());
+        // MOVED FORWARD, not zeroed. 43 and 44 are the successors of the 42 and 43 above, and
+        // the property that matters is the strict inequality: no value this counter has
+        // already handed to a twin may ever come back.
+        EXPECT_EQ(MGPipeApplier().VertexBuffersSerial, 43u);
+        EXPECT_EQ(MGPipeApplier().IndexBufferSerial, 44u);
+        EXPECT_GT(MGPipeApplier().VertexBuffersSerial, 42u);
+        EXPECT_GT(MGPipeApplier().IndexBufferSerial, 43u);
 #endif
     }
 } // namespace

@@ -94,6 +94,24 @@ namespace MobileGL::MG_Pipe {
     // P3a: the applier's own records (D-G4)
     // ---------------------------------------------------------------------------------
 
+    // THE SLOT A CLIENT MAY NAME IS BOUNDED, and the bound lives here rather than at the
+    // client's allocator because the two tables below are grown BY the slot index. An array a
+    // handle indexes is the right shape for a dense slot space (MGPipeHandles.h) and the price
+    // of that shape is that one corrupt Uint32 in a payload otherwise arrives at an allocator
+    // as a four-billion-entry request from inside the bounds gate's own commit. A slot at or
+    // above these is Fatal{ProtocolCorruption} - the same verdict as any other record that
+    // would make the server act outside its own storage - and never a resize.
+    //
+    // The two numbers differ because the two records do: a resource record is descriptor-sized
+    // and a vertex-elements record carries both unpacked views at ~1.3 KB, so one bound would
+    // mean two very different worst cases. Both are far above what a GL application has live
+    // at once, and NEITHER IS EVER ALLOCATED BY BEING NAMED: the tables grow to the client's
+    // own dense high-water mark and no further, so the bound costs nothing until a record is
+    // already corrupt. Package C bounds handle.Slot the same way before
+    // BackendSlotTable::EntryAt, which resizes on a client-supplied index too.
+    inline constexpr Uint32 kMGPipeMaxResourceSlots = 1u << 20;
+    inline constexpr Uint32 kMGPipeMaxVertexElementsSlots = 1u << 16;
+
     // One record per live resource, indexed by MGPipeHandle::Slot, kind Buffer; slot 0 is the
     // reserved null handle and is never live.
     struct MGPipeResourceRecord {
@@ -173,11 +191,46 @@ namespace MobileGL::MG_Pipe {
         Uint32 PatchCarrierComparisons = 0;      // cumulative, armed set_patch_state calls only
         Uint32 PatchCarrierDivergences = 0;      // cumulative
 
-        // ---- P3a (D-G4). All per context, like everything above. ----
+        // ---- P3a (D-G4). ----
+        //
+        // THE TWO HALVES BELOW HAVE DIFFERENT LIVES, and MGPipeApplierReset is where the
+        // difference is spent: the OBJECT RECORDS describe GL objects and outlive a
+        // make-current; the WORKING STATE describes what the next draw fetches with and does
+        // not. Reading the whole block as "per context" is what dropped a shared buffer's
+        // record at every context switch and made the write that followed it disappear.
 
-        // Indexed by MGPipeHandle::Slot of kind Buffer / VertexElementsCso.
+        // ---- object records: indexed by MGPipeHandle::Slot of kind Buffer /
+        // VertexElementsCso, and NOT part of the working state.
+        //
+        // A GL object lives in a SHARE GROUP, not in a context: a buffer created before a
+        // make-current is the same buffer, with the same storage, after it, and its record is
+        // the only thing the backend has left to read that storage's extent and mutation
+        // serial out of (D-A4 re-keys IsBufferDrawClean onto exactly those two). Dropping the
+        // records at a make-current would therefore make every subsequent glBufferSubData on a
+        // pre-existing buffer resolve to nothing and be refused - a lost write, in a build
+        // where the refusal's assertion has compiled out.
+        //
+        // They are cleared by the object's OWN death signal - resource_destroy,
+        // delete_vertex_elements, which is what D-L makes the buffer's death crossing - and by
+        // MGPipeApplierReleaseObjectRecords when the served context and its applier go away.
+        // Nothing else.
         Vector<MGPipeResourceRecord> Resources;
         Vector<MGPipeVertexElementsRecord> VertexElementsCsos;
+
+        // Every call this applier REFUSED because it named a record this applier does not
+        // have: an unknown slot, a slot that is not live, or a generation that has moved on
+        // under it. The refusal is a defined no-op - nothing stored, nothing dispatched, no
+        // serial moved - for the reason written beside kResourceRefusalNote in PipeApply.cpp,
+        // but A NO-OP NOBODY CAN SEE IS A DROPPED CALL NOBODY CAN SEE: MOBILEGL_ASSERT compiles
+        // out at INFO, which is what all three gate builds and every shipped build are, so
+        // these two are how a unit case - and an operator reading a log - observe it in EVERY
+        // build. Per context, like the four render-state wire counters above.
+        Uint64 RefusedResourceCalls = 0;
+        Uint64 RefusedVertexInputCalls = 0;
+
+        // ---- working state: what the next draw fetches with. All of it is per context and
+        // all of it is cleared by MGPipeApplierReset, EXCEPT the two serials, which only ever
+        // advance (see there).
 
         // The last bind_vertex_elements. Null is legal and means "no VAO bound".
         MGPipeHandle BoundVertexElements = kMGPipeNullHandle;
@@ -196,12 +249,18 @@ namespace MobileGL::MG_Pipe {
         // answer.
         Uint32 VertexFetchBaseInstance = 0;
         // Server-owned MGGen, ++ on every applied set_vertex_buffers. It is what retires the
-        // backend twin's wrapping-Uint16-plus-identity patches.
+        // backend twin's wrapping-Uint16-plus-identity patches - which means IT MUST NEVER
+        // HAND OUT A VALUE TWICE. A reset ADVANCES it (the cleared window is itself a change
+        // the twin has to hear about) and never returns it to 0: a counter that restarts walks
+        // back through every value it has already stamped into a twin that outlived the
+        // switch, and the identity patch that used to close that hole is exactly what D-G4
+        // deletes on the twin's side.
         Uint64 VertexBuffersSerial = 0;
 
         // The last set_index_buffer. Independent of the vertex-elements configuration by
         // design (D5): the index slot is not part of a VAO's configuration version.
         MGPIndexBuffer IndexBuffer{};
+        // Advanced, never zeroed, for VertexBuffersSerial's reason.
         Uint64 IndexBufferSerial = 0;
 
         // Every map_persistent EMISSION, i.e. every acquisition attempt - mint OR decline -
@@ -216,9 +275,29 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's single applier. Under split there is one per served context.
     MGPipeApplierState& MGPipeApplier();
-    // Drops every CSO and the residual mirror. Context teardown, server reset, and the unit
-    // tests' per-case fixture.
+
+    // A MAKE-CURRENT, NOT A TEARDOWN - and the distinction is the whole of this function's
+    // contract. It runs on every change of the current GLContext (MGPipeTracker::Update resets
+    // the tracker whenever the context pointer moves, and the emitter calls this from the
+    // first walk that follows), including a make-current BACK to a context that is still alive
+    // and whose objects are all still there.
+    //
+    // So it drops what a returning context may not inherit - the render-state CSOs (whose
+    // client-side cache is dropped on the line above it, so both sides start over together),
+    // the residual mirror, and the vertex-input WORKING state - and it ADVANCES the two global
+    // vertex-input serials rather than zeroing them. It does NOT drop the resource or
+    // vertex-elements records: those describe share-group objects that the switch does not
+    // destroy, and dropping them is a dropped write on the far side of it.
     void MGPipeApplierReset();
+
+    // THE OTHER SCOPE: the served context is going away and its applier with it, so the object
+    // records go too. Under split that is one applier per served context and this is its
+    // teardown. In the monolith there is ONE applier behind every context, so this is
+    // deliberately wired to NOTHING: a record is cleared by its object's own death signal
+    // (resource_destroy, delete_vertex_elements) and the process's exit clears the rest.
+    // Calling it on one context's destruction in a monolith would drop every other context's
+    // records, which is the C1 hole in its other direction.
+    void MGPipeApplierReleaseObjectRecords();
 
     // ---------------------------------------------------------------------------------
     // The seven apply entry points (ARCHITECTURE.md 5.3, ROADMAP.md P2)
