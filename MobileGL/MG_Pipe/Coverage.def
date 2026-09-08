@@ -195,6 +195,46 @@
 // resolution reads the applier's BoundVertexElements instead of the object - at which point
 // PipeFill.cpp's EmittedCallSuppliesTheWholeField arm is where that is decided, deliberately
 // rather than silently by this row's presence.
+//
+// P4a ADDS SIX ROWS, and the same note applies to every one of them: each is SHAPE-ONLY, each
+// lands in PipeFill.cpp's EmittedCallSuppliesTheWholeField FALSE arm, and the decision is
+// taken THERE rather than inherited from a row's presence here. The rows and their calls:
+//
+//   GetFramebufferBindingSlot -> SetFramebufferState   GetProgramForDraw     -> SetDrawProgram
+//   GetImageTextureBinding    -> SetShaderImages       GetProgramForDispatch -> SetDispatchProgram
+//   GetTextureUnitObject      -> SetSamplerViews       GetMaxTouchedTextureUnit -> SetSamplerViews
+//
+// Five of the six are the pointer-storage case GetBoundVertexArray already documents: the
+// field is a BindingSlot<FramebufferObject>, an ImageTextureBinding, a TextureUnit or a
+// SharedPtr<ProgramObject> - frontend heap references - and the calls carry eight-byte
+// {slot, gen} handles and resolved descriptors. The applier has no way to produce a pointer
+// and P4a deliberately does not give it one; skipping the pull would leave every one of those
+// mirrors null on every draw of every push build. What retires those pulls is not a better
+// applier, it is the phase where the backend stops reading a frontend object at all.
+//
+// THE SIXTH IS A DIFFERENT ARGUMENT AND IT IS WORTH WRITING DOWN, because it looks like the
+// easy one. GetMaxTouchedTextureUnit is a plain Int, and set_sampler_views' Count IS that
+// value plus one (the second merge rule: a high-water mark is directly the count argument).
+// But the set is SUPPRESSED on an unchanged content hash and is emitted only when bit 12 fires,
+// and bit 12's shutter is Mix(textureContent, GetTextureBindGeneration()) - which does NOT
+// move on a redundant re-bind of the object a unit already holds, while the high-water mark
+// DOES (see NoteUnitTouched in DirtySurface.def). So the applier's Count can lag the frontend's
+// high-water mark by exactly the case the suppressor exists to swallow, and the field keeps
+// being pulled. Narrowing that is P3b/P4b's, with the backend debounce it takes over.
+//
+// FOUR ACCESSORS THAT MAP TO A P4a CALL ARE DELIBERATELY NOT HERE, for GetPixelStoreParameters'
+// reason - a row here says "this field is supplied", and for these it would be a half-truth:
+//   GetActiveTextureUnit  - glActiveTexture's selector. set_sampler_views carries the RESOLVED
+//     per-unit set and no active-unit selector at all; nothing on the wire carries it.
+//   GetTextureContextId   - a context identity the backend keys its own tables on. No call
+//     carries it and none should: it is the server's question about the client, not state.
+//   GetTextureBindGeneration / GetSamplingResolutionGeneration - frontend SHUTTERS. What
+//     replaces them server-side is the applier's own Serial, which is a different value with a
+//     different owner; claiming the sets supply the generations would make the fill loop skip
+//     two counters no record carries.
+// And GetTextureObject / GetProgramObject are STICKY (see MGP_COVERAGE_STICKY_LIST): they are
+// keyed by GL name, they are object lookups rather than verb state, and a forwarded field has
+// no storage for an emitted call to supply.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
     X(GetBlendColor,                            SetDynamicState)         \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
@@ -210,8 +250,11 @@
     X(GetDepthFunc,                             CreateRenderState)       \
     X(GetDepthMask,                             CreateRenderState)       \
     X(GetDepthRangeIndexed,                     SetDynamicState)         \
+    X(GetFramebufferBindingSlot,                SetFramebufferState)     \
+    X(GetImageTextureBinding,                   SetShaderImages)         \
     X(GetLineWidth,                             SetDynamicState)         \
     X(GetLogicOp,                               CreateRenderState)       \
+    X(GetMaxTouchedTextureUnit,                 SetSamplerViews)         \
     X(GetMinSampleShadingValue,                 CreateRenderState)       \
     X(GetPatchDefaultInnerLevel,                SetPatchState)           \
     X(GetPatchDefaultOuterLevel,                SetPatchState)           \
@@ -221,11 +264,14 @@
     X(GetPolygonOffsetFactor,                   SetDynamicState)         \
     X(GetPolygonOffsetUnits,                    SetDynamicState)         \
     X(GetPrimitiveRestartIndex,                 SetDynamicState)         \
+    X(GetProgramForDispatch,                    SetDispatchProgram)      \
+    X(GetProgramForDraw,                        SetDrawProgram)          \
     X(GetProvokingVertexMode,                   CreateRenderState)       \
     X(GetRenderStateParameters,                 CreateRenderState)       \
     X(GetRenderStateParametersVersion,          BindRenderState)         \
     X(GetScissorBox,                            SetDynamicState)         \
     X(GetStencilState,                          CreateRenderState)       \
+    X(GetTextureUnitObject,                     SetSamplerViews)         \
     X(GetViewport,                              SetDynamicState)         \
     X(GetViewportIndexed,                       SetDynamicState)         \
     X(IsCapabilityEnabled,                      CreateRenderState)       \

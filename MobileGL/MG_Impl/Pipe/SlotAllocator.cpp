@@ -35,6 +35,22 @@ namespace MobileGL::MG_Pipe {
         return m_kinds[index < kKindCount ? index : 0];
     }
 
+    MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(KindState& state, MGPipeKind kind,
+                                                                 Uint32 slot) {
+        if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(slot)) {
+            const SizeT index = slot - kMGPipeShaderCsoCompositeSlotBase;
+            if (index >= state.BandSlots.size()) return nullptr;
+            return &state.BandSlots[index];
+        }
+        if (slot >= state.Slots.size()) return nullptr;
+        return &state.Slots[slot];
+    }
+
+    const MGPipeSlotAllocator::SlotState*
+    MGPipeSlotAllocator::EntryOf(const KindState& state, MGPipeKind kind, Uint32 slot) {
+        return EntryOf(const_cast<KindState&>(state), kind, slot);
+    }
+
     MGPipeHandle MGPipeSlotAllocator::Allocate(MGPipeKind kind) {
         KindState& state = StateOf(kind);
         if (state.Slots.empty()) {
@@ -94,14 +110,67 @@ namespace MobileGL::MG_Pipe {
         return handle;
     }
 
+    MGPipeHandle MGPipeSlotAllocator::AllocateComposite(Uint64 lifetimeId) {
+        // P4a, D-H7. The mirror image of Allocate() above, restricted to the band that one
+        // refuses, and kept in a table of its own so both spaces stay DENSE: the band's base
+        // is 983040, and minting one composite into the slot-indexed vector would allocate
+        // ~23 MB of SlotState for a single program pipeline.
+        KindState& state = StateOf(MGPipeKind::ShaderCso);
+
+        Uint32 slot = 0;
+        Bool reused = false;
+        if (!state.BandFreeList.empty()) {
+            slot = state.BandFreeList.back();
+            state.BandFreeList.pop_back();
+            reused = true;
+        }
+
+        if (!reused) {
+            const SizeT next = kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size();
+            slot = static_cast<Uint32>(next);
+            // The band's own exhaustion assert, mirroring Allocate()'s: a composite that
+            // cannot be minted is a NAMED failure, not a silent fall-through into the ordinary
+            // program slots, which is exactly what reserving a band rather than setting a flag
+            // buys.
+            MOBILEGL_ASSERT(next < kMGPipeShaderCsoSlotLimit,
+                            "the MGPipe ShaderCso COMPOSITE band is exhausted at slot %zu; a "
+                            "program-pipeline composite cannot be minted and must not take an "
+                            "ordinary program's slot",
+                            next);
+            if (next >= kMGPipeShaderCsoSlotLimit) return kMGPipeNullHandle;
+            state.BandSlots.emplace_back();
+        }
+
+        SlotState* entry = EntryOf(state, MGPipeKind::ShaderCso, slot);
+        if (entry == nullptr) return kMGPipeNullHandle;
+        if (entry->EverHandedOut) {
+            MOBILEGL_ASSERT(entry->Gen != ~Uint32{0},
+                            "MGPipe handle generation wrapped on the ShaderCso composite band, "
+                            "slot %u; {slot, gen} is no longer unique",
+                            slot);
+            ++entry->Gen;
+        }
+        entry->EverHandedOut = true;
+        entry->Live = true;
+        entry->LifetimeId = lifetimeId;
+        ++state.LiveCount;
+        if (lifetimeId != 0) {
+            MOBILEGL_ASSERT(state.ByLifetimeId.find(lifetimeId) == state.ByLifetimeId.end(),
+                            "lifetime id %llu already owns a ShaderCso slot",
+                            static_cast<unsigned long long>(lifetimeId));
+            state.ByLifetimeId[lifetimeId] = slot;
+        }
+        return MGPipeHandle{slot, entry->Gen};
+    }
+
     MGPipeHandle MGPipeSlotAllocator::FindByLifetimeId(MGPipeKind kind, Uint64 lifetimeId) const {
         if (lifetimeId == 0) return kMGPipeNullHandle;
         const KindState& state = StateOf(kind);
         const auto it = state.ByLifetimeId.find(lifetimeId);
         if (it == state.ByLifetimeId.end()) return kMGPipeNullHandle;
-        const Uint32 slot = it->second;
-        if (slot >= state.Slots.size() || !state.Slots[slot].Live) return kMGPipeNullHandle;
-        return MGPipeHandle{slot, state.Slots[slot].Gen};
+        const SlotState* entry = EntryOf(state, kind, it->second);
+        if (entry == nullptr || !entry->Live) return kMGPipeNullHandle;
+        return MGPipeHandle{it->second, entry->Gen};
     }
 
     MGPipeHandle MGPipeSlotAllocator::Acquire(MGPipeKind kind, Uint64 lifetimeId) {
@@ -112,56 +181,68 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeSlotAllocator::Free(MGPipeKind kind, MGPipeHandle handle) {
         KindState& state = StateOf(kind);
-        if (handle.Slot >= state.Slots.size()) return;
-        SlotState& entry = state.Slots[handle.Slot];
+        SlotState* entry = EntryOf(state, kind, handle.Slot);
+        if (entry == nullptr) return;
         // A stale handle must not free the slot its successor now owns - that is the whole
-        // reason the generation is in the key.
-        if (!entry.Live || entry.Gen != handle.Gen) return;
-        if (entry.LifetimeId != 0) {
-            const auto it = state.ByLifetimeId.find(entry.LifetimeId);
+        // reason the generation is in the key. It is also what makes the SECOND of a
+        // composite's two independent release paths a proven no-op.
+        if (!entry->Live || entry->Gen != handle.Gen) return;
+        if (entry->LifetimeId != 0) {
+            const auto it = state.ByLifetimeId.find(entry->LifetimeId);
             if (it != state.ByLifetimeId.end() && it->second == handle.Slot) {
                 state.ByLifetimeId.erase(it);
             }
         }
-        entry.Live = false;
-        entry.LifetimeId = 0;
+        entry->Live = false;
+        entry->LifetimeId = 0;
         --state.LiveCount;
-        state.FreeList.push_back(handle.Slot);
+        if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(handle.Slot)) {
+            state.BandFreeList.push_back(handle.Slot);
+        } else {
+            state.FreeList.push_back(handle.Slot);
+        }
     }
 
     Bool MGPipeSlotAllocator::IsLive(MGPipeKind kind, MGPipeHandle handle) const {
-        const KindState& state = StateOf(kind);
-        if (handle.Slot >= state.Slots.size()) return false;
-        const SlotState& entry = state.Slots[handle.Slot];
-        return entry.Live && entry.Gen == handle.Gen;
+        const SlotState* entry = EntryOf(StateOf(kind), kind, handle.Slot);
+        return entry != nullptr && entry->Live && entry->Gen == handle.Gen;
     }
 
     Uint32 MGPipeSlotAllocator::GenOfSlot(MGPipeKind kind, Uint32 slot) const {
-        const KindState& state = StateOf(kind);
-        if (slot >= state.Slots.size()) return 0;
-        return state.Slots[slot].Gen;
+        const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+        return entry != nullptr ? entry->Gen : 0;
     }
 
     Uint64 MGPipeSlotAllocator::LifetimeIdOfSlot(MGPipeKind kind, Uint32 slot) const {
-        const KindState& state = StateOf(kind);
-        if (slot >= state.Slots.size()) return 0;
-        return state.Slots[slot].LifetimeId;
+        const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+        return entry != nullptr ? entry->LifetimeId : 0;
     }
 
     Uint32 MGPipeSlotAllocator::HighWater(MGPipeKind kind) const {
-        return static_cast<Uint32>(StateOf(kind).Slots.size());
+        const KindState& state = StateOf(kind);
+        // Literally "one past the highest slot ever handed out", composites included, so a
+        // leaked composite slot moves it exactly as a leaked ordinary one does - which is what
+        // the per-kind leak cases assert on and what would otherwise make the composite case
+        // green for ever and mean nothing.
+        if (!state.BandSlots.empty()) {
+            return static_cast<Uint32>(kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size());
+        }
+        return static_cast<Uint32>(state.Slots.size());
     }
 
     Uint32 MGPipeSlotAllocator::LiveCount(MGPipeKind kind) const { return StateOf(kind).LiveCount; }
 
     Uint32 MGPipeSlotAllocator::FreeCount(MGPipeKind kind) const {
-        return static_cast<Uint32>(StateOf(kind).FreeList.size());
+        const KindState& state = StateOf(kind);
+        return static_cast<Uint32>(state.FreeList.size() + state.BandFreeList.size());
     }
 
     void MGPipeSlotAllocator::Reset() {
         for (KindState& state : m_kinds) {
             state.Slots.clear();
             state.FreeList.clear();
+            state.BandSlots.clear();
+            state.BandFreeList.clear();
             state.ByLifetimeId.clear();
             state.LiveCount = 0;
         }

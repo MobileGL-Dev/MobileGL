@@ -308,8 +308,13 @@ enum class MGPipeFieldEmitter : Uint8 {
     BindRenderState,
     BindVertexElements,
     CreateRenderState,
+    SetDispatchProgram,
+    SetDrawProgram,
     SetDynamicState,
+    SetFramebufferState,
     SetPatchState,
+    SetSamplerViews,
+    SetShaderImages,
     SetVertexAttribDefaults,
 };
 
@@ -318,8 +323,13 @@ inline constexpr const char* kMGPipeFieldEmitterNames[] = {
     "BindRenderState",
     "BindVertexElements",
     "CreateRenderState",
+    "SetDispatchProgram",
+    "SetDrawProgram",
     "SetDynamicState",
+    "SetFramebufferState",
     "SetPatchState",
+    "SetSamplerViews",
+    "SetShaderImages",
     "SetVertexAttribDefaults",
 };
 
@@ -344,11 +354,11 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::CreateRenderState, // GetDepthFunc
     MGPipeFieldEmitter::CreateRenderState, // GetDepthMask
     MGPipeFieldEmitter::SetDynamicState, // GetDepthRangeIndexed
-    MGPipeFieldEmitter::kNone, // GetFramebufferBindingSlot
-    MGPipeFieldEmitter::kNone, // GetImageTextureBinding
+    MGPipeFieldEmitter::SetFramebufferState, // GetFramebufferBindingSlot
+    MGPipeFieldEmitter::SetShaderImages, // GetImageTextureBinding
     MGPipeFieldEmitter::SetDynamicState, // GetLineWidth
     MGPipeFieldEmitter::CreateRenderState, // GetLogicOp
-    MGPipeFieldEmitter::kNone, // GetMaxTouchedTextureUnit
+    MGPipeFieldEmitter::SetSamplerViews, // GetMaxTouchedTextureUnit
     MGPipeFieldEmitter::CreateRenderState, // GetMinSampleShadingValue
     MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultInnerLevel
     MGPipeFieldEmitter::SetPatchState, // GetPatchDefaultOuterLevel
@@ -359,8 +369,8 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetFactor
     MGPipeFieldEmitter::SetDynamicState, // GetPolygonOffsetUnits
     MGPipeFieldEmitter::SetDynamicState, // GetPrimitiveRestartIndex
-    MGPipeFieldEmitter::kNone, // GetProgramForDispatch
-    MGPipeFieldEmitter::kNone, // GetProgramForDraw
+    MGPipeFieldEmitter::SetDispatchProgram, // GetProgramForDispatch
+    MGPipeFieldEmitter::SetDrawProgram, // GetProgramForDraw
     MGPipeFieldEmitter::kNone, // GetProgramObject
     MGPipeFieldEmitter::CreateRenderState, // GetProvokingVertexMode
     MGPipeFieldEmitter::CreateRenderState, // GetRenderStateParameters
@@ -371,7 +381,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetTextureBindGeneration
     MGPipeFieldEmitter::kNone, // GetTextureContextId
     MGPipeFieldEmitter::kNone, // GetTextureObject
-    MGPipeFieldEmitter::kNone, // GetTextureUnitObject
+    MGPipeFieldEmitter::SetSamplerViews, // GetTextureUnitObject
     MGPipeFieldEmitter::kNone, // GetTransformFeedbackCapturedVertices
     MGPipeFieldEmitter::kNone, // GetTransformFeedbackGeneration
     MGPipeFieldEmitter::kNone, // GetTransformFeedbackPausedPrimitiveCounter
@@ -388,7 +398,7 @@ inline constexpr MGPipeFieldEmitter kMGPipeFieldEmittedBy[kMGPipeInputFieldCount
     MGPipeFieldEmitter::kNone, // GetBoundTransformFeedbackLifetimeId
     MGPipeFieldEmitter::kNone, // HasOpenTransformFeedbackSpan
 };
-inline constexpr SizeT kMGPipeEmittedFieldCount = 34;
+inline constexpr SizeT kMGPipeEmittedFieldCount = 40;
 
 struct MGPipeFilledState {
     Uint64 CurrentVerbSerial;

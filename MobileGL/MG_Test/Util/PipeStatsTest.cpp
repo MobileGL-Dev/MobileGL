@@ -160,6 +160,17 @@ namespace {
         // the storage-regrow gate reads, so its short name is pinned where an operator's
         // grep would break.
         EXPECT_NE(line.find("mpr="), String::npos) << line;
+        // P4a's emission bracket, and its short names are pinned for exactly the same reason:
+        // fbe/sve/sse/sie are the four suppressors' hit rates and ctu is the client half of
+        // the upload-shape comparison, so a rename breaks every recorded reading of them.
+        EXPECT_NE(line.find("emit[fbe="), String::npos) << line;
+        EXPECT_NE(line.find("sve="), String::npos) << line;
+        EXPECT_NE(line.find("sse="), String::npos) << line;
+        EXPECT_NE(line.find("sie="), String::npos) << line;
+        EXPECT_NE(line.find("ctu="), String::npos) << line;
+        // And the new ByteClass rides the ordinary bytes[] bracket under a short name that is
+        // NOT "csob": the cso[] bracket above already prints csob= for the CSO bind count.
+        EXPECT_NE(line.find("csob-blob="), String::npos) << line;
 #endif
     }
 
@@ -281,6 +292,18 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoMints), "render-state-cso-mints");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::RenderStateCsoBinds), "render-state-cso-binds");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::MapPersistentRoundtrips), "map-persistent-roundtrips");
+        // P4a's six. The four set counters are how the suppressors' hit rates are read, ctu is
+        // the client-side twin of Espryt's tex-upload-emissions - a divergence between the two
+        // is the only way an upload-SHAPE regression becomes visible, because SSIM cannot see
+        // the box/rect split at all - and cso-blob-bytes is the ByteClass that discharges the
+        // summary line's missing CSO-blob row.
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::FramebufferEmissions), "framebuffer-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::SamplerViewEmissions), "sampler-view-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::SamplerStateEmissions), "sampler-state-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::ShaderImageEmissions), "shader-image-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::ClientTextureUploadEmissions),
+                     "client-tex-upload-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::ByteClass::CsoBlobBytes), "cso-blob-bytes");
 #endif
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");

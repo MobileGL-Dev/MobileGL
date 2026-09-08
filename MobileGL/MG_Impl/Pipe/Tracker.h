@@ -20,9 +20,17 @@
 //
 // WHAT IT DOES. One Uint32 dirty mask per verb, one bit per row of ARCHITECTURE.md 5.2,
 // computed by comparing a shutter against what the tracker last pushed. P2 emitted for bits
-// 0..4 (the value-class ones); P3a adds bits 5, 9 and 10 - the vertex-input family - and the
-// rest are still computed, latched and counted so the per-bit fire rate is a measurement
-// rather than a plan, with their fields going through the residual fill until P3b/P4a/P4b.
+// 0..4 (the value-class ones); P3a adds bits 5, 9 and 10 - the vertex-input family - and P4a
+// adds SEVEN: 6, 7 and 8 (the program family), 11 (the framebuffer) and 12, 13 and 14 (the
+// three unit sets). Only bits 15, 16 and 17 - the const-buffer, shader-buffer and
+// stream-output sets - are still computed, latched and counted without an emitter, so the
+// per-bit fire rate is a measurement rather than a plan and their fields go through the
+// residual fill until P4b.
+//
+// P4a NARROWS NOTHING AND WIDENS ONE THING: bit 11's shutter gains the READ framebuffer
+// binding slot's version, because set_framebuffer_state is emitted per bound TARGET and a
+// glBindFramebuffer(GL_READ_FRAMEBUFFER, ...) moved no shutter at all before. Over-firing is
+// free; that was an under-fire.
 //
 // WHY EVERY SHUTTER OVER-FIRES. A bit that fires too often costs one extra push. A bit
 // that fires too rarely renders stale, and ARCHITECTURE.md 13.2 names that as the
@@ -61,22 +69,24 @@ namespace MobileGL::MG_Pipe {
         NewPixelPack,            // PixelStoreParameters (pack)         -> set_pixel_pack_state
         NewPatchState,           // the patch trio, NaN legal           -> set_patch_state
         NewVertexAttribDefaults, // glVertexAttrib* defaults            -> set_vertex_attrib_defaults
-        // ---- value class: NEW_VERTEX_ELEMENTS is emitted from P3a; the other three are
-        // still computed and counted, and are emitted from P3b/P4a on ----
+        // ---- value class: NEW_VERTEX_ELEMENTS is emitted from P3a and the other three from
+        // P4a - the program family, one subsystem, three bits because the frontend moves them
+        // as three separate events ----
         NewVertexElements,       // the bound VAO's attribute configuration -> create/bind_vertex_elements
-        NewShader,               // the current program's link version
-        NewShaderBindings,       // image units, block bindings, uniform write set
-        NewGlobalConstants,      // the default-uniform-block image
+        NewShader,               // the current program's link version -> create/bind_shader_state,
+                                 //    set_draw_program, set_dispatch_program (P4a)
+        NewShaderBindings,       // image units, block bindings, uniform write set (P4a)
+        NewGlobalConstants,      // the default-uniform-block image -> set_global_constants (P4a)
         // ---- object class. THE FIRST TWO ARE P3a's, not P3b/P4b's: the roadmap puts
         // set_vertex_buffers and set_index_buffer in the same phase as the vertex-elements
-        // trio, and this comment said otherwise until the commit that wired them. The rest
-        // are still computed and counted only. ----
+        // trio, and this comment said otherwise until the commit that wired them. THE NEXT
+        // FOUR ARE P4a's. The last three are still computed and counted only, until P4b. ----
         NewVertexBuffers,        // -> set_vertex_buffers (P3a)
         NewIndexBuffer,          // -> set_index_buffer   (P3a)
-        NewFramebuffer,
-        NewSamplerViews,
-        NewSamplers,
-        NewShaderImages,
+        NewFramebuffer,          // -> set_framebuffer_state, per bound target (P4a)
+        NewSamplerViews,         // -> set_sampler_views   (P4a)
+        NewSamplers,             // -> bind_sampler_states (P4a)
+        NewShaderImages,         // -> set_shader_images   (P4a)
         NewConstBuffers,
         NewShaderBuffers,
         NewSoTargets,
@@ -102,6 +112,22 @@ namespace MobileGL::MG_Pipe {
     inline constexpr Uint32 kMGPipeDirtyEmittedAtP3a =
         kMGPipeDirtyEmittedAtP2 | MGPipeDirtyBit(MGPipeDirty::NewVertexElements) |
         MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers) | MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer);
+
+    // The SEVEN P4a adds, across FOUR subsystems: bits 6/7/8 are the program family, 11 the
+    // framebuffer, and 12/13/14 the sampler-view / sampler-state / image-unit sets. Added
+    // rather than edited into the two above, for the reason those two exist: each phase's
+    // constant survives as the next phase's A/B control and as what a test compares the
+    // subsystem map against.
+    //
+    // EVERY ONE OF THESE SHUTTERS WAS ALREADY COMPUTED, LATCHED AND COUNTED before P4a; what
+    // P4a adds is an emitter for them. That is why this is a one-line constant and not seven
+    // new shutters - and it is also why the two narrowings below are stated as requirements.
+    inline constexpr Uint32 kMGPipeDirtyEmittedAtP4a =
+        kMGPipeDirtyEmittedAtP3a | MGPipeDirtyBit(MGPipeDirty::NewShader) |
+        MGPipeDirtyBit(MGPipeDirty::NewShaderBindings) |
+        MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants) |
+        MGPipeDirtyBit(MGPipeDirty::NewFramebuffer) | MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
+        MGPipeDirtyBit(MGPipeDirty::NewSamplers) | MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
 
     inline constexpr const char* kMGPipeDirtyNames[kMGPipeDirtyCount] = {
         "NEW_RENDER_STATE",
@@ -146,8 +172,33 @@ namespace MobileGL::MG_Pipe {
         case MGPipeDirty::NewVertexBuffers:
         case MGPipeDirty::NewIndexBuffer:
             return kMGPipeSubsystemVertexInput;
+        // P4a's seven, across four subsystems. FOUR AND NOT ONE for P3a's reason one level
+        // out: a framebuffer path that regressed, a texture path that regressed, a sampler
+        // path that regressed and a program path that regressed are four different findings.
+        //
+        // The program family is three bits because the frontend moves them separately - a
+        // relink, a binding change and a uniform write are three events - but one subsystem,
+        // because an operator switching programs off has to get the whole family's legacy arm.
+        // Same for the three unit sets: create_sampler_state, create_sampler_view and the
+        // three kVarTail sets are one family, and half of it is not a control.
+        case MGPipeDirty::NewShader:
+        case MGPipeDirty::NewShaderBindings:
+        case MGPipeDirty::NewGlobalConstants:
+            return kMGPipeSubsystemPrograms;
+        case MGPipeDirty::NewFramebuffer:
+            return kMGPipeSubsystemFramebuffer;
+        case MGPipeDirty::NewSamplerViews:
+        case MGPipeDirty::NewSamplers:
+        case MGPipeDirty::NewShaderImages:
+            return kMGPipeSubsystemSamplers;
+        // NO BIT NAMES kMGPipeSubsystemTextureResources, and that is deliberate rather than an
+        // omission: the texture and renderbuffer resource_* calls and set_texture_params are
+        // dispatched from the GL entry points that cause them - a constructor, a storage
+        // definition, a glTexParameter - not from a dirty walk, exactly as P3a's buffer family
+        // is. Bit 10 gates those dispatch sites; there is no dirty bit to map onto it and
+        // there must not be one, or the emission would be gated twice and disagree with itself.
         default:
-            // The remaining bits have no call of their own until P3b/P4a/P4b, so there is no
+            // The remaining bits have no call of their own until P4b, so there is no
             // subsystem to switch and the residual fill keeps supplying their fields.
             return 0;
         }
@@ -300,10 +351,36 @@ namespace MobileGL::MG_Pipe {
                                                 indexObject ? indexObject->GetLifetimeId() : 0);
             }
             now[Index(MGPipeDirty::NewIndexBuffer)] = MGPipeMixShutter(vaoIdentity, indexShutter);
+            // Bit 11, WIDENED AT P4a AND THIS IS A REQUIREMENT RATHER THAN AN OPTION. The
+            // shutter observed the DRAW binding slot only, so glBindFramebuffer(
+            // GL_READ_FRAMEBUFFER, ...) moved nothing at all - which was harmless while
+            // nothing was emitted for the bit and is an UNDER-FIRE the moment P4a emits
+            // set_framebuffer_state per bound target (D-C2): the read record would never be
+            // sent and the server's ReadSurface would stay the previous framebuffer's. Over-
+            // firing costs one extra push; under-firing renders stale, and this file's own
+            // rule is that under-firing is the dangerous direction.
+            //
+            // A RENDERBUFFER RESPECIFY IS STILL INVISIBLE HERE, and deliberately so:
+            // RenderbufferObject's SetInternalFormat / AllocateStorage / SetSamples bump no
+            // version and raise no notice, so re-storaging an ALREADY-ATTACHED renderbuffer
+            // moves neither half of this shutter. That hole is closed by emitting
+            // resource_respecify straight from the storage entry point - not by widening this
+            // shutter and not by adding a version counter to RenderbufferObject, which would
+            // resize the pull build's object and break G1.
+            //
+            // AND A TRAP THE NEXT NARROWING WOULD WALK INTO, recorded here because it is
+            // invisible from the shutter: FramebufferObject::SetDrawBuffer versions the VALUE
+            // being written rather than the index being written TO - it calls
+            // BumpAttachmentVersion(buffer). The object version and the aggregate still move,
+            // so THIS shutter is safe; a narrower one built on m_attachmentVersions would not
+            // be, and P4a must not build one.
             now[Index(MGPipeDirty::NewFramebuffer)] = MGPipeMixShutter(
-                ctx.GetAnyFramebufferAttachmentGeneration(),
-                m_framebufferBind.Observe(
-                    ctx.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetVersion()));
+                MGPipeMixShutter(
+                    ctx.GetAnyFramebufferAttachmentGeneration(),
+                    m_framebufferBind.Observe(
+                        ctx.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetVersion())),
+                m_readFramebufferBind.Observe(
+                    ctx.GetFramebufferBindingSlot(FramebufferTarget::Read).GetVersion()));
             now[Index(MGPipeDirty::NewSamplerViews)] =
                 MGPipeMixShutter(textureContent, ctx.GetTextureBindGeneration());
             now[Index(MGPipeDirty::NewSamplers)] =
@@ -380,6 +457,7 @@ namespace MobileGL::MG_Pipe {
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
+            m_readFramebufferBind.Reset();
             m_indexSlotVersion.Reset();
             m_pack = PixelStoreParameters{};
             m_patch = PatchTrio{};
@@ -469,6 +547,12 @@ namespace MobileGL::MG_Pipe {
         // The draw framebuffer BINDING slot version, widened for the same reason: a Uint16
         // that wrapped would let a composite shutter repeat and cost a missed fire.
         MGPipeWidenedCounter m_framebufferBind;
+        // P4a: the READ framebuffer binding slot's version, its own counter for the same
+        // reason the draw one exists. Two counters rather than one over both slots: a single
+        // widened counter fed two independent Uint16s reads a decrease as a wrap on every
+        // alternation and would add 65536 per switch, which costs nothing in correctness
+        // (over-firing) but makes the high word meaningless.
+        MGPipeWidenedCounter m_readFramebufferBind;
         // The BOUND VAO's element-array slot version, widened for the same reason. One
         // counter over a slot that changes with the bound VAO: a stale high word can only
         // ADD a fire, never drop one, and the VAO identity in the same mix is what makes a

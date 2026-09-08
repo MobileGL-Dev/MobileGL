@@ -83,7 +83,30 @@ namespace MobileGL::MG_Pipe {
     // the other.
     inline constexpr Uint64 kMGPipeSubsystemResources = 1ull << 7;
     inline constexpr Uint64 kMGPipeSubsystemVertexInput = 1ull << 8;
-    // bits 9..62 reserved for the later phases, allocated in ROADMAP order.
+    // P4a's four. FOUR AND NOT ONE, for P3a's reason one level out: a framebuffer path that
+    // regressed, a texture path that regressed, a sampler path that regressed and a program
+    // path that regressed are four different findings, and clearing one must not disarm the
+    // other three.
+    //
+    // THREE OF THEM HAVE A DEPENDENCY and it is diagnosed at the first use, never half-run -
+    // one Resolve<Family>SubsystemArm per family beside the backend's existing
+    // ResolveResourceSubsystemArm, modelled on the bit-8-requires-bit-7 refusal it already
+    // ships, and lazy rather than at bring-up because a pre-flight child dying on a signal
+    // makes a whole lane SKIP green: bit 11 requires bit 10 because
+    // every MGPBoundView::Texture and MGPImageView::Res names a Texture handle and only bit 10
+    // puts one in the slot table; bit 9 requires bit 10 because MGPSurface::Res does; and bit
+    // 10 requires bit 7 because a buffer texture's BufferForTexBuffer names a Buffer handle.
+    // The mirror pairs (10 without 11, 10 without 9, 7 without 10) are all fine, and are
+    // stated as such because an unreachable branch that says something different is how the
+    // reachable one drifts. Bit 12 depends on nothing.
+    inline constexpr Uint64 kMGPipeSubsystemFramebuffer = 1ull << 9;       // set_framebuffer_state
+    inline constexpr Uint64 kMGPipeSubsystemTextureResources = 1ull << 10; // texture + renderbuffer
+                                                                          // resource_*, set_texture_params
+    inline constexpr Uint64 kMGPipeSubsystemSamplers = 1ull << 11;         // sampler CSO, sampler view,
+                                                                          // the three unit sets
+    inline constexpr Uint64 kMGPipeSubsystemPrograms = 1ull << 12;         // shader CSO, draw/dispatch
+                                                                          // program, global constants
+    // bits 13..62 reserved for the later phases, allocated in ROADMAP order.
     // NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of CSOs, so
     // every pipeline-version change mints a fresh CSO and the map is never probed. This is
     // the negative control the whole CSO design is measured against (ROADMAP.md P2).
@@ -93,6 +116,14 @@ namespace MobileGL::MG_Pipe {
     // "everything P2 had and nothing of mine" arm is spelled MOBILEGL_PIPE_PUSH=0x7f.
     inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP2 = 0x7full;   // bits 0..6
     inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP3a = 0x1ffull; // bits 0..8
+    // P4a's, and the two above are NOT edited: 0x1ff is P4a's T2 arm and its "everything P3a
+    // had and nothing of mine" control, exactly as 0x7f was P3a's.
+    inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP4a = 0x1fffull; // bits 0..12
+    static_assert(kMGPipeSubsystemsMigratedAtP4a ==
+                      (kMGPipeSubsystemsMigratedAtP3a | kMGPipeSubsystemFramebuffer |
+                       kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
+                       kMGPipeSubsystemPrograms),
+                  "the P4a phase constant and P4a's four subsystem bits have drifted");
 
     // The catalogue itself. Only macros, so it is safe to expand inside the namespace, and
     // consumers (the unit test, later the transport) get MGP_CALL_LIST from this header.

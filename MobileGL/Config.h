@@ -322,16 +322,25 @@ namespace MobileGL::MG_Config {
         // 0 - the only shipped value until the migration lands - is "pull everything",
         // i.e. exactly today's behaviour, and is the default of a PULL build, where the
         // knob is meaningless anyway. A PUSH build defaults to every subsystem migrated so
-        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP3a), so MOBILEGL_PIPE_PUSH=0 in the
-        // environment is the all-pull control and 0x7f (kMGPipeSubsystemsMigratedAtP2) is
-        // the "P2 only" control P3a's A/B is run against. Accepts decimal or 0x-prefixed
-        // hex, and operators pass it as hex, so the bits are listed here (MG_Pipe/MGPipe.h
-        // owns them):
+        // far (MG_Pipe::kMGPipeSubsystemsMigratedAtP4a), so MOBILEGL_PIPE_PUSH=0 in the
+        // environment is the all-pull control and 0x1ff (kMGPipeSubsystemsMigratedAtP3a) is
+        // the "everything before P4a" control P4a's A/B is run against - each phase's
+        // constant survives as the next phase's control, which is why none of them is ever
+        // edited. Accepts decimal or 0x-prefixed hex, and operators pass it as hex, so the
+        // bits are listed here (MG_Pipe/MGPipe.h owns them):
         //   0x01 render state (create/bind_render_state + set_dynamic_state)
         //   0x02 pixel pack        0x04 patch state      0x08 vertex attrib defaults
         //   0x10 residual values   0x20 Espryt slots     0x40 Magma vertex input
         //   0x80 resources (the resource_* family: the seven BufferBackendOps hooks)
         //   0x100 vertex input (vertex elements / vertex buffers / index buffer)
+        //   0x200 framebuffer (set_framebuffer_state)              - requires 0x400
+        //   0x400 texture resources (texture + renderbuffer resource_*,
+        //         set_texture_params)                              - requires 0x80
+        //   0x800 samplers (sampler CSO, sampler view, set_sampler_views /
+        //         bind_sampler_states / set_shader_images)         - requires 0x400
+        //   0x1000 programs (shader CSO, set_draw/dispatch_program, global constants)
+        //   A dependency that is not met is REFUSED with one ERROR naming both bits and the
+        //   family runs its legacy arm; it is never half-run.
         //   1<<63 NOT a subsystem, a BEHAVIOUR: turn OFF client-side content addressing of
         //         CSOs, so every pipeline-version change mints a fresh CSO and the map is
         //         never probed. The negative control the CSO design is measured against.

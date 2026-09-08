@@ -73,6 +73,21 @@ namespace MobileGL::MG_Util::PipeStats {
         // PLACEHOLDER (plan section 6.3): the residual value block does not exist yet. The
         // class is minted now so the counter names never churn; it stays at 0 until P2.
         ResidualValueBlock,
+#if MOBILEGL_PIPE_PUSH
+        // P4a's, and THE PUSH GUARD IS NEW ON THIS ENUM: CallClass has had one since P2 and
+        // ByteClass has never had one, so the block is opened here rather than the member
+        // simply appended. Without it the pull build's two counter arrays, the name table, the
+        // short-name table and FormatWindowLine all resize for a class that could never leave
+        // zero - and the pull build has to stay symbol-identical.
+        //
+        // The bytes of every CSO BLOB the client declares in a frame: P3a's vertex-elements
+        // blobs (which MEASUREMENTS.md recorded as a client-side array that was never
+        // measured, and left to P4a to give the summary line a class for), P4a's sampler
+        // parameter blobs, and P4a's program archives. It is the number that says what a
+        // transport would actually have to move for the CSO families, as opposed to what the
+        // records themselves cost.
+        CsoBlobBytes,
+#endif
         Count
     };
 
@@ -124,6 +139,23 @@ namespace MobileGL::MG_Util::PipeStats {
         // first window. Counted at the client emitter, behind the usual Enabled() predicate;
         // no timer anywhere.
         MapPersistentRoundtrips,
+        // P4a's five, push-only for the same reason as the three above, and every one of them
+        // counts a record that ACTUALLY WENT OUT - post-suppressor - because the number an
+        // operator needs is the traffic, not the number of times the emitter was asked.
+        //
+        // The four set counters are how the suppressors' hit rates become readable at all: a
+        // suppressor that stopped suppressing is invisible in the pixels and shows up here as
+        // a per-frame count that tracks the draw count instead of the state changes.
+        FramebufferEmissions,
+        SamplerViewEmissions,
+        SamplerStateEmissions,
+        ShaderImageEmissions,
+        // The CLIENT-side twin of Espryt's TextureUploadEmissions, which counts the same
+        // records on the server. Two published numbers rather than one is the whole point:
+        // SSIM is completely blind to the box-versus-rect upload shape, and the Mali cliff it
+        // hides is ~+6 ms/frame, so an emission-shape divergence has to be a difference of two
+        // numbers rather than something only a GPU can see.
+        ClientTextureUploadEmissions,
 #endif
         Count
     };

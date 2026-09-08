@@ -145,15 +145,152 @@ namespace MobileGL::MG_Pipe {
     static_assert(sizeof(MGPCaps) == sizeof(DynamicBackendParameters) + 8 + 24 + 24,
                   "MGPCaps gained padding or a member; update the wire format");
 
+    // ---------------------------------------------------------------------------------
+    // MGPResourceDesc's two discriminators (P4a, D-A3 / D-A4)
+    // ---------------------------------------------------------------------------------
+
+    // MGPResourceDesc::Target. P3a minted no enum for this list because it had exactly one
+    // producer and used the leading member's value (0) for it; P4a's texture family is the
+    // second producer, so the list is written out here, beside the field, in the order the
+    // field's own comment already wrote it.
+    //
+    // TexRect IS A THIRTEENTH ENUMERATOR AND THE BRIEF'S LIST HAS TWELVE. MobileGL's
+    // TextureTarget has TextureRectangle (MG_State/GLState/TextureState/TextureEnum.h), the
+    // table below may not have a `default:` arm, and folding rectangle onto Tex2D would erase
+    // a distinction the frontend keeps and both backends switch on (Espryt's
+    // MapToBackendTextureTarget lowers Tex1D the same way and Tex1D still has its own
+    // enumerator here). It is appended AFTER TexBuffer so every value the design document
+    // names keeps the number it was given.
+    enum class MGPipeResourceTarget : Uint8 {
+        Buffer = 0,
+        Tex1D,
+        Tex2D,
+        Tex3D,
+        Tex1DArray,
+        Tex2DArray,
+        TexCube,
+        TexCubeArray,
+        Tex2DMS,
+        Tex2DMSArray,
+        Renderbuffer,
+        TexBuffer,
+        TexRect,
+        Count,
+    };
+
+    // P3a's constant, moved here from MG_Impl/Pipe/ResourceTracker.h with the enum: the ack
+    // predicate at the bottom of this header now names the buffer target explicitly (D-A2) and
+    // may not reach into MG_Impl to do it. The static_assert is what keeps the two spellings
+    // from drifting; nothing may open-code either.
+    inline constexpr Uint8 kMGPipeResourceTargetBuffer =
+        static_cast<Uint8>(MGPipeResourceTarget::Buffer);
+    static_assert(kMGPipeResourceTargetBuffer == static_cast<Uint8>(MGPipeResourceTarget::Buffer),
+                  "P3a's kMGPipeResourceTargetBuffer and MGPipeResourceTarget::Buffer have drifted");
+
+    // A sentinel the table below returns for a TextureTarget enumerator it does not name. It
+    // is NOT a legal Target value - it does not fit the field's Uint8 - so an unmapped
+    // enumerator is a build break at the static_assert rather than a descriptor that quietly
+    // describes the wrong kind of storage. Exactly kMGPipeBindUnmapped's shape.
+    inline constexpr Uint32 kMGPipeResourceTargetUnmapped = 0x100u;
+
+    // The one table. No `default:` arm on purpose - that is what makes the static_assert
+    // below able to see an unnamed enumerator, and it is the shape
+    // MGPipeBindMaskForBufferTarget already uses for BufferTarget.
+    constexpr Uint32 MGPipeResourceTargetForTextureTarget(MobileGL::TextureTarget target) {
+        switch (target) {
+        case MobileGL::TextureTarget::Texture1D:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex1D);
+        case MobileGL::TextureTarget::Texture2D:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex2D);
+        case MobileGL::TextureTarget::Texture3D:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex3D);
+        case MobileGL::TextureTarget::TextureCubeMap:
+            return static_cast<Uint32>(MGPipeResourceTarget::TexCube);
+        // Its own enumerator rather than Tex2D: see the enum's comment.
+        case MobileGL::TextureTarget::TextureRectangle:
+            return static_cast<Uint32>(MGPipeResourceTarget::TexRect);
+        case MobileGL::TextureTarget::Texture2DMultisample:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex2DMS);
+        case MobileGL::TextureTarget::TextureBuffer:
+            return static_cast<Uint32>(MGPipeResourceTarget::TexBuffer);
+        case MobileGL::TextureTarget::Texture1DArray:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex1DArray);
+        case MobileGL::TextureTarget::Texture2DArray:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex2DArray);
+        case MobileGL::TextureTarget::TextureCubeMapArray:
+            return static_cast<Uint32>(MGPipeResourceTarget::TexCubeArray);
+        case MobileGL::TextureTarget::Texture2DMultisampleArray:
+            return static_cast<Uint32>(MGPipeResourceTarget::Tex2DMSArray);
+        // NOT TEXTURE TARGETS. Listed rather than defaulted so the completeness assert still
+        // sees them, and mapped to the sentinel because no descriptor may carry either: the
+        // count is the enum's bound and Unknown is what an unresolved GL enum becomes.
+        case MobileGL::TextureTarget::TextureTargetCount:
+        case MobileGL::TextureTarget::Unknown:
+            return kMGPipeResourceTargetUnmapped;
+        }
+        return kMGPipeResourceTargetUnmapped;
+    }
+
+    constexpr Bool MGPipeEveryTextureTargetIsMapped() {
+        for (SizeT i = 0; i < static_cast<SizeT>(MobileGL::TextureTarget::TextureTargetCount); ++i) {
+            if (MGPipeResourceTargetForTextureTarget(static_cast<MobileGL::TextureTarget>(i)) ==
+                kMGPipeResourceTargetUnmapped) {
+                return false;
+            }
+        }
+        return true;
+    }
+    static_assert(MGPipeEveryTextureTargetIsMapped(),
+                  "a TextureTarget enumerator has no MGPResourceDesc::Target row: add it to "
+                  "MGPipeResourceTargetForTextureTarget, and give it an enumerator of its own "
+                  "rather than folding it onto a neighbour (D-A3)");
+    static_assert(MGPipeResourceTargetForTextureTarget(MobileGL::TextureTarget::Texture2D) !=
+                      MGPipeResourceTargetForTextureTarget(MobileGL::TextureTarget::TextureRectangle),
+                  "a rectangle texture is not a 2D texture on the wire; both backends switch on "
+                  "the difference");
+
+    // MGPResourceDesc::BindMask's twelve bits, in the order the field's comment names them.
+    //
+    // THEY LIVED IN MG_Impl/Pipe/ResourceTracker.h THROUGH P3a, with that file's own note
+    // saying "the integrator moves them beside the field when a second producer appears
+    // (P4a's texture family)". P4a is that producer: a texture sets kMGPipeBindSampler,
+    // kMGPipeBindShaderImage, kMGPipeBindRenderTarget and kMGPipeBindDepthStencil, which are
+    // the four bits nothing set before. The mask is STICKY - ORed, never cleared - and is
+    // emitted on both resource_create and every resource_respecify.
+    enum MGPipeBindBit : Uint16 {
+        kMGPipeBindNone = 0,
+        kMGPipeBindVertex = 1u << 0,
+        kMGPipeBindIndex = 1u << 1,
+        kMGPipeBindConstant = 1u << 2,
+        kMGPipeBindShaderBuffer = 1u << 3,
+        kMGPipeBindIndirect = 1u << 4,
+        kMGPipeBindSampler = 1u << 5,
+        kMGPipeBindShaderImage = 1u << 6,
+        kMGPipeBindRenderTarget = 1u << 7,
+        kMGPipeBindDepthStencil = 1u << 8,
+        kMGPipeBindStreamOutput = 1u << 9,
+        kMGPipeBindAtomic = 1u << 10,
+        // THE D-B7 SWITCH. With kCapNeedsHostIndexBytes set the server mirrors this
+        // resource's bytes so it can rewrite restart indices and flatten multi-draws
+        // (ARCHITECTURE.md 10.3). Getting it wrong is invisible in monolith and silently
+        // disables both under split, which is why it is set from a table rather than from a
+        // special case at the emission site.
+        kMGPipeBindElementArray = 1u << 11,
+    };
+
     // Discriminated resource descriptor: buffers, every texture target and renderbuffers
     // share one create/respecify shape (section 4.5.1).
     struct MGPResourceDesc {
         MGPipeHandle Resource;
-        Uint8 Target;      // Buffer | Tex1D..TexCubeArray | Tex2DMS.. | Renderbuffer | TexBuffer
+        // MGPipeResourceTarget: Buffer | Tex1D..TexCubeArray | Tex2DMS.. | Renderbuffer |
+        // TexBuffer | TexRect. Never open-coded; the texture half comes from
+        // MGPipeResourceTargetForTextureTarget above.
+        Uint8 Target;
         Uint8 StorageKind; // == TextureStorageType (Mipmap | Buffer)
-        // VERTEX|INDEX|CONSTANT|SHADER_BUFFER|INDIRECT|SAMPLER|SHADER_IMAGE|RENDER_TARGET|
-        // DEPTH_STENCIL|STREAM_OUTPUT|ATOMIC|ELEMENT_ARRAY. The ELEMENT_ARRAY bit is the
-        // D-B7 switch: with kCapNeedsHostIndexBytes set the server mirrors this resource.
+        // MGPipeBindBit, above: VERTEX|INDEX|CONSTANT|SHADER_BUFFER|INDIRECT|SAMPLER|
+        // SHADER_IMAGE|RENDER_TARGET|DEPTH_STENCIL|STREAM_OUTPUT|ATOMIC|ELEMENT_ARRAY. The
+        // ELEMENT_ARRAY bit is the D-B7 switch: with kCapNeedsHostIndexBytes set the server
+        // mirrors this resource.
         Uint16 BindMask;
         Uint32 InternalFormat; // already resolved to an uncompressed fallback by the client
         Uint32 Width, Height, Depth;
@@ -304,18 +441,35 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPSamplerView, 36);
 
     // Per texture OBJECT, independent of any view.
+    //
+    // P4a, D-E1: 32 -> 40 bytes. BuiltinSampler is the SamplerCso carrying the
+    // SamplerParameters of the SamplerObject every ITextureObject owns
+    // (TextureState/TextureObject.h's m_sampler, constructed by TextureObjectBase's
+    // constructor). GL 4.6 core table 23.18 makes filter/wrap/compare/border SAMPLER state,
+    // and Espryt pushes it with glTexParameter* onto the TEXTURE rather than with
+    // glBindSampler onto the unit - behaviour P4a preserves exactly. Naming the CSO rather
+    // than widening this payload with a filter/wrap/border block is what keeps ONE authority
+    // for one value: SyncTextureParamsToBackend reads this record, SyncBuiltinSamplerToBackend
+    // reads that CSO's SamplerParameters, and the two pushes stay two pushes.
     struct MGPTextureParams {
-        MGPipeHandle Res;
-        Uint16 BaseLevel, MaxLevel;
-        Uint8 Swizzle[4];
-        Uint8 DepthStencilMode;
+        MGPipeHandle Res;            //  0
+        // Kind SamplerCso. kMGPipeNullHandle is ILLEGAL - every texture object owns a sampler
+        // object, so a null here is Fatal{ProtocolCorruption} rather than "no sampler".
+        MGPipeHandle BuiltinSampler; //  8
+        Uint16 BaseLevel, MaxLevel;  // 16
+        Uint8 Swizzle[4];            // 20
+        Uint8 DepthStencilMode;      // 24
         // Mirrors m_forceTextureParamsResync: the widened-channel carrier needs a swizzle
         // override that the frontend params version does not move for.
-        Uint8 ForceResync;
-        Uint8 Pad0[2];
-        Float MinLod, MaxLod, LodBias;
+        Uint8 ForceResync;           // 25
+        // Mirrors m_forceSamplerResync, which had no wire spelling at all before P4a. What it
+        // guards is not mis-filtering but an INCOMPLETE texture sampling (0,0,0,1) after a
+        // driver re-mint, which is why it is a second bit and not folded into ForceResync.
+        Uint8 SamplerResync;         // 26
+        Uint8 Pad0;                  // 27
+        Float MinLod, MaxLod, LodBias; // 28
     };
-    MGP_ASSERT_POD(MGPTextureParams, 32);
+    MGP_ASSERT_POD(MGPTextureParams, 40);
 
     // create_shader_state. The reflection blob is the whole LinkArtifacts + SpirvArtifacts
     // archive; P0.5 extracts those types out of ProgramObject.h so a server can
@@ -352,6 +506,35 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPSurface, 24);
 
+    // P4a, D-C2/D-C3: the record is emitted PER BOUND TARGET.
+    //
+    // GL has two independent framebuffer bindings and this record carries one Fbo and one
+    // ReadSurface, so Target says which binding it describes: 0 = Draw, 1 = Read, 2 = Both
+    // (one object bound to both targets). The draw-buffer array is applied only for a record
+    // whose Target is not Read - Espryt's own comment records the Minecraft 26.x OIT bug
+    // where a READ-only sync landed glDrawBuffers on the wrong framebuffer - and ReadSurface
+    // is resolved from the READ framebuffer's own read buffer, which is what makes the
+    // read-buffer-shared-FBO defect class unrepresentable rather than merely fixed.
+    enum class MGPipeFramebufferTarget : Uint8 {
+        Draw = 0,
+        Read = 1,
+        Both = 2,
+        Count,
+    };
+
+    // MGPFramebufferState::Color[] and DrawBuffers[] are ONE array width, and it is the wire's
+    // bound rather than the driver's: GetDynamicParameters().MaxColorAttachments is the raw ES
+    // cap and is not clamped to 8 on the GLES path, so a driver reporting more would silently
+    // truncate this record. The framebuffer subsystem bit is REFUSED at its first lookup in
+    // that case, with one ERROR naming the cap, and the legacy arm runs - the same shape the
+    // backend's existing bit-8-requires-bit-7 refusal already ships
+    // (ResolveFramebufferSubsystemArm, beside ResolveResourceSubsystemArm). Widening the
+    // payload is a wire change nobody has evidence for, and truncating silently is the bug
+    // class this phase is closing.
+    inline constexpr Uint32 kMGPipeMaxColorAttachments = 8;
+    static_assert(kMGPipeMaxColorAttachments == MobileGL::kMGMaxDrawBuffers,
+                  "MGPFramebufferState::Color[] and DrawBuffers[] are one array width");
+
     struct MGPFramebufferState {
         MGPipeHandle Fbo; // kMGPipeDefaultFramebuffer for the default framebuffer
         MGPSurface Color[8];
@@ -361,7 +544,16 @@ namespace MobileGL::MG_Pipe {
         MGPSurface ReadSurface;
         Int8 DrawBuffers[8]; // attachment index, -1 = NONE
         Uint16 Width, Height, Layers, Samples;
-        Uint8 FixedSampleLocations, IsDefault, Complete, Pad0;
+        // Complete is FramebufferObject::CheckCompleteness(), the frontend-only answer - NOT
+        // glCheckFramebufferStatus's. CheckFramebufferStatus_State additionally consults
+        // ActiveBackendRejectsDistinctDepthStencil() and HasNonRenderableColorAttachment,
+        // which read the backend's probed format-capability cache; a client emitting that
+        // answer would be reading the backend from the client side, which is the exact
+        // coupling this boundary exists to remove. A later phase must not assume the stronger
+        // answer, and glCheckFramebufferStatus keeps answering from the frontend as it does
+        // today.
+        Uint8 FixedSampleLocations, IsDefault, Complete;
+        Uint8 Target; // MGPipeFramebufferTarget, above (P4a, D-C2; was Pad0)
         Uint32 Pad1;
         // Two jobs (section 4.5.6): the server's render-pass memo key, and the CLIENT's
         // emission suppressor - an unchanged hash means this record is not sent at all.
@@ -377,6 +569,20 @@ namespace MobileGL::MG_Pipe {
     // MG_Impl/Pipe/PipeFill.cpp is the one translation unit that sees both and carries the
     // static_assert, because this header may not include a frontend one.
     inline constexpr Uint32 kMGPipeMaxVertexAttribs = 32;
+
+    // P4a, D-G2. MobileGL's texture-unit space is ONE MERGED array of
+    // TextureState::MAX_TEXTURE_IMAGE_UNITS = 192 - there is no stage dimension on
+    // set_sampler_views / bind_sampler_states / set_shader_images, because the same unit may
+    // be sampled from two stages and per-stage 32 is an advertised number rather than a
+    // storage shape. These two bound the three var-tail sets' Start + Count, and a record
+    // that names a window outside them is Fatal{ProtocolCorruption} - the var-tail window IS
+    // the bound and entries outside it are not cleared.
+    //
+    // Pinned against the frontend constant in MG_Impl/Pipe/PipeFill.cpp, the one translation
+    // unit that sees both, exactly as kMGPipeMaxVertexAttribs is: this header may not include
+    // a frontend one.
+    inline constexpr Uint32 kMGPipeMaxTextureUnits = 192;
+    inline constexpr Uint32 kMGPipeMaxImageUnits = 192;
 
     struct MGPVertexBuffer {
         MGPipeHandle Res;
@@ -675,10 +881,19 @@ namespace MobileGL::MG_Pipe {
     // is ((void)0) - the applier is one function call away - and the transport wires the
     // doorbell to this predicate when it lands.
     //
-    // Immutable is exactly the right discriminator: it is set iff the store came from a
-    // glBufferStorage* entry point, which is the definition of the allowed case.
+    // P4a, D-A2: THE PREDICATE IS NARROWED TO NAME THE BUFFER TARGET, and that is a
+    // requirement rather than a tidy-up. glTexStorage* also sets Immutable - it is a real
+    // descriptor fact the backend reads, and the client must set it - but texture allocation
+    // is already deferred to sync time in monolith (glTexImage*/glTexStorage* only
+    // MarkStorageDirty; even glRenderbufferStorage* allocates lazily inside SyncToBackend), so
+    // splitting changes no observable behaviour and this batch must NOT ack. glBufferStorage
+    // stays the only entry point allowed a synchronous acknowledgement.
+    //
+    // PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage drives glTexStorage2D and
+    // glRenderbufferStorage idioms through it, and is the negative control for a future
+    // widening.
     inline Bool MGPipeResourceRespecifyNeedsAck(const MGPResourceDesc& desc) {
-        return desc.Immutable != 0;
+        return desc.Immutable != 0 && desc.Target == kMGPipeResourceTargetBuffer;
     }
 
     // The forward terminator for a server-initiated texture pull (section 7.1). May carry

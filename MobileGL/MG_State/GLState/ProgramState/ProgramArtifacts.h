@@ -408,6 +408,17 @@ namespace MobileGL::MG_State::GLState {
     // Free constrained templates rather than members so the struct bodies above stay a verbatim
     // move. The sizeof trip wires below are what keep these tables honest: a member added to a
     // struct changes its size, trips the assertion, and the message sends the author here.
+    //
+    // THE SERIALIZER NOW EXISTS (P4a): MG_State/GLState/ProgramState/ProgramArtifactsCodec.
+    // {h,cpp}, beside this header rather than inside it so the check_include_closure.py
+    // "artifacts-header" probe stays untouched. It is two visitors over the tables below - a
+    // writer that appends to a Vector<Uint8> and a reader that consumes one - length-prefixed,
+    // little-endian, with a format-version word first and a MGL_LINKARTIFACTS_SIZE echo
+    // second, so a struct that gained a field and a codec that did not is a mismatch at READ
+    // time rather than a silent truncation. Adding a member to any struct above therefore
+    // means: add its VisitFields row here, update the sizeof number below, and bump
+    // kProgramArtifactsCodecVersion. `LinkArtifacts::program` stays the one deliberate
+    // omission, and the codec has no arm for it.
     template <class Self, class V>
         requires std::same_as<std::remove_const_t<Self>, TypeFacts>
     void VisitFields(Self& a, V&& v) {
@@ -549,7 +560,7 @@ namespace MobileGL::MG_State::GLState {
     // ---- trip wires ----
     // TypeFacts is a POD on every ABI: 13 Bool + 3 bytes of padding + 7 x 4-byte scalars.
     static_assert(std::is_trivially_copyable_v<TypeFacts> && sizeof(TypeFacts) == 44,
-                  "TypeFacts changed: add the field to VisitFields(TypeFacts) (and its serializer when one exists), then update this number");
+                  "TypeFacts changed: add the field to VisitFields(TypeFacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
     // The container-bearing structs have one size per standard library (std::string and
     // std::set differ between libstdc++ and libc++), so their numbers are pinned PER STL:
     // libstdc++ (the Linux CI toolchain) here, libc++ (the NDK) by the integrator, MSVC
@@ -565,12 +576,12 @@ namespace MobileGL::MG_State::GLState {
 #endif
 #ifdef MGL_LINKARTIFACTS_SIZE
     static_assert(sizeof(ResourceReflection) == MGL_RESOURCEREFLECTION_SIZE,
-                  "ResourceReflection changed size: add the field to VisitFields(ResourceReflection) (and its serializer when one exists), then update this number");
+                  "ResourceReflection changed size: add the field to VisitFields(ResourceReflection) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
     static_assert(sizeof(XfbVarying) == MGL_XFBVARYING_SIZE,
-                  "XfbVarying changed size: add the field to VisitFields(XfbVarying) (and its serializer when one exists), then update this number");
+                  "XfbVarying changed size: add the field to VisitFields(XfbVarying) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
     static_assert(sizeof(LinkArtifacts) == MGL_LINKARTIFACTS_SIZE,
-                  "LinkArtifacts changed size: add the field to VisitFields(LinkArtifacts) (and its serializer when one exists), then update this number");
+                  "LinkArtifacts changed size: add the field to VisitFields(LinkArtifacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
     static_assert(sizeof(SpirvArtifacts) == MGL_SPIRVARTIFACTS_SIZE,
-                  "SpirvArtifacts changed size: add the field to VisitFields(SpirvArtifacts) (and its serializer when one exists), then update this number");
+                  "SpirvArtifacts changed size: add the field to VisitFields(SpirvArtifacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
 #endif
 } // namespace MobileGL::MG_State::GLState

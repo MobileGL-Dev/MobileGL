@@ -85,6 +85,17 @@ namespace MobileGL::MG_Pipe {
     // a pipeline object, and the server never learns it is a composite - it is just another
     // ShaderCso. Reserving a band rather than a flag keeps the composite resolver's
     // lifetime bookkeeping out of the ordinary program slot allocator.
+    //
+    // THE ONE ENTRY POINT INTO THE BAND is MGPipeSlotAllocator::AllocateComposite(lifetimeId)
+    // (MG_Impl/Pipe/SlotAllocator.h, P4a D-H7). MGPipeSlotAllocator::Allocate REFUSES the band
+    // for kind ShaderCso, which is what makes "an ordinary program can never be handed a
+    // composite slot" a property of the allocator rather than of its callers; the band carries
+    // its own exhaustion assert, so exhausting it is a named Fatal rather than silent slot
+    // theft from ordinary programs. A composite's slot has TWO independent release paths - the
+    // pipeline cache's LRU eviction and the composite ProgramObject's own destructor - and
+    // both go through one client-side death helper (MG_Pipe/PipeMutation.h's
+    // MGPipeEmitShaderCsoDestroyAndFree), whose second call is a proven no-op because Free
+    // refuses a slot that is not live at that generation.
     inline constexpr Uint32 kMGPipeShaderCsoSlotLimit = 1u << 20;
     inline constexpr Uint32 kMGPipeShaderCsoCompositeSlotBase =
         kMGPipeShaderCsoSlotLimit - (kMGPipeShaderCsoSlotLimit >> 4);

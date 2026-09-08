@@ -57,33 +57,16 @@ namespace MobileGL::MG_Pipe {
     // D-A3: BindMask
     // ---------------------------------------------------------------------------------
 
-    // MGPResourceDesc::BindMask's twelve bits, in the order MGPipeTypes.h names them:
-    // VERTEX|INDEX|CONSTANT|SHADER_BUFFER|INDIRECT|SAMPLER|SHADER_IMAGE|RENDER_TARGET|
-    // DEPTH_STENCIL|STREAM_OUTPUT|ATOMIC|ELEMENT_ARRAY.
+    // MGPResourceDesc::BindMask's twelve bits MOVED TO MG_Pipe/MGPipeTypes.h AT P4a, beside
+    // the field, exactly as the note that stood here said they would when a second producer
+    // appeared: P4a's texture family sets kMGPipeBindSampler / kMGPipeBindShaderImage /
+    // kMGPipeBindRenderTarget / kMGPipeBindDepthStencil, the four bits nothing set before.
+    // No alias is written for them because none is possible or needed - both files are
+    // namespace MobileGL::MG_Pipe and this one includes that header, so every spelling below
+    // and in package B's code is unchanged.
     //
-    // They are spelled HERE rather than in MGPipeTypes.h because that header is the contract
-    // package's and the mask has, so far, exactly one producer: this file. The integrator
-    // moves them beside the field when a second producer appears (P4a's texture family).
-    enum MGPipeBindBit : Uint16 {
-        kMGPipeBindNone = 0,
-        kMGPipeBindVertex = 1u << 0,
-        kMGPipeBindIndex = 1u << 1,
-        kMGPipeBindConstant = 1u << 2,
-        kMGPipeBindShaderBuffer = 1u << 3,
-        kMGPipeBindIndirect = 1u << 4,
-        kMGPipeBindSampler = 1u << 5,
-        kMGPipeBindShaderImage = 1u << 6,
-        kMGPipeBindRenderTarget = 1u << 7,
-        kMGPipeBindDepthStencil = 1u << 8,
-        kMGPipeBindStreamOutput = 1u << 9,
-        kMGPipeBindAtomic = 1u << 10,
-        // THE D-B7 SWITCH. With kCapNeedsHostIndexBytes set the server mirrors this
-        // resource's bytes so it can rewrite restart indices and flatten multi-draws
-        // (ARCHITECTURE.md 10.3). Getting it wrong is invisible in monolith and silently
-        // disables both under split, which is why it is set from the same table as every
-        // other bit rather than from a special case at the emission site.
-        kMGPipeBindElementArray = 1u << 11,
-    };
+    // What stays here is the BUFFER half of the mapping, which is this file's own: the
+    // BufferTarget table, its sentinel and its completeness assert.
 
     // A sentinel the table below returns for an enumerator it does not name. It is NOT a
     // legal mask value: every enumerator must be listed, including the ones that map to no
@@ -152,12 +135,12 @@ namespace MobileGL::MG_Pipe {
     // The discriminators MGPResourceDesc / MGPSubData carry for a BUFFER
     // ---------------------------------------------------------------------------------
     //
-    // MGPipeTypes.h documents Target as "Buffer | Tex1D..TexCubeArray | Renderbuffer |
-    // TexBuffer" and StorageKind as "== TextureStorageType", but P3a is buffer-only and the
-    // contract package minted no enum for the first list. Buffer is its leading member and
-    // is therefore 0, which is also what a zero-initialised record already says; the second
-    // is the frontend enum, named rather than open-coded.
-    inline constexpr Uint16 kMGPipeResourceTargetBuffer = 0;
+    // P4a MINTED THE FIRST LIST: MGPipeTypes.h now carries enum MGPipeResourceTarget beside
+    // the field, and kMGPipeResourceTargetBuffer moved there with it - the narrowed
+    // resource_respecify ack predicate lives in that header and has to name the buffer target
+    // explicitly, and it may not reach into MG_Impl to do so. The second discriminator is the
+    // frontend enum, named rather than open-coded, and stays here because only this file
+    // produces it.
     inline constexpr Uint8 kMGPipeResourceStorageKindBuffer =
         static_cast<Uint8>(MobileGL::TextureStorageType::Buffer);
 

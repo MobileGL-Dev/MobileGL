@@ -296,3 +296,26 @@ target_link_libraries(
 )
 
 gtest_discover_tests(ProgramArtifactsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
+# P4a: the archive SERIALIZER over the same VisitFields tables, beside the header's own suite.
+# Its target and this registration are the CONTRACT commit's, like every other suite whose
+# contents a later package extends. Every case is a visible SKIP in a pull build, because the
+# codec is push-only - the root CMakeLists.txt appends it inside `if (MOBILEGL_PIPE_PUSH)` -
+# and a vanishing test would make `ctest -N` differ between the pull and push trees.
+add_executable(
+        ProgramArtifactsCodecTest
+        ProgramArtifactsCodecTest.cpp
+)
+
+target_include_directories(ProgramArtifactsCodecTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ProgramArtifactsCodecTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(ProgramArtifactsCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

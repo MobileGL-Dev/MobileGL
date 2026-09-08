@@ -491,6 +491,12 @@ if (MOBILEGL_PIPE_PUSH)
         MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
         MobileGL/MG_Pipe/PipeApply.cpp
         MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
+        # P4a's contract: the reflection-archive serializer over ProgramArtifacts.h's
+        # VisitFields tables. Push-only for the same G1 reason as the three above - in
+        # monolith the archive never crosses (create_shader_state hands the two structs over
+        # by pointer beside the record), so the codec is live code only in the VERIFY lane,
+        # where the applier serialises, deserialises and field-compares before storing.
+        MobileGL/MG_State/GLState/ProgramState/ProgramArtifactsCodec.cpp
     )
 endif()
 

@@ -320,15 +320,29 @@ namespace {
     // keeps the name it was born with and follows the phase constant instead of a literal
     // five: what it has always asserted is "a bit names a subsystem if and only if this build
     // emits a call for it", which is the property the emission gate and the residual-fill
-    // skip both rest on. P3a took the vertex-input family over, so the set it compares
-    // against is now kMGPipeDirtyEmittedAtP3a - and a bit that gained an arm without gaining
-    // an emitter, or the reverse, still fails here.
+    // skip both rest on. P3a took the vertex-input family over and P4a takes seven more bits
+    // across four subsystems, so the set it compares against is now kMGPipeDirtyEmittedAtP4a -
+    // and a bit that gained an arm without gaining an emitter, or the reverse, still fails
+    // here.
     TEST_F(TrackerWalk, OnlyTheFiveEmittedBitsNameASubsystem) {
         for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
             const auto bit = static_cast<MGPipeDirty>(i);
-            const Bool emitted = (kMGPipeDirtyEmittedAtP3a & MGPipeDirtyBit(bit)) != 0;
+            const Bool emitted = (kMGPipeDirtyEmittedAtP4a & MGPipeDirtyBit(bit)) != 0;
             EXPECT_EQ(MGPipeSubsystemForDirty(bit) != 0, emitted) << kMGPipeDirtyNames[i];
         }
+        // Each phase's constant SURVIVES as the next phase's A/B control, so the three are
+        // pinned as a chain rather than one being edited into the next: 0x1ff is P4a's "T2"
+        // arm and 0x7f is P3a's, and an operator's recorded mask has to keep meaning what it
+        // meant.
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP4a & kMGPipeDirtyEmittedAtP3a, kMGPipeDirtyEmittedAtP3a);
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP3a & kMGPipeDirtyEmittedAtP2, kMGPipeDirtyEmittedAtP2);
+        // The three bits P4a still does not emit for - the const-buffer, shader-buffer and
+        // stream-output sets - name no subsystem, so their fields keep going through the
+        // residual fill. Stated positively as well as through the loop above, because "only
+        // these three are left" is the phase's own scope statement.
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers), 0u);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers), 0u);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets), 0u);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState), kMGPipeSubsystemRenderState);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack), kMGPipeSubsystemPixelPack);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState), kMGPipeSubsystemPatchState);
@@ -339,6 +353,26 @@ namespace {
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements), kMGPipeSubsystemVertexInput);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexBuffers), kMGPipeSubsystemVertexInput);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewIndexBuffer), kMGPipeSubsystemVertexInput);
+        // P4a's seven, across FOUR subsystems, and the grouping is the whole point: the three
+        // program bits are one family because an operator switching programs off has to get
+        // the whole legacy arm, and so are the three unit-set bits.
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShader), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBindings), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewGlobalConstants), kMGPipeSubsystemPrograms);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewFramebuffer), kMGPipeSubsystemFramebuffer);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplerViews), kMGPipeSubsystemSamplers);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplers), kMGPipeSubsystemSamplers);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderImages), kMGPipeSubsystemSamplers);
+        // AND NO BIT NAMES THE TEXTURE-RESOURCE SUBSYSTEM. Its calls are dispatched from the
+        // GL entry points that cause them - a constructor, a storage definition, a
+        // glTexParameter - not from a dirty walk, exactly as P3a's buffer family is, so a bit
+        // that started naming it would gate the emission twice and the two gates would
+        // disagree the first time one of them was edited.
+        for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+            EXPECT_NE(MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)),
+                      kMGPipeSubsystemTextureResources)
+                << kMGPipeDirtyNames[i];
+        }
     }
 
     TEST_F(TrackerWalk, TheFirstWalkOnAFreshContextPublishesEverything) {

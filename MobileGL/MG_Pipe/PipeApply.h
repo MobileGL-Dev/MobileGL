@@ -28,6 +28,17 @@
 // (MG_Impl/Pipe) already have it, and MG_Pipe sits below MG_Backend.
 //
 // Compiled only under MOBILEGL_PIPE_PUSH (CMakeLists.txt), so the pull build gains no symbol.
+// P4a: create_shader_state carries the reflection ARCHIVE, and in monolith the archive does
+// not travel - the two structs ride beside the record through the entry point's companion
+// pointers, exactly as P3a's `const void* initialBytes` does (D-H3, the one Blob rule). So
+// this header needs their NAMES and never their definitions; the forward declaration is the
+// whole coupling and the closure gate is what keeps it one. The verify build is the only
+// place the codec runs, and it runs from PipeApply.cpp.
+namespace MobileGL::MG_State::GLState {
+    struct LinkArtifacts;
+    struct SpirvArtifacts;
+} // namespace MobileGL::MG_State::GLState
+
 namespace MobileGL::MG_Pipe {
     struct PipeInputs;
 
@@ -109,8 +120,33 @@ namespace MobileGL::MG_Pipe {
     // own dense high-water mark and no further, so the bound costs nothing until a record is
     // already corrupt. Package C bounds handle.Slot the same way before
     // BackendSlotTable::EntryAt, which resizes on a client-supplied index too.
+    // P4a: THE BOUND IS PER KIND, not per table, and that is what keeps one number honest
+    // while the number of tables grows. The slot spaces of kinds Buffer, Texture and
+    // Renderbuffer are INDEPENDENT (MGPipeSlotAllocator allocates per kind), so three
+    // different objects can hold slot 7; the applier therefore keeps one Vector per resource
+    // KIND and indexes it by slot, rather than one Vector indexed by slot alone. Each is
+    // bounded by kMGPipeMaxResourceSlots and each grows only to its own dense high-water mark.
     inline constexpr Uint32 kMGPipeMaxResourceSlots = 1u << 20;
     inline constexpr Uint32 kMGPipeMaxVertexElementsSlots = 1u << 16;
+    // P4a's three, and the argument is written out for each because the records differ in
+    // size. None is ever allocated by being named: the tables grow to the client's own dense
+    // high-water mark and no further, so the bound costs nothing until a record is corrupt.
+    //
+    // A sampler CSO record is a 100-byte value plus a handle, and sampler CSOs are
+    // CONTENT-ADDRESSED at capacity 256 on the client, so the live population is bounded by
+    // that cache and not by the application. 1<<16 is far above anything a GL program can hold
+    // and small enough that a corrupt slot is refused rather than allocated.
+    inline constexpr Uint32 kMGPipeMaxSamplerCsoSlots = 1u << 16;
+    // A sampler VIEW is identity-addressed one per ITextureObject (P4a D-F2), so its
+    // population tracks the texture population exactly and it takes the texture bound.
+    inline constexpr Uint32 kMGPipeMaxSamplerViewSlots = 1u << 20;
+    // The shader-CSO bound is the SLOT LIMIT ITSELF, because the composite band lives inside
+    // that space (MGPipeHandles.h): a bound below it would refuse the very slots
+    // AllocateComposite is allowed to hand out.
+    inline constexpr Uint32 kMGPipeMaxShaderCsoSlots = kMGPipeShaderCsoSlotLimit;
+    static_assert(kMGPipeMaxShaderCsoSlots > kMGPipeShaderCsoCompositeSlotBase,
+                  "the ShaderCso bound must contain the composite band, or a composite handle "
+                  "is refused as out of range on arrival");
 
     // One record per live resource, indexed by MGPipeHandle::Slot, kind Buffer; slot 0 is the
     // reserved null handle and is never live.
@@ -129,6 +165,102 @@ namespace MobileGL::MG_Pipe {
         // persistent-mapped host writes can set it with zero new record kinds; a verify build
         // pins that it is false, so that phase cannot land a silent semantic change under it.
         Bool HasLiveHostWrites = false;
+
+        // ---- P4a. Only a record of kind Texture ever carries these; a buffer's stay at
+        // their defaults, which is what keeps ONE record type for the discriminated
+        // descriptor rather than a second one that would have to be kept in step with it.
+
+        // set_texture_params, per texture OBJECT and independent of any binding - which is
+        // the whole point of addressing it by resource: a texture that is only an FBO
+        // attachment, only an image-unit binding or only a glCopyImageSubData endpoint has no
+        // sampler view to hang its parameters on, and today the READ-attachment case reaches
+        // no parameter push at all. ParamsSerial replaces the twin's
+        // m_syncedTextureParamsVersion + m_forceTextureParamsResync pair.
+        MGPTextureParams Params{};
+        Uint64 ParamsSerial = 0;
+        // The SamplerViewCso minted for this texture (P4a D-F2: one per ITextureObject,
+        // re-issued on the same handle whenever the restrictions move).
+        MGPipeHandle ViewCso = kMGPipeNullHandle;
+        // THE PENDING-UPLOAD SET, and it is server-side state on purpose (D-D5). The client
+        // clears its own dirty flags at EMISSION, for the levels whose record the applier
+        // accepted; Espryt's upload loop has bail arms - an incomplete texture returns early,
+        // a multisample target refreshes and skips - that today leave the frontend flag set,
+        // so a naive move of the clear to the client would lose those texels. The applier
+        // accumulates the emitted shape here instead, it survives any number of bails, and
+        // Espryt consumes and clears an entry only where it actually uploads.
+        //
+        // The verify lane's RETAIN MODE is what gates the shape: a consume-and-clear set
+        // cannot be recomputed after emission, so the tracker retains the pre-clear set and
+        // the comparator compares the emitted (UnionBox, RegionCount, Regions[]) against it
+        // field by field.
+        struct PendingUpload {
+            Uint16 UploadTarget = 0;
+            Uint16 Level = 0;
+            MGPBox UnionBox{};
+            Vector<MGPSubRegion> Regions;
+        };
+        Vector<PendingUpload> PendingUploads;
+    };
+
+    // ---------------------------------------------------------------------------------
+    // P4a: the three new object-record kinds (D-J1)
+    // ---------------------------------------------------------------------------------
+    //
+    // All three follow MGPipeResourceRecord's shape exactly - Gen, Live, a payload and a
+    // server-owned monotone Serial - because the body-level idioms are the same ones:
+    // a create starts the record OVER rather than editing it (a recycled slot's record must
+    // not contribute one field, and Serial stays 0 because a create is not a mutation, so a
+    // fresh backend twin starting at 0 agrees without either side publishing anything); the
+    // serial moves BEFORE the backend is told; a destroy drops the record whole and keeps the
+    // generation, and the CLIENT frees the slot afterwards.
+
+    // create_sampler_state / delete_sampler_state. The parameters cross byte for byte
+    // INCLUDING borderColorForm - all three border representations are always numerically
+    // populated, so the value alone cannot say which driver entry point to use - and
+    // MOBILEGL_PIPE_VERIFY compares them FIELD BY FIELD (PipeFields.def's
+    // MGP_FIELDS_SamplerParameters), because the struct has three bytes of trailing padding
+    // and a byte comparison of it is a coin flip rather than a gate.
+    struct MGPipeSamplerCsoRecord {
+        Uint32 Gen = 0;
+        Bool Live = false;
+        SamplerParameters Params{};
+        Uint64 Serial = 0;
+    };
+
+    // create_sampler_view / delete_sampler_view: ONLY the view restrictions. Everything a
+    // glTexParameter writes lives on set_texture_params instead. Re-issuing on the same
+    // handle is how a restriction change travels (Gen moves only on slot reuse); it bumps
+    // Serial and does not rebind anything.
+    struct MGPipeSamplerViewRecord {
+        Uint32 Gen = 0;
+        Bool Live = false;
+        MGPSamplerView View{};
+        Uint64 Serial = 0;
+    };
+
+    // create/bind/delete_shader_state, plus set_global_constants' per-program half.
+    //
+    // THE ARTEFACTS ARE NOT HELD HERE IN MONOLITH: MGPProgramDesc's seven MGPBlobRefs are all
+    // declared with Size 0 ("this record does not declare its blob") and the LinkArtifacts /
+    // SpirvArtifacts ride beside the record through the entry point's companion pointers, so
+    // the applier stores the DESCRIPTOR and the identity and the server reads the frontend's
+    // own archive. That is what keeps the codec off the monolith hot path entirely; the verify
+    // build is where it is exercised, by serialising, deserialising and field-comparing before
+    // storing.
+    //
+    // GlobalConstants is the one allocation P4a adds per program, it is bounded by
+    // Desc.GlobalUboSize, and it is NOT on the hot path: set_global_constants is
+    // (ShaderCso, Version) keyed and fires at most once per program per frame.
+    struct MGPipeShaderCsoRecord {
+        Uint32 Gen = 0;
+        Bool Live = false;
+        MGPProgramDesc Desc{};
+        // GetUBOContentVersion() as last received. ~0u is the backends' "never uploaded"
+        // sentinel and the client must never emit it, so it is also what this starts at.
+        Uint32 GlobalConstantsVersion = ~Uint32{0};
+        Vector<Uint8> GlobalConstants;
+        Uint64 GlobalConstantsSerial = 0;
+        Uint64 Serial = 0;
     };
 
     // The vertex-elements CSO as the applier holds it: the unpacked blob, both views, plus
@@ -217,6 +349,30 @@ namespace MobileGL::MG_Pipe {
         Vector<MGPipeResourceRecord> Resources;
         Vector<MGPipeVertexElementsRecord> VertexElementsCsos;
 
+        // ---- P4a's object records. FIVE MORE TABLES, and the two resource ones are separate
+        // Vectors rather than more rows of `Resources` above because the slot space is PER
+        // KIND: a Buffer, a Texture and a Renderbuffer can all hold slot 7 at once, so a
+        // single slot-indexed table would alias three different objects onto one record. The
+        // record TYPE is shared - one discriminated descriptor for buffers, every texture
+        // target and renderbuffers - and the bound is shared; only the table is per kind.
+        //
+        // Like the two above they are share-group state: MGPipeApplierReset does not touch
+        // them, and only the object's own death signal and MGPipeApplierReleaseObjectRecords
+        // clear them.
+        Vector<MGPipeResourceRecord> TextureResources;
+        Vector<MGPipeResourceRecord> RenderbufferResources;
+        Vector<MGPipeSamplerCsoRecord> SamplerCsos;
+        Vector<MGPipeSamplerViewRecord> SamplerViewCsos;
+        Vector<MGPipeShaderCsoRecord> ShaderCsos;
+        // The ShaderCso COMPOSITE band's records, indexed by (slot - the band's base), for the
+        // same reason MGPipeSlotAllocator keeps the band in a table of its own: the band
+        // starts at 983040, so one program-pipeline composite in the slot-indexed vector above
+        // would grow it to ~983k records of ~240 bytes each. THE SERVER STILL NEVER LEARNS IT
+        // IS A COMPOSITE - the split is an indexing detail on this side of the wire, the
+        // handle is an ordinary ShaderCso handle, and create/bind/delete_shader_state name it
+        // exactly as they name any other program.
+        Vector<MGPipeShaderCsoRecord> CompositeShaderCsos;
+
         // Every call this applier REFUSED because it named a record this applier does not
         // have: an unknown slot, a slot that is not live, or a generation that has moved on
         // under it. The refusal is a defined no-op - nothing stored, nothing dispatched, no
@@ -227,6 +383,19 @@ namespace MobileGL::MG_Pipe {
         // build. Per context, like the four render-state wire counters above.
         Uint64 RefusedResourceCalls = 0;
         Uint64 RefusedVertexInputCalls = 0;
+        // P4a's, in the same shape and for the same reason: every framebuffer, sampler,
+        // sampler-view, program and texture-params call this applier refused because it named
+        // a record this applier does not have. One counter rather than five, because the five
+        // families share one legal refusal sequence (teardown ->
+        // MGPipeApplierReleaseObjectRecords -> ~Object -> death notices naming records already
+        // dropped) and an operator reading a log wants to know that ANY object call was
+        // dropped; the log line names the call and the handle.
+        //
+        // THE OTHER CLASS IS NOT COUNTED HERE AND MUST NOT BE: a var-tail window outside its
+        // bound, or a set_texture_params whose BuiltinSampler is the null handle, would make
+        // the backend act outside its own storage or sample an object that does not exist -
+        // that is Fatal{ProtocolCorruption}, not a dropped call.
+        Uint64 RefusedObjectCalls = 0;
 
         // ---- working state: what the next draw fetches with. All of it is per context and
         // all of it is cleared by MGPipeApplierReset, EXCEPT the two serials, which only ever
@@ -271,6 +440,50 @@ namespace MobileGL::MG_Pipe {
         // operator greps is PipeStats' map-persistent-roundtrips (mpr); this member is the
         // applier-side observable a unit case reads without a stats window.
         Uint64 MapPersistentRoundtrips = 0;
+
+        // ---- P4a's WORKING state. All of it is per context and all of it is cleared by
+        // MGPipeApplierReset, EXCEPT the serials, which only ever advance - a counter that
+        // restarts walks back through values already stamped into a twin that outlived the
+        // switch, and P4a deletes the identity patches that used to close that hole.
+
+        // set_framebuffer_state, per bound target (D-C2). Target = Both writes both. The
+        // record is fully resolved: ReadSurface comes from the READ framebuffer's own read
+        // buffer, so the shared-FBO case cannot lose it, and DrawBuffers[] is applied only for
+        // a record whose Target is not Read.
+        MGPFramebufferState DrawFramebuffer{};
+        MGPFramebufferState ReadFramebuffer{};
+        Uint64 FramebufferSerial = 0;
+
+        // The three kVarTail unit sets, as received. NO STAGE DIMENSION: MobileGL's
+        // texture-unit space is one merged array of 192, the same unit may be sampled from two
+        // stages, and stage is derived server-side from the reflection archive only where the
+        // target API needs it.
+        //
+        // THE VAR-TAIL WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED - the
+        // record is "the last set as received", exactly as set_vertex_buffers is, and
+        // Start + Count above the bound is Fatal{ProtocolCorruption}.
+        Array<MGPBoundView, kMGPipeMaxTextureUnits> BoundSamplerViews{};
+        Uint32 SamplerViewStart = 0;
+        Uint32 SamplerViewCount = 0;
+        Uint64 SamplerViewsSerial = 0;
+
+        Array<MGPipeHandle, kMGPipeMaxTextureUnits> BoundSamplerStates{};
+        Uint32 SamplerStateStart = 0;
+        Uint32 SamplerStateCount = 0;
+        Uint64 SamplerStatesSerial = 0;
+
+        Array<MGPImageView, kMGPipeMaxImageUnits> BoundShaderImages{};
+        Uint32 ShaderImageStart = 0;
+        Uint32 ShaderImageCount = 0;
+        Uint64 ShaderImagesSerial = 0;
+
+        // set_draw_program / set_dispatch_program are two calls because the frontend has two
+        // joins and two PipeInputs slots; bind_shader_state is the third, and a null handle is
+        // legal in all three and means "nothing bound".
+        MGPipeHandle DrawProgram = kMGPipeNullHandle;
+        MGPipeHandle DispatchProgram = kMGPipeNullHandle;
+        MGPipeHandle BoundShaderCso = kMGPipeNullHandle;
+        Uint64 ProgramBindingSerial = 0;
     };
 
     // The monolith's single applier. Under split there is one per served context.
@@ -288,6 +501,20 @@ namespace MobileGL::MG_Pipe {
     // vertex-input serials rather than zeroing them. It does NOT drop the resource or
     // vertex-elements records: those describe share-group objects that the switch does not
     // destroy, and dropping them is a dropped write on the far side of it.
+    //
+    // P4a EXTENDS BOTH HALVES AND THE RULE IS UNCHANGED (D-J4). Cleared: the two framebuffer
+    // records, the three unit sets, DrawProgram / DispatchProgram / BoundShaderCso - all of it
+    // per-context working state - with their serials ADVANCED and never zeroed. Not cleared:
+    // texture and renderbuffer resources, sampler CSOs, sampler views, shader CSOs, and the
+    // texture params and pending uploads that ride on a resource record, because a texture
+    // lives in a share group exactly as a buffer does.
+    //
+    // AND THEREFORE NO P4a TRACKER NEEDS A RE-PUBLICATION PATH ON FreshlyPrimed, AND NONE MAY
+    // HAVE ONE: re-emitting create_sampler_state for a record the applier still holds would
+    // move its Serial for nothing. What DOES reset on a fresh context is each emitter's
+    // BOUND-HANDLE latch - the framebuffer and unit-set hashes through
+    // MGPipeSetHashSuppressor::InvalidateAll, and the program emitter's BoundShaderCso mirror -
+    // because those mirror working state this function just cleared.
     void MGPipeApplierReset();
 
     // THE OTHER SCOPE: the served context is going away and its applier with it, so the object
@@ -402,6 +629,105 @@ namespace MobileGL::MG_Pipe {
     // set_index_buffer: an independent call, NOT a subset of the vertex-elements
     // configuration. Bumps IndexBufferSerial.
     void MGPipeApplySetIndexBuffer(const MGPIndexBuffer& record);
+
+    // ---------------------------------------------------------------------------------
+    // P4a: the fifteen object and working-state entry points (D-A1, D-B1, D-J1)
+    // ---------------------------------------------------------------------------------
+    //
+    // NOT ONE OF THEM DISPATCHES TO A BACKEND FUNCTION POINTER, and that is the single most
+    // important structural decision in P4a rather than an omission. Nothing in these families
+    // reaches the backend at GL-call time today - texture storage only marks a level dirty and
+    // Espryt allocates lazily at sync, texture params run from SyncTextureObjectToBackend at
+    // draw sync, renderbuffer storage is allocated inside SyncToBackend on a four-field cache,
+    // a sampler twin is created lazily from the program pass, and the framebuffer, unit sets
+    // and program are all resolved at PrepareForDraw. So every call below is either an OBJECT
+    // RECORD the applier stores or WORKING STATE the applier stores, and Espryt reads the
+    // applier at the sync points it already has, keyed on a server-owned Serial instead of a
+    // frontend version. MGPipeResourceOps is therefore UNCHANGED - nine members, same
+    // signatures - and P4a adds no backend op table and no op-table member at all.
+    //
+    // The consequence for the four resource entry points above: they BRANCH on
+    // record.Desc.Target. A buffer target dispatches into MGPipeResourceOps exactly as P3a
+    // wrote it; every other target stores and returns. The branch is one comparison against
+    // kMGPipeResourceTargetBuffer and it is where a mis-typed descriptor becomes visible.
+    //
+    // AT THE CONTRACT COMMIT EVERY BODY BELOW IS A STUB, exactly as P3a's nine were: the
+    // signatures are what the client, the backend and the gates compile against and the
+    // records above are what they write into; the bodies land in the three commits that
+    // follow this one on the same branch.
+
+    // set_framebuffer_state. Fully resolved - nothing in the record requires a lookup on the
+    // far side. `state.Target` says which binding it describes (Draw / Read / Both) and the
+    // applier keeps the two records apart; Both writes both. ContentHash covers every field
+    // including Fbo and DrawBuffers[8], which is what makes a suppressed record provably mean
+    // "the draw-buffer array did not move" and therefore "the fragColor broadcast count did
+    // not move".
+    void MGPipeApplySetFramebufferState(const MGPFramebufferState& state);
+
+    // create_sampler_state. `parameters` is the client's canonical SamplerParameters copy,
+    // beside the record for the one Blob rule's reason; the applier stores it by value.
+    void MGPipeApplyCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters);
+    // delete_sampler_state: emitted by the CSO cache's LRU eviction and by the frontend
+    // sampler object's death helper. Clears Live and drops the record; the client frees the
+    // slot afterwards.
+    void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle);
+
+    // create_sampler_view. Re-issued on the SAME handle whenever the view restrictions move,
+    // which is legal because Gen increments only on slot reuse and never on a respecify.
+    void MGPipeApplyCreateSamplerView(const MGPSamplerView& view);
+    void MGPipeApplyDeleteSamplerView(const MGPHandleOnly& handle);
+
+    // set_texture_params: addressed by RESOURCE and independent of any binding, which is what
+    // lets a texture that is only an attachment, only an image-unit binding or only a
+    // glCopyImageSubData endpoint carry its parameters at all. params.BuiltinSampler may never
+    // be the null handle - every ITextureObject owns a sampler object - so a null is
+    // Fatal{ProtocolCorruption} rather than "no sampler".
+    void MGPipeApplySetTextureParams(const MGPTextureParams& params);
+
+    // set_sampler_views / bind_sampler_states / set_shader_images: `tail` is hdr.Count entries
+    // starting at hdr.Start, and hdr.Start + hdr.Count above the unit bound is
+    // Fatal{ProtocolCorruption}. Entries outside the declared window are NOT cleared.
+    void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail);
+    void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail);
+    void MGPipeApplySetShaderImages(const MGPShaderImages& hdr, const MGPImageView* tail);
+
+    // create_shader_state. THE ARTEFACTS TRAVEL BESIDE THE RECORD, by pointer: all seven of
+    // desc.Spirv[] and desc.Reflection are declared with Size 0 ("this record does not declare
+    // its blob"), which is what a monolith emission is, and the codec is NOT called - zero
+    // serialisation cost on the monolith path. A verify build serialises, deserialises and
+    // field-compares before storing, and a mismatch is Fatal{PipeVerifyDiffer, "program-archive"}.
+    // Splitting this record for a transport whose ring caps one record at half its capacity is
+    // P5's problem, not this entry point's.
+    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
+                                      const MG_State::GLState::LinkArtifacts* link,
+                                      const MG_State::GLState::SpirvArtifacts* spirv);
+    void MGPipeApplyBindShaderState(const MGPHandleOnly& handle);
+    void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle);
+    void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle);
+    void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle);
+
+    // set_global_constants: the DEFAULT UNIFORM BLOCK only. Keyed (ShaderCso, Version) and
+    // emitted at most once per program per frame; `bytes` is MapUBO()'s image, GetUBOSize()
+    // long, handed over as a companion pointer with Blob.Size 0. record.Version is
+    // GetUBOContentVersion() and may never be ~0u, which is the backends' "never uploaded"
+    // sentinel.
+    void MGPipeApplySetGlobalConstants(const MGPGlobalConstants& record, const void* bytes);
+
+    // ---------------------------------------------------------------------------------
+    // P4a: the named, greppable unmigrated emulations (D-M)
+    // ---------------------------------------------------------------------------------
+    //
+    // ROADMAP.md's P4a row ends "emulation 在 split 下显式 Fatal 直到 P8". In monolith the
+    // code paths keep running exactly as today - the Fatal is a SPLIT-only arm - so this costs
+    // P4a a named call site per unmigrated emulation and nothing else. P5/P8 give it teeth: a
+    // split server that reaches one of these has no client address space to read and must
+    // abort loudly rather than degrade silently.
+    //
+    // Monolith body: (void)name;. The list of names is pinned by
+    // PipeCatalogueTest.EveryUnmigratedEmulationIsNamedOnce and the call count is grepped by
+    // the purity gate, so a site that quietly disappears is a red gate rather than a surprise
+    // at P8.
+    void MGPipeUnmigratedEmulation(const char* name);
 
     // ---------------------------------------------------------------------------------
     // The derivation step (ARCHITECTURE.md 5.3, P2 brief D5)

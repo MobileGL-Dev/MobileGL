@@ -47,6 +47,25 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle Allocate(MGPipeKind kind);
         // Allocate and remember `lifetimeId` as this handle's frontend identity.
         MGPipeHandle AllocateFor(MGPipeKind kind, Uint64 lifetimeId);
+
+        // P4a, D-H7: THE ONE ENTRY POINT INTO THE ShaderCso COMPOSITE BAND, and the only one
+        // there will ever be. Allocate() above refuses that band on purpose, so a program
+        // pipeline's flattened composite - minted client-side from the stage programs bound to
+        // the pipeline object, and indistinguishable from an ordinary program to the server -
+        // needs a door of its own rather than a flag on the handle. The kind is implied: only
+        // ShaderCso has a band.
+        //
+        // It behaves exactly like AllocateFor in every other respect (free list first, then
+        // the band's own high-water mark; Gen moves only on reuse; the lifetimeId -> slot map
+        // is written) and it carries the band's own exhaustion assert, so exhausting the
+        // composite space is a NAMED Fatal rather than silent slot theft from ordinary
+        // programs. Returns kMGPipeNullHandle when the band is full.
+        //
+        // Freed through the ordinary Free(MGPipeKind::ShaderCso, handle): a composite's slot
+        // has two independent release paths - the pipeline cache's LRU eviction and the
+        // composite ProgramObject's own destructor - and Free refusing a slot that is not live
+        // at that generation is what makes the second one a proven no-op.
+        MGPipeHandle AllocateComposite(Uint64 lifetimeId);
         // The handle a lifetime id was allocated for, or kMGPipeNullHandle. A recycled heap
         // address does NOT reproduce a mapping: MG_State hands out a fresh lifetime id per
         // object, so the map key is unique for the life of the process.
@@ -64,8 +83,12 @@ namespace MobileGL::MG_Pipe {
         // otherwise, live or not.
         Uint32 GenOfSlot(MGPipeKind kind, Uint32 slot) const;
         Uint64 LifetimeIdOfSlot(MGPipeKind kind, Uint32 slot) const;
-        // One past the highest slot ever handed out of this kind, i.e. what a server-side
-        // slot-indexed table must be sized to.
+        // One past the highest slot ever handed out of this kind - which for ShaderCso means
+        // the COMPOSITE band's top once a composite has been minted, because that really is
+        // the highest slot handed out. It is what the leak cases read (a leaked slot of any
+        // kind, composite included, moves it), and it is NOT a table size for kind ShaderCso:
+        // the band is sparse against the ordinary space by design, so a consumer indexing by
+        // slot keeps the band in a table of its own, exactly as this allocator does.
         Uint32 HighWater(MGPipeKind kind) const;
         Uint32 LiveCount(MGPipeKind kind) const;
         Uint32 FreeCount(MGPipeKind kind) const;
@@ -85,12 +108,27 @@ namespace MobileGL::MG_Pipe {
             // Indexed by slot; [0] is the reserved slot and is never live.
             Vector<SlotState> Slots;
             Vector<Uint32> FreeList;
+            // P4a: the ShaderCso COMPOSITE band, indexed by (slot - the band's base) and
+            // EMPTY for every other kind. A SECOND VECTOR RATHER THAN MORE OF THE FIRST, and
+            // it is not a micro-optimisation: the band starts at 983040, so minting one
+            // composite into the slot-indexed vector above would allocate ~983k SlotStates -
+            // ~23 MB - for a single program pipeline, and a consumer that sized a table off
+            // HighWater would pay the same shape again with a far bigger record. Both spaces
+            // stay dense against their own high-water mark, which is the property this
+            // allocator exists to give the server.
+            Vector<SlotState> BandSlots;
+            Vector<Uint32> BandFreeList;
             UnorderedMap<Uint64, Uint32> ByLifetimeId;
             Uint32 LiveCount = 0;
         };
 
         KindState& StateOf(MGPipeKind kind);
         const KindState& StateOf(MGPipeKind kind) const;
+        // The SlotState a (kind, slot) names, in whichever of the two vectors holds it, or
+        // null when the slot has never been handed out. One resolver, so a caller that forgets
+        // the band cannot exist.
+        static SlotState* EntryOf(KindState& state, MGPipeKind kind, Uint32 slot);
+        static const SlotState* EntryOf(const KindState& state, MGPipeKind kind, Uint32 slot);
 
         Array<KindState, kKindCount> m_kinds{};
     };

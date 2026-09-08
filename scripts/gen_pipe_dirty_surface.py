@@ -71,8 +71,21 @@ SCAN_ROOTS = (os.path.join(REPO_ROOT, "MobileGL", "MG_Impl", "GLImpl"),
               os.path.join(REPO_ROOT, "MobileGL", "MG_State", "GLState"))
 
 # The mutating half of GLContext's surface. Prefix-matched, per the plan's list.
+#
+# P4a WIDENS IT BY EXACTLY TWO WORDS, `Use` and `Bind`, and the hole they close is a coverage
+# hole in this heuristic rather than a red gate that was being ignored: `UseProgram` begins
+# with "Use" and `BindVertexArray`, `BindProgramPipelineObject` and `BindTransformFeedbackObject`
+# begin with "Bind", so none of the four was ever visible to this scan - and each of them moves
+# a field P3a or P4a pushes. The complete set the widening surfaces was enumerated by grep at
+# the phase's base ref before the change landed, so it is four names on seven call sites and
+# not a discovery.
+#
+# `Create` and `Pop` are DELIBERATELY NOT ADDED; DirtySurface.def's header carries the reason,
+# which is that they create or destroy objects rather than move a pushed field, and each
+# object class's creation and destruction is already answered by its own Mark*ForDeletion row
+# plus the constructor-time resource_create.
 MUTATOR_PREFIXES = ("Add", "Set", "Mark", "Bump", "Allocate", "Truncate", "Record", "Notify",
-                    "Begin", "End")
+                    "Begin", "End", "Use", "Bind")
 
 MUTATOR_RE = re.compile(r"pGLContext->\s*((?:%s)\w*)\s*\(" % "|".join(MUTATOR_PREFIXES))
 # The SECOND publish mechanism (MG_Pipe/PipeMutation.h). It carries the FIELD, not a mutator
@@ -1768,6 +1781,47 @@ def self_test(scanned, bits, publishers, movers, moved, outside=None, undecided_
                                               {"SetPixelStoreParam": {"NEW_PIXEL_PACK"}})
     tripped(any(p.startswith("STALE undecided mark NEW_PIXEL_PACK for SetPixelStoreParam")
                 for p in problems), "18 (a stale undecided mark)")
+
+    # 19. THE PREFIX WIDENING ITSELF (P4a). `Use` and `Bind` are what make the four new rows
+    #     visible at all, and the control asserts BOTH halves of that - P3a's ten-word set
+    #     matches none of the four, and the current set matches exactly the four - because
+    #     "the pattern matches now" and "the pattern did not match before" are different
+    #     claims, and only the pair says the widening bought anything.
+    p3a_prefixes = ("Add", "Set", "Mark", "Bump", "Allocate", "Truncate", "Record", "Notify",
+                    "Begin", "End")
+    p3a_re = re.compile(r"pGLContext->\s*((?:%s)\w*)\s*\(" % "|".join(p3a_prefixes))
+    widened_names = ("UseProgram", "BindVertexArray", "BindProgramPipelineObject",
+                     "BindTransformFeedbackObject")
+    sample = " ".join("pGLContext->%s(x);" % name for name in widened_names)
+    tripped(not p3a_re.findall(sample)
+            and sorted(MUTATOR_RE.findall(sample)) == sorted(widened_names),
+            "19 (P3a's prefix set is blind to the four mutators `Use` and `Bind` add)")
+
+    # 20a-20d. ONE CONTROL PER NEW ROW, and each is the row's own: with that ONE mutator gone
+    #     from what the scan finds - which is what a narrowed prefix set, a renamed entry point
+    #     or a deleted call site would produce - its row has to come out as a STALE row rather
+    #     than sitting in the file describing a mutator that no longer exists. The other three
+    #     rows must not trip on it, or one control would be standing in for four.
+    for index, name in enumerate(widened_names):
+        without = {m: c for m, c in scanned.items() if m != name} if isinstance(scanned, dict) \
+            else set(scanned) - {name}
+        problems = check_mapping(real, real_duplicates, without, bits)
+        stale = [p for p in problems if p.startswith("STALE row")]
+        tripped(len(stale) == 1 and name in stale[0],
+                "20%s (the %s row is STALE the moment the scan stops finding it)"
+                % ("abcd"[index], name))
+
+    # 21. THE TWO UNDECIDED MARKS ARE STILL LOAD-BEARING. Dropping them has to make --check
+    #     refuse both rows as unmarked UNDECIDED - which is what says the marks are covering a
+    #     real blind spot rather than a verdict the analysis could give today. Control 18 is
+    #     the other direction: a mark the derivation DOES decide is itself a problem, so
+    #     neither of these can outlive its reason.
+    problems, _, _, undecided_rows = object_class_problems(real, bits, movers, moved, outside, {})
+    tripped(any(p.startswith("UNDECIDED answer NEW_SHADER for UseProgram") for p in problems)
+            and any(p.startswith("UNDECIDED answer NEW_VERTEX_ELEMENTS for BindVertexArray")
+                    for p in problems)
+            and len(undecided_rows) == 2,
+            "21 (the two P4a undecided marks are still needed)")
 
     # THE POSITIVE CONTROLS. (a) The row that was wrong in round 3: SetPixelStoreParam writes
     # NEW_PIXEL_PACK's shutter member sixteen times, through a token-pasting macro; it has

@@ -18,7 +18,9 @@
 // them answers it against a shape the backend rediscovered. P2 lands the MECHANISM and ONE
 // real consumer (SetVertexAttribDefaults) so the shape is pinned by a test rather than by a
 // plan; the other six slots exist, are unit-tested, and are wired by the phase that moves
-// the set they name. P3a wires the second, SetVertexBuffers.
+// the set they name. P3a wires the second, SetVertexBuffers. P4a wires SetSamplerViews,
+// BindSamplerStates and SetShaderImages, and APPENDS an eighth slot, SetFramebufferState -
+// which leaves only SetShaderBuffers and SetStreamOutputTargets unwired, both P4b's.
 //
 // A WIRED SLOT PUTS A REQUIREMENT ON ITS HASH, and SetVertexBuffers is where that first
 // bites: the hash has to cover EVERY input the record carries, not only the set. Its
@@ -40,15 +42,28 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // One slot per kVarTail set_* (ARCHITECTURE.md 5.1's call list).
+    // One slot per kVarTail set_* (ARCHITECTURE.md 5.1's call list), PLUS
+    // SetFramebufferState, which is not kVarTail at all: MGPFramebufferState carries a
+    // ContentHash for TWO jobs - the server's render-pass memo key and the client's emission
+    // suppressor - and the second one needs a slot here like any other. The enum is
+    // CLIENT-ONLY and is not a wire opcode, so appending before Count is safe.
     enum class MGPipeSuppressorSlot : Uint32 {
         SetVertexBuffers = 0,     // P3a - wired, and its hash includes BaseInstance
-        SetSamplerViews,          // P3b
-        BindSamplerStates,        // P3b
-        SetShaderImages,          // P4b
+        // P4a - WIRED. The three unit sets' suppressors are not optional and were never a
+        // later phase's: MGPipeTypes.h makes the pattern mandatory for every kVarTail set_*,
+        // because GetTextureBindGeneration() bumps on a REDUNDANT rebind - MC 26.2 rebinds the
+        // same sampler at every texture-unit switch - so an unsuppressed set is a
+        // several-hundred-byte variable-length record per batch, which is the exact regression
+        // the design names. What P3b/P4b owns is the ~175-line BACKEND debounce these replace
+        // (UnitBindingsSnapshot / CaptureUnitBindings / UnitBindingsUnchanged and the two
+        // g_*SyncList tables); P4a wires the carrier, P3b/P4b deletes the backend copy.
+        SetSamplerViews,          // P4a - wired (backend debounce deletion: P3b/P4b)
+        BindSamplerStates,        // P4a - wired (backend debounce deletion: P3b/P4b)
+        SetShaderImages,          // P4a - wired (backend debounce deletion: P3b/P4b)
         SetShaderBuffers,         // P4b
         SetStreamOutputTargets,   // P4b
         SetVertexAttribDefaults,  // P2 - the one consumer that is wired
+        SetFramebufferState,      // P4a - wired
         Count,
     };
 

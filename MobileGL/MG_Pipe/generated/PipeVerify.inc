@@ -109,6 +109,7 @@ inline Bool MGPipeVerify(const MGPSwapInterval& a, const MGPSwapInterval& b, con
 inline Bool MGPipeVerify(const MGPSurfaceInfo& a, const MGPSurfaceInfo& b, const char** outField);
 inline Bool MGPipeVerify(const RenderStateParameters& a, const RenderStateParameters& b, const char** outField);
 inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParameters& b, const char** outField);
+inline Bool MGPipeVerify(const SamplerParameters& a, const SamplerParameters& b, const char** outField);
 inline Bool MGPipeVerify(const PerBufferBlendState& a, const PerBufferBlendState& b, const char** outField);
 inline Bool MGPipeVerify(const StencilFaceState& a, const StencilFaceState& b, const char** outField);
 inline Bool MGPipeVerify(const DynamicBackendParameters& a, const DynamicBackendParameters& b, const char** outField);
@@ -246,6 +247,8 @@ template <>
 struct MGPipeHasFieldVerifier<RenderStateParameters> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<PixelStoreParameters> : std::true_type {};
+template <>
+struct MGPipeHasFieldVerifier<SamplerParameters> : std::true_type {};
 template <>
 struct MGPipeHasFieldVerifier<PerBufferBlendState> : std::true_type {};
 template <>
@@ -629,6 +632,11 @@ inline Bool MGPipeVerify(const PixelStoreParameters& a, const PixelStoreParamete
     return true;
 }
 
+inline Bool MGPipeVerify(const SamplerParameters& a, const SamplerParameters& b, const char** outField) {
+    MGP_FIELDS_SamplerParameters(MGP_VERIFY_FIELD)
+    return true;
+}
+
 inline Bool MGPipeVerify(const PerBufferBlendState& a, const PerBufferBlendState& b, const char** outField) {
     MGP_FIELDS_PerBufferBlendState(MGP_VERIFY_FIELD)
     return true;
@@ -661,4 +669,4 @@ inline Bool MGPipeVerify(const MGPVertexBindingPointWire& a, const MGPVertexBind
 
 #undef MGP_VERIFY_FIELD
 
-inline constexpr SizeT kMGPipeVerifiedPayloadCount = 71;
+inline constexpr SizeT kMGPipeVerifiedPayloadCount = 72;

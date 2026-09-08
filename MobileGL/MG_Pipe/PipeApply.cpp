@@ -626,6 +626,7 @@ namespace MobileGL::MG_Pipe {
         // the backend's own bring-up and teardown, not by a state reset.
         g_applier.RefusedResourceCalls = 0;
         g_applier.RefusedVertexInputCalls = 0;
+        g_applier.RefusedObjectCalls = 0;
         g_applier.BoundVertexElements = kMGPipeNullHandle;
         g_applier.VertexBuffers = {};
         g_applier.VertexBufferStart = 0;
@@ -662,6 +663,31 @@ namespace MobileGL::MG_Pipe {
         //     the first compare after the switch is a mismatch, which is the safe direction.
         ++g_applier.VertexBuffersSerial;
         ++g_applier.IndexBufferSerial;
+
+        // ---- P4a's working state, cleared for the same reason and with the same serial rule
+        // (D-J4). The OBJECT records - texture and renderbuffer resources, sampler CSOs,
+        // sampler views, shader CSOs - are deliberately NOT here: a texture lives in a share
+        // group exactly as a buffer does, and its record is where the extent, the parameters
+        // and the pending-upload set the backend reads now live.
+        g_applier.DrawFramebuffer = MGPFramebufferState{};
+        g_applier.ReadFramebuffer = MGPFramebufferState{};
+        g_applier.BoundSamplerViews = {};
+        g_applier.SamplerViewStart = 0;
+        g_applier.SamplerViewCount = 0;
+        g_applier.BoundSamplerStates = {};
+        g_applier.SamplerStateStart = 0;
+        g_applier.SamplerStateCount = 0;
+        g_applier.BoundShaderImages = {};
+        g_applier.ShaderImageStart = 0;
+        g_applier.ShaderImageCount = 0;
+        g_applier.DrawProgram = kMGPipeNullHandle;
+        g_applier.DispatchProgram = kMGPipeNullHandle;
+        g_applier.BoundShaderCso = kMGPipeNullHandle;
+        ++g_applier.FramebufferSerial;
+        ++g_applier.SamplerViewsSerial;
+        ++g_applier.SamplerStatesSerial;
+        ++g_applier.ShaderImagesSerial;
+        ++g_applier.ProgramBindingSerial;
     }
 
     void MGPipeApplierReleaseObjectRecords() {
@@ -675,6 +701,23 @@ namespace MobileGL::MG_Pipe {
         g_applier.BoundVertexElements = kMGPipeNullHandle;
         ++g_applier.VertexBuffersSerial;
         ++g_applier.IndexBufferSerial;
+        // P4a's five object tables go with them, and the working handles they could name go
+        // too - a bound shader CSO whose record has just been dropped must not survive as a
+        // handle the next call resolves against.
+        g_applier.TextureResources.clear();
+        g_applier.RenderbufferResources.clear();
+        g_applier.SamplerCsos.clear();
+        g_applier.SamplerViewCsos.clear();
+        g_applier.ShaderCsos.clear();
+        g_applier.CompositeShaderCsos.clear();
+        g_applier.DrawProgram = kMGPipeNullHandle;
+        g_applier.DispatchProgram = kMGPipeNullHandle;
+        g_applier.BoundShaderCso = kMGPipeNullHandle;
+        ++g_applier.FramebufferSerial;
+        ++g_applier.SamplerViewsSerial;
+        ++g_applier.SamplerStatesSerial;
+        ++g_applier.ShaderImagesSerial;
+        ++g_applier.ProgramBindingSerial;
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
@@ -1371,4 +1414,84 @@ namespace MobileGL::MG_Pipe {
     void MGPipeDeriveRenderStateFieldsForChunks(PipeInputs& inputs, Uint32 globalChunkBits) {
         MGPipeApplyAccess::DeriveRenderStateFields(inputs, globalChunkBits);
     }
+
+    // ================================================================================
+    // P4a: the fifteen object and working-state entry points - STUBS (contract commit)
+    // ================================================================================
+    //
+    // Every body below is deliberately empty at the contract commit, exactly as P3a's nine
+    // resource entry points were at theirs. What this commit fixes is the SIGNATURE and the
+    // storage it will write into: packages B and C compile and link against these, package D
+    // and E read the records above, and the gates see the whole shape - so nothing after this
+    // commit has to change a declaration, and no two packages ever edit one file.
+    //
+    // The bodies land in w1 (framebuffer + texture resources), w2 (samplers, views and the
+    // three unit sets) and w3 (programs and the default uniform block), on this same branch
+    // and before any client package runs against them: a stub applier under a real client is
+    // how P3a's first Espryt round produced 202 red cases that had to be argued rather than
+    // measured, and the order exists to make that structurally impossible.
+    //
+    // (void) casts rather than unnamed parameters, so the parameter NAMES stay in the
+    // definition and the bodies that replace these start from the vocabulary the header uses.
+
+    void MGPipeApplySetFramebufferState(const MGPFramebufferState& state) { (void)state; }
+
+    void MGPipeApplyCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters) {
+        (void)desc;
+        (void)parameters;
+    }
+
+    void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplyCreateSamplerView(const MGPSamplerView& view) { (void)view; }
+
+    void MGPipeApplyDeleteSamplerView(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplySetTextureParams(const MGPTextureParams& params) { (void)params; }
+
+    void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
+        (void)hdr;
+        (void)tail;
+    }
+
+    void MGPipeApplyBindSamplerStates(const MGPSamplerStates& hdr, const MGPipeHandle* tail) {
+        (void)hdr;
+        (void)tail;
+    }
+
+    void MGPipeApplySetShaderImages(const MGPShaderImages& hdr, const MGPImageView* tail) {
+        (void)hdr;
+        (void)tail;
+    }
+
+    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
+                                      const MG_State::GLState::LinkArtifacts* link,
+                                      const MG_State::GLState::SpirvArtifacts* spirv) {
+        (void)desc;
+        (void)link;
+        (void)spirv;
+    }
+
+    void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) { (void)handle; }
+
+    void MGPipeApplySetGlobalConstants(const MGPGlobalConstants& record, const void* bytes) {
+        (void)record;
+        (void)bytes;
+    }
+
+    // THE MONOLITH BODY IS A NO-OP AND THAT IS THE WHOLE OF IT: the emulation this names still
+    // runs, exactly as it does today, on the same code path. What the call site buys is that
+    // the set of emulations a split server cannot serve is NAMED, GREPPABLE and PINNED, so P5
+    // and P8 give it teeth by editing one function instead of rediscovering five call sites.
+    //
+    // It takes a literal and does nothing with it. Not a log line, not a counter: it sits on
+    // paths a frame can reach many times, and ROADMAP.md forbids committing hot-path
+    // instrumentation.
+    void MGPipeUnmigratedEmulation(const char* name) { (void)name; }
 } // namespace MobileGL::MG_Pipe

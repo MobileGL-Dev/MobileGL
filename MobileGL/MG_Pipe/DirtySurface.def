@@ -154,6 +154,21 @@
 // The gate is therefore a COMPLETENESS gate over what the scanner does see. The semantic
 // proof stays the MOBILEGL_PIPE_VERIFY lane, which is blind to none of them.
 //
+// THE MUTATOR PREFIX SET WIDENS AT P4a, and what it does NOT gain is the more interesting
+// half. `pGLContext->` + Add|Set|Mark|Bump|Allocate|Truncate|Record|Notify|Begin|End could
+// not see `UseProgram`, `BindVertexArray`, `BindProgramPipelineObject` or
+// `BindTransformFeedbackObject` - four mutators that each move a field P3a or P4a pushes -
+// because none of them starts with one of those words. `Use` and `Bind` are added, and the
+// complete set the widening surfaces was enumerated by grep at the phase's base ref so it
+// cannot surprise anybody: exactly those four names, on seven call sites.
+//
+// `Create*` and `Pop*` are DELIBERATELY NOT ADDED. They create or destroy objects rather than
+// move a pushed field, and each object class's creation and destruction is already answered
+// twice over - by its own Mark*ForDeletion row below and by the constructor-time
+// resource_create - so adding them would produce rows that restate an answer this file already
+// gives, and every one of them would have to be maintained against a mechanism that is not
+// theirs. A gate whose rows do not each carry their own question is a gate nobody reads.
+//
 // clang-format off
 
 // X(Mutator, Answer)
@@ -279,6 +294,34 @@
     /* so the honest answer is the pull. Narrowing it is P3b's, when it takes the subsystem */  \
     /* over and the binding points get a generation of their own.                           */ \
     X(SetNamedTransformFeedbackBinding,   kPulledEveryVerb)                                     \
+    /* ---- P4a, THE FOUR THE WIDENED PREFIX SET SURFACES. Every one of them moves a field */  \
+    /* P3a or P4a pushes and none of them was visible to the scan before, because none     */  \
+    /* begins with one of the ten words the pattern matched.                                */ \
+    /*   UseProgram is bit 6's whole subject: the shutter is                                */ \
+    /*     Mix(GetCurrentProgram()->GetLifetimeId(), GetLinkVersion()) and glUseProgram is  */  \
+    /*     what moves the object it reads through. Two call sites.                          */ \
+    /*   BindVertexArray is bit 5's, for the same reason one level down: the shutter mixes  */  \
+    /*     the bound VAO's identity with its configuration version, and this is the bind.   */  \
+    /*     Three call sites.                                                                */ \
+    X(UseProgram,                         NEW_SHADER)                                          \
+    X(BindVertexArray,                    NEW_VERTEX_ELEMENTS)                                 \
+    /* NOT NEW_SHADER, and the derivation refutes it outright rather than leaving it a      */  \
+    /* judgement: this mutator writes m_boundProgramPipeline (plus the pipeline name table) */  \
+    /* and bit 6's shutter reads m_currentProgram's lifetime id and link version - disjoint */  \
+    /* sets, on every path. That is not an oversight in the shutter either: it reads        */  \
+    /* GetCurrentProgram() and DELIBERATELY NOT GetProgramForDraw(), because the tracker    */  \
+    /* must not force a compile just to answer "did the shader move", and flattening a      */  \
+    /* pipeline into its composite is exactly the compile it would force. What a bind moves */  \
+    /* is which program the validate point will flatten, and that field -                   */  \
+    /* GetProgramForDraw - is in the may-read mask of every class that draws and is copied  */  \
+    /* by the residual fill at every verb of those classes, EMITTED-AND-STILL-PULLED like   */  \
+    /* GetBoundVertexArray. So the pull is what holds on every path, and it is the answer.  */ \
+    X(BindProgramPipelineObject,          kPulledEveryVerb)                                    \
+    /* No shutter at all, and none is needed: the transform-feedback binding reaches the    */  \
+    /* backend through GetBoundTransformFeedbackLifetimeId and its siblings, which are in   */  \
+    /* the kDraw and kXfbSpan may-read masks, so the residual fill copies them at every     */  \
+    /* verb of those classes. Narrowing it is P4b's, with set_stream_output_targets.        */ \
+    X(BindTransformFeedbackObject,        kPulledEveryVerb)                                    \
     /* ---- an object's death: no generation, because there is no longer an object  */          \
     /* to carry one. Espryt 0b's delete_* / resource_destroy publishes the kinds     */         \
     /* that have a handle on the wire; programs, program pipelines and shaders have  */         \
@@ -296,9 +339,24 @@
     /*     Destroyed consumer, package espryt), not the client's: the client mints   */        \
     /*     the CSO handle and emits create/bind, and the free rides with that        */        \
     /*     consumer. Until it lands the row states the design, not the tree.         */        \
+    /* P4a CLOSES ONE OF THE THREE HOLES ABOVE AND STATES WHY THE OTHER TWO ARE NOT HOLES.  */ \
+    /*   MarkProgramForDeletion -> kExplicitDestroy. delete_shader_state exists now and     */  \
+    /*     ~ProgramObject emits it through the client-side death helper, in the fixed       */  \
+    /*     order: the wire delete first, the backend notice second, the slot free last. A   */  \
+    /*     program pipeline COMPOSITE takes the same call on the same helper - the server   */  \
+    /*     never learns it is a composite.                                                  */ \
+    /*   MarkProgramPipelineForDeletion stays kUnpublishedDestroy, and it is NOT waiting    */  \
+    /*     for a later phase: a ProgramPipelineObject has no lifetime id and no wire object */  \
+    /*     at all (its only identity is m_everBound). It never gets a handle, so there is   */  \
+    /*     nothing for a delete to name. What its cache's eviction DOES publish is the      */  \
+    /*     composite's delete_shader_state, which is the row above.                         */ \
+    /*   MarkShaderForDeletion stays kUnpublishedDestroy for the same kind of reason: a     */  \
+    /*     ShaderObject has no lifetime id and never crosses the boundary - the payload is  */  \
+    /*     per-stage SPIR-V plus the reflection archive, not source, and glslang lives      */  \
+    /*     entirely on the client.                                                          */ \
     X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
     X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
-    X(MarkProgramForDeletion,             kUnpublishedDestroy)                                  \
+    X(MarkProgramForDeletion,             kExplicitDestroy)                                     \
     X(MarkProgramPipelineForDeletion,     kUnpublishedDestroy)                                  \
     X(MarkRenderbufferObjectForDeletion,  kExplicitDestroy)                                     \
     X(MarkSamplerObjectForDeletion,       kExplicitDestroy)                                     \
@@ -326,9 +384,32 @@
 // UNDECIDED, each with the reason --check prints for it. Every bit answer NOT listed here
 // is marked derived: --check fails when the derivation cannot decide it, and fails again
 // when a mark here names a pair the derivation now decides, so this list can neither hide a
-// row nor outlive its reason. Empty today: every bit answer above is supported at field
-// level. The ten mutators that reach a tainted body (--check prints the count) all carry a
-// prose answer, which no derivation checks.
-#define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)
+// row nor outlive its reason.
+//
+// IT WAS EMPTY UNTIL P4a, and it stops being empty for a reason that is a property of the
+// SCANNER rather than of the two rows. Both entries below are bit answers that are plainly
+// true - glUseProgram is what moves the object bit 6's shutter reads through, and
+// glBindVertexArray is what moves the object bit 5's shutter reads through - and the write
+// analysis cannot say so, because each of them reaches, BY NAME, a body that writes a member
+// with no m_ prefix:
+//
+//   UseProgram      -> DestroyProgramSlot() writes `attachedShaders`
+//   BindVertexArray -> a call spelled `Bind(` resolves to every body of that name, one of
+//                      which (ImageTextureBinding::Bind) writes `Access`
+//
+// A call resolved by name to every body of that name is one of the three over-approximations
+// this analysis documents about itself, and an unplaceable write TAINTS the body it is in -
+// which is the right default, because "it does not write anything the shutter reads" must
+// never be claimed about code the script could not read. Widening the taint rule to ignore
+// non-m_ writes would weaken the one mechanism that catches a genuine under-fire, so the rows
+// are MARKED, with the tool's own reason, rather than the tool being made more permissive.
+// Control 9c is what proves a marked row still needs the mark, and control 18 is what fails
+// the moment either of these becomes decidable and the mark outlives its reason.
+//
+// The ten mutators that reach a tainted body (--check prints the count) all carry a prose
+// answer, which no derivation checks; these two are the first that carry a bit answer.
+#define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
+    X(UseProgram,      NEW_SHADER)                                                              \
+    X(BindVertexArray, NEW_VERTEX_ELEMENTS)
 
 // clang-format on

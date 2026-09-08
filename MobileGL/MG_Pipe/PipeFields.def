@@ -78,9 +78,12 @@
     F(Cso) F(Texture) F(InternalFormat) F(Target) F(MinLevel) F(NumLevels) F(MinLayer) F(NumLayers) \
     F(Samples) F(FixedSampleLocations)
 
+// P4a, D-E1: BuiltinSampler and SamplerResync. Pad0 stays unlisted - gen_pipe.py's
+// PADDING_MEMBER_RE (^Pad\d*$) excludes it, and a member that stops being called Pad<n> MUST
+// gain a row here or pipe-gates goes red.
 #define MGP_FIELDS_MGPTextureParams(F) \
-    F(Res) F(BaseLevel) F(MaxLevel) F(Swizzle) F(DepthStencilMode) F(ForceResync) F(MinLod) F(MaxLod) \
-    F(LodBias)
+    F(Res) F(BuiltinSampler) F(BaseLevel) F(MaxLevel) F(Swizzle) F(DepthStencilMode) F(ForceResync) \
+    F(SamplerResync) F(MinLod) F(MaxLod) F(LodBias)
 
 #define MGP_FIELDS_MGPProgramDesc(F) \
     F(Cso) F(StageMask) F(GlobalUboSize) F(ReservedNumSamplesOffset) F(SpirvStatus) F(NativeFloat64) \
@@ -89,9 +92,12 @@
 #define MGP_FIELDS_MGPSurface(F) \
     F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget)
 
+// P4a, D-C2: Pad0 became Uint8 Target, and gen_pipe.py's PADDING_MEMBER_RE only excludes a
+// member still NAMED Pad<n> - so the rename without this row is a pipe-gates failure, which
+// is exactly the trip wire that makes the byte impossible to add silently.
 #define MGP_FIELDS_MGPFramebufferState(F) \
     F(Fbo) F(Color) F(Depth) F(Stencil) F(ReadSurface) F(DrawBuffers) F(Width) F(Height) F(Layers) \
-    F(Samples) F(FixedSampleLocations) F(IsDefault) F(Complete) F(ContentHash)
+    F(Samples) F(FixedSampleLocations) F(IsDefault) F(Complete) F(Target) F(ContentHash)
 
 #define MGP_FIELDS_MGPVertexBuffer(F) \
     F(Res) F(Offset) F(Stride) F(Divisor) F(BindingIndex)
@@ -254,6 +260,18 @@
     F(SwapBytes) F(LSBFirst) F(RowLength) F(ImageHeight) F(SkipPixels) F(SkipRows) F(SkipImages) \
     F(Alignment)
 
+// P4a, D-F1: THE PADDING TRAP. SamplerParameters is sizeof == 100 with THREE BYTES OF
+// TRAILING PADDING (96 bytes of members plus the 1-byte borderColorForm) and had no field
+// table and no MGP_VERIFY_PAYLOAD_LIST row at all, so MGPSamplerDesc's blob was compared as
+// BYTES and MOBILEGL_PIPE_VERIFY could false-differ on uninitialised padding - a coin flip
+// rather than a gate. With this list the comparator sees the sixteen members and the three
+// bytes can never enter the answer. The client-side CSO cache hashes and memcmp-confirms over
+// a ZERO-INITIALISED canonical copy for the same reason, which is the other half of D-F1.
+#define MGP_FIELDS_SamplerParameters(F) \
+    F(wrapS) F(wrapT) F(wrapR) F(minFilter) F(magFilter) F(mipmapMode) F(minLod) F(maxLod) \
+    F(lodBias) F(maxAnisotropy) F(compareFunc) F(compareMode) F(borderColor) F(borderColorI) \
+    F(borderColorUI) F(borderColorForm)
+
 #define MGP_FIELDS_PerBufferBlendState(F) \
     F(Enabled) F(SrcFactorRGB) F(DstFactorRGB) F(SrcFactorAlpha) F(DstFactorAlpha) F(ColorEquation) \
     F(AlphaEquation)
@@ -326,7 +344,8 @@
     P(MGPDrawRange) P(MGPDrawIndirect) P(MGPGridInfo) P(MGPMemoryBarrier) P(MGPStreamOutputBegin) \
     P(MGPXfbAccounting) P(MGPStreamOutputControl) P(MGPFlush) P(MGPPresent) P(MGPSwapInterval) \
     P(MGPSurfaceInfo) \
-    P(RenderStateParameters) P(PixelStoreParameters) P(PerBufferBlendState) P(StencilFaceState) \
+    P(RenderStateParameters) P(PixelStoreParameters) P(SamplerParameters) P(PerBufferBlendState) \
+    P(StencilFaceState) \
     P(DynamicBackendParameters) P(MGHostSpan) \
     P(MGPVertexAttribWire) P(MGPVertexBindingPointWire)
 

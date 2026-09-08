@@ -19,9 +19,19 @@
 #include <MG_State/GLState/StateObjectDeathNotice.h>
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/CsoCache.h>
+// P4a's five client emitters. This translation unit is the ONLY one that includes them in the
+// library, exactly as it is for Tracker.h, CsoCache.h, ResourceTracker.h and VertexInputEmit.h
+// - all of them header-only for the same ownership reason. Each carries its family's
+// kMGPipeWired*Subsystem constant, so the bit that switches a family on is added by the commit
+// that gives that family's emitters their bodies, and no two packages ever edit one file.
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#include <MG_Impl/Pipe/ImageEmit.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/ProgramEmit.h>
 #include <MG_Impl/Pipe/ResourceTracker.h>
+#include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/TextureEmit.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
@@ -849,6 +859,125 @@ namespace MobileGL::MG_Pipe {
         return published;
     }
 
+    // ================================================================================
+    // P4a: one client-side death helper per kind P4a mints (D-I1)
+    // ================================================================================
+    //
+    // BACKEND-NEUTRAL FROM THE FIRST COMMIT, which is the whole point: before P3a's C-1 fix
+    // the only thing that ever returned a VertexElementsCso slot was DirectGLES'
+    // StateObjectDeathOps table, so under a backend that installs none every VAO leaked a slot
+    // and a ~1.3 KB applier record for the life of the process. P4a mints SIX kinds and there
+    // is no intermediate state in which a backend table is the only path for any of them.
+    //
+    // THE THREE-STEP ORDER IS FIXED and each position is load-bearing (see PipeMutation.h):
+    // wire delete, then the death notice, then the slot free. Each helper returns whether its
+    // delete actually went out, which is the LATCH taken at the object's create - asking a
+    // live predicate twice pairs a create emitted under one registration with a destroy gated
+    // on another, and either direction leaks.
+    //
+    // EVERY ONE OF THEM IS PUBLISHED-GATED RATHER THAN SLOT-GATED. A slot is not evidence of a
+    // record: a backend twin table mints one through MGPipeSlots().Acquire whether or not the
+    // subsystem ever asked this client to emit a create - which is exactly what a
+    // MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs - and a delete_* on such a handle is
+    // a refused call the applier counts and asserts on. So the emitter is asked
+    // RecordIsPublished(handle) before any delete goes out.
+    //
+    // AT THE CONTRACT COMMIT the five family emitters are stubs that publish nothing, so every
+    // helper here answers false and the legacy path runs unchanged - which is what makes this
+    // commit behaviourally inert while the SHAPE is already the final one.
+    namespace {
+        // Steps 2 and 3, shared: raise the notice while the handle still resolves, then return
+        // the slot. Raised UNCONDITIONALLY, exactly as the five destructors raised it before
+        // P4a: whether a slot exists is this client's business, and a consumer that records
+        // notices must not stop seeing a class announce itself.
+        void NotifyAndFree(MGPipeKind kind, Uint64 lifetimeId, MGPipeHandle handle) {
+            MG_State::GLState::NotifyStateObjectDestroyed(kind, lifetimeId);
+            if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(kind, handle);
+        }
+    } // namespace
+
+    Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId) {
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
+        const Bool published = false; // the sampler emitter publishes nothing yet
+        // A sampler view has no frontend object of its own - it is minted off the texture's
+        // lifetime id - so there is no NotifyStateObjectDestroyed for kind SamplerViewCso to
+        // raise and step 2 is vacuous here. The slot still goes back, last.
+        if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(MGPipeKind::SamplerViewCso, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId) {
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
+        const Bool published = false; // the texture emitter publishes nothing yet
+        NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
+        // THE SAMPLER VIEW DIES WITH ITS TEXTURE, because it is minted off the same lifetime
+        // id: one SamplerViewCso per ITextureObject (D-F2), re-issued on the same handle
+        // whenever the restrictions move. Released AFTER the texture's own record, so a server
+        // that reads the view to answer "what is this texture" still can while the texture is
+        // being dropped.
+        //
+        // THE BUILT-IN SAMPLER IS NOT RELEASED HERE, and that is a correction to the design
+        // table rather than an omission: the SamplerObject every ITextureObject owns is a real
+        // frontend object with its OWN lifetime id and its own #if MOBILEGL_PIPE_PUSH
+        // destructor, so freeing it from the texture's lifetime id would resolve the wrong slot
+        // (or, worse, a live one belonging to another object). ~SamplerObject runs immediately
+        // after this - a member's destructor follows its owner's body - and takes
+        // MGPipeEmitSamplerCsoDestroyAndFree below, which is the same helper, the same order
+        // and idempotent.
+        MGPipeEmitSamplerViewCsoDestroyAndFree(lifetimeId);
+        return published;
+    }
+
+    Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId) {
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
+        const Bool published = false; // the texture/renderbuffer emitter publishes nothing yet
+        NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitFramebufferDestroyAndFree(Uint64 lifetimeId) {
+        // NO WIRE DELETE EXISTS FOR THIS KIND, and none is invented: PipeCalls.def has
+        // resource_destroy and the five delete_* rows and no framebuffer delete, because a
+        // framebuffer is not a resource and is not a CSO - it is STATE, and
+        // set_framebuffer_state is the only call that names one. The catalogue is closed.
+        //
+        // So the handle is minted and freed entirely client-side and this helper is steps 2
+        // and 3 only. What makes a dangling Fbo unreachable is the frontend's own
+        // MarkFramebufferObjectForDeletion path, which already rebinds any slot holding the
+        // victim to framebuffer 0; and a RECYCLED framebuffer handle can never be suppressed
+        // against its predecessor's record, because Fbo carries Gen and Gen is inside the
+        // record's ContentHash.
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
+        NotifyAndFree(MGPipeKind::Framebuffer, lifetimeId, handle);
+        return false;
+    }
+
+    Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId) {
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
+        const Bool published = false; // the sampler emitter publishes nothing yet
+        NotifyAndFree(MGPipeKind::SamplerCso, lifetimeId, handle);
+        return published;
+    }
+
+    Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId) {
+        // ORDINARY PROGRAMS AND PIPELINE COMPOSITES TAKE THE SAME PATH, deliberately: the
+        // server never learns a composite is a composite, and the only difference on this side
+        // is which band the slot came out of. A composite's slot has TWO independent release
+        // paths - the pipeline cache's LRU eviction and the composite ProgramObject's own
+        // destructor - and the second is a proven no-op, because MGPipeSlotAllocator::Free
+        // refuses a slot that is not live at that generation and bumps no generation of its
+        // own (the bump rides the next handout).
+        const MGPipeHandle handle =
+            MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
+        const Bool published = false; // the program emitter publishes nothing yet
+        NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);
+        return published;
+    }
+
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
         if (verb == nullptr || field == nullptr) {
             g_omission = PoisonOmission{};
@@ -970,6 +1099,20 @@ namespace MobileGL::MG_Pipe {
             // causes them rather than filled into a PipeInputs field.
             case MGPipeFieldEmitter::BindVertexElements:
                 return kMGPipeSubsystemVertexInput;
+            // P4a's six emitted rows, across three of its four subsystems. The fourth,
+            // kMGPipeSubsystemTextureResources, names NO emitted field and cannot: the texture
+            // and renderbuffer resource_* calls and set_texture_params are dispatched at the
+            // GL call that causes them rather than filled into a PipeInputs field, exactly as
+            // P3a's buffer family is, so there is no Coverage.def emitted row for them and
+            // there must not be one.
+            case MGPipeFieldEmitter::SetFramebufferState:
+                return kMGPipeSubsystemFramebuffer;
+            case MGPipeFieldEmitter::SetSamplerViews:
+            case MGPipeFieldEmitter::SetShaderImages:
+                return kMGPipeSubsystemSamplers;
+            case MGPipeFieldEmitter::SetDrawProgram:
+            case MGPipeFieldEmitter::SetDispatchProgram:
+                return kMGPipeSubsystemPrograms;
             case MGPipeFieldEmitter::kNone:
                 break;
             }
@@ -1038,6 +1181,72 @@ namespace MobileGL::MG_Pipe {
                           MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                       "the MGPipe vertex-attribute capacity and the frontend's have drifted");
 
+        // ---- P4a's SEVEN pairings, and EVERY ONE OF THEM COMPARES AGAINST
+        // SubsystemForEmitter RATHER THAN AGAINST A CONSTANT. That is the lesson written out
+        // twenty lines above and it is not a style preference: naming the subsystem constant
+        // directly pins the dirty half to a constant instead of pinning the two MAPS to each
+        // other, so an emitter row moved onto another subsystem would still satisfy the
+        // assertion while the emission gate and the residual-fill skip had begun to disagree.
+        //
+        // One emitter row stands for each family: set_framebuffer_state for the framebuffer,
+        // set_sampler_views for the sampler family (set_shader_images is the same subsystem
+        // and is pinned to it below), and set_draw_program for the program family.
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewFramebuffer) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetFramebufferState),
+                      "set_framebuffer_state and NEW_FRAMEBUFFER must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplerViews) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetSamplerViews),
+                      "set_sampler_views and NEW_SAMPLER_VIEWS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewSamplers) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetSamplerViews),
+                      "bind_sampler_states and NEW_SAMPLERS must name the sampler subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderImages) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetShaderImages),
+                      "set_shader_images and NEW_SHADER_IMAGES must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShader) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram),
+                      "create/bind_shader_state and NEW_SHADER must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBindings) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram),
+                      "the program family and NEW_SHADER_BINDINGS must name one subsystem");
+        static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewGlobalConstants) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDispatchProgram),
+                      "set_global_constants and NEW_GLOBAL_CONSTANTS must name one subsystem");
+        // And the two program emitters really are one subsystem, which is what makes the two
+        // assertions above a statement about the family rather than about one call.
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::SetDrawProgram) ==
+                          SubsystemForEmitter(MGPipeFieldEmitter::SetDispatchProgram),
+                      "set_draw_program and set_dispatch_program are one family and one A/B");
+
+        // THE TEXTURE-RESOURCE SUBSYSTEM HAS NO DIRTY BIT, and that has to be asserted rather
+        // than left as an absence: its calls are dispatched from the GL entry points that
+        // cause them, so a bit that started naming it would gate the emission twice - once at
+        // the dispatch site and once in the walk - and the two would disagree the first time
+        // one of them was edited. Exactly the shape NoDirtyBitOwnsTheResidualSubsystem uses.
+        constexpr Bool NoDirtyBitOwnsTheTextureResourceSubsystem() {
+            for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) ==
+                    kMGPipeSubsystemTextureResources) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        static_assert(NoDirtyBitOwnsTheTextureResourceSubsystem(),
+                      "a MGPipeDirty bit now owns kMGPipeSubsystemTextureResources: the texture "
+                      "and renderbuffer resource_* calls are dispatched at the GL call that "
+                      "causes them, so a dirty bit would gate them a second time");
+
+        // The two texture-unit capacities are one number on both sides of the boundary, and
+        // this is the one translation unit that sees the frontend constant and the MG_Pipe
+        // one - the same pinning kMGPipeMaxVertexAttribs gets, for the same reason.
+        static_assert(kMGPipeMaxTextureUnits ==
+                          static_cast<Uint32>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS),
+                      "the MGPipe texture-unit capacity and the frontend's have drifted");
+        static_assert(kMGPipeMaxImageUnits ==
+                          static_cast<Uint32>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS),
+                      "the MGPipe image-unit capacity and the frontend's have drifted");
+
         // Which of those subsystems THIS BUILD actually emits for. It grows one commit at a
         // time, and a field whose emitter is not wired here keeps being pulled - so adding a
         // row to Coverage.def can never silently drop a field on the floor before the call
@@ -1068,12 +1277,43 @@ namespace MobileGL::MG_Pipe {
         // and every one of those calls lands in RefusedResourceCalls. Bit 7 without bit 8 is
         // fine. Neither the P3a default (0x1ff, both on) nor G12's control (0x7f, both off)
         // is in that arm, which is why nothing in the phase trips over it.
+        // P4a's FOUR ARE NOT WRITTEN HERE AT ALL, and that is the structural half of the
+        // ownership rule rather than a stylistic choice. This file is the contract package's
+        // for the entire phase: it carries Coverage.def's enum-coupled switch, the validate
+        // point and the death helpers, so the packages that fill the emitters in must never
+        // edit it - which is exactly the merge trap that produced a push and verify build that
+        // did not compile on the integrated tree while both branches were green apart. So each
+        // family's bit is the value of a constant DEFINED IN THAT FAMILY'S OWN EMIT HEADER,
+        // initialised to 0 there and set to the subsystem constant by the commit that gives
+        // those emitters their bodies. A mistake is then a compile error at the contract
+        // commit, not at the merge, and no file is touched twice.
+        //
+        // The sampler bit covers SamplerEmit.h AND ImageEmit.h: one family, one A/B.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
                                                   kMGPipeSubsystemVertexAttribDefaults |
                                                   kMGPipeSubsystemResources |
-                                                  kMGPipeSubsystemVertexInput;
+                                                  kMGPipeSubsystemVertexInput |
+                                                  kMGPipeWiredFramebufferSubsystem |
+                                                  kMGPipeWiredTextureSubsystem |
+                                                  kMGPipeWiredSamplerSubsystem |
+                                                  kMGPipeWiredProgramSubsystem;
+        // Each family constant is either 0 or its own subsystem bit and nothing else. Without
+        // this a header that set the wrong constant - the sampler bit in the program header,
+        // say - would switch the wrong family on and every gate would still pass.
+        static_assert(kMGPipeWiredFramebufferSubsystem == 0 ||
+                          kMGPipeWiredFramebufferSubsystem == kMGPipeSubsystemFramebuffer,
+                      "FramebufferEmit.h's wired constant must be 0 or the framebuffer bit");
+        static_assert(kMGPipeWiredTextureSubsystem == 0 ||
+                          kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
+                      "TextureEmit.h's wired constant must be 0 or the texture-resource bit");
+        static_assert(kMGPipeWiredSamplerSubsystem == 0 ||
+                          kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers,
+                      "SamplerEmit.h's wired constant must be 0 or the sampler bit");
+        static_assert(kMGPipeWiredProgramSubsystem == 0 ||
+                          kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms,
+                      "ProgramEmit.h's wired constant must be 0 or the program bit");
 
         // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
         // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason
@@ -1113,11 +1353,36 @@ namespace MobileGL::MG_Pipe {
         //     coming through the residual fill because the mirror is a pointer only the
         //     client can hold. What retires the pull is not a better applier - it is P8,
         //     where the backend stops reading a frontend VAO at all.
+        //   P4a's SIX ROWS ARE ALL FALSE, and five of them for GetBoundVertexArray's exact
+        //     reason: the field's storage is a frontend heap reference - a
+        //     BindingSlot<FramebufferObject>, an ImageTextureBinding, a TextureUnit, two
+        //     SharedPtr<ProgramObject> - and the calls that supply them carry eight-byte
+        //     {slot, gen} handles and fully resolved descriptors. The applier has no way to
+        //     produce a pointer and P4a deliberately does not give it one: a payload never
+        //     contains a pointer, and the whole point of the conversion is that the server
+        //     stops holding frontend references. Skipping the pull would leave those mirrors
+        //     null on every draw of every push build. What retires them is not a better
+        //     applier, it is the phase where the backend stops reading a frontend object.
+        //
+        //     GetMaxTouchedTextureUnit is the sixth and its argument is different, which is
+        //     why it is written out: it is a plain Int, and set_sampler_views' Count IS that
+        //     value plus one. But the set is SUPPRESSED on an unchanged content hash and is
+        //     emitted only when NEW_SAMPLER_VIEWS fires, and that bit's shutter -
+        //     Mix(textureContent, GetTextureBindGeneration()) - does NOT move on a redundant
+        //     re-bind of the object a unit already holds, while the high-water mark DOES. So
+        //     the applier's Count can lag the frontend's mark by exactly the case the
+        //     suppressor exists to swallow, and the field keeps being pulled.
         constexpr Bool EmittedCallSuppliesTheWholeField(MGPipeInputField field) {
             switch (field) {
             case MGPipeInputField::GetPixelStoreParameters:
             case MGPipeInputField::GetCurrentVertexAttribute:
             case MGPipeInputField::GetBoundVertexArray:
+            case MGPipeInputField::GetFramebufferBindingSlot:
+            case MGPipeInputField::GetImageTextureBinding:
+            case MGPipeInputField::GetTextureUnitObject:
+            case MGPipeInputField::GetProgramForDraw:
+            case MGPipeInputField::GetProgramForDispatch:
+            case MGPipeInputField::GetMaxTouchedTextureUnit:
                 return false;
             default:
                 return true;
@@ -1496,6 +1761,53 @@ namespace MobileGL::MG_Pipe {
         Uint64 EmitIndexBuffer(GLContext& ctx) {
             return MGPipeVertexInputEmitterInstance().EmitIndexBuffer(ctx);
         }
+
+        // ---- P4a's seven emitters (D-C, D-D, D-F, D-G, D-H) ----
+        //
+        // THE SHAPE IS THE CONTRACT COMMIT'S, exactly as P3a's three were: seven adapters
+        // whose bodies live in the five family headers, so the commits that fill those
+        // emitters in never touch this file. Every one of them returns 0 today.
+        //
+        // THE ORDER IS ARCHITECTURE.md 5.4's RECOMMENDED ONE - framebuffer, then program, then
+        // textures/sampler/image/global constants - and that document is explicit that the
+        // order is code organisation and NOT a contract: all of a verb's set_*/bind_* must
+        // complete before the verb, and apart from "a resource create precedes a bind to it"
+        // there is no ordering requirement between them. The server specialises the shader and
+        // the pipeline lazily at the verb, from everything it holds at that moment, which is
+        // what makes deriving the fragColor broadcast count from the framebuffer record legal
+        // at the verb rather than at the FBO sync.
+        Uint64 EmitFramebufferState(GLContext& ctx) {
+            return MGPipeFramebufferEmitterInstance().EmitFramebufferState(ctx);
+        }
+
+        Uint64 EmitShaderState(GLContext& ctx) {
+            return MGPipeProgramEmitterInstance().EmitShaderState(ctx);
+        }
+
+        Uint64 EmitGlobalConstants(GLContext& ctx) {
+            return MGPipeProgramEmitterInstance().EmitGlobalConstants(ctx);
+        }
+
+        Uint64 EmitSamplerViews(GLContext& ctx) {
+            return MGPipeSamplerEmitterInstance().EmitSamplerViews(ctx);
+        }
+
+        Uint64 EmitSamplerStates(GLContext& ctx) {
+            return MGPipeSamplerEmitterInstance().EmitSamplerStates(ctx);
+        }
+
+        Uint64 EmitShaderImages(GLContext& ctx) {
+            return MGPipeImageEmitterInstance().EmitShaderImages(ctx);
+        }
+
+        // The texture sub-data DRAIN, and it is the one P4a emitter with no dirty bit over it.
+        // Its calls are dispatched from the GL entry points that cause them (a constructor, a
+        // storage definition, a glTexParameter) and the only thing that has to wait for the
+        // validate point is the accumulated upload, so the gate is the subsystem bit alone.
+        // With nothing dirty the drain list is empty and this is one test.
+        Uint64 DrainTextureSubData(GLContext& ctx) {
+            return MGPipeTextureEmitterInstance().DrainTextureSubData(ctx);
+        }
     } // namespace
 
     Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
@@ -1581,7 +1893,58 @@ namespace MobileGL::MG_Pipe {
             // is not. The resource tracker is deliberately NOT reset here for the same
             // reason its records survive: see ResourceTracker.h's ResetForTest.
             MGPipeVertexInputEmitterInstance().Reset();
+            // P4a's five, and ONLY their latches: MGPipeApplierReset clears the framebuffer
+            // records, the three unit sets and the three program handles, so the emitters'
+            // mirrors of those must go with them or the first emission after a make-current
+            // would be suppressed as unchanged and the server would draw with the previous
+            // context's bindings. What must NOT reset is the RECORD half - the applier keeps
+            // its texture, sampler, view and shader-CSO records across a make-current, because
+            // a GL object lives in a share group, and re-publishing one would move its Serial
+            // for nothing.
+            MGPipeFramebufferEmitterInstance().Reset();
+            MGPipeTextureEmitterInstance().Reset();
+            MGPipeSamplerEmitterInstance().Reset();
+            MGPipeImageEmitterInstance().Reset();
+            MGPipeProgramEmitterInstance().Reset();
             g_residualDue = true;
+        }
+
+        // P4a's segment, in ARCHITECTURE.md 5.4's RECOMMENDED order - framebuffer, then
+        // program, then textures / sampler / image / global constants - which is why it stands
+        // before the render-state block rather than after it. That order is explicitly code
+        // organisation and not a contract (all of a verb's set_*/bind_* complete before the
+        // verb, and the server specialises lazily AT the verb from everything it then holds),
+        // so nothing about the P2 and P3a emissions changes by standing after it; what it buys
+        // is that the file reads in the order the design states.
+        //
+        // ALL SEVEN ARE STUBS AT THE CONTRACT COMMIT and all four family bits are absent from
+        // kMGPipeWiredSubsystems, so `wants()` is false for every one of them and this whole
+        // block is dead until the packages that own the emitters land. Placing it here, once,
+        // is what keeps those packages out of this file.
+        if (wants(MGPipeDirty::NewFramebuffer)) {
+            payloadBytes += EmitFramebufferState(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShader) || wants(MGPipeDirty::NewShaderBindings)) {
+            payloadBytes += EmitShaderState(*ctx);
+        }
+        // The texture drain has no dirty bit over it (see its definition); it is gated on the
+        // subsystem bit and on this build having wired the family at all, which is the same
+        // pair `wants()` applies to every other emission.
+        if ((pushMask & kMGPipeSubsystemTextureResources) != 0 &&
+            (kMGPipeWiredSubsystems & kMGPipeSubsystemTextureResources) != 0) {
+            payloadBytes += DrainTextureSubData(*ctx);
+        }
+        if (wants(MGPipeDirty::NewSamplerViews)) {
+            payloadBytes += EmitSamplerViews(*ctx);
+        }
+        if (wants(MGPipeDirty::NewSamplers)) {
+            payloadBytes += EmitSamplerStates(*ctx);
+        }
+        if (wants(MGPipeDirty::NewShaderImages)) {
+            payloadBytes += EmitShaderImages(*ctx);
+        }
+        if (wants(MGPipeDirty::NewGlobalConstants)) {
+            payloadBytes += EmitGlobalConstants(*ctx);
         }
 
         if (wants(MGPipeDirty::NewPipelineState) || wants(MGPipeDirty::NewRenderState)) {

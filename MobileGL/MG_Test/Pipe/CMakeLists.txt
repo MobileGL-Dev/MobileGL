@@ -135,16 +135,25 @@ if (MSVC)
         target_compile_options(MagmaPipeIdentityTest PRIVATE /Zc:preprocessor)
 endif()
 
-# P3a's two suites. Their targets and this registration are the CONTRACT commit's, for the
-# same reason the four P2 suites' are: their CONTENTS belong to two later packages each, and
-# neither of them should have to come back to this file to add a case.
+# P3a's two suites AND P4a's six, together because they take exactly the same shape. Their
+# targets and this registration are the CONTRACT commit's, for the same reason the four P2
+# suites' are: their CONTENTS belong to two later packages each, and neither of them should
+# have to come back to this file to add a case.
+#
+# P4a's six are FramebufferEmitTest, TextureEmitTest, SamplerEmitTest, ImageEmitTest,
+# ProgramEmitTest and CompositeResolverTest. Each lands from the contract commit with one case
+# that pins the shape its later cases depend on - the emitter is one never-destroyed process
+# singleton, or the composite band has exactly one door - so none of them is an empty file
+# waiting for a package, and none of them can be registered wrongly without a red test.
 #
 # They link gtest rather than gtest_main and carry their own main(), like PipeInputsTest and
 # RenderStateSpansTest: the applier's bounds and protocol trip wires report through a log line
 # in a shipped push build and std::abort() in a poison or verify one, so a case that drives
 # one reads the line back out of a file the process names before anything logs. Deciding that
 # HERE is what keeps the later packages out of this file.
-foreach(pipeTest ResourceEmitTest VertexInputEmitTest)
+foreach(pipeTest ResourceEmitTest VertexInputEmitTest
+                 FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
+                 ProgramEmitTest CompositeResolverTest)
         add_executable(${pipeTest} ${pipeTest}.cpp)
 
         target_include_directories(${pipeTest} PRIVATE
@@ -168,7 +177,9 @@ endforeach()
 
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
-foreach(pipeTest ResourceEmitTest VertexInputEmitTest)
+foreach(pipeTest ResourceEmitTest VertexInputEmitTest
+                 FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
+                 ProgramEmitTest CompositeResolverTest)
         gtest_discover_tests(${pipeTest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach()
 gtest_discover_tests(MagmaPipeIdentityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

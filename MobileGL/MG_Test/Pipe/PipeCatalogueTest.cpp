@@ -13,10 +13,18 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <iterator>
 #include <limits>
+#include <type_traits>
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
+// P4a: MGPipeUnmigratedEmulation's declaration, and the applier's records the catalogue's size
+// pins now reach. Push-only, like the translation unit that defines them - in a pull build the
+// symbol does not exist and the one case that calls it is compiled out.
+#if MOBILEGL_PIPE_PUSH
+#include <MG_Pipe/PipeApply.h>
+#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Pipe;
@@ -155,6 +163,76 @@ TEST(PipeCatalogue, ResidualBlockIsExactlyItsTwoValueStructsPlusPatchTail) {
     EXPECT_EQ(sizeof(MGPPixelPackState), sizeof(PixelStoreParameters));
     EXPECT_EQ(sizeof(MGPPatchState), 40u);
     EXPECT_EQ(sizeof(MGPBindRenderState), 12u);
+}
+
+// P4a's two payload edits, which are the only two the phase makes, and both are the kind a
+// compiler catches only where somebody asked it to. MGP_ASSERT_POD already pins both sizes in
+// MGPipeTypes.h; what is pinned HERE is the SHAPE the two edits were made for, because that is
+// what a later phase would silently undo.
+TEST(PipeCatalogue, TextureParamsNameTheirBuiltinSamplerAndFramebufferStateNamesItsTarget) {
+    // 32 -> 40: the CSO handle carrying the SamplerParameters of the SamplerObject every
+    // ITextureObject owns, plus the second resync bit. Naming the CSO rather than widening
+    // this payload with a filter/wrap/border block is what keeps ONE authority for one value -
+    // duplicating SamplerParameters on the wire would give two.
+    EXPECT_EQ(sizeof(MGPTextureParams), 40u);
+    EXPECT_EQ(offsetof(MGPTextureParams, Res), 0u);
+    EXPECT_EQ(offsetof(MGPTextureParams, BuiltinSampler), 8u);
+    EXPECT_EQ(offsetof(MGPTextureParams, SamplerResync), 26u);
+    // The two resync bits are SEPARATE bytes and must stay so: ForceResync guards a swizzle
+    // override the frontend params version does not move for, SamplerResync guards an
+    // incomplete texture sampling (0,0,0,1) after a driver re-mint. Different failures,
+    // different owners, one byte each.
+    EXPECT_NE(offsetof(MGPTextureParams, ForceResync), offsetof(MGPTextureParams, SamplerResync));
+
+    // Pad0 -> Uint8 Target, and the SIZE DID NOT MOVE, which is the whole point: the record is
+    // emitted once per bound target that moved, or once with Both, and that costs a byte the
+    // struct already had.
+    EXPECT_EQ(sizeof(MGPFramebufferState), 304u);
+    EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Draw), 0u);
+    EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Read), 1u);
+    EXPECT_EQ(static_cast<Uint8>(MGPipeFramebufferTarget::Both), 2u);
+    // The wire's colour-attachment width is ONE width, and it is the wire's rather than the
+    // driver's: a driver reporting more attachments than this is refused at bring-up, never
+    // truncated into the record.
+    EXPECT_EQ(kMGPipeMaxColorAttachments, 8u);
+    EXPECT_EQ(std::extent_v<decltype(MGPFramebufferState::Color)>, kMGPipeMaxColorAttachments);
+    EXPECT_EQ(std::extent_v<decltype(MGPFramebufferState::DrawBuffers)>, kMGPipeMaxColorAttachments);
+
+    // And the two unit bounds, which bound all three var-tail sets. One merged unit space, no
+    // stage dimension.
+    EXPECT_EQ(kMGPipeMaxTextureUnits, 192u);
+    EXPECT_EQ(kMGPipeMaxImageUnits, 192u);
+}
+
+// D-A3: the resource-target enum minted beside the field, and the property that makes it worth
+// minting - EVERY TextureTarget has a row, checked at compile time by a table with no
+// `default:` arm, so adding a target is a build break rather than a descriptor that silently
+// describes the wrong kind of storage.
+TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
+    // The compile-time half is MGPipeEveryTextureTargetIsMapped's static_assert; this is the
+    // same walk at runtime, so the case names the offender instead of the build naming a line.
+    for (SizeT i = 0; i < static_cast<SizeT>(TextureTarget::TextureTargetCount); ++i) {
+        const auto target = static_cast<TextureTarget>(i);
+        EXPECT_NE(MGPipeResourceTargetForTextureTarget(target), kMGPipeResourceTargetUnmapped)
+            << "TextureTarget " << i << " has no MGPResourceDesc::Target row";
+        EXPECT_LT(MGPipeResourceTargetForTextureTarget(target),
+                  static_cast<Uint32>(MGPipeResourceTarget::Count));
+    }
+    // Buffer is 0 and stays 0: P3a's constant is what a zero-initialised record already says,
+    // and the narrowed ack predicate below compares against it.
+    EXPECT_EQ(static_cast<Uint32>(MGPipeResourceTarget::Buffer), 0u);
+    EXPECT_EQ(kMGPipeResourceTargetBuffer, 0u);
+    // No texture target may collide with the buffer target, or a texture descriptor would ask
+    // for a synchronous acknowledgement.
+    for (SizeT i = 0; i < static_cast<SizeT>(TextureTarget::TextureTargetCount); ++i) {
+        EXPECT_NE(MGPipeResourceTargetForTextureTarget(static_cast<TextureTarget>(i)),
+                  static_cast<Uint32>(kMGPipeResourceTargetBuffer));
+    }
+    // A rectangle texture is NOT a 2D texture on the wire. Espryt lowers both to GL_TEXTURE_2D
+    // at bind time and lowers Texture1D the same way, and Tex1D still has an enumerator of its
+    // own; folding rectangle onto Tex2D here would erase a distinction both backends switch on.
+    EXPECT_NE(MGPipeResourceTargetForTextureTarget(TextureTarget::Texture2D),
+              MGPipeResourceTargetForTextureTarget(TextureTarget::TextureRectangle));
 }
 
 // G3's opcode numbering is the wire protocol. Position in PipeCalls.def, 1-based, no holes.
@@ -352,9 +430,19 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 // the struct that used to memcmp is compared member by member. P3a added the two vertex wire
 // views as a seventh and eighth non-payload entry (63 + 8), for the same reason: they are the
 // elements of create_vertex_elements' blob, and a memcmp over that blob would false-differ on
-// MGPVertexAttribWire::Pad0.
+// MGPVertexAttribWire::Pad0. P4a adds SamplerParameters as a ninth (63 + 9 = 72), and the name
+// of this case stays what it was, because a removed test name is a gate failure of its own.
+//
+// SamplerParameters IS THE SHARPEST OF THE NINE. It is 100 bytes with THREE BYTES OF TRAILING
+// PADDING (96 bytes of members plus the one-byte borderColorForm), it rides
+// MGPSamplerDesc::Parameters as a blob, and until P4a it had no field list and no verify-list
+// row at all - so the comparator fell back to comparing the blob as BYTES and could
+// false-differ on padding nobody writes. That is not a theoretical hazard for this struct:
+// the client's CSO cache confirms a hash hit with a memcmp over the same bytes, so a codec or
+// a cache that read the padding would mint a fresh CSO per call and the verify lane would
+// abort at random.
 TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
-    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 71u);
+    EXPECT_EQ(kMGPipeVerifiedPayloadCount, 72u);
     static_assert(MGPipeHasFieldVerifier<RenderStateParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PixelStoreParameters>::value);
     static_assert(MGPipeHasFieldVerifier<PerBufferBlendState>::value);
@@ -363,6 +451,7 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     static_assert(MGPipeHasFieldVerifier<MGHostSpan>::value);
     static_assert(MGPipeHasFieldVerifier<MGPVertexAttribWire>::value);
     static_assert(MGPipeHasFieldVerifier<MGPVertexBindingPointWire>::value);
+    static_assert(MGPipeHasFieldVerifier<SamplerParameters>::value);
     PixelStoreParameters p{};
     PixelStoreParameters q{};
     const char* field = nullptr;
@@ -377,6 +466,38 @@ TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
     t.Offset = 8;
     EXPECT_FALSE(MGPipeVerify(s, t, &field));
     EXPECT_STREQ(field, "Offset");
+
+    // P4a's ninth, and its two halves. First: the comparator sees the members, INCLUDING
+    // borderColorForm - which is the field a backend picks glSamplerParameterIiv over fv by,
+    // and which no value comparison can infer because all three border representations are
+    // always numerically populated.
+    SamplerParameters left{};
+    SamplerParameters right{};
+    EXPECT_TRUE(MGPipeVerify(left, right, &field));
+    right.borderColorForm = BorderColorForm::Int;
+    EXPECT_FALSE(MGPipeVerify(left, right, &field));
+    EXPECT_STREQ(field, "borderColorForm");
+    right = left;
+    right.borderColorI = IntVec4{1, 0, 0, 0};
+    EXPECT_FALSE(MGPipeVerify(left, right, &field));
+    EXPECT_STREQ(field, "borderColorI");
+    right = left;
+    right.maxAnisotropy = 4.0f;
+    EXPECT_FALSE(MGPipeVerify(left, right, &field));
+    EXPECT_STREQ(field, "maxAnisotropy");
+
+    // Second, and this is the one a byte comparison gets wrong: the THREE TRAILING PADDING
+    // BYTES are not fields, so garbage in them cannot make two equal sampler states differ.
+    // Written through a byte pointer, because that is the only way to reach a byte the struct
+    // does not name.
+    static_assert(sizeof(SamplerParameters) == 100);
+    right = left;
+    auto* rightBytes = reinterpret_cast<unsigned char*>(&right);
+    for (SizeT i = sizeof(SamplerParameters) - 3; i < sizeof(SamplerParameters); ++i) {
+        rightBytes[i] = 0x5A;
+    }
+    EXPECT_TRUE(MGPipeVerify(left, right, &field))
+        << "the comparator read a padding byte: field=" << (field != nullptr ? field : "(none)");
 }
 
 // G7 pins the member list the pipeline/dynamic split is derived from.
@@ -580,6 +701,81 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     mutableStore.Width = 64u * 1024u;
     EXPECT_FALSE(MGPipeResourceRespecifyNeedsAck(mutableStore));
 
+    // P4a: THE TWO IDIOMS THAT MADE THE PREDICATE HAVE TO NARROW. Textures travel on the same
+    // resource_respecify row as buffers, and glTexStorage* sets Immutable for a real reason -
+    // it is a descriptor fact the backend reads - so an Immutable-only predicate would have
+    // started acknowledging every immutable texture allocation the moment P4a's texture family
+    // landed. Texture allocation is already deferred to sync time in monolith (glTexImage* and
+    // glTexStorage* only mark the storage dirty, and even glRenderbufferStorage* allocates
+    // lazily inside SyncToBackend), so splitting changes no observable behaviour and this batch
+    // must not ack. glBufferStorage stays the only entry point allowed a synchronous one.
+    //
+    // This is the negative control for a future widening, in both directions: a predicate that
+    // stopped naming the buffer target would turn these two green-and-wrong.
+    MGPResourceDesc immutableTexture{};
+    immutableTexture.Immutable = 1; // glTexStorage2D
+    immutableTexture.Target =
+        static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(TextureTarget::Texture2D));
+    immutableTexture.Width = 256;
+    immutableTexture.Height = 256;
+    immutableTexture.Levels = 9;
+    EXPECT_FALSE(MGPipeResourceRespecifyNeedsAck(immutableTexture));
+
+    MGPResourceDesc renderbuffer{};
+    renderbuffer.Immutable = 1; // glRenderbufferStorage: one shot, and still lazy in the backend
+    renderbuffer.Target = static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer);
+    renderbuffer.Width = 1920;
+    renderbuffer.Height = 1080;
+    EXPECT_FALSE(MGPipeResourceRespecifyNeedsAck(renderbuffer));
+
+    // And the buffer half still answers true with the target spelled explicitly rather than
+    // relying on a zero-initialised record to mean "buffer".
+    MGPResourceDesc immutableBuffer{};
+    immutableBuffer.Immutable = 1;
+    immutableBuffer.Target = kMGPipeResourceTargetBuffer;
+    EXPECT_TRUE(MGPipeResourceRespecifyNeedsAck(immutableBuffer));
+
     // And the opcode did not move: a flag-word edit is not a catalogue edit.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ResourceRespecify), 3);
+}
+
+// G13b, D-M: "emulation 在 split 下显式 Fatal 直到 P8" costs P4a a NAMED, GREPPABLE call site
+// per unmigrated emulation and nothing else - in monolith MGPipeUnmigratedEmulation is a no-op
+// and the emulation still runs on exactly the code path it runs on today. What this pins is
+// the LIST, because the whole value of the mechanism is that P5 and P8 edit one function
+// instead of rediscovering five call sites, and a site that quietly disappears has to be a red
+// gate rather than a surprise three phases later.
+//
+// The names are pinned here rather than counted in the backend, because the count alone cannot
+// say WHICH one was lost. The purity gate greps the count; this says what the count is of.
+TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
+    // Every one of these is an emulation that reads or writes CLIENT memory a split server
+    // would not have: a CPU shadow mirror, a CPU mipmap fallback, a shadow-conversion readback,
+    // and the re-dirty of already-uploaded levels that a texture re-mint performs.
+    const char* const kNames[] = {
+        "copy-image-shadow-mirror",     // the glCopyImageSubData CPU-shadow mirror
+        "generate-mipmap-storage",      // EnsureGenerateMipmapStorageAllocated
+        "generate-mipmap-cpu-fallback", // GenerateThreeChannelFloatMipmapOnCpu
+        "get-tex-image-shadow",         // GetTexImageViaShadowConversion
+        "texture-remint-pull",          // RequireImageBindableStorage's re-dirty
+    };
+    EXPECT_EQ(std::size(kNames), 5u);
+    // No duplicates: two sites sharing a name would make the grepped count and this list
+    // disagree in the one direction nobody would notice.
+    for (SizeT i = 0; i < std::size(kNames); ++i) {
+        for (SizeT j = i + 1; j < std::size(kNames); ++j) {
+            EXPECT_STRNE(kNames[i], kNames[j]);
+        }
+    }
+    // The last one is the head of the only NEW stall class the design admits, and P4a supplies
+    // exactly one of its four mitigations - prevention, through ImageBindableHint on every
+    // create and respecify. The async pull, the bounded retention and the
+    // ResourceSubDataComplete terminator are a later phase's, and P4a must not build half a
+    // terminator.
+    EXPECT_STREQ(kNames[4], "texture-remint-pull");
+#if MOBILEGL_PIPE_PUSH
+    // In monolith it really is a no-op: calling it changes nothing and returns nothing. The
+    // teeth are a split server's, and the call site is what P8 gives them to.
+    for (const char* name : kNames) MGPipeUnmigratedEmulation(name);
+#endif
 }

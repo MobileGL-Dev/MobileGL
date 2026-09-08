@@ -169,12 +169,17 @@ namespace MobileGL::MG_Util::PipeStats {
             "stage-buffer",        "stage-texture",       "stage-ubo-global",
             "stage-ubo-named",     "stage-vertex-client", "stage-index-client",
             "stage-indirect-cmd",  "persistent-map-push", "residual-value-block",
+#if MOBILEGL_PIPE_PUSH
+            "cso-blob-bytes",
+#endif
         };
         const char* const kCallClassNames[kCallClassCount] = {
             "draws", "accessor-calls", "tex-upload-emissions", "tex-upload-box", "tex-upload-rect",
             "tex-upload-jobs",
 #if MOBILEGL_PIPE_PUSH
             "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
+            "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
+            "shader-image-emissions", "client-tex-upload-emissions",
 #endif
         };
         const char* const kGateNames[kGateCount] = {
@@ -193,8 +198,15 @@ namespace MobileGL::MG_Util::PipeStats {
             "magma-draw-fastpath-miss", "magma-pipeline-memo-miss",      "magma-dynamic-tail-miss",
         };
         // Short forms, so the per-120-frame line stays one terminal line wide.
+        // "csob-blob" and not "csob": the cso[] bracket below already prints csob= for the
+        // render-state CSO BIND count, and two different numbers under one grep is how a
+        // recorded baseline stops meaning anything.
         const char* const kByteClassShort[kByteClassCount] = {"buf",  "tex",  "ubog", "ubon", "vtxc",
-                                                              "idxc", "icmd", "pmap", "resid"};
+                                                              "idxc", "icmd", "pmap", "resid",
+#if MOBILEGL_PIPE_PUSH
+                                                              "csob-blob",
+#endif
+        };
         const char* const kGateShort[kGateCount] = {"ers", "etl", "eub", "mfp", "mpm", "mdt"};
 
         void ResetCounters() {
@@ -429,6 +441,18 @@ namespace MobileGL::MG_Util::PipeStats {
         // reason: it is push-only, and a window with an unexpected mpr= is the one number
         // that says an adoption is happening per draw rather than per storage definition.
         line += " mpr=" + std::to_string(calls[static_cast<Uint32>(CallClass::MapPersistentRoundtrips)]);
+        // P4a's four suppressor-visible emission counts and the client-side upload twin, on a
+        // bracket of their own so one grep reads the whole family. Every one of them is
+        // post-suppressor: a set that was resolved and then not sent does not appear here, and
+        // that is what makes fbe/sve/sse/sie the suppressors' hit rates rather than their call
+        // rates. ctu is the CLIENT's count of the same texture records Espryt's tex[emit=]
+        // counts on the server - the two agreeing is the whole reason both are printed.
+        line += "] emit[fbe=" + std::to_string(calls[static_cast<Uint32>(CallClass::FramebufferEmissions)]);
+        line += " sve=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerViewEmissions)]);
+        line += " sse=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerStateEmissions)]);
+        line += " sie=" + std::to_string(calls[static_cast<Uint32>(CallClass::ShaderImageEmissions)]);
+        line += " ctu=" +
+                std::to_string(calls[static_cast<Uint32>(CallClass::ClientTextureUploadEmissions)]);
 #endif
         line += "] gates[";
         for (Uint32 i = 0; i < kGateCount; ++i) {

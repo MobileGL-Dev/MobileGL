@@ -140,6 +140,66 @@ namespace MobileGL::MG_Pipe {
     // is asked rather than assumed.
     Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId);
 
+    // ---- P4a: ONE CLIENT-SIDE DEATH HELPER PER KIND P4a MINTS (brief D-I1) ----
+    //
+    // BACKEND-NEUTRAL FROM DAY ONE, and this is the P3a final-review lesson taken forward
+    // rather than repeated. Before it, the only thing that ever returned a VertexElementsCso
+    // slot was DirectGLES' StateObjectDeathOps table; under a backend that installs none -
+    // DirectVulkan/Magma, which keeps its own age-reclaimed identity table on purpose - every
+    // VAO ever created held its slot and its applier record for the life of the process, and
+    // past 65536 slots every create became a permanent Fatal{ProtocolCorruption}. P4a mints
+    // SIX kinds, so the rule is stated once and obeyed six times: whatever mints a handle owns
+    // the death of that handle, the client mints all six, and a backend death notice is a
+    // redundant SECOND path that must be idempotent - which it is, because it resolves through
+    // the same lifetimeId -> slot map these free, and MGPipeSlotAllocator::Free refuses a slot
+    // that is not live at that generation.
+    //
+    // THE ORDER INSIDE EACH IS FIXED AND IS NOT A PACKAGE'S CHOICE:
+    //   1. emit the wire delete FIRST - it drops the applier's record while the record still
+    //      exists, so a recycled slot cannot inherit a field;
+    //   2. raise NotifyStateObjectDestroyed SECOND - it resolves the handle through the
+    //      allocator, and a backend told after the Free could no longer find its twin, which
+    //      moves the leak from the client to the driver object;
+    //   3. free the slot LAST, and a double free on a stale generation is a proven no-op
+    //      because Free bumps no generation (the bump rides the next handout).
+    //
+    // ALL SIX TAKE THE LIFETIME ID rather than the object, for MGPipeEmitVertexElementsDestroy
+    // AndFree's reason: they run from a destructor, where the last SharedPtr has already
+    // dropped, and the lifetime id is what the slot allocator resolves the handle from. It is
+    // also what keeps this header a declaration-only coupling - no frontend class needs
+    // forward-declaring for any of them.
+    //
+    // Each returns whether its wire delete actually went out, which is the LATCH taken at the
+    // object's create and not a second reading of the subsystem predicate: an object born
+    // while a subsystem bit was clear and destroyed after it was set would otherwise free its
+    // slot with the applier's record still Live, on a slot about to be handed out again. The
+    // legacy path runs only when the answer is false.
+
+    // ResourceDestroy, and then the SamplerViewCso minted off this same lifetime id (P4a
+    // D-F2: one sampler view per ITextureObject). Called from TextureObjectBase's VIRTUAL
+    // destructor, so 2D / 3D / cube / buffer / view all announce exactly once.
+    Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId);
+    // ResourceDestroy.
+    Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId);
+    // NO WIRE CALL AT ALL (D-I2). PipeCalls.def has no framebuffer delete, because a
+    // framebuffer is not a resource and is not a CSO - it is STATE, and set_framebuffer_state
+    // is the only call that names one - and the catalogue is closed, so P4a does not invent a
+    // row. The handle is minted and freed entirely client-side and this helper does steps 2
+    // and 3 only. A recycled framebuffer handle is distinguished by Gen, which is inside the
+    // record's ContentHash, so it can never be suppressed against its predecessor's record.
+    Bool MGPipeEmitFramebufferDestroyAndFree(Uint64 lifetimeId);
+    // DeleteSamplerState. Also the path the content-addressed CSO cache's LRU eviction takes,
+    // which is why it is addressed by lifetime id and not by "the object that owns it".
+    Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId);
+    // DeleteSamplerView. Called by the texture helper above; a sampler view has no frontend
+    // object of its own, so this is the only path there is.
+    Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId);
+    // DeleteShaderState, for an ordinary program AND for a program-pipeline COMPOSITE, whose
+    // slot has two independent release paths - the pipeline cache's LRU eviction and the
+    // composite ProgramObject's own destructor. One helper for both, and the second call is a
+    // proven no-op.
+    Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId);
+
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
