@@ -57,6 +57,11 @@
 #endif
 
 #if MOBILEGL_PIPE_PUSH
+// PipeApply.h does not guard itself (its push-only property comes from the root
+// CMakeLists), so it is included from inside this arm and nowhere else.
+#include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
+
 namespace {
     // Which arm of the twin table this binary runs on.
     //
@@ -4157,6 +4162,136 @@ TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopp
 #endif
 }
 
+// P3a REWORK C-1's gate, and the case that would have caught it.
+//
+// A persistently mapped buffer whose store was NOT adopted - under the 16 MiB threshold, or
+// with DisableLargeBufferAdoption, or with no EXT_buffer_storage - is written through its
+// pointer and emits NOTHING: no resource call, no serial, no mutation epoch. The only thing
+// that can make the next draw carry those bytes to the GPU is the per-draw clean probe
+// answering DIRTY, which is why the pre-P3a probe asks the frontend IsMapped() instead of
+// asking a serial. The first cut of the handle arm replaced that question with the applier
+// record's HasLiveHostWrites - a field D-A4 pins false and nothing in P3a writes - so the
+// answer became CLEAN forever, EnsureBufferResourceForHandle (and with it
+// SyncPersistentMappedRange, the ONLY per-draw push for a vertex/uniform/SSBO persistent map)
+// was never reached again, and the frame drew the last uploaded bytes with no diagnostic.
+//
+// The case is built so it can go red for exactly that: every other question is arranged to
+// answer clean, and the first EXPECT asserts so before the map is taken.
+TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTwoDraws) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the handle-keyed resource table only exists on the {slot, gen} arm";
+    }
+
+    auto owner = MakeShared<BufferObject>(0u);
+    owner->Respecify(256, nullptr);
+    const MG_Pipe::MGPipeHandle res =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Buffer, owner->GetLifetimeId());
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res));
+
+    // The applier's record, written straight into the state rather than through package A's
+    // entry points: this case is about the PROBE, and the probe reads the record.
+    auto& applier = MG_Pipe::MGPipeApplier();
+    if (applier.Resources.size() <= static_cast<SizeT>(res.Slot)) {
+        applier.Resources.resize(static_cast<SizeT>(res.Slot) + 1);
+    }
+    auto& record = applier.Resources[res.Slot];
+    record = {};
+    record.Gen = res.Gen;
+    record.Live = true;
+    record.Desc.Width = 256;
+    record.Serial = 7;
+    // Pinned false by D-A4 and by the MOBILEGL_PIPE_VERIFY assertion in the probe. That is
+    // exactly why it cannot answer the map question on its own.
+    record.HasLiveHostWrites = false;
+
+    auto& twin = BufferImpl::g_backendBufferResources.GetOrCreate(res);
+    twin = MakeShared<BufferImpl::GLESBufferResource>();
+    auto* const resource = twin.get();
+    resource->id = 1; // a name, never used: this probe issues no GL
+    resource->contextGeneration = BufferImpl::CurrentBufferContextGeneration();
+    resource->storageInitialized = true;
+    resource->storageSize = 256;
+    resource->syncedChangeSerial = record.Serial;
+
+    ASSERT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, owner.get()))
+        << "the fixture is not clean before the map is taken, so this case cannot isolate the "
+           "live-map question it exists for";
+
+    // GL_MAP_PERSISTENT_BIT | GL_MAP_WRITE_BIT, shadow-backed (nothing adopts it: no backend
+    // AcquirePersistentMap is registered in this binary). This is the state the app writes
+    // through with no GL call at all.
+    void* const mapped = owner->AcquireMemoryRange(
+        Range1D{0, 256}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    ASSERT_NE(mapped, nullptr);
+    ASSERT_TRUE(owner->IsMapped());
+    ASSERT_FALSE(owner->IsBackendPersistentMapped())
+        << "the map was adopted, so this is the zero-copy case and not the one under test";
+
+    // The write between the two draws. It moves NOTHING the record can see.
+    static_cast<Uint8*>(mapped)[0] = 0x5Au;
+    EXPECT_EQ(record.Serial, 7u) << "sanity: a write through a persistent map emits no call";
+
+    EXPECT_FALSE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, owner.get()))
+        << "the handle arm called a persistently mapped, non-adopted buffer draw-CLEAN, so the "
+           "bytes just written through its pointer would never reach the GPU: the live-map "
+           "question has been answered from HasLiveHostWrites, which P3a pins false";
+
+    owner->ReleaseMemory(false);
+    EXPECT_TRUE(BufferImpl::IsBufferDrawCleanByHandle(res, resource, owner.get()))
+        << "the probe stayed dirty after the unmap, i.e. it is not the map that is being read";
+
+    BufferImpl::g_backendBufferResources.ReleaseByHandle(res);
+    MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, res);
+    record = {};
+}
+
+// P3a REWORK M-1's gate (contract-review M2). The minting overload's symmetric `!=` is safe
+// because its handle comes out of the allocator and can never be behind the entry; the HANDLE
+// overload's input ARRIVES in a payload, so a generation BEHIND the live entry's is reachable -
+// and adopting it destroyed the incumbent's twin (a driver id, a persistent map, a pooled
+// store, dropped by a defaulted destructor that deletes nothing) and stamped the slot back to
+// the dead generation, after which the incumbent's own FindByHandle refused it.
+TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+
+    FakeSlotTable table;
+    const MG_Pipe::MGPipeHandle current{7u, 2u};
+    const MG_Pipe::MGPipeHandle stale{7u, 1u};
+
+    auto& incumbent = table.GetOrCreate(current);
+    incumbent = MakeShared<FakeBackendObject>();
+    incumbent->marker = 0xC0FFEE;
+    const FakeBackendObject* const raw = incumbent.get();
+
+    auto& answer = table.GetOrCreate(stale);
+    EXPECT_EQ(answer, nullptr)
+        << "a backwards generation was handed a twin rather than refused; FindByHandle refuses "
+           "the same input, so the two entry points disagreed";
+
+    auto* const still = table.FindByHandle(current);
+    ASSERT_NE(still, nullptr) << "the live twin's entry was retired by a handle from its past";
+    EXPECT_EQ(still->get(), raw)
+        << "the incumbent's twin was destroyed by a stale handle - the driver storage it owned "
+           "went with it, and the incumbent would silently be handed a fresh empty twin";
+    EXPECT_EQ((*still)->marker, 0xC0FFEE);
+
+    // Forward is still a recycle, which is the direction the comment always covered.
+    const MG_Pipe::MGPipeHandle successor{7u, 3u};
+    auto& next = table.GetOrCreate(successor);
+    EXPECT_EQ(next, nullptr) << "a successor at a recycled slot inherited its predecessor's twin";
+    EXPECT_EQ(table.FindByHandle(current), nullptr) << "the predecessor's handle still resolves";
+
+    // And a slot past the table's bound is refused rather than resized to.
+    auto& absurd = table.GetOrCreate(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u});
+    EXPECT_EQ(absurd, nullptr) << "an unbounded client slot decided a vector resize";
+    EXPECT_EQ(table.FindByHandle(MG_Pipe::MGPipeHandle{FakeSlotTable::kMaxHandleSlot, 1u}), nullptr);
+}
+
 #else
 // G2 wants the pull and the push build to list the SAME ctest entries. The twin table only
 // exists under MOBILEGL_PIPE_PUSH, so in the pull build each case above keeps its name and
@@ -4231,5 +4366,13 @@ TEST(DirectGLESSlotTable, EglBringUpUnderTheArmlessKnobPairReturnsInsteadOfStopp
 
 TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundThem) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESBufferDrawProbe, ALiveHostMapKeepsTheHandleArmProbeDirtyBetweenTwoDraws) {
+    GTEST_SKIP() << "the handle-keyed resource table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 #endif // MOBILEGL_PIPE_PUSH
