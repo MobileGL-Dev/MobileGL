@@ -102,6 +102,12 @@ void main() { word = 0xC0FFEEu; }
                 // The NULL-data definition is the adoption point (and Minecraft's
                 // arena-creation idiom).
                 glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
+                ConfigureVertexArray(m_vao);
+            }
+
+            void ConfigureVertexArray(GLuint vao) {
+                glBindVertexArray(vao);
+                glBindBuffer(GL_ARRAY_BUFFER, m_arena);
                 glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                                       reinterpret_cast<void*>(kVertexOffset));
                 glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
@@ -173,12 +179,12 @@ void main() { word = 0xC0FFEEu; }
                                 GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
             }
 
-            void DrawQuad() {
+            void DrawQuad(GLuint vao = 0) {
                 glViewport(0, 0, Gl().Width(), Gl().Height());
                 glClearColor(0.f, 0.f, 0.f, 1.f);
                 glClear(GL_COLOR_BUFFER_BIT);
                 glUseProgram(m_program);
-                glBindVertexArray(m_vao);
+                glBindVertexArray(vao != 0 ? vao : m_vao);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
 
@@ -220,6 +226,97 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_GT(px[1], 200) << "the cross-frame rewrite of the adopted arena did not reach the draw; "
                                  "the old color means the write went to bytes the draw no longer reads";
         EXPECT_LT(px[0], 50) << "the draw still shows the previous frame's bytes";
+    }
+
+    // Respecifying a frontend buffer preserves its VAO attachments even when the
+    // backend replaces the adopted store's GL name. Keep every attribute binding
+    // unchanged so a stale backend VAO cannot be repaired by a frontend rebind.
+    TEST_F(LargeArenaAdoptionScenario, RespecifiedVertexArenaKeepsVaoBindings) {
+        if (!Ready() || IsSkipped()) return;
+
+        UploadQuad(1.f, 0.f, 0.f);
+        DrawQuad();
+        ASSERT_GT(CenterPixel()[0], 200);
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        GLuint otherVao = 0;
+        glGenVertexArrays(1, &otherVao);
+        ConfigureVertexArray(otherVao);
+        DrawQuad(otherVao);
+        EXPECT_GT(CenterPixel()[0], 200);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        constexpr std::array<GLsizeiptr, 3> sizes = {
+            kArenaBytes, kArenaBytes + 4096, kArenaBytes - 4096,
+        };
+        constexpr std::array<std::array<float, 3>, 3> colors = {{
+            {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}, {1.f, 0.f, 0.f},
+        }};
+        for (std::size_t i = 0; i < sizes.size(); ++i) {
+            SCOPED_TRACE(sizes[i]);
+            glBindBuffer(GL_ARRAY_BUFFER, m_arena);
+            glBufferData(GL_ARRAY_BUFFER, sizes[i], nullptr, GL_DYNAMIC_DRAW);
+            UploadQuad(colors[i][0], colors[i][1], colors[i][2]);
+            // The unbound VAO can retain the deleted store; the current VAO's
+            // attachments can be cleared by deletion. Both must be repaired.
+            for (GLuint vao : {m_vao, otherVao}) {
+                SCOPED_TRACE(vao);
+                DrawQuad(vao);
+                const auto px = CenterPixel();
+                EXPECT_EQ(FirstGLError(), 0u);
+                for (std::size_t channel = 0; channel < 3; ++channel) {
+                    if (colors[i][channel] != 0.f) {
+                        EXPECT_GT(px[channel], 200) << "VAO did not fetch the replacement vertex store";
+                    } else {
+                        EXPECT_LT(px[channel], 50) << "VAO still fetched the previous vertex store";
+                    }
+                }
+            }
+        }
+        glDeleteVertexArrays(1, &otherVao);
+    }
+
+    TEST_F(LargeArenaAdoptionScenario, RespecifiedIndexArenaKeepsVaoBinding) {
+        if (!Ready() || IsSkipped()) return;
+
+        auto vertices = QuadVertices(1.f, 0.f, 0.f);
+        const auto green = QuadVertices(0.f, 1.f, 0.f);
+        vertices.insert(vertices.end(), green.begin(), green.end());
+        glBindBuffer(GL_ARRAY_BUFFER, m_arena);
+        glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
+                        GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+
+        GLuint indices = 0;
+        glGenBuffers(1, &indices);
+        glBindVertexArray(m_vao);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indices);
+        // Redefine through COPY_WRITE_BUFFER so the element binding slot never
+        // changes. The small final store also exercises returning to shadow storage.
+        glBindBuffer(GL_COPY_WRITE_BUFFER, indices);
+        constexpr std::array<GLsizeiptr, 4> sizes = {
+            kArenaBytes, kArenaBytes, kArenaBytes + 4096, 4096,
+        };
+        for (std::size_t i = 0; i < sizes.size(); ++i) {
+            SCOPED_TRACE(sizes[i]);
+            const GLuint first = (i % 2) == 0 ? 0u : 6u;
+            const std::array<GLuint, 6> elements = {
+                first, first + 1, first + 2, first + 3, first + 4, first + 5,
+            };
+            glBufferData(GL_COPY_WRITE_BUFFER, sizes[i], nullptr, GL_DYNAMIC_DRAW);
+            glBufferSubData(GL_COPY_WRITE_BUFFER, 0, sizeof(elements), elements.data());
+            glViewport(0, 0, Gl().Width(), Gl().Height());
+            glClearColor(0.f, 0.f, 0.f, 1.f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glUseProgram(m_program);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
+            const auto px = CenterPixel();
+            EXPECT_EQ(FirstGLError(), 0u);
+            EXPECT_GT(px[first == 0 ? 0 : 1], 200) << "VAO did not fetch the replacement index store";
+            EXPECT_LT(px[first == 0 ? 1 : 0], 50) << "VAO still fetched the previous index store";
+        }
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
+        glDeleteBuffers(1, &indices);
     }
 
     // The shadow IS the mapping: a readback straight after a CPU write must hand

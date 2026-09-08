@@ -1230,6 +1230,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (resource->id != 0 && CanTouchGLNow() &&
                         resource->contextGeneration == g_bufferContextGeneration) {
                         NoteBufferIdDeleted(resource->id);
+                        // Frontend VAO bindings survive respecification; force their
+                        // backend twins to bind the replacement buffer name.
+                        ++g_bufferBackendIdGeneration;
                         g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                         resource->id = 0;
                         resource->immutableStorage = false;
@@ -1499,7 +1502,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // See the declaration: re-mints of a live resource's driver id. Written only on
-        // the context thread (both re-mint sites run there), read only by the VAO sync.
+        // the context thread (all re-mint sites run there), read only by the VAO sync.
         Uint64 g_bufferBackendIdGeneration = 0;
 
         void RegisterBufferBackendOps() {

@@ -18,6 +18,7 @@ target_link_libraries(DriverPostIterationRPWitnessTest PRIVATE
 add_executable(
         DriverBugProbesTest
         DriverBugProbesTest.cpp
+        PersistentBufferOrderingProbeTest.cpp
 )
 
 target_include_directories(DriverBugProbesTest PRIVATE
