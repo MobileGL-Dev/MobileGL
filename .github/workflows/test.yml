@@ -569,24 +569,25 @@ jobs:
         working-directory: build-verify
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)"
 
-      # The two always-on P2 negative controls (G8, G12), which are labelled integration-gpu and
-      # not integration-verify - they are about the handle key and the CSO switch, not about the
-      # comparator - so the lane above does not reach them. They are run HERE because this is the
-      # only CI job that unpacks a MOBILEGL_PIPE_PUSH build: CsoContentAddressingScenario reads
-      # the two CSO counters out of the library's summary line and both the counters and the
-      # cso[] bracket are #if MOBILEGL_PIPE_PUSH, so in the pull `integration` job the entries do
-      # not exist at all.
+      # The always-on P2 and P3a negative controls (G8, G10, G12), which are labelled
+      # integration-gpu and not integration-verify - they are about the handle key, the subsystem
+      # switch and the map-persistent counter, not about the comparator - so the lane above does
+      # not reach them. They are run HERE because this is the only CI job that unpacks a
+      # MOBILEGL_PIPE_PUSH build: every one of them reads a counter out of the library's summary
+      # line, and both the counters and their brackets are #if MOBILEGL_PIPE_PUSH, so in the pull
+      # `integration` job the entries exist (gate G2 requires the same names in both builds) but
+      # have nothing to assert.
       #
       # An arm whose subsystem has not landed on this tree SKIPS with the reason (never absent,
-      # never a green that asserted nothing), so this step is green through the P2 landing order
-      # and starts asserting as each package arrives.
+      # never a green that asserted nothing), so this step is green through the P2 and P3a landing
+      # orders and starts asserting as each package arrives.
       #
       # The environment is the sibling step's, deliberately and in full: these entries run the
       # same DirectVulkan binary through the same runner, so the three MOBILEGL_MAGMA_* fixes it
       # needs apply here too, and a crash here has to leave a core for the same black-box flow.
       # The step above is the only reason those lines exist in this job; a control that crashed
       # without one would be the hardest failure in the job to diagnose.
-      - name: The handle-ABA and CSO-content-addressing controls (G8, G12)
+      - name: The handle-ABA, CSO and P3a subsystem controls (G8, G10, G12)
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -597,7 +598,8 @@ jobs:
           ulimit -c unlimited
           sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'
           ctest --output-on-failure -L integration-gpu \
-            -R 'HandleRecycle|CsoContentAddressing' --no-tests=error -j 4
+            -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystemControl|MapPersistentRoundtrips' \
+            --no-tests=error -j 4
 
       # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
       # library opens it fopen(path, "w"), so after an ambient lane of 400-odd processes the file
@@ -1540,10 +1542,21 @@ jobs:
     runs-on: ubuntu-latest
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
+    env:
+      # P3a's base ref, for the G5 region gate below. It is 44c2b5cf and NOT the workflow's
+      # baseline_sha input: that input is the SYMBOL baseline (087685d1, P1's G1 reading) and it
+      # is empty on a push, whereas this gate asks "did the buffer pool, the deferred-release
+      # drain and the three rings move since the phase started". INTEGRATOR-DECISIONS ID-1 is
+      # where the ref comes from.
+      BASELINE: "44c2b5cf"
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
+        with:
+          # The G5 gate reads Managers.cpp at BASELINE with `git show`, which a depth-1 checkout
+          # does not have. Nothing else in this job needs history.
+          fetch-depth: 0
 
       # The seven generators all read MG_Pipe/*.def, so regenerating and diffing is what
       # keeps the two interface tables, the wire records, the verify comparators, the
@@ -1602,6 +1615,32 @@ jobs:
         run: |
           python3 scripts/gen_pipe_dirty_surface.py --check
           python3 scripts/gen_pipe_dirty_surface.py --self-test
+
+      # A GATE as of P3a (G5). "pool 与延迟释放原样搬" (ROADMAP.md:19) is meant literally: the
+      # buffer pool, the deferred-release drain and the three persistently mapped rings move
+      # VERBATIM, and ARCHITECTURE.md:515 says why - their retire happens only inside Present, so
+      # a batching or ordering change there starves them, and nothing else in this workflow can
+      # see it. P3a rewrites the rest of Managers.cpp by design, so a file diff says nothing; the
+      # script extracts the nine named bodies and compares their hashes on their own.
+      #
+      # Scoped to the disaggregation branch and to a manual dispatch, deliberately: the question
+      # is "did these nine move since P3a started", and BASELINE is P3a's base ref. On dev, where
+      # unrelated buffer fixes land on their own schedule, the same comparison would be asking a
+      # question nobody posed - it belongs with the TEMPORARY trigger lines at the top of this
+      # file and retires with them.
+      #
+      # --self-test is the half that keeps it honest, and it is not optional: a comparison that
+      # silently stopped comparing produces exactly the same green as nine untouched bodies. It
+      # runs three canned controls - nine bodies extracted, an edit OUTSIDE them ignored, and a
+      # perturbed body reported BY NAME - and fails if any of them does not answer. Same shape as
+      # gen_pipe.py --self-test above.
+      - name: The buffer pool, the deferred-release drain and the rings did not move (G5)
+        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
+        run: bash scripts/p3a_untouched_regions.sh "${BASELINE}" HEAD
+
+      - name: The untouched-region gate can still fail (G5)
+        if: ${{ github.ref == 'refs/heads/feat/disaggregated' || github.event_name == 'workflow_dispatch' }}
+        run: bash scripts/p3a_untouched_regions.sh --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
