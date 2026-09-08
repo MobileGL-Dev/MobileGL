@@ -32,7 +32,11 @@
 #include "Includes.h"
 
 #include <MG_State/GLState/BufferState/BufferObject.h>
+#include <MG_State/GLState/FramebufferState/FramebufferObject.h>
+#include <MG_State/GLState/ProgramState/ProgramObject.h>
 #include <MG_State/GLState/RenderbufferState/RenderbufferObject.h>
+#include <MG_State/GLState/SamplerState/SamplerObject.h>
+#include <MG_State/GLState/TextureState/TextureObject2D.h>
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 
 using namespace MobileGL;
@@ -155,4 +159,70 @@ TEST(ObjectLifetimeIdTest, RenderbufferObjectAtARecycledAddressCarriesAFreshLife
 
 TEST(ObjectLifetimeIdTest, LiveRenderbufferObjectsHaveDistinctLifetimeIds) {
     ExpectDistinctIdsWhileBothAlive<MG_State::GLState::RenderbufferObject>("RenderbufferObject");
+}
+
+// P4a mints a client handle off the lifetime id of FOUR more object classes - a texture, a
+// framebuffer, a sampler and a program - and resolves every one of their death paths through
+// the same lifetimeId -> slot map. So the property these cases prove stops being a statement
+// about two backend memos and becomes the thing the whole handle space rests on: a recycled
+// heap address must not reproduce a handle, because the applier's record and the backend's twin
+// are both keyed on one.
+//
+// The texture case is additionally a CHURN check that costs nothing extra: under a push build
+// each round mints a Texture slot in the constructor and returns it in the destructor, so 64
+// rounds that leaked would be visible to the leak cases the gates package owns.
+TEST(ObjectLifetimeIdTest, TextureObjectAtARecycledAddressCarriesAFreshLifetimeId) {
+    using MG_State::GLState::TextureObject2D;
+    const int reuseCount = ProbeLifetimeIdAcrossAddressReuse<TextureObject2D>("TextureObject2D");
+    if (reuseCount == 0) {
+        GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across 64 "
+                        "construct/destroy rounds, so the recycled-address case was never exercised";
+    }
+    RecordProperty("address_reuses_observed", reuseCount);
+}
+
+TEST(ObjectLifetimeIdTest, LiveTextureObjectsHaveDistinctLifetimeIds) {
+    ExpectDistinctIdsWhileBothAlive<MG_State::GLState::TextureObject2D>("TextureObject2D");
+}
+
+TEST(ObjectLifetimeIdTest, FramebufferObjectAtARecycledAddressCarriesAFreshLifetimeId) {
+    using MG_State::GLState::FramebufferObject;
+    const int reuseCount = ProbeLifetimeIdAcrossAddressReuse<FramebufferObject>("FramebufferObject");
+    if (reuseCount == 0) {
+        GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across 64 "
+                        "construct/destroy rounds, so the recycled-address case was never exercised";
+    }
+    RecordProperty("address_reuses_observed", reuseCount);
+}
+
+TEST(ObjectLifetimeIdTest, LiveFramebufferObjectsHaveDistinctLifetimeIds) {
+    ExpectDistinctIdsWhileBothAlive<MG_State::GLState::FramebufferObject>("FramebufferObject");
+}
+
+TEST(ObjectLifetimeIdTest, SamplerObjectAtARecycledAddressCarriesAFreshLifetimeId) {
+    using MG_State::GLState::SamplerObject;
+    const int reuseCount = ProbeLifetimeIdAcrossAddressReuse<SamplerObject>("SamplerObject");
+    if (reuseCount == 0) {
+        GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across 64 "
+                        "construct/destroy rounds, so the recycled-address case was never exercised";
+    }
+    RecordProperty("address_reuses_observed", reuseCount);
+}
+
+TEST(ObjectLifetimeIdTest, LiveSamplerObjectsHaveDistinctLifetimeIds) {
+    ExpectDistinctIdsWhileBothAlive<MG_State::GLState::SamplerObject>("SamplerObject");
+}
+
+TEST(ObjectLifetimeIdTest, ProgramObjectAtARecycledAddressCarriesAFreshLifetimeId) {
+    using MG_State::GLState::ProgramObject;
+    const int reuseCount = ProbeLifetimeIdAcrossAddressReuse<ProgramObject>("ProgramObject");
+    if (reuseCount == 0) {
+        GTEST_SKIP() << "inconclusive, not proven: this allocator never handed the same address back across 64 "
+                        "construct/destroy rounds, so the recycled-address case was never exercised";
+    }
+    RecordProperty("address_reuses_observed", reuseCount);
+}
+
+TEST(ObjectLifetimeIdTest, LiveProgramObjectsHaveDistinctLifetimeIds) {
+    ExpectDistinctIdsWhileBothAlive<MG_State::GLState::ProgramObject>("ProgramObject");
 }
