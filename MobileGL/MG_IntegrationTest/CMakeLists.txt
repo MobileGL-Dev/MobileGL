@@ -52,6 +52,7 @@ add_executable(MobileGLIntegrationTest
     Main.cpp
     Harness/HeadlessGL.cpp
     Harness/BackendCapsPeek.cpp
+    Harness/PipeSlotPeek.cpp
     Scenarios/OrientationScenario.cpp
     Scenarios/CrossFrameBufferScenario.cpp
     Scenarios/ResidentIndexScenario.cpp

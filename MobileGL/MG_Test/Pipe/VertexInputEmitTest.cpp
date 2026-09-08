@@ -47,12 +47,16 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include <algorithm>
+
 #include <Config.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/VertexInputEmit.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/StateObjectDeathNotice.h>
 #endif
 
 using namespace MobileGL;
@@ -126,7 +130,9 @@ namespace {
     X(VertexInputEmit, ABaseInstanceChangeAloneStillEmitsTheVertexBufferSet)                        \
     X(VertexInputEmit, AnUnchangedSetWithAnUnchangedBaseInstanceEmitsNothing)                       \
     X(VertexInputEmit, RebindingTheSameVaoEmitsABindAndNoCreate)                                    \
-    X(VertexInputEmit, PingPongingBetweenTwoVaosNeverRecreatesEither)
+    X(VertexInputEmit, PingPongingBetweenTwoVaosNeverRecreatesEither)                               \
+    X(VertexInputEmit, DestroyedVertexArraysReturnTheirCsoSlotsAndRecords)                          \
+    X(VertexInputEmit, ADoubleReleaseOfAVertexElementsSlotIsHarmless)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -499,6 +505,110 @@ namespace {
         Ctx().BindVertexArray(0);
         EXPECT_GT(Emitter().EmitVertexElements(Ctx()), 0u) << "the default VAO is a VAO and has a handle";
         EXPECT_EQ(Emitter().CreateCount(), 3u);
+    }
+
+    // ============================ C-1: the death path ============================
+    //
+    // THE LEAK THIS RULES OUT, and why it is a client case rather than a backend one. Every
+    // validate point with a VAO bound calls MGPipeSlots().Acquire(VertexElementsCso, ...) and
+    // MGPipeApplyCreateVertexElements, and the applier's record is an Array<...,32> pair -
+    // about 1.3 KB per slot. Until C-1 the ONLY thing that ever returned one was DirectGLES'
+    // StateObjectDeathOps table, so under any backend that installs none - which is what
+    // DirectVulkan/Magma deliberately does, MagmaPipeArms.h says why - a VAO's slot and its
+    // record were held for the life of the process, on the shipped 0x1ff mask. Sodium and
+    // Create churn a VAO per chunk section; 10 k of them is 13 MB of records plus 10 k
+    // SlotState entries plus 10 k map nodes, monotonic, on a platform with an LMK, and past
+    // kMGPipeMaxVertexElementsSlots every create_vertex_elements becomes a permanent
+    // Fatal{ProtocolCorruption}.
+    //
+    // This binary installs NO StateObjectDeathOps at all, which is exactly the shape of the
+    // backend the leak was invisible under. Before C-1 the two EXPECTs on LiveCount below read
+    // `live + kChurn` and `HighWater` grew by kChurn; after it, both come back.
+    TEST(VertexInputEmit, DestroyedVertexArraysReturnTheirCsoSlotsAndRecords) {
+        EmitterScope scope;
+        ASSERT_EQ(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+            << "this case is the NO-death-ops backend; with a consumer installed it would be "
+               "measuring Espryt's free instead of the client's";
+
+        auto& slots = MGPipeSlots();
+        const Uint32 liveBefore = slots.LiveCount(MGPipeKind::VertexElementsCso);
+        const Uint32 highWaterBefore = slots.HighWater(MGPipeKind::VertexElementsCso);
+
+        // Every round is one VAO, configured, drawn with (which is what mints the slot AND
+        // publishes the record), then deleted. The names are reused, exactly as a chunk
+        // renderer's are - MG_State hands out a fresh lifetime id per object anyway, so a
+        // recycled NAME must not be what returns the slot.
+        constexpr int kChurn = 64;
+        Uint32 peakLive = 0;
+        for (int round = 0; round < kChurn; ++round) {
+            // Through the name allocator, so MarkVertexArrayForDeletion recognises the name and
+            // actually drops the slot's reference - and so the recycled NAME is part of the
+            // shape, exactly as a chunk renderer's is. The lifetime id is fresh every round
+            // whatever the name does, which is what the free has to key on.
+            Vector<Uint> names;
+            Ctx().GenVertexArrayNames(1, names);
+            ASSERT_EQ(names.size(), 1u) << "round " << round;
+            const Uint name = names[0];
+            Ctx().CreateVertexArrayObject(name);
+            Ctx().BindVertexArray(name);
+            const SharedPtr<VertexArrayObject> vao = Ctx().GetBoundVertexArray();
+            ASSERT_TRUE(vao) << "round " << round;
+            vao->SetAttributeFormat(0, 4, DataType::Float32, false, 16, 0, false);
+            vao->EnableAttribute(0);
+            ASSERT_GT(Emitter().EmitVertexElements(Ctx()), 0u) << "round " << round;
+            peakLive = std::max(peakLive, slots.LiveCount(MGPipeKind::VertexElementsCso));
+            // Unbind first: a still-bound VAO goes on living, which is the whole reason the
+            // death path hangs off the destructor and not off glDeleteVertexArrays.
+            Ctx().BindVertexArray(0);
+            Ctx().MarkVertexArrayForDeletion(name);
+        }
+
+        EXPECT_EQ(slots.LiveCount(MGPipeKind::VertexElementsCso), liveBefore)
+            << kChurn << " vertex arrays were created and destroyed and the client kept their "
+                         "CSO slots; under a backend that installs no death notice consumer "
+                         "that is one SlotState, one map node and a ~1.3 KB applier record per "
+                         "VAO, for the life of the process";
+        // The default VAO plus one recycled slot, i.e. the churn recycles instead of growing.
+        EXPECT_LE(slots.HighWater(MGPipeKind::VertexElementsCso) - highWaterBefore, 3u)
+            << "the CSO slot space grew with the churn instead of being recycled";
+        EXPECT_LE(peakLive, liveBefore + 2u) << "more than one churned VAO was live at once";
+        EXPECT_EQ(MGPipeApplier().RefusedVertexInputCalls, 0u)
+            << "a death path emitted delete_vertex_elements for a record the applier never had";
+    }
+
+    // Espryt's death notice frees the same slot the client's death path frees, and after C-1
+    // both run. The allocator's Free is what makes that safe - it refuses a slot that is not
+    // live at that generation, and the Gen bump rides the NEXT handout rather than the free -
+    // so a second release cannot skip a generation, cannot double-push the free list, and
+    // cannot take a slot away from the successor that has meanwhile been given it.
+    TEST(VertexInputEmit, ADoubleReleaseOfAVertexElementsSlotIsHarmless) {
+        EmitterScope scope;
+        auto& slots = MGPipeSlots();
+        const Uint32 liveBefore = slots.LiveCount(MGPipeKind::VertexElementsCso);
+
+        const SharedPtr<VertexArrayObject> vao = MakeVao(11);
+        vao->EnableAttribute(0);
+        ASSERT_GT(Emitter().EmitVertexElements(Ctx()), 0u);
+        const MGPipeHandle handle = Emitter().BoundHandle();
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        const Uint64 lifetimeId = vao->GetLifetimeId();
+
+        // The notice's half, by hand and FIRST - the order Espryt's consumer runs in.
+        slots.Free(MGPipeKind::VertexElementsCso, handle);
+        EXPECT_EQ(slots.LiveCount(MGPipeKind::VertexElementsCso), liveBefore);
+
+        // ...and then the client's, which must find nothing and say so rather than corrupt the
+        // free list or emit a delete for a record it has already forgotten.
+        EXPECT_FALSE(MGPipeEmitVertexElementsDestroyAndFree(lifetimeId))
+            << "a second release resolved a handle the first one retired";
+        EXPECT_EQ(slots.LiveCount(MGPipeKind::VertexElementsCso), liveBefore);
+
+        // The successor takes the recycled slot with a MOVED generation, which is the property
+        // a double free would have broken.
+        const MGPipeHandle successor = slots.Acquire(MGPipeKind::VertexElementsCso, lifetimeId + 1);
+        EXPECT_EQ(successor.Slot, handle.Slot);
+        EXPECT_NE(successor.Gen, handle.Gen);
+        slots.Free(MGPipeKind::VertexElementsCso, successor);
     }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace

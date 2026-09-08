@@ -120,6 +120,7 @@
 #include <vector>
 
 #include "../Harness/HeadlessGL.h"
+#include "../Harness/PipeSlotPeek.h"
 #include "../Harness/ScenarioFixture.h"
 
 #ifdef GLAPI
@@ -990,6 +991,105 @@ void main() { oColor = texture(uTex, vUv); }
             glDeleteFramebuffers(1, &secondFbo);
             GLuint cleanup[2] = {firstAttachment, secondAttachment};
             glDeleteTextures(2, cleanup);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // P3a C-1: the recycle has to give the SLOT back, not only refuse to alias.
+        //
+        // Everything above asks "did the replacement inherit the dead object's state". This asks
+        // the other half of the same identity contract, which no case in this file could see:
+        // when the dead object is not replaced at all, does the client hand its {slot, gen}
+        // back? Until C-1 the answer under DirectVulkan was NO. The mint is the client's
+        // (MGPipeVertexInputEmitter::EmitVertexElements acquires a VertexElementsCso slot at
+        // every validate point with a VAO bound) and the only free in the tree was Espryt's
+        // StateObjectDeathOps consumer - so under Magma, which installs none deliberately
+        // (MagmaPipeArms.h: "an allocator here would grow by one SlotState plus one map node
+        // per object EVER created, for the life of the process, on a platform with an LMK"),
+        // every VAO ever created held its slot and its ~1.3 KB applier record until the process
+        // died, on the shipped 0x1ff mask, until create_vertex_elements began tripping
+        // Fatal{ProtocolCorruption} permanently at kMGPipeMaxVertexElementsSlots.
+        //
+        // THE OBSERVABLE IS THE ALLOCATOR, not pixels: this leak produces correct pictures the
+        // whole way to the fatal, which is exactly why the four cases above ran green over it.
+        // It runs on BOTH backends' Handles lanes; DirectVulkan is where it was red.
+        TEST_F(HandleRecycleScenario, DestroyedVertexArraysReturnTheirVertexElementsSlots) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            if (m_arm != Arm::Handles) {
+                GTEST_SKIP() << "the client mints a VertexElementsCso slot only when the vertex-input "
+                                "subsystem is on, and only the Handles arm pins it (0x1ff). The Legacy "
+                                "and AbaControl lanes run MOBILEGL_PIPE_PUSH=0, where there is no "
+                                "allocator to leak from.";
+            }
+
+            unsigned liveBefore = 0;
+            unsigned highWaterBefore = 0;
+            if (!MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &liveBefore) ||
+                !MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
+                                                &highWaterBefore)) {
+                GTEST_SKIP() << "the client slot allocator is out of reach from this module (a pull "
+                                "build has none, and the Android link resolves no internal symbol), so "
+                                "'could not look' would be reported as 'did not leak'";
+            }
+
+            // One shared VBO: the case is about the VAOs, and a per-round buffer would churn the
+            // Buffer kind's slots alongside them and blur which allocator answered.
+            const GLuint buffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
+
+            // Each round creates a vertex array, DRAWS with it - which is what mints the slot and
+            // publishes the applier's record; a VAO that never reaches a validate point has
+            // neither - unbinds it and deletes it. glGenVertexArrays hands the same name back
+            // every time, exactly as a chunk renderer's does, so a death path that keyed on the
+            // GL NAME rather than on the lifetime id would look correct here too - which is why
+            // the assertion is on the allocator and not on the name.
+            constexpr int kChurn = 48;
+            unsigned peakLive = liveBefore;
+            for (int round = 0; round < kChurn; ++round) {
+                GLuint vao = 0;
+                glGenVertexArrays(1, &vao);
+                ConfigureQuadVao(vao, buffer);
+                const Image image = DrawQuadAndRead(vao);
+                if (round == 0) {
+                    // One picture check, so a green here cannot mean "the draws never happened
+                    // and therefore nothing was ever minted".
+                    ExpectWholeViewportIs(image, "green", "the churn's first draw");
+                }
+                unsigned live = 0;
+                ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
+                                                           &live));
+                if (live > peakLive) peakLive = live;
+                glBindVertexArray(0);
+                glDeleteVertexArrays(1, &vao);
+            }
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the churn left a GL error behind";
+
+            unsigned liveAfter = 0;
+            unsigned highWaterAfter = 0;
+            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
+                                                       &liveAfter));
+            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
+                                                       &highWaterAfter));
+            std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " VertexElementsCso live "
+                      << liveBefore << " -> " << liveAfter << " (peak " << peakLive << "), high water "
+                      << highWaterBefore << " -> " << highWaterAfter << " over " << kChurn
+                      << " create/draw/destroy rounds" << std::endl;
+
+            EXPECT_EQ(liveAfter, liveBefore)
+                << kChurn << " vertex arrays were created, drawn with and destroyed and " << (liveAfter - liveBefore)
+                << " VertexElementsCso slots never came back. Each one holds a SlotState, a "
+                   "lifetime-id map node and the applier's ~1.3 KB record for the life of the "
+                   "process, and past kMGPipeMaxVertexElementsSlots every create_vertex_elements "
+                   "trips Fatal{ProtocolCorruption} for good. Backend "
+                << Gl().BackendName();
+            EXPECT_LE(highWaterAfter - highWaterBefore, 4u)
+                << "the CSO slot space grew with the churn instead of recycling one slot; the "
+                   "frees are not reaching the allocator's free list";
+            EXPECT_LE(peakLive - liveBefore, 2u)
+                << "more than one churned vertex array was live at the allocator at once, so the "
+                   "deaths are arriving late rather than at the destructor";
+
+            glDeleteBuffers(1, &buffer);
         }
 
     } // namespace
