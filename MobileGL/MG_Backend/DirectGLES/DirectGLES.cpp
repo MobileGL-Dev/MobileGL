@@ -2419,15 +2419,48 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Count is the "has this set ever arrived" test, never the serial: MGPipeApplierReset
         // advances the working-state serials whether or not anything was emitted.
+        //
+        // WHY THE SEAM CHECK IS ONLY LOUD AT THE VALIDATE POINT (review MAJOR-3). The
+        // framebuffer seam logs unconditionally because SyncCurrentFBO only ever runs where the
+        // records are current. This one does not have that property: SyncImageTextureBinding is
+        // ALSO the eager funnel glBindImageTexture itself runs, and at that moment the newest
+        // record legitimately describes the PREVIOUS draw, so an unconditional log here would
+        // fire on every ordinary frame and the grep section 8 mandates would be worthless. The
+        // latch below is set only around the draw/dispatch sweep, where the set for THIS draw
+        // has been applied and a mismatch is therefore a mis-keyed emission - the same finding
+        // against B/C the framebuffer line reports, in the same words, so one grep covers all
+        // three seams.
+        static Bool g_imageRecordSeamIsAuthoritative = false;
+
         static const MG_Pipe::MGPImageView* ResolveShaderImageRecord(
             Uint unit, const MG_State::GLState::ITextureObject* boundTexture) {
+            // P4a decline-site I1: M - the mask says this family is not switched on; stays
+            //   silent at the verification round (becomes D's SamplerSubsystemEnabled()).
             if (!EsprytDrawSamplerHandlesEnabled()) return nullptr;
             const auto& st = MG_Pipe::MGPipeApplier();
+            // P4a decline-site I2: S - flips to loud-once at the verification round, and only
+            //   when the current program declares images: a program with images and no pushed
+            //   set is a seam defect, while a program with none is the ordinary case.
             if (st.ShaderImageCount == 0) return nullptr;
+            // P4a decline-site I3: M - a unit outside the received window has no pushed answer,
+            //   so the eager funnel uses the frontend binding; stays silent. (The SWEEP's
+            //   membership is a different question and is not this window - see
+            //   SyncImageTextureBindings and review MAJOR-1.)
             if (unit < st.ShaderImageStart || unit - st.ShaderImageStart >= st.ShaderImageCount) return nullptr;
+            // P4a decline-site I4: unreachable by PipeApply.h:461-464 (Start + Count above the
+            //   bound is Fatal{ProtocolCorruption} in the applier) - kept as defence, no flip.
             if (unit >= st.BoundShaderImages.size()) return nullptr;
             const MG_Pipe::MGPImageView& view = st.BoundShaderImages[unit];
-            if (view.Res != g_backendTextureObjects.HandleOf(boundTexture)) return nullptr;
+            // P4a decline-site I5: S - THE IMAGE SEAM, loud NOW at the validate point (MAJOR-3)
+            //   and silent at the eager funnel for the reason above. No further flip.
+            if (view.Res != g_backendTextureObjects.HandleOf(boundTexture)) {
+                if (g_imageRecordSeamIsAuthoritative) {
+                    MGLOG_E_ONCE("An image record does not describe the binding it names "
+                                 "(image unit %u); running the pre-handle image bind.",
+                                 static_cast<unsigned>(unit));
+                }
+                return nullptr;
+            }
             return &view;
         }
 #endif
@@ -2578,21 +2611,62 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint unitCount = std::min<Uint>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS,
                                                   static_cast<Uint>(std::max(g_GLESCapabilities.MaxImageUnits, 0)));
 #if MOBILEGL_PIPE_PUSH
-            // P4a e3 (D-G2, D-J2): the pushed set's window is the sweep's membership once the
-            // set has arrived. THE VAR-TAIL WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT
-            // CLEARED - the record is "the last set as received" - so this walks [Start,
-            // Start + Count) and nothing else, clamped to what ES actually exposes because
-            // binding past the device limit raises GL_INVALID_VALUE on every dispatch. The
-            // client emits Start = 0 and Count = the image high-water mark + 1, so this is the
-            // same walk with the high-water read off the record instead of a backend global.
+            // P4a e3 (D-G2, D-J2), CORRECTED BY THE REVIEW'S MAJOR-1.
+            //
+            // THE RECORD'S WINDOW IS NOT THIS SWEEP'S MEMBERSHIP. D-J2 and PipeApply.h:461-464
+            // are a rule about RECORD RETENTION - entries outside the var-tail window are not
+            // cleared in the applier - and say nothing about which DRIVER units a re-issue
+            // sweep has to visit. The membership this loop needs is "every unit the driver
+            // currently has an image on", and that is g_imageUnitHighWaterMark, which is
+            // server-owned by construction: SyncImageTextureBinding is the only path to
+            // glBindImageTexture and raises the mark on every unit it hands a texture, so the
+            // mark is monotonic and covers every unit a re-mint could strand.
+            //
+            // The first version of this arm walked [Start, Start + Count) and returned, which
+            // is the SMALLER-WINDOW failure direction DEV-3 refused for keys.maxTouchedUnit: if
+            // set_shader_images is the program-RESOLVED set, a program declaring only unit 0
+            // pushes a window of [0,1), and unit 5's image - established eagerly by an earlier
+            // dispatch and never revisited - is skipped. A texture re-minted between the two
+            // dispatches then leaves unit 5 on a deleted driver name: a write through a freed
+            // allocation on Adreno, a rejected dispatch on Mali. The pre-handle sweep bound
+            // EVERY unit precisely so that could not happen, and that guarantee is what this
+            // sweep exists for. So the record's window is UNIONED with the mark, never
+            // substituted for it, and the walk starts at 0 rather than at Start (a unit BELOW
+            // Start is as undescribed as one above Start + Count).
+            //
+            // A8, which the review adds to this package's assumption list: NOTHING IN THE
+            // CONTRACT PINS THE WINDOW'S MEMBERSHIP. PipeApply.h:461-464 says only that the
+            // record is the last set as received, and that Start + Count above the bound is
+            // Fatal{ProtocolCorruption}. Until package C documents in ImageEmit.h that the
+            // window covers every unit the driver holds, this union is load-bearing; the
+            // verification round logs (ShaderImageStart, ShaderImageCount) against the mark for
+            // a Minecraft frame and says whether it can ever be relaxed.
+            //
+            // What the record still buys is real and is e3's actual deliverable: the four field
+            // VALUES come off it inside SyncImageTextureBinding, and the walk stops at the
+            // high-water mark instead of at the device's MaxImageUnits. The units in
+            // [end, unitCount) the pre-handle arm additionally visits have never been given a
+            // texture through the only funnel that can give one, so re-binding 0 on them is a
+            // provable no-op.
             {
                 const auto& st = MG_Pipe::MGPipeApplier();
+                // P4a decline-site I6: M - a set that never arrived means the full pre-handle
+                //   sweep below, which is the SAFE (wider) direction; stays silent.
                 if (EsprytDrawSamplerHandlesEnabled() && st.ShaderImageCount != 0) {
-                    const Uint32 end =
-                        std::min<Uint32>(st.ShaderImageStart + st.ShaderImageCount, static_cast<Uint32>(unitCount));
-                    for (Uint32 unit = st.ShaderImageStart; unit < end; ++unit) {
+                    // P4a decline-site I7: the window/mark UNION (MAJOR-1, fixed here); no flip
+                    //   remains at the verification round, only the A8 measurement above.
+                    const Uint32 end = std::min<Uint32>(
+                        std::max<Uint32>(st.ShaderImageStart + st.ShaderImageCount,
+                                         static_cast<Uint32>(g_imageUnitHighWaterMark)),
+                        static_cast<Uint32>(unitCount));
+                    // This IS the validate point - the only two callers are the draw gate and
+                    // PrepareForCompute - so the image seam is authoritative for the length of
+                    // the walk and only for that length.
+                    g_imageRecordSeamIsAuthoritative = true;
+                    for (Uint32 unit = 0; unit < end; ++unit) {
                         SyncImageTextureBinding(unit);
                     }
+                    g_imageRecordSeamIsAuthoritative = false;
                     return;
                 }
             }
