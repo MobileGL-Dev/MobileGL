@@ -195,8 +195,11 @@ namespace MobileGL::MG_Pipe {
     // when the pipeline version moved, and it keeps the eviction order in the same array as
     // the content - a map would need a second structure to answer "which is oldest".
     inline MGPipeCsoCache& MGPipeCsoCacheInstance() {
-        static MGPipeCsoCache cache;
-        return cache;
+        // NEVER DESTROYED, for MGPipeTrackerInstance()' reason (MG_Impl/Pipe/Tracker.h): the
+        // rule covers every MGPipe process singleton, not only the ones on today's death
+        // paths.
+        static MGPipeCsoCache* cache = new MGPipeCsoCache();
+        return *cache;
     }
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH

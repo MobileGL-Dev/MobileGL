@@ -431,8 +431,14 @@ namespace MobileGL::MG_Pipe {
     // The monolith's one vertex-input emitter, beside the tracker, the CSO cache, the
     // set-hash suppressor and the resource tracker.
     inline MGPipeVertexInputEmitter& MGPipeVertexInputEmitterInstance() {
-        static MGPipeVertexInputEmitter emitter;
-        return emitter;
+        // NEVER DESTROYED, for MGPipeSlots()' reason (MG_Impl/Pipe/SlotAllocator.cpp), and
+        // this one is not hypothetical: C-1 put this emitter DIRECTLY on ~VertexArrayObject's
+        // path - MGPipeEmitVertexElementsDestroyAndFree asks RecordIsPublished(handle) and
+        // then NoteRecordDestroyed(handle), which read and WRITE m_latch. A destroyed
+        // emitter answers out of a freed Vector and the write grows it, i.e. an operator
+        // new + memcpy + operator delete on an already-freed block.
+        static MGPipeVertexInputEmitter* emitter = new MGPipeVertexInputEmitter();
+        return *emitter;
     }
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH

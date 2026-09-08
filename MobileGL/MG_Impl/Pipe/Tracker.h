@@ -521,8 +521,14 @@ namespace MobileGL::MG_Pipe {
     // The monolith's one tracker. Under split there is one per client context; the context
     // identity check inside Update is what makes the single instance safe today.
     inline MGPipeTracker& MGPipeTrackerInstance() {
-        static MGPipeTracker tracker;
-        return tracker;
+        // NEVER DESTROYED, for MGPipeSlots()' reason (MG_Impl/Pipe/SlotAllocator.cpp). The
+        // rule is stated over the SET of MGPipe process singletons rather than over the two
+        // that a frontend destructor reaches today: which of them a destructor reaches is a
+        // property of the emitters, and the emitters change (C-1 added a second reaching
+        // path in one commit). One allocation per process, no destructor to lose - this type
+        // has none - and nothing can then answer a late call out of freed storage.
+        static MGPipeTracker* tracker = new MGPipeTracker();
+        return *tracker;
     }
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH

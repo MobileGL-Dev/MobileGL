@@ -86,8 +86,11 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's one suppressor, beside the tracker and the CSO cache.
     inline MGPipeSetHashSuppressor& MGPipeSetHashSuppressorInstance() {
-        static MGPipeSetHashSuppressor suppressor;
-        return suppressor;
+        // NEVER DESTROYED, for MGPipeTrackerInstance()' reason (MG_Impl/Pipe/Tracker.h): the
+        // rule covers every MGPipe process singleton, not only the ones on today's death
+        // paths.
+        static MGPipeSetHashSuppressor* suppressor = new MGPipeSetHashSuppressor();
+        return *suppressor;
     }
 } // namespace MobileGL::MG_Pipe
 #endif // MOBILEGL_PIPE_PUSH
