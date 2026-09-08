@@ -3954,6 +3954,198 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
         table.ReleaseByHandle(second);
         MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Buffer, second);
     }
+
+    // P4a: the EIGHTH table and the SIXTH kind - the sampler view, which is the only kind in
+    // the phase with no frontend object at all. MobileGL has no sampler-view class: GL binds a
+    // texture to a unit and the sampler uniform's type plus the two completeness predicates
+    // decide what the shader sees, gallium's one-view-per-slot IS that resolved form, and the
+    // resolution moves to the CLIENT (D-F3). So this table is handle-keyed only, like the
+    // buffer resource table above, and its twin owns no driver id whatsoever - what it holds is
+    // the server's memo of one resolved view plus the raw-depth-fetch substitution decision,
+    // which is one of the two backend post-processings ARCHITECTURE.md:206 keeps on the server.
+    //
+    // The handle is minted off the TEXTURE's lifetime id (D-F2: one view per ITextureObject),
+    // which is what makes HandleOf resolve at all - and it is legal precisely because the two
+    // kinds have separate slot spaces, so the same lifetime id names a Texture slot and a
+    // SamplerViewCso slot without either shadowing the other.
+    {
+        using MobileGL::MG_Backend::DirectGLES::SamplerViewImpl::g_backendSamplerViews;
+        using MobileGL::MG_Backend::DirectGLES::SamplerViewImpl::BackendSamplerViewObject;
+        auto& table = g_backendSamplerViews;
+
+        SharedPtr<ITextureObject> owner = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle first =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, owner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(first))
+            << "SamplerViewCso: the client allocator minted no handle for a live texture's view";
+
+        // The same lifetime id, two kinds, two independent slot spaces.
+        const MG_Pipe::MGPipeHandle textureHandle =
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Texture, owner->GetLifetimeId());
+        EXPECT_FALSE(first == textureHandle)
+            << "SamplerViewCso: the view handle and the texture handle are the same {slot, gen}, so "
+               "one kind's slot space is aliasing the other's";
+
+        auto& firstTwin = table.GetOrCreate(first);
+        firstTwin = MakeShared<BackendSamplerViewObject>();
+        firstTwin->SyncedSerial = 0xABCDEFull;
+        const BackendSamplerViewObject* const firstRaw = firstTwin.get();
+        EXPECT_EQ(table.FindByHandle(first), &firstTwin)
+            << "SamplerViewCso: the handle does not address the twin GetOrCreate handed back";
+        EXPECT_EQ(table.HandleOf(owner.get()), first)
+            << "SamplerViewCso: HandleOf did not resolve the view minted off this texture's "
+               "lifetime id, so a backend path that still arrives holding the object cannot find "
+               "its view";
+
+        const SharedPtr<BackendSamplerViewObject> released = table.ReleaseByHandle(first);
+        EXPECT_NE(released, nullptr) << "SamplerViewCso: delete_sampler_view found no twin to retire";
+        EXPECT_EQ(table.FindByHandle(first), nullptr)
+            << "SamplerViewCso: the twin outlived its delete_sampler_view";
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, first);
+
+        auto successorOwner = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle second = MG_Pipe::MGPipeSlots().Acquire(
+            MG_Pipe::MGPipeKind::SamplerViewCso, successorOwner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(second)) << "SamplerViewCso";
+        EXPECT_EQ(second.Slot, first.Slot)
+            << "SamplerViewCso: the freed slot was not handed back, so this walk did not exercise "
+               "the recycle it exists to test";
+        EXPECT_NE(second.Gen, first.Gen)
+            << "SamplerViewCso: Gen did not move on slot reuse - the predecessor's handle would "
+               "resolve to the successor's view, which is the ABA the {slot, gen} key exists to stop";
+        EXPECT_EQ(table.FindByHandle(first), nullptr) << "SamplerViewCso: the STALE handle resolved";
+
+        auto& secondTwin = table.GetOrCreate(second);
+        EXPECT_EQ(secondTwin, nullptr)
+            << "SamplerViewCso: a view at a recycled slot inherited its predecessor's memo, so the "
+               "raw-depth-fetch decision of a dead texture would be replayed for a live one";
+        secondTwin = MakeShared<BackendSamplerViewObject>();
+        EXPECT_NE(table.FindByHandle(second)->get(), firstRaw) << "SamplerViewCso";
+
+        // BACKWARD generations are REFUSED rather than adopted, exactly as they are on every
+        // other handle-keyed table (SlotTables.h:301-321). Forward is a recycle; adopting a
+        // backward one would retire the incumbent LIVE twin and then stamp the slot back to the
+        // dead view's generation.
+        auto& stale = table.GetOrCreate(first);
+        EXPECT_EQ(stale, nullptr) << "SamplerViewCso: a generation BEHIND the live twin was adopted";
+        EXPECT_NE(table.FindByHandle(second), nullptr)
+            << "SamplerViewCso: the live twin was destroyed by a handle from its slot's past";
+
+        table.ReleaseByHandle(second);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, second);
+    }
+}
+
+// P4a (ID-8): the backend death notice is the REDUNDANT SECOND PATH for every kind the client
+// mints, and it must be IDEMPOTENT - the client's own helper emits the wire delete, raises this
+// notice and frees the slot, in that order, so whichever of the two frees first wins and the
+// other must find nothing and do nothing.
+//
+// Driven through the REAL consumer the backend installed rather than through a recording stub:
+// what is under test is Espryt's OnFrontendStateObjectDestroyed arm, including the SamplerViewCso
+// arm P4a adds, and a stub would prove only that the test can call itself.
+TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
+    using namespace MobileGL;
+    using namespace MobileGL::MG_Backend::DirectGLES;
+    using namespace MobileGL::MG_State::GLState;
+
+    if (!EsprytSlotTablesEnabled()) {
+        GTEST_SKIP() << "the legacy arm keys twins on the frontend heap address and cannot answer "
+                        "a death notice at all";
+    }
+
+    const MG_State::GLState::StateObjectDeathOps* ops = MG_State::GLState::GetStateObjectDeathOps();
+    ASSERT_NE(ops, nullptr) << "the backend installed no death-notice consumer";
+    ASSERT_NE(ops->OnDestroyed, nullptr);
+
+    // The sampler view first, because it is the arm P4a adds and the only kind whose notice
+    // names a lifetime id belonging to ANOTHER object (the texture the view was minted off).
+    {
+        using SamplerViewImpl::BackendSamplerViewObject;
+        using SamplerViewImpl::g_backendSamplerViews;
+
+        auto owner = MakeShared<TextureObject2D>(0u);
+        const Uint64 lifetimeId = owner->GetLifetimeId();
+        const MG_Pipe::MGPipeHandle view =
+            MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(view));
+        g_backendSamplerViews.GetOrCreate(view) = MakeShared<BackendSamplerViewObject>();
+        ASSERT_NE(g_backendSamplerViews.FindByHandle(view), nullptr);
+
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr)
+            << "the sampler-view notice left the twin behind, so the slot's next owner would "
+               "inherit a dead texture's resolved view";
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId)))
+            << "the notice did not return the slot";
+
+        // The second path. The client's helper calls Free right after raising the notice, and a
+        // Free on a slot that is no longer live at that generation is a proven no-op
+        // (SlotAllocator.cpp:117-119) - so this is the shape that actually ships, twice over.
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, view);
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr);
+
+        // And the slot really is back: a successor gets it with a moved generation, which is
+        // the property a double free would break by skipping one.
+        auto successor = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle reused = MG_Pipe::MGPipeSlots().Acquire(
+            MG_Pipe::MGPipeKind::SamplerViewCso, successor->GetLifetimeId());
+        EXPECT_EQ(reused.Slot, view.Slot);
+        EXPECT_NE(reused.Gen, view.Gen);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, reused);
+    }
+
+    // The five kinds that DO have a frontend object: their notice is raised by the object's own
+    // destructor today and by the client's helper after P4a's client packages land, so it is
+    // delivered twice for one death. A second delivery must be a no-op rather than a second
+    // free - which is what would drop a successor's twin under it.
+    struct KindCase {
+        const char* name;
+        MG_Pipe::MGPipeKind kind;
+        Uint64 lifetimeId;
+    };
+    Vector<KindCase> cases;
+    {
+        auto texture = MakeShared<TextureObject2D>(0u);
+        auto renderbuffer = MakeShared<RenderbufferObject>(0u);
+        auto framebuffer = MakeShared<FramebufferObject>(1u);
+        auto sampler = MakeShared<SamplerObject>(0u);
+        auto program = MakeShared<ProgramObject>(0u);
+
+        TextureImpl::g_backendTextureObjects.GetOrCreate(SharedPtr<ITextureObject>(texture));
+        RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbuffer);
+        FramebufferImpl::g_backendFramebufferObjects.GetOrCreate(framebuffer);
+        SamplerImpl::g_backendSamplerObjects.GetOrCreate(sampler);
+        PrgramImpl::g_backendProgramObjects.GetOrCreate(program);
+
+        cases.push_back({"Texture", MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId()});
+        cases.push_back({"Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId()});
+        cases.push_back({"Framebuffer", MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId()});
+        cases.push_back({"SamplerCso", MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId()});
+        cases.push_back({"ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId()});
+
+        for (const auto& one : cases) {
+            EXPECT_FALSE(MG_Pipe::MGPipeHandleIsNull(
+                MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+                << one.name << ": nothing was twinned, so this walk proves nothing";
+        }
+        // The real destructors run here and raise the first notice.
+    }
+
+    for (const auto& one : cases) {
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+            << one.name << ": the object's own death did not return its slot";
+        // Second and third deliveries: nothing to resolve, nothing to free, no abort.
+        ops->OnDestroyed(one.kind, one.lifetimeId);
+        ops->OnDestroyed(one.kind, one.lifetimeId);
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
+            MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
+            << one.name << ": a redundant notice resurrected a mapping";
+    }
 }
 
 // The two-holder fix, end to end through the REAL Texture registry and the REAL destructor:
@@ -4369,6 +4561,10 @@ TEST(DirectGLESSlotTable, TheArmlessCasesLeaveTheLogPathAndTheConfigAsTheyFoundT
 }
 
 TEST(DirectGLESSlotTable, AGenerationBehindTheLiveTwinIsRefusedRatherThanAdopted) {
+    GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
+}
+
+TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
     GTEST_SKIP() << "the {slot, gen} twin table is compiled only under MOBILEGL_PIPE_PUSH";
 }
 
