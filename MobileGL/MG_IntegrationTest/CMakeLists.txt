@@ -1422,9 +1422,24 @@ gtest_discover_tests(MobileGLIntegrationTest
 # failure indistinguishable from "the counter was never emitted". Same rule as the CSO lanes, the
 # map-persistent lanes and the verify arming lane.
 #
-# DirectGLES only. P4a migrates Espryt's framebuffer, texture, sampler and program paths; Magma's
-# are P7 and register nothing here, so a DirectVulkan lane would be measuring the client emitters
-# against a backend nobody asked to change.
+# THE FIRST FOUR LANES ARE DirectGLES ONLY. P4a migrates Espryt's framebuffer, texture, sampler
+# and program paths; Magma's are P7 and register nothing here, so a DirectVulkan lane that measured
+# the emit[] bracket would be measuring the client emitters against a backend nobody asked to
+# change.
+#
+# THE FIFTH AND SIXTH LANES INVERT THAT, and the inversion is the point (c0f, ID-39/ID-40). "Magma
+# registers no consumer" stopped being a reason to have no lane the moment it became a THING THE
+# CLIENT MUST CHECK: P4a's families were wired without P3a's "a backend registered
+# MGPipeResourceOps" conjunct, so on Magma the client emitted, the applier ACCEPTED, the client
+# cleared its dirty flags on that acceptance and Magma's legacy path found nothing to upload - 66
+# DirectVulkan cases red, every one of them texture-upload shaped, every one of them green at
+# 0x1ff. The fix's belt (the applier refusing and counting RefusedNoConsumer) is invisible in
+# pixels and invisible in the emit[] bracket, so it needs its own entry, and it needs it on the
+# backend WITHOUT the consumer. The DirectGLES twin is the control that keeps the assertion from
+# being vacuously true of a tree where nothing emits anywhere.
+#
+# Both run at the PHASE DEFAULT (0x1fff) rather than a hand-picked mask, for the reason the whole
+# block gives: the shape that ships is the shape worth measuring.
 #
 # Registered in EVERY build, including the pull build where none of the counters exists, so that
 # `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
@@ -1449,6 +1464,16 @@ mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIR
     "MOBILEGL_PIPE_PUSH=0x5ff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-refused-texture-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_CONSUMER_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=consumer"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-consumer-DirectGLES.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_OBJECT_SUBSYSTEM_LANE=no-consumer"
+    "MOBILEGL_PIPE_PUSH=0x1fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-no-consumer-DirectVulkan.log"
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
 gtest_discover_tests(MobileGLIntegrationTest
     TEST_PREFIX "DirectGLES.ObjectSubsystemControl.On."
@@ -1485,6 +1510,24 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.Consumer."
+    TEST_FILTER "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_CONSUMER_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.ObjectSubsystemControl.NoConsumer."
+    TEST_FILTER "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT}"
 )
 
 # --- The texture upload shape: RECORDED, NOT GATED in P4a (D-D4) ----------------------
