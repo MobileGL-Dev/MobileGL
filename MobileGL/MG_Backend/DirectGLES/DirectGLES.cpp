@@ -7524,6 +7524,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (existingLevelCount == 0) {
             return false;
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a (D-M). glGenerateMipmap's storage grow reaches into the frontend texture's own
+        // level shadows to decide - and then to define - the levels the driver is about to
+        // fill. In monolith that is exactly what it does today and nothing here changes; under
+        // a split there is no client address space to reach into, so P8 gives this name teeth.
+        // Named and greppable rather than silent, so the site cannot quietly disappear before
+        // then.
+        MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-storage");
+#endif
 
         const IntVec3 baseTexelSize = texture.GetMipmapTexelSize(uploadTarget, 0);
         const SizeT baseByteSize = texture.GetMipmapByteSize(uploadTarget, 0);
@@ -8167,6 +8176,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         auto* mipmapTexture = MG_State::GLState::AsMipmapTexture(texture.get());
         if (mipmapTexture == nullptr) return false;
+#if MOBILEGL_PIPE_PUSH
+        // P4a (D-M). The three-channel float mipmap fallback filters the CHAIN ON THE CPU out
+        // of the frontend's level shadows and uploads the result. Monolith keeps doing exactly
+        // that; a split server has no shadow to filter, and P8 is what retires it. The texels
+        // themselves are the other half of ARCHITECTURE.md's generate_mipmap item, which is
+        // P8's too.
+        MG_Pipe::MGPipeUnmigratedEmulation("generate-mipmap-cpu-fallback");
+#endif
         const Uint levelCount = mipmapTexture->GetMipmapLevelCount();
         constexpr Int kChannels = 3;
 
@@ -8454,6 +8471,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         auto* srcMipmap = MG_State::GLState::AsMipmapTexture(srcEndpoint.Texture.get());
         auto* dstMipmap = MG_State::GLState::AsMipmapTexture(dstEndpoint.Texture.get());
         if (!srcMipmap || !dstMipmap) return;
+#if MOBILEGL_PIPE_PUSH
+        // P4a (D-M). glCopyImageSubData's CPU-shadow mirror copies the source level's shadow
+        // rows into the DESTINATION's shadow so a later readback of the destination sees what
+        // the GPU copy put there. Both shadows are the client's, so this is the clearest case
+        // in the family of an emulation that cannot survive a split; ROADMAP puts the move
+        // itself in P8 and this names the site until then.
+        MG_Pipe::MGPipeUnmigratedEmulation("copy-image-shadow-mirror");
+#endif
 
         const auto srcUploadTarget = srcEndpoint.Texture->GetUploadTargets()[0];
         const auto dstUploadTarget = dstEndpoint.Texture->GetUploadTargets()[0];
@@ -10073,6 +10098,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
             return true;
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a (D-M). glGetTexImage is answered out of the frontend's own level shadow,
+        // converted to the requested format and type. Monolith is unchanged; a split server
+        // holds no shadow to convert, and the readback family as a whole is P3b/P4b's and
+        // P8's rather than this phase's.
+        MG_Pipe::MGPipeUnmigratedEmulation("get-tex-image-shadow");
+#endif
         const auto& pixelPackBufferObject =
             MGB_CTX->GetBufferBindingSlot(BufferTarget::PixelPack).GetBoundObject();
         if (!pixelPackBufferObject && pixels == nullptr) {
