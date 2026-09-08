@@ -17,6 +17,7 @@
 #include <MG_Backend/MGPipe/PipeInputs.h>
 #include <MG_Impl/Pipe/CsoCache.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
@@ -542,6 +543,171 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
+    // ================================================================================
+    // P3a: the resource family's emission (brief D-A, D-B, D-C, D-D)
+    // ================================================================================
+    //
+    // Declared in MG_Pipe/PipeMutation.h and defined here for the layering reason that
+    // header states: the emission sites are BufferObject's dispatchers, which are MG_State's,
+    // and MG_State may see a declaration but never MG_Impl/Pipe/ResourceTracker.h.
+    //
+    // Every one of these is called from a site that has ALREADY asked
+    // MGPipeResourceSubsystemEnabled(), except the mint and the destroy - the handle is
+    // client state and its lifetime is the frontend object's, not the subsystem's.
+    namespace {
+        using MG_State::GLState::BufferObject;
+
+        MGPHandleOnly BufferHandleOnly(MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(MGPipeKind::Buffer);
+            return only;
+        }
+    } // namespace
+
+    Bool MGPipeResourceSubsystemEnabled() {
+        return (MG_Config::Features.PipePush & kMGPipeSubsystemResources) != 0 &&
+               MGPipeGetResourceOps() != nullptr;
+    }
+
+    Bool MGPipeResourceOpsHaveSubDataResident() {
+        const MGPipeResourceOps* ops = MGPipeGetResourceOps();
+        return ops != nullptr && ops->SubDataResident != nullptr;
+    }
+
+    void MGPipeMintResourceHandle(BufferObject& buffer) {
+        // UNCONDITIONAL in a push build, deliberately: set_vertex_buffers names a buffer by
+        // handle whether or not the resource family is switched on, so gating the mint on
+        // the resource subsystem bit would make the vertex-input subsystem emit null handles
+        // in exactly the A/B arm that exists to isolate the two. It costs one free-list pop
+        // and one map insert per buffer object and emits nothing.
+        MGPipeInstallClientResourceCallbacks();
+        MGPipeResourceTrackerInstance().Acquire(buffer);
+    }
+
+    void MGPipeEmitResourceCreate(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Acquire(buffer);
+        Uint16 bindMask = tracker.BindMask(handle);
+        if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
+        // storageDefined = false: the constructor has no store yet, storage is defined lazily
+        // by the first respecify, and the backend's ensure path already tolerates a resource
+        // that has none.
+        const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, false);
+        tracker.NoteDesc(desc, true);
+        MGPipeApplyResourceCreate(desc);
+    }
+
+    void MGPipeEmitResourceRespecify(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Acquire(buffer);
+        Uint16 bindMask = tracker.BindMask(handle);
+        if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
+        const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, true);
+        tracker.NoteDesc(desc, false);
+        // initialBytes is the client's own shadow base - zero copy, and null is a real answer
+        // for the orphaning idiom (a NULL-data respecify leaves the store undefined and the
+        // backend must not upload the stale bytes).
+        const void* initialBytes = desc.HasDefinedContent != 0 ? buffer.MappedData() : nullptr;
+        // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
+        // record: only an immutable store (a glBufferStorage*) is a real synchronous
+        // allocation and only it is allowed one. In monolith the acknowledgement is
+        // ((void)0), because the applier is one function call away and has already run by
+        // the time this returns; the transport wires the doorbell to that same predicate.
+        MGPipeApplyResourceRespecify(desc, initialBytes);
+    }
+
+    void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
+        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const Uint8* base = buffer.MappedData();
+        const Bool encodable =
+            MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
+                MGPSubData record{};
+                MGPipeBuildSubDataRecord(handle, at, length, record);
+                MGPipeApplyResourceSubData(record, base + at);
+            });
+        if (!encodable) {
+            MGLOG_E_ONCE("MGPipe: resource_subdata range [%llu, +%llu) on buffer %u cannot be encoded - "
+                         "one record's destination box caps the offset at 2^31-1",
+                         static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
+                         buffer.GetExternalIndex());
+        }
+    }
+
+    void MGPipeEmitBufferSubDataResident(BufferObject& buffer, SizeT offset, const void* bytes, SizeT size) {
+        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const auto* base = static_cast<const Uint8*>(bytes);
+        const Bool encodable =
+            MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
+                MGPSubData record{};
+                MGPipeBuildSubDataRecord(handle, at, length, record);
+                // The application's STAGING store, valid for the duration of the call only.
+                MGPipeApplyBufferSubDataResident(record, base + (at - offset));
+            });
+        if (!encodable) {
+            MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
+                         static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
+                         buffer.GetExternalIndex());
+        }
+    }
+
+    void MGPipeEmitResourceFlushRange(BufferObject& buffer, SizeT offset, SizeT size, Uint32 accessFlags) {
+        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        MGPFlushRange record{};
+        record.Res = handle;
+        record.Offset = offset;
+        record.Size = size;
+        // The application's REAL flags, not a normalised subset: the backend's kill-switch
+        // arm reads INVALIDATE_RANGE / INVALIDATE_BUFFER / UNSYNCHRONIZED per call to choose
+        // between a map+memcpy+unmap and an upload, so merging them here would change which.
+        record.AccessFlags = accessFlags;
+        MGPipeApplyResourceFlushRange(record, buffer.MappedData() + offset);
+    }
+
+    void MGPipeEmitResourceReadback(BufferObject& buffer) {
+        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        MGPReadback record{};
+        record.Res = handle;
+        // Whole-buffer by contract (BufferObject.h: the op pulls the backend's current
+        // contents for the WHOLE buffer into the shadow).
+        record.Offset = 0;
+        record.Size = buffer.GetSize();
+        // The answer travels back through MGPipeClientOnBufferWriteback, and the server's
+        // epoch bump happens AFTER that writeback, never before.
+        MGPipeApplyResourceReadback(record);
+    }
+
+    void* MGPipeEmitMapPersistent(BufferObject& buffer) {
+        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        MGPipeResourceTrackerInstance().NoteMapPersistent();
+        // THE map-persistent-roundtrips SITE, and it counts every EMISSION - mint OR
+        // DECLINE - because every one of them needs an answer from the resource owner. A
+        // counter defined as "round trips actually taken" is 0 by construction in monolith
+        // and could never go red for the reason it exists; this one is the same number in
+        // both modes and is "one per storage definition" exactly as the design requires.
+        if (MG_Util::PipeStats::Enabled()) {
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::MapPersistentRoundtrips, 1);
+        }
+        return MGPipeApplyMapPersistent(BufferHandleOnly(handle), buffer.GetSize(), buffer.MappedData());
+    }
+
+    void MGPipeEmitResourceDestroyAndFree(BufferObject& buffer) {
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+        const MGPipeHandle handle = tracker.Find(buffer);
+        if (MGPipeHandleIsNull(handle)) return;
+        if (MGPipeResourceSubsystemEnabled()) {
+            tracker.NoteDestroy();
+            MGPipeApplyResourceDestroy(BufferHandleOnly(handle));
+        }
+        // THE ORDER IS FIXED (D-L): the applier clears the record and the backend drops its
+        // twin while the handle still resolves, and only then does the slot go back. Free
+        // erases the lifetimeId -> slot mapping, so a notice resolved twice finds nothing the
+        // second time - and the Gen bump happens on the NEXT handout of the slot, not here,
+        // so a double free cannot skip a generation.
+        tracker.Retire(handle);
+        MGPipeSlots().Free(MGPipeKind::Buffer, handle);
+    }
+
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
         if (verb == nullptr || field == nullptr) {
             g_omission = PoisonOmission{};
@@ -711,14 +877,28 @@ namespace MobileGL::MG_Pipe {
         // row to Coverage.def can never silently drop a field on the floor before the call
         // that carries it exists.
         //
-        // P3a's two are DELIBERATELY ABSENT at the contract commit: the three emitters below
-        // are stubs that emit nothing and the applier's fourteen entry points are stubs that
-        // apply nothing, so wiring either bit here would retire a pull for a call that does
-        // not happen yet. The commit that gives the emitters their bodies adds them.
+        // P3a's two were DELIBERATELY ABSENT at the contract commit, because the emitters
+        // were stubs; each is added by the commit that gives its own emitters their bodies.
+        //
+        // NEITHER OF THEM RETIRES A PULL, and saying so is the point of adding them
+        // deliberately rather than by reflex:
+        //
+        //   kMGPipeSubsystemResources names NO emitted field at all. SubsystemForEmitter
+        //     above can never return it, because the resource family is dispatched at the GL
+        //     call that causes it rather than filled into a PipeInputs field - there is no
+        //     Coverage.def emitted row for it and there cannot be one. It is here so the
+        //     constant states what this build emits for, which is what an operator reading
+        //     a MOBILEGL_PIPE_PUSH value has to be able to trust.
+        //
+        //   kMGPipeSubsystemVertexInput names exactly one emitted field, GetBoundVertexArray
+        //     through bind_vertex_elements - and EmittedCallSuppliesTheWholeField below says
+        //     false for it, with the reason. So this bit switches the EMISSION on and
+        //     changes nothing about the fill loop.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
-                                                  kMGPipeSubsystemVertexAttribDefaults;
+                                                  kMGPipeSubsystemVertexAttribDefaults |
+                                                  kMGPipeSubsystemResources;
 
         // A field an emitted call supplies COMPLETELY, so the residual fill may stop pulling
         // it. Two rows of Coverage.def's emitted list do not qualify and each has its reason

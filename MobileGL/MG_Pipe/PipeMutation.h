@@ -75,6 +75,59 @@ namespace MobileGL::MG_Pipe {
 
     // MG_Impl/Pipe/PipeFill.cpp. A no-op unless a context is live.
     void MGPipeNoteAggregate(MGPipeAggregate aggregate);
+
+    // ---- P3a: the resource family's emission points (brief D-A1) ----
+    //
+    // The seven BufferBackendOps hooks already dispatch at the GL call that causes them
+    // (ARCHITECTURE.md 5.1 names them as the ONE exception to push-at-validate), so their
+    // pipe calls are emitted from the same BufferObject dispatchers rather than from the
+    // validate point. That puts the emission inside MG_State, which is why these are
+    // DECLARED here beside the two notices and DEFINED in MG_Impl/Pipe/PipeFill.cpp: this
+    // header is the one MG_State already includes for exactly this, and the closure gate
+    // (check_include_closure.py's mutation-header probe) keeps it a declaration - reaching
+    // MG_Impl/Pipe/ResourceTracker.h from BufferObject.cpp would pull the client's tracker
+    // into the state machine that calls it.
+    //
+    // The forward declaration is the whole coupling: none of these needs the definition of
+    // BufferObject, and this header must not gain it.
+} // namespace MobileGL::MG_Pipe
+
+namespace MobileGL::MG_State::GLState {
+    class BufferObject;
+}
+
+namespace MobileGL::MG_Pipe {
+    // (Features.PipePush & kMGPipeSubsystemResources) != 0 && MGPipeGetResourceOps() != nullptr.
+    //
+    // BOTH HALVES MATTER. The bit is the operator's per-subsystem A/B; the table is "has a
+    // backend taken this family over at all". Until one has, every dispatch below falls
+    // through to the BufferBackendOps table it replaces and the tree behaves exactly as it
+    // did - which is what lets the client half land on its own.
+    Bool MGPipeResourceSubsystemEnabled();
+    // The nullable member, asked the way the frontend asks g_bufferBackendOps->ResidentSubData
+    // today: one backend deliberately does not implement it and the caller has a different
+    // path when it is absent (BufferObject::FillSubData).
+    Bool MGPipeResourceOpsHaveSubDataResident();
+
+    // Minted from the constructor and released from the destructor, both unconditionally in
+    // a push build: a handle is CLIENT state and set_vertex_buffers names it whether or not
+    // the resource family is switched on. The CALLS are what the predicate above gates.
+    void MGPipeMintResourceHandle(MG_State::GLState::BufferObject& buffer);
+    // In this order, and it is not negotiable (D-L): the destroy resolves the handle, and
+    // MGPipeSlotAllocator::Free erases the lifetimeId -> slot mapping it resolves through.
+    void MGPipeEmitResourceDestroyAndFree(MG_State::GLState::BufferObject& buffer);
+
+    void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
+    void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
+    void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
+    void MGPipeEmitBufferSubDataResident(MG_State::GLState::BufferObject& buffer, SizeT offset,
+                                         const void* bytes, SizeT size);
+    void MGPipeEmitResourceFlushRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size,
+                                      Uint32 accessFlags);
+    void MGPipeEmitResourceReadback(MG_State::GLState::BufferObject& buffer);
+    // Returns the coherent host pointer the resource owner donated, or null for a DECLINE -
+    // which is a real answer. Every call, mint or decline, is one map-persistent roundtrip.
+    void* MGPipeEmitMapPersistent(MG_State::GLState::BufferObject& buffer);
 } // namespace MobileGL::MG_Pipe
 #define MGP_NOTE_MUTATION(Field)                                                                                       \
     ::MobileGL::MG_Pipe::MGPipeNoteFrontendMutation(::MobileGL::MG_Pipe::MGPipeInputField::Field)
