@@ -445,6 +445,49 @@ if (MOBILEGL_PIPE_PUSH)
                        "HandleRecycle.Handles will SKIP on it")
     endif()
 
+    # P3a's buffer question, and it is NOT the two above. Bits 5/6 re-keyed each backend's
+    # VERTEX-INPUT memos; a BUFFER only travels as a handle once the resource_* family does
+    # (P3a for DirectGLES, P7 for DirectVulkan), and until then a buffer's backend twin is
+    # still reached from the frontend BufferObject. HandleRecycle's buffer case therefore has
+    # a marker of its own: reading the P2 one would arm its Handles arm on a tree where
+    # nothing about a buffer is keyed on a handle.
+    #
+    # Probed by MGPipeResourceOps - the op table PipeApply.h declares and a backend registers -
+    # over each backend's whole directory, for the reason the block above gives: the owning
+    # package picks its own file layout, and a filename probe would answer "no" forever the
+    # moment it moved the code.
+    foreach(mglItestResourceBackend DirectGLES DirectVulkan)
+        mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_OPS
+            "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/${mglItestResourceBackend}" "MGPipeResourceOps")
+        if (MGL_ITEST_RESOURCE_OPS)
+            message(STATUS "Integration tests: ${mglItestResourceBackend} registers a resource op table "
+                           "(${MGL_ITEST_RESOURCE_OPS})")
+            list(APPEND MGL_ITEST_CAPABILITY_ENV
+                "MGITEST_HANDLE_REKEY_RESOURCES_${mglItestResourceBackend}=1")
+        else()
+            message(STATUS "Integration tests: no ${mglItestResourceBackend} source names "
+                           "MGPipeResourceOps - HandleRecycle.Handles' buffer case will SKIP on it")
+        endif()
+    endforeach()
+
+    # The client-side emitter of P3a's map-persistent-roundtrips counter, which is what
+    # StorageBufferRegrow, LargeArenaAdoption and ResourceSubsystemControl read. Same shape and
+    # same reason as the CSO emitter probe above: the counter is minted in MG_Impl/Pipe (package
+    # B), header-only today, so the question is "does any source there emit it", not "does a
+    # named file exist". Until it does, mpr= is structurally zero and an assertion about it
+    # would be a statement about nothing.
+    mgl_itest_probe_for_symbol(MGL_ITEST_RESOURCE_EMITTER
+        "${MGL_ITEST_ROOT}/MobileGL/MG_Impl/Pipe" "MapPersistentRoundtrips")
+    if (MGL_ITEST_RESOURCE_EMITTER)
+        message(STATUS "Integration tests: map-persistent-roundtrips has an emitter "
+                       "(${MGL_ITEST_RESOURCE_EMITTER})")
+        list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_RESOURCE_EMITTER_PRESENT=1")
+    else()
+        message(STATUS "Integration tests: no MG_Impl/Pipe source emits MapPersistentRoundtrips - "
+                       "StorageBufferRegrow's, LargeArenaAdoption's and ResourceSubsystemControl's "
+                       "mpr entries will SKIP")
+    endif()
+
     mgl_itest_probe_for_symbol(MGL_ITEST_MAGMA_ABA
         "${MGL_ITEST_ROOT}/MobileGL/MG_Backend/DirectVulkan" "PipeHandleAbaControl")
     if (MGL_ITEST_MAGMA_ABA)
@@ -456,9 +499,9 @@ if (MOBILEGL_PIPE_PUSH)
                        "HandleRecycle.AbaControl will SKIP")
     endif()
 else()
-    message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl} and "
-                   "CsoContentAddressing stay registered (G2) and SKIP: every arm they assert is "
-                   "compiled only under MOBILEGL_PIPE_PUSH")
+    message(STATUS "Integration tests: pull build - HandleRecycle.{Handles,AbaControl}, "
+                   "CsoContentAddressing and ResourceSubsystemControl stay registered (G2) and SKIP: "
+                   "every arm they assert is compiled only under MOBILEGL_PIPE_PUSH")
 endif()
 
 mgl_itest_join_environment(MGL_ITEST_GLES_ENVIRONMENT
@@ -857,10 +900,15 @@ gtest_discover_tests(MobileGLIntegrationTest
 # arm runs `MOBILEGL_PIPE_PUSH=0 ctest -L integration-gpu` over the whole label, and without the
 # explicit bitmask below that leaked PUSH=0 turned this lane's LEGACY_MEMOS=0 into D14's armless
 # combination: the bring-up aborted, on purpose, and the lane went red for a reason that was never
-# about handles. The mask is the P2 default (kMGPipeSubsystemsMigratedAtP2), not a hand-picked bit,
-# so the lane keeps measuring the shape that ships.
+# about handles. The mask is the PHASE default, not a hand-picked bit, so the lane keeps measuring
+# the shape that ships: it was kMGPipeSubsystemsMigratedAtP2 (0x7f) and is now
+# kMGPipeSubsystemsMigratedAtP3a (0x1ff, MG_Pipe/MGPipe.h), which adds bit 7 (resources) and bit 8
+# (vertex input). Pinning it at 0x7f after P3a would leave the Handles arm asserting the P2 shape
+# while the buffer and vertex-input handles it is supposed to be about stayed switched off - a lane
+# that still passes and no longer measures the key that ships. Each phase's constant survives as the
+# NEXT phase's A/B control, which is what ResourceSubsystemControl's Off lane uses 0x7f for.
 if (MOBILEGL_PIPE_PUSH)
-    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x7f")
+    set(MGL_ITEST_HANDLES_ARM_KNOBS "MOBILEGL_PIPE_LEGACY_MEMOS=0" "MOBILEGL_PIPE_PUSH=0x1ff")
     set(MGL_ITEST_ABA_ARM_KNOBS "MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1")
 else()
     set(MGL_ITEST_HANDLES_ARM_KNOBS "")

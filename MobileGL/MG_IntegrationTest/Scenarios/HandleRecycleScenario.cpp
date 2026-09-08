@@ -7,8 +7,16 @@
 // End of Source File Header
 //
 // Scenario - THE HANDLE ABA (gate G8): a frontend object that dies and is replaced at the same
-// heap address must not inherit the dead object's backend twin, its vertex-input state, or its
-// draw memo.
+// heap address must not inherit the dead object's backend twin, its vertex-input state, its
+// buffer contents, or its draw memo.
+//
+// P3a ADDS TWO WINDOWS to the four P2 wrote, because it re-keys two more object classes. The
+// BUFFER (ABufferAtARecycledAddressDoesNotInheritItsPredecessorsContents) is the resource_*
+// family's: a store that dies and is replaced at the same slot must not hand the replacement's
+// draw the dead store's bytes. The two-buffer VERTEX SET
+// (AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexBufferSet) is
+// set_vertex_buffers': the per-binding buffer identities are a record of their own, separate
+// from the elements blob, and a recycled VAO must not inherit its predecessor's.
 //
 // WHY THIS EXISTS. Every backend memo in the tree is keyed, today, on some property of a LIVE
 // frontend object: a raw `void*` owner pointer (DirectGLES' StateBackendObjectRegistry and its
@@ -183,6 +191,23 @@ namespace MGITest {
             const std::string& backend = HeadlessGL::Get().BackendName();
             if (backend == "DirectVulkan") return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_DirectVulkan");
             return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_DirectGLES");
+        }
+
+        // The SAME question for the BUFFER, and it is a different question. The marker above
+        // answers "is this backend's VERTEX-INPUT memo keyed on {slot, gen}", which P2 landed;
+        // a buffer only travels as a handle once the resource_* family does (P3a for Espryt,
+        // P7 for Magma), and until then a buffer's backend twin is still resolved from the
+        // frontend object. A buffer case that read the P2 marker would therefore report the
+        // Handles arm as armed on a tree where nothing about a buffer is keyed on a handle -
+        // green for a re-key that does not exist, which is the one outcome this file exists to
+        // prevent. Set by MG_IntegrationTest/CMakeLists.txt from a content probe for
+        // MGPipeResourceOps under each backend's own directory.
+        bool ThisBackendsResourceRekeyHasLanded() {
+            const std::string& backend = HeadlessGL::Get().BackendName();
+            if (backend == "DirectVulkan") {
+                return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_RESOURCES_DirectVulkan");
+            }
+            return BuildMarkerIsSet("MGITEST_HANDLE_REKEY_RESOURCES_DirectGLES");
         }
 
         // ---- the scene -----------------------------------------------------------------
@@ -362,6 +387,25 @@ void main() { oColor = texture(uTex, vUv); }
                 }
             }
 
+            // The buffer case's extra gate, on top of the arm gate above. Only the Handles arm
+            // needs it: `Legacy` asserts today's guards (which exist on every tree) and
+            // `AbaControl` is gated on the knob's consumer already.
+            void SkipUnlessTheResourceHandlePathIsAssertableHere() {
+                if (m_arm != Arm::Handles) return;
+                if (!ThisBackendsResourceRekeyHasLanded()) {
+                    GTEST_SKIP() << "subsystem not implemented on this tree: the buffer's Handles arm "
+                                    "needs this backend's resource_* op table, and the build's capability "
+                                    "probe found no source under MobileGL/MG_Backend/"
+                                 << Gl().BackendName()
+                                 << " naming MGPipeResourceOps. Until it lands, a buffer's backend twin is "
+                                    "still resolved from the frontend BufferObject, so there is no "
+                                    "{slot, gen} buffer key here to assert about (P3a package C for "
+                                    "DirectGLES; Magma's buffer path is P7). The entry stays registered "
+                                    "and visible, and arms itself when that package lands in a push "
+                                    "build.";
+                }
+            }
+
             // A VBO holding one solid-colour quad.
             GLuint MakeQuadBuffer(float r, float g, float b) {
                 const std::vector<Vertex> vertices = Quad(r, g, b);
@@ -384,6 +428,42 @@ void main() { oColor = texture(uTex, vUv); }
                 glEnableVertexAttribArray(1);
                 glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                                       reinterpret_cast<const void*>(offsetof(Vertex, r)));
+            }
+
+            // The same quad, split across TWO buffers - positions in one, colours in the other,
+            // one MGPVertexBuffer entry each. What travels in a P3a `set_vertex_buffers` is the
+            // per-binding BUFFER IDENTITY (D-H3: Res, Offset 0, the resolved stride and
+            // divisor); the formats live in the vertex-elements blob and are byte-identical
+            // between the two VAOs by construction. Splitting the set is what lets a PARTIAL
+            // inheritance be seen: with one buffer, a stale set and a stale everything look the
+            // same in the pixels.
+            GLuint MakePositionBuffer() {
+                const float positions[12] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f,
+                                             -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, 1.0f};
+                GLuint buffer = 0;
+                glGenBuffers(1, &buffer);
+                glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(positions), positions, GL_STATIC_DRAW);
+                return buffer;
+            }
+
+            GLuint MakeColorBuffer(float r, float g, float b) {
+                const float colors[18] = {r, g, b, r, g, b, r, g, b, r, g, b, r, g, b, r, g, b};
+                GLuint buffer = 0;
+                glGenBuffers(1, &buffer);
+                glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                glBufferData(GL_ARRAY_BUFFER, sizeof(colors), colors, GL_STATIC_DRAW);
+                return buffer;
+            }
+
+            void ConfigureSplitQuadVao(GLuint vao, GLuint positionBuffer, GLuint colorBuffer) {
+                glBindVertexArray(vao);
+                glBindBuffer(GL_ARRAY_BUFFER, positionBuffer);
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+                glBindBuffer(GL_ARRAY_BUFFER, colorBuffer);
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
             }
 
             Image DrawQuadAndRead(GLuint vao) {
@@ -562,6 +642,217 @@ void main() { oColor = texture(uTex, vUv); }
             GLuint cleanupVaos[2] = {greenVao, primerVao};
             glDeleteVertexArrays(2, cleanupVaos);
             GLuint cleanupBuffers[2] = {redBuffer, greenBuffer};
+            glDeleteBuffers(2, cleanupBuffers);
+        }
+
+        // ------------------------------------------------------------------------------------
+        // 1a. The same recycle, over a vertex-input SET of TWO buffers - the shape a P3a
+        //     `set_vertex_buffers` actually has.
+        //
+        //     The case above swaps the ONE buffer its VAO reads, so "inherited the dead VAO's
+        //     vertex input" and "inherited the dead VAO's everything" are the same picture. P3a
+        //     splits that record in two: the formats travel once per configuration, in
+        //     `create_vertex_elements`' blob, and the per-binding BUFFER IDENTITIES travel in
+        //     `set_vertex_buffers` (D-G2, D-H3). So the replacement here shares its predecessor's
+        //     POSITION buffer and differs in the COLOUR buffer alone: the elements blob is
+        //     byte-identical between the two VAOs, exactly one entry of the buffer set moved, and
+        //     a replacement that inherited the dead VAO's set draws its own geometry in the dead
+        //     VAO's colour. A single-buffer window cannot produce that picture.
+        //
+        //     A SEPARATE CASE RATHER THAN A SECOND WINDOW IN THE ONE ABOVE, and the reason is
+        //     measured. gtest_discover_tests registers one ctest entry per case, so a case is a
+        //     PROCESS; the AbaControl knob collapses every VAO in a process onto one memo entry,
+        //     and that entry carries the resolved vertex-input LAYOUT as well as the bindings.
+        //     Two windows in one process therefore means the second window's VAOs inherit the
+        //     first window's layout - and these VAOs deliberately do NOT share the first's
+        //     (interleaved stride 20 there, two tight arrays here). Run as a second phase, the
+        //     AbaControl arms read the split VAOs' vertices through the interleaved layout and
+        //     every draw in the phase, priming and warm-up included, came back as garbage
+        //     (measured: "should be all green ... first offender is blue"). That is not the
+        //     identity claim failing, it is the arm's own knob poisoning the setup - so the
+        //     window gets a process of its own, where every VAO carries the same layout and the
+        //     buffer identity is again the only thing that differs.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario,
+               AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexBufferSet) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+
+            const GLuint positionBuffer = MakePositionBuffer();
+            const GLuint redColorBuffer = MakeColorBuffer(1.0f, 0.0f, 0.0f);
+            const GLuint greenColorBuffer = MakeColorBuffer(0.0f, 1.0f, 0.0f);
+
+            // Same rule as the case above: every buffer is realised and DRAWN WITH before the
+            // window, so the window contains no buffer traffic and the slice-epoch gate - which
+            // is not an identity gate - is not what decides the verdict.
+            GLuint splitPrimerVao = 0;
+            glGenVertexArrays(1, &splitPrimerVao);
+            ConfigureSplitQuadVao(splitPrimerVao, positionBuffer, greenColorBuffer);
+            const Image splitPrimed = DrawQuadAndRead(splitPrimerVao);
+            ExpectWholeViewportIs(splitPrimed, "green", "priming the split replacement's colour buffer");
+
+            GLuint splitRedVao = 0;
+            glGenVertexArrays(1, &splitRedVao);
+            ConfigureSplitQuadVao(splitRedVao, positionBuffer, redColorBuffer);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the split VAO left a GL error behind";
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                const Image warm = DrawQuadAndRead(splitRedVao);
+                ExpectWholeViewportIs(warm, "red", "split warm-up frame " + std::to_string(frame));
+            }
+
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glUseProgram(m_colorProgram);
+            glBindVertexArray(splitRedVao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glDeleteVertexArrays(1, &splitRedVao);
+
+            GLuint splitGreenVao = 0;
+            glGenVertexArrays(1, &splitGreenVao);
+            ConfigureSplitQuadVao(splitGreenVao, positionBuffer, greenColorBuffer);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
+                << "building the split replacement VAO left a GL error behind";
+            glBindVertexArray(splitGreenVao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+            const Image splitImage = ReadPixels(Gl().Width(), Gl().Height());
+            Gl().EndFrame();
+
+            if (splitGreenVao != splitRedVao) {
+                GTEST_SKIP() << "inconclusive, not proven: glGenVertexArrays returned " << splitGreenVao
+                             << " rather than the deleted " << splitRedVao
+                             << ", so no ABA was constructed for the split vertex-buffer set";
+            }
+            RecordProperty("recycled_split_vao_name", static_cast<int>(splitGreenVao));
+
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/true, splitImage, "green", "red",
+                            "the draw after a VAO reading a two-buffer vertex set was recycled inside "
+                            "one frame");
+
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            GLuint splitCleanupVaos[2] = {splitGreenVao, splitPrimerVao};
+            glDeleteVertexArrays(2, splitCleanupVaos);
+            GLuint splitCleanupBuffers[3] = {positionBuffer, redColorBuffer, greenColorBuffer};
+            glDeleteBuffers(3, splitCleanupBuffers);
+        }
+
+
+        // ------------------------------------------------------------------------------------
+        // 1b. The BUFFER (P3a). Today a buffer's backend twin is reached from the frontend
+        //     object: Espryt keys GLESBufferResource off the BufferObject's SharedPtr and
+        //     re-probes it per draw through IsBufferDrawClean, and Magma mixes the
+        //     BufferObject's lifetime id into VertexInputStateFactory's content hash - the guard
+        //     commit 66b3b6e2 added after a destroyed buffer's GPU slice was bound for its
+        //     successor's draw. P3a replaces that reachability with a client-minted handle: the
+        //     store lives in a slot table, ~BufferObject emits `resource_destroy` and THEN frees
+        //     the slot (D-L), and the next buffer is handed the same slot with Gen + 1.
+        //
+        //     This case is the pixel-level question about that swap: does a buffer created
+        //     immediately after another one died, at the same GL name and the same {slot}, get
+        //     its own bytes? It is the buffer twin of the vertex-array case above and it is
+        //     written FIRST, against the P3a contract commit, so that whatever the Legacy arm
+        //     reports here is on the record before package C touches a backend.
+        //
+        //     THE VAO IS NOT RECYCLED HERE - it is created once and outlives the whole case.
+        //     Only the buffer dies. That is also why the VAO's attributes are PARKED on a
+        //     buffer that never dies before the delete: a VAO attribute holds a
+        //     SharedPtr<BufferObject> (MGPipeValueTypes.h:516), so while the VAO still points at
+        //     the doomed buffer the frontend object cannot die, glDeleteBuffers only unnames it,
+        //     and there would be no recycle to construct at all.
+        // ------------------------------------------------------------------------------------
+        TEST_F(HandleRecycleScenario, ABufferAtARecycledAddressDoesNotInheritItsPredecessorsContents) {
+            if (!Ready()) return;
+            SkipUnlessTheArmIsAssertableHere();
+            if (IsSkipped()) return;
+            SkipUnlessTheResourceHandlePathIsAssertableHere();
+            if (IsSkipped()) return;
+
+            // Both survivors are realised and drawn with before the window, for the reason the
+            // vertex-array case gives: a buffer touched for the first time moves the manager-wide
+            // slice epoch, and that gate is not an identity gate.
+            const GLuint parkingBuffer = MakeQuadBuffer(0.0f, 0.0f, 1.0f);
+            GLuint vao = 0;
+            glGenVertexArrays(1, &vao);
+            ConfigureQuadVao(vao, parkingBuffer);
+            const Image parked = DrawQuadAndRead(vao);
+            ExpectWholeViewportIs(parked, "blue", "priming the parking buffer");
+
+            const GLuint redBuffer = MakeQuadBuffer(1.0f, 0.0f, 0.0f);
+            ConfigureQuadVao(vao, redBuffer);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the first buffer left a GL error behind";
+
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                const Image warm = DrawQuadAndRead(vao);
+                ExpectWholeViewportIs(warm, "red", "warm-up frame " + std::to_string(frame));
+            }
+
+            // ---- the ABA window: ONE frame, two draws ----
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glUseProgram(m_colorProgram);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+
+            // Let go of the doomed buffer - from the VAO's attributes and from the binding point -
+            // and only then delete it, so the frontend object really dies here.
+            ConfigureQuadVao(vao, parkingBuffer);
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            GLuint doomed = redBuffer;
+            glDeleteBuffers(1, &doomed);
+
+            // The replacement, immediately, with the same size and the same layout - so a store
+            // pooled by size, a twin resolved by identity or a content hash over the
+            // configuration all match the dead buffer's - and DIFFERENT CONTENTS, which is the
+            // only thing that differs and the only thing the pixels can show.
+            const GLuint greenBuffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
+            ConfigureQuadVao(vao, greenBuffer);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
+                << "building the replacement buffer left a GL error behind";
+
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+            const Image image = ReadPixels(Gl().Width(), Gl().Height());
+            Gl().EndFrame();
+
+            if (greenBuffer != redBuffer) {
+                GTEST_SKIP() << "inconclusive, not proven: glGenBuffers returned " << greenBuffer
+                             << " rather than the deleted " << redBuffer << ", so no ABA was constructed";
+            }
+            RecordProperty("recycled_buffer_name", static_cast<int>(greenBuffer));
+
+            // The AbaControl arm expects the CORRUPTION here, and that this window can produce
+            // it at all is a measurement rather than an assumption. MOBILEGL_PIPE_HANDLE_ABA_CONTROL
+            // has two consumers, both Magma's, and the one that decides this case is
+            // VertexInputStateFactory::ComputeHash's `bufferKey = 0`: with the BUFFER's identity
+            // gone from the vertex-input content hash, TryBindResolvedVertexBindings accepts a
+            // binding resolved from the dead buffer as proof that it still reads the live one -
+            // the exact defect that hash was fixed for. The open question was whether the
+            // guards the control deliberately leaves standing would mask it, because one of
+            // them, VkBufferManager's manager-wide slice epoch, MOVES when the replacement is
+            // created and the replacement is created INSIDE this window by construction (a
+            // buffer ABA cannot be built without creating a buffer in it). It does not: on the
+            // contract tree both AbaControl lanes read the dead buffer's colour over 100% of
+            // the viewport ("first offender at (2,2) is red rgba(255,0,0,255)"). So the control
+            // reaches the buffer path too, and the line below records what was observed on
+            // EVERY arm, whether or not the case passes.
+            //
+            // What it does NOT reach is Espryt - the knob has no DirectGLES consumer, which is
+            // why the AbaControl arm is registered on DirectVulkan lanes only - nor the
+            // {slot, gen} GENERATION, for the reason MagmaPipeAbaControlDefeatsIdentity gives.
+            // Package C's buffer re-key is where a Features.PipeHandleAbaControl consumer over
+            // the resource slot table would go, the way MagmaPipeClaimSlotMemos is Magma's.
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/true, image, "green", "red",
+                            "the draw after the buffer was recycled inside one frame");
+
+            glBindVertexArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            glDeleteVertexArrays(1, &vao);
+            GLuint cleanupBuffers[2] = {parkingBuffer, greenBuffer};
             glDeleteBuffers(2, cleanupBuffers);
         }
 
