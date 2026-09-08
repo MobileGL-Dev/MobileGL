@@ -153,12 +153,10 @@ void main() { word = 0xC0FFEEu; }
                 glBindVertexArray(0);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_arena != 0) glDeleteBuffers(1, &m_arena);
-                if (m_secondArena != 0) glDeleteBuffers(1, &m_secondArena);
                 if (m_program != 0) glDeleteProgram(m_program);
                 if (m_compute != 0) glDeleteProgram(m_compute);
                 m_vao = 0;
                 m_arena = 0;
-                m_secondArena = 0;
                 m_program = 0;
                 m_compute = 0;
             }
@@ -266,9 +264,6 @@ void main() { word = 0xC0FFEEu; }
             unsigned int m_compute = 0;
             unsigned int m_vao = 0;
             unsigned int m_arena = 0;
-            // Only the counting case uses this one; see the comment there for why it does not
-            // simply re-specify m_arena.
-            unsigned int m_secondArena = 0;
             std::string m_buildLog;
         };
 
@@ -459,32 +454,30 @@ void main() { word = 0xC0FFEEu; }
 
         Gl().EndFrame(); // close the setup window, SetUp's own definition included
 
-        // One definition of a store past the 16 MiB adoption threshold, in a SECOND arena rather
-        // than by re-specifying SetUp's. Re-specifying an adopted store while a VAO's attributes
-        // still read it leaves the backend VAO bound to the retired store - `dev`'s d7655247
-        // ("rebind VAOs when an adopted buffer is respecified - the immediate retire path forgot
-        // the buffer-id generation"), which is NOT in feat/disaggregated's history. A counting
-        // case that carried that crash would be red for a reason that has nothing to do with the
-        // counter. A fresh store is the same STORAGE DEFINITION either way, which is what
-        // ARCHITECTURE.md:474 prices.
-        glGenBuffers(1, &m_secondArena);
-        glBindBuffer(GL_ARRAY_BUFFER, m_secondArena);
+        // One definition of a store past the 16 MiB adoption threshold, taken by RE-SPECIFYING
+        // SetUp's arena while m_vao's attributes are still pointing into it - and the attributes
+        // are deliberately NOT re-declared afterwards, so the draws below can only land if the
+        // backend VAO followed the new store on its own.
+        //
+        // That is the hard shape on purpose. It was routed around in the first cut of this file
+        // because feat/disaggregated did not yet carry `dev`'s d7655247 ("rebind VAOs when an
+        // adopted buffer is respecified - the immediate retire path forgot the buffer-id
+        // generation") and the workload was a hard SIGSEGV inside the vertex fetch on the first
+        // draw after the re-specification. ID-9 merged that fix (feat/disaggregated 5cb826b0) and
+        // requires it to hold in BOTH the legacy and the handle arm of the respecify/retire path,
+        // so this workload counts the path rather than avoiding it: under the
+        // ResourceSubsystemOn./Off. lanes the same body runs on both arms, and a handle arm that
+        // re-implemented the retire without the rebind is a crash here rather than a silent
+        // divergence found on device.
+        glBindBuffer(GL_ARRAY_BUFFER, m_arena);
         glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
-        glBindVertexArray(m_vao);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                              reinterpret_cast<void*>(kVertexOffset));
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                              reinterpret_cast<void*>(kVertexOffset + 2 * sizeof(float)));
-        ASSERT_EQ(FirstGLError(), 0u) << "defining the second arena inside the counted window failed";
+        ASSERT_EQ(FirstGLError(), 0u) << "re-specifying the arena inside the counted window failed";
 
         // ... and then a frame's worth of traffic against it, of the shape the arena exists for:
         // a SubData per draw, every one of which lands in the adopted mapping and none of which
         // may acquire it again.
-        const auto vertices = QuadVertices(0.f, 1.f, 0.f);
         for (int draw = 0; draw < kDrawsInTheWindow; ++draw) {
-            glBindBuffer(GL_ARRAY_BUFFER, m_secondArena);
-            glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                            GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+            UploadQuad(0.f, 1.f, 0.f);
             DrawQuad();
         }
         const auto px = CenterPixel();

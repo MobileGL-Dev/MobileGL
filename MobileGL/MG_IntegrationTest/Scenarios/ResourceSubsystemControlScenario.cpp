@@ -89,19 +89,20 @@ namespace MGITest {
         // Two definitions and several draws each, so "one per definition", "one per draw" and
         // "none at all" are three different numbers.
         //
-        // TWO ARENAS, EACH DEFINED ONCE, rather than one arena defined twice, and that is a
-        // deliberate detour around a bug that is not this branch's: re-specifying an adopted
-        // store while a VAO's attributes still read it leaves the backend VAO bound to the
-        // retired store, which `dev`'s d7655247 ("rebind VAOs when an adopted buffer is
-        // respecified - the immediate retire path forgot the buffer-id generation") fixes. That
-        // commit is NOT in feat/disaggregated's history, and this workload reproduced it as a
-        // hard SIGSEGV inside the vertex fetch on the first draw after the second definition.
-        // A control that carried a pre-existing `dev` crash would be red for a reason that has
-        // nothing to do with the subsystem bits it is measuring, so it defines a second arena
-        // instead - which is the same number of STORAGE DEFINITIONS, and therefore the same
-        // count, by ARCHITECTURE.md:474's own wording. The finding is recorded for the
-        // integrator rather than fixed here (ROADMAP.md:88: unrelated fixes do not ride the
-        // split work).
+        // ONE ARENA DEFINED TWICE, not two arenas defined once each: the second definition
+        // RE-SPECIFIES a store whose bytes the VAO's attributes are already pointing into, and
+        // the attributes are not re-declared afterwards. That makes this control also the place
+        // where the respecify/retire path is exercised on BOTH arms of the A/B, which is what
+        // ID-9 asks for: `dev`'s d7655247 ("rebind VAOs when an adopted buffer is respecified -
+        // the immediate retire path forgot the buffer-id generation") arrived in
+        // feat/disaggregated with the 5cb826b0 merge, and the handle arm duplicates that retire
+        // core, so an arm that forgot the rebind must be visible somewhere. Here it is a dead
+        // draw or a fault, not a silent divergence. The first cut of this file routed around the
+        // path because the fix was not yet in this branch's history and the workload reproduced
+        // as a hard SIGSEGV in the vertex fetch; that detour is what ID-9 supersedes.
+        //
+        // The COUNT is unaffected by the change: two storage definitions either way, which is
+        // what ARCHITECTURE.md:474 prices.
         constexpr int kDefinitionsInTheWindow = 2;
         constexpr int kDrawsPerDefinition = 3;
         constexpr int kInset = 2;
@@ -154,12 +155,12 @@ void main() { oColor = vec4(vColor, 1.0); }
                 m_program = CompileProgram(kVS, kFS, &error);
                 ASSERT_NE(m_program, 0u) << error;
 
-                // The VAO only. The arenas are created and defined inside the counted window -
-                // the window a summary line reports is "since the previous line", so a
-                // definition taken in SetUp would be counted in a window this case does not
-                // control - and their attribute pointers are declared only once each store
-                // exists, because an attribute whose offset is 16 MiB into a store that has not
-                // been defined yet is a range no driver has to accept.
+                // The VAO only. The arena is created and defined inside the counted window - the
+                // window a summary line reports is "since the previous line", so a definition
+                // taken in SetUp would be counted in a window this case does not control - and
+                // its attribute pointers are declared only once the store exists, because an
+                // attribute whose offset is 16 MiB into a store that has not been defined yet is
+                // a range no driver has to accept.
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 RecordProperty("lane", m_lane.empty() ? "ambient" : m_lane.c_str());
@@ -170,10 +171,8 @@ void main() { oColor = vec4(vColor, 1.0); }
                 glUseProgram(0);
                 glBindVertexArray(0);
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
-                for (GLuint& arena : m_arenas) {
-                    if (arena != 0) glDeleteBuffers(1, &arena);
-                    arena = 0;
-                }
+                if (m_arena != 0) glDeleteBuffers(1, &m_arena);
+                m_arena = 0;
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_program != 0) glDeleteProgram(m_program);
             }
@@ -216,23 +215,29 @@ void main() { oColor = vec4(vColor, 1.0); }
             }
 
             // ONE storage definition - the NULL-data glBufferData past the adoption threshold,
-            // which is Minecraft's arena-creation idiom and the adoption point - then the
-            // attribute pointers into it and a few draws. Entirely inside one frame, so one
-            // summary window covers exactly this.
-            void DefineAnArenaAndDrawFromIt(int index, float r, float g, float b) {
-                glGenBuffers(1, &m_arenas[static_cast<std::size_t>(index)]);
-                glBindBuffer(GL_ARRAY_BUFFER, m_arenas[static_cast<std::size_t>(index)]);
+            // which is Minecraft's arena-creation idiom and the adoption point - then a few
+            // draws. Entirely inside one frame, so one summary window covers exactly this.
+            //
+            // The attribute pointers are declared ONCE, on the first definition, and never again:
+            // definition 0 creates the store, every later index RE-SPECIFIES it under the live
+            // VAO. Re-declaring them afterwards would re-sync the VAO by hand and hide the thing
+            // the second definition is here to exercise (see kDefinitionsInTheWindow above).
+            void DefineTheArenaAndDrawFromIt(int index, float r, float g, float b) {
+                if (index == 0) glGenBuffers(1, &m_arena);
+                glBindBuffer(GL_ARRAY_BUFFER, m_arena);
                 glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
                 const std::vector<Vertex> vertices = Quad(r, g, b);
                 glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
                                 GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
-                glBindVertexArray(m_vao);
-                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                      reinterpret_cast<void*>(kVertexOffset));
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                      reinterpret_cast<void*>(kVertexOffset + 2 * sizeof(float)));
-                glEnableVertexAttribArray(0);
-                glEnableVertexAttribArray(1);
+                if (index == 0) {
+                    glBindVertexArray(m_vao);
+                    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                          reinterpret_cast<void*>(kVertexOffset));
+                    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                                          reinterpret_cast<void*>(kVertexOffset + 2 * sizeof(float)));
+                    glEnableVertexAttribArray(0);
+                    glEnableVertexAttribArray(1);
+                }
                 glUseProgram(m_program);
                 for (int draw = 0; draw < kDrawsPerDefinition; ++draw) {
                     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -242,8 +247,7 @@ void main() { oColor = vec4(vColor, 1.0); }
             std::string m_lane;
             GLuint m_program = 0;
             GLuint m_vao = 0;
-            std::vector<GLuint> m_arenas =
-                std::vector<GLuint>(static_cast<std::size_t>(kDefinitionsInTheWindow), 0u);
+            GLuint m_arena = 0;
         };
 
         // ONE case per lane, and it is a constraint rather than a preference: this case READS the
@@ -261,9 +265,11 @@ void main() { oColor = vec4(vColor, 1.0); }
 
             ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
             for (int definition = 0; definition < kDefinitionsInTheWindow; ++definition) {
-                DefineAnArenaAndDrawFromIt(definition, 0.0f, 1.0f, 0.0f);
+                DefineTheArenaAndDrawFromIt(definition, 0.0f, 1.0f, 0.0f);
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
-                    << "arena definition " << definition << " left a GL error behind";
+                    << "arena definition " << definition
+                    << " left a GL error behind (definition 0 creates the store, every later one "
+                       "re-specifies it under the live VAO)";
             }
             const Image image = ReadPixels(Gl().Width(), Gl().Height());
             Gl().EndFrame(); // the swap that emits the window covering exactly the work above
