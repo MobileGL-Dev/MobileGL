@@ -2808,38 +2808,59 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool SyncCurrentFBOByRecord() {
             g_fboRecordsTrusted = false;
             const auto& st = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPFramebufferState& drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
-            const MG_Pipe::MGPFramebufferState& readRecord = BoundFramebufferRecord(FramebufferTarget::Read);
-            const Bool drawUnrecorded = MG_Pipe::MGPipeHandleIsNull(drawRecord.Fbo);
-            const Bool readUnrecorded = MG_Pipe::MGPipeHandleIsNull(readRecord.Fbo);
-            // P4a decline-site F2: S, and its HALF-DESCRIBED case is LOUD NOW (ID-19), not at
-            //   the verification round.
+            const MG_Pipe::MGPFramebufferState* const drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
+            const MG_Pipe::MGPFramebufferState* const readRecord = BoundFramebufferRecord(FramebufferTarget::Read);
+            const Bool drawUnrecorded = drawRecord == nullptr || MG_Pipe::MGPipeHandleIsNull(drawRecord->Fbo);
+            const Bool readUnrecorded = readRecord == nullptr || MG_Pipe::MGPipeHandleIsNull(readRecord->Fbo);
+            // P4a decline-site F2: S - BOTH CASES ARE LOUD, the half-described one since v2
+            //   (ID-19) and the NEITHER-DESCRIBED one from this verification round.
             //
-            //   NEITHER target recorded is the transitional state of a tree whose client half
-            //   has not landed - every draw on this tree is that - and it stays silent until
-            //   the round flips it. EXACTLY ONE recorded is a different animal: an emitter
-            //   walks {Draw, Read} together and a Target = Both record writes both, so no
-            //   correct emitter can produce it. It is the shape a PARTIALLY LANDED emitter
-            //   produces, it is invisible in a pixel test because the arm just declines, and it
-            //   is precisely what this phase's integration round has to catch - so it says so,
-            //   in the words section 8's one grep looks for, and names which target is missing
-            //   plus the handle of the one that is not.
+            //   EXACTLY ONE recorded: an emitter walks {Draw, Read} together and a Target = Both
+            //   record writes both, so no correct emitter can produce it. It is the shape a
+            //   PARTIALLY LANDED emitter produces and it is invisible in a pixel test because
+            //   the arm just declines.
+            //
+            //   NEITHER recorded WAS the transitional state of a tree whose client half had not
+            //   landed - on this branch, before B and C were integrated, every draw was that,
+            //   which is why v2 left it silent. Package B now emits set_framebuffer_state for
+            //   every bound framebuffer and this function only runs with bit 9 (and therefore
+            //   10, 11 and 7) set, so reaching a draw with NEITHER binding described means the
+            //   record for the bound framebuffer never arrived, or arrived at a slot whose
+            //   generation has already moved - the applier counts that second cause separately
+            //   in StaleFramebufferRecordLookups, so the two are told apart without a third
+            //   message. Both are seam defects and both now say so, in the words section 8's
+            //   one grep looks for.
             if (drawUnrecorded || readUnrecorded) {
                 if (drawUnrecorded != readUnrecorded) {
-                    const MG_Pipe::MGPFramebufferState& described = drawUnrecorded ? readRecord : drawRecord;
+                    const MG_Pipe::MGPFramebufferState& described = *(drawUnrecorded ? readRecord : drawRecord);
                     MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: the %s "
                                  "binding has no record while %s names {slot %u, gen %u} - a "
                                  "half-described applier; running the pre-handle framebuffer sync.",
                                  drawUnrecorded ? "DRAW" : "READ", drawUnrecorded ? "READ" : "DRAW",
                                  static_cast<unsigned>(described.Fbo.Slot),
                                  static_cast<unsigned>(described.Fbo.Gen));
+                } else {
+                    MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: NEITHER "
+                                 "the DRAW nor the READ binding has one while the framebuffer "
+                                 "subsystem bit is set (bound handles {slot %u, gen %u} / "
+                                 "{slot %u, gen %u}, %llu stale-generation lookup(s) so far); "
+                                 "running the pre-handle framebuffer sync.",
+                                 static_cast<unsigned>(
+                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Slot),
+                                 static_cast<unsigned>(
+                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Gen),
+                                 static_cast<unsigned>(
+                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Slot),
+                                 static_cast<unsigned>(
+                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Gen),
+                                 static_cast<unsigned long long>(st.StaleFramebufferRecordLookups));
                 }
                 return false;
             }
             // P4a decline-site F3: S - the framebuffer seam, already loud; the round keeps this
             //   wording VERBATIM because it is the stem the other two seams now share.
-            if (!FramebufferRecordMatchesBinding(FramebufferTarget::Draw, drawRecord) ||
-                !FramebufferRecordMatchesBinding(FramebufferTarget::Read, readRecord)) {
+            if (!FramebufferRecordMatchesBinding(FramebufferTarget::Draw, *drawRecord) ||
+                !FramebufferRecordMatchesBinding(FramebufferTarget::Read, *readRecord)) {
                 MGLOG_E_ONCE("A framebuffer record does not describe the binding it names; "
                              "running the pre-handle framebuffer sync.");
                 return false;
@@ -2850,7 +2871,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (auto& target : fboTargets) {
                 if (SyncedFramebufferSerialIsCurrent(target, st.FramebufferSerial)) continue;
 
-                const MG_Pipe::MGPFramebufferState& record = BoundFramebufferRecord(target);
+                const MG_Pipe::MGPFramebufferState& record = *BoundFramebufferRecord(target);
                 if (record.IsDefault != 0) {
                     // The default framebuffer, said by the record rather than by comparing the
                     // bound object against pDefaultFramebufferInfo->defaultFBO - which is one
@@ -2873,39 +2894,74 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // handle - FindByHandle(record.Fbo) - so a recycled FBO cannot be mistaken for
                 // its predecessor here.
                 //
-                // A1, RECONCILED AGAINST WHAT D ACTUALLY BUILT. The fallback below is NOT the
-                // one-liner this package predicted. D adds `BackendPtr* GetOrCreateByHandle(
-                // MGPipeHandle)` (esprytobj Managers.h ~453), which returns a POINTER rather
-                // than the reference GetOrCreate(StatePtr) returns, and D says the pointer form
-                // is deliberate. So at the rebase this becomes GetOrCreateByHandle(record.Fbo)
-                // PLUS A NULL CHECK on the returned pointer, and once the resolve takes the
-                // handle the `slot.GetBoundObject()` above it and FramebufferRecordMatchesBinding
-                // both go with it (A2's `#else` half never fires - D left SyncToBackend's and
-                // SyncReadBufferToBackend's signatures textually unchanged).
+                // A1, TAKEN AT THE VERIFICATION ROUND AGAINST WHAT D ACTUALLY BUILT. The twin
+                // is resolved BY HANDLE ONLY: `BackendPtr* GetOrCreateByHandle(MGPipeHandle)`
+                // (Managers.h ~453) returns a POINTER rather than the reference
+                // GetOrCreate(StatePtr) returns, deliberately, because it has three ways to
+                // decline - the legacy arm, a slot past the table's sanity bound, and a
+                // generation BEHIND the live entry's - and every one of them has to be visible
+                // here rather than answered with a parked twin. So the FindByHandle-then-
+                // GetOrCreate(currentFBO) pair is gone and with it the last place on this arm
+                // where a twin could be minted against the bound frontend ADDRESS.
                 //
-                // AND THE POINTER-INVALIDATION CONTRACT HAS TO BE RE-CHECKED THERE, not just
-                // the call. Managers.h ~381-385 says a handle-arm result is invalidated by the
-                // next GetOrCreate/Find/CollectGarbage. The expression below short-circuits, so
-                // FindByHandle's result is never held across the fallback - but
-                // GetOrCreateByHandle CAN GROW THE TABLE, so whoever writes the rebase must
-                // keep the two out of one expression and must not hold the pointer across a
-                // later resolve.
+                // WHAT DID NOT GO, against the review's A1 sketch, and why:
+                //   * `slot.GetBoundObject()` STAYS. A2's `#else` half never fired - D left
+                //     SyncToBackend(SharedPtr<FramebufferObject>, target) and
+                //     SyncReadBufferToBackend(SharedPtr<FramebufferObject>) textually
+                //     unchanged - so the frontend object is still this call's ARGUMENT. Only
+                //     the twin LOOKUP moved to the handle.
+                //   * FramebufferRecordMatchesBinding (F3) STAYS, and the §2 table's "keep
+                //     verbatim; it is the wording §8.2 greps" is the ruling that governs: with
+                //     the twin now resolved from the record and configured FROM THE BOUND
+                //     OBJECT, the identity check is the only thing standing between a
+                //     mis-keyed record and one framebuffer's attachments written into
+                //     another's twin. Removing it would delete the check that makes this
+                //     rewrite safe.
+                //
+                // THE POINTER-INVALIDATION CONTRACT (Managers.h ~381-385): a handle-arm result
+                // is a stable array element that only a table-GROWING GetOrCreate can move.
+                // GetOrCreateByHandle is exactly such a call, so its result is used and dropped
+                // inside this iteration and never held across another registry call.
                 auto& slot = GetFramebufferBindingSlotChecked(target);
                 const auto& currentFBO = slot.GetBoundObject();
-                // P4a decline-site F4: S - unreachable today (FramebufferRecordMatchesBinding
-                //   maps "nothing bound" to boundIsDefault and a non-default record is already
-                //   rejected above), and at the verification round it becomes a FULL fallback -
-                //   g_fboRecordsTrusted = false; return false - rather than the `continue` that
-                //   would leave the other target half-run against section 1's invariant.
+                // P4a decline-site F4: S - FLIPPED AT THE VERIFICATION ROUND to the FULL
+                //   fallback the review specified. Still unreachable in practice
+                //   (FramebufferRecordMatchesBinding maps "nothing bound" to boundIsDefault and
+                //   a non-default record is already rejected above), but the `continue` it used
+                //   to take would have left the other target half-run against section 1's
+                //   invariant that a decline is a whole-arm decline.
                 if (!currentFBO) {
-                    MGLOG_E_ONCE("A framebuffer record names %s but no FBO is bound to it.",
-                                 target == FramebufferTarget::Read ? "READ" : "DRAW");
-                    continue;
+                    MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: the "
+                                 "%s record names {slot %u, gen %u} but no FBO is bound to that "
+                                 "binding; running the pre-handle framebuffer sync.",
+                                 target == FramebufferTarget::Read ? "READ" : "DRAW",
+                                 static_cast<unsigned>(record.Fbo.Slot),
+                                 static_cast<unsigned>(record.Fbo.Gen));
+                    g_fboRecordsTrusted = false;
+                    return false;
                 }
 
-                auto* twinSlot = g_backendFramebufferObjects.FindByHandle(record.Fbo);
-                auto& backendObj =
-                    twinSlot ? *twinSlot : g_backendFramebufferObjects.GetOrCreate(currentFBO);
+                auto* const twinSlot = g_backendFramebufferObjects.GetOrCreateByHandle(record.Fbo);
+                // A1's third decline. Bit 9 implies bit 10 implies bit 7, so the slot tables are
+                // armed whenever this function runs and the legacy-arm cause cannot fire here;
+                // what is left is a slot past the sanity bound or a generation behind the live
+                // entry's, and both are seam defects - a handle the emitter minted for a
+                // recycled slot and never described, or one it had already retired. The whole
+                // arm declines rather than this one target, for F4's reason.
+                if (twinSlot == nullptr) {
+                    MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: the "
+                                 "%s record's handle {slot %u, gen %u} is refused by the twin slot "
+                                 "table (live generation %u); running the pre-handle framebuffer "
+                                 "sync.",
+                                 target == FramebufferTarget::Read ? "READ" : "DRAW",
+                                 static_cast<unsigned>(record.Fbo.Slot),
+                                 static_cast<unsigned>(record.Fbo.Gen),
+                                 static_cast<unsigned>(
+                                     g_backendFramebufferObjects.LiveGenAt(record.Fbo.Slot)));
+                    g_fboRecordsTrusted = false;
+                    return false;
+                }
+                auto& backendObj = *twinSlot;
                 if (!backendObj) {
                     backendObj = MakeShared<BackendFramebufferObject>();
                 }
@@ -2919,16 +2975,29 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //
                 // MINOR-1, CORRECTED: the read buffer is applied by SyncReadBufferToBackend
                 // FROM THE FRONTEND OBJECT, not from MGPFramebufferState::ReadSurface - this
-                // package reads Fbo, IsDefault, Target, DrawBuffers[] and ContentHash and
-                // nothing else. What the change actually buys, and it is worth having, is that
-                // the skip is now a FIELD TEST on record.Target instead of a pointer compare
-                // against whatever object the previous loop iteration happened to sync, so the
-                // read-buffer-shared-FBO defect class can no longer be produced by an accident
-                // of loop order. It is the defect expressed as a field, NOT made
-                // unrepresentable; reading ReadSurface here is the D-C1 endpoint and belongs
-                // with A1's rewrite, when the twin API takes the record.
+                // package reads Fbo, IsDefault, DrawBuffers[] and ContentHash and nothing else.
+                //
+                // ID-27 (wire review v2, MAJOR-1): THE QUESTION IS ASKED OF THE BOUND HANDLES,
+                // NOT OF THE RECORD'S STORED TARGET, and it is no longer possible to ask it any
+                // other way in this file. `MGPFramebufferState::Target` is the target of the
+                // LAST EMISSION that wrote the record, and since ID-19(c) that emission may be
+                // a `Named` one from any of B's sixteen DSA sites - so a framebuffer really
+                // bound to both bindings can carry `Target == Named` and a framebuffer bound to
+                // neither can carry `Target == Both` left over from when it was. The skip's
+                // real question is "is one object bound to both bindings", and the applier
+                // answers it directly: BoundFramebuffer[Draw] == BoundFramebuffer[Read]. Both
+                // are non-null here (F2 rejected a null on either), and a handle compares by
+                // {slot, gen}, so a recycled slot is not its predecessor.
+                //
+                // Reading the stored Target degraded to a redundant per-frame read-buffer sync
+                // rather than to a wrong picture, which is exactly why it needed replacing here
+                // instead of being caught by a lane: `Target != Both` takes the full
+                // SyncToBackend path below, which is correct and merely repeats the draw pass's
+                // attachment work. The wire review found it by reading the emitter.
+                const auto& boundHandles = st.BoundFramebuffer;
                 if (target == FramebufferTarget::Read &&
-                    record.Target == static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both)) {
+                    boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)] ==
+                        boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)]) {
                     backendObj->SyncReadBufferToBackend(currentFBO);
                     StampSyncedFramebufferSerial(target, st.FramebufferSerial);
                     continue;
@@ -3953,15 +4022,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // SyncCurrentFBO immediately before this, so the records have just been
                 // checked against the two bindings.
                 if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
-                    const MG_Pipe::MGPFramebufferState& record =
+                    const MG_Pipe::MGPFramebufferState* const recordPtr =
                         BoundFramebufferRecord(FramebufferTarget::Draw);
-                    // P4a decline-site F7: unreachable - g_fboRecordsTrusted implies both
-                    //   handles are non-null (SyncCurrentFBOByRecord sets the latch only after
-                    //   it has rejected a null on either target, and it runs immediately before
-                    //   this in PrepareForDraw). At the verification round it becomes a
-                    //   MOBILEGL_ASSERT or is deleted; it must not become a silent decline that
-                    //   looks like a legitimate one.
-                    if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
+                    // P4a decline-site F7: FLIPPED AT THE VERIFICATION ROUND from a silent
+                    //   decline to an assertion, because it is unreachable and a silent decline
+                    //   here is indistinguishable from a legitimate one. g_fboRecordsTrusted
+                    //   implies a record with a non-null handle on BOTH targets:
+                    //   SyncCurrentFBOByRecord sets the latch only after F2 has rejected a null
+                    //   pointer or handle on either, and it runs immediately before this in
+                    //   PrepareForDraw. Kept as a checked decline rather than deleted so a
+                    //   release build cannot dereference null if that ordering ever changes.
+                    MOBILEGL_ASSERT(recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo));
+                    if (recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo)) {
+                        const MG_Pipe::MGPFramebufferState& record = *recordPtr;
                         if (!g_broadcastMemoHandleValid || g_broadcastMemoContentHash != record.ContentHash) {
                             Uint enabledDrawBuffers = 0;
                             for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
@@ -4124,16 +4197,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // IsDefault byte, rather than the bound object's address and a comparison against
         // pDefaultFramebufferInfo->defaultFBO.
         if (FramebufferSubsystemEnabled() && FramebufferImpl::g_fboRecordsTrusted) {
-            const MG_Pipe::MGPFramebufferState& record = BoundFramebufferRecord(target);
+            const MG_Pipe::MGPFramebufferState* const recordPtr = BoundFramebufferRecord(target);
             // The record's own handle is the "has this binding ever been described" test, not
             // FramebufferSerial - which MGPipeApplierReset advances whether or not anything
             // was ever emitted (see SyncCurrentFBOByRecord). The trust latch above is the
             // other half: it says the sync that ran a moment ago found these two records
             // describing these two bindings.
-            // P4a decline-site F5: unreachable, same argument as F7 above - the trust latch
-            //   implies a non-null handle on both targets. Becomes a MOBILEGL_ASSERT or is
-            //   deleted at the verification round.
-            if (!MG_Pipe::MGPipeHandleIsNull(record.Fbo)) {
+            // P4a decline-site F5: FLIPPED AT THE VERIFICATION ROUND to an assertion, same
+            //   argument and same shape as F7 above - the trust latch implies a record with a
+            //   non-null handle on both targets, and a silent decline here would look exactly
+            //   like a legitimate one.
+            MOBILEGL_ASSERT(recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo));
+            if (recordPtr != nullptr && !MG_Pipe::MGPipeHandleIsNull(recordPtr->Fbo)) {
+                const MG_Pipe::MGPFramebufferState& record = *recordPtr;
                 if (record.IsDefault == 0) {
                     auto* twinEntry = FramebufferImpl::g_backendFramebufferObjects.FindByHandle(record.Fbo);
                     // P4a decline-site F6: S - already loud, and it KEEPS this shape at the
