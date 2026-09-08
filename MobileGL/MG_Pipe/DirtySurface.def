@@ -37,27 +37,40 @@
 // EVERY BIT ANSWER IN THIS FILE IS DERIVED AND CHECKED, in two families and one
 // direction. The RenderState family (45 rows) is checked both ways against RenderState.cpp,
 // below. Every other NEW_* answer is checked against the shutter Tracker.h builds for that
-// bit: gen_pipe_dirty_surface.py resolves what the shutter READS to the members behind it,
-// computes what each mutator transitively WRITES (through MGP_NOTE_AGGREGATE too, whose hop
-// it reads out of MGPipeNoteAggregate's own switch, and through the function-like macros of
-// MG_State, which it EXPANDS - sixteen of RenderState.cpp's writes exist only after the
-// preprocessor has pasted them together), and fails a row that names a bit whose shutter its
-// mutator moves on no path at all. That half is one-directional on purpose - "it does write
-// something the shutter reads" cannot prove it does so on EVERY path - so it catches
-// under-firing and not over-claiming.
+// bit: gen_pipe_dirty_surface.py resolves what the shutter READS and what each mutator
+// transitively WRITES (through MGP_NOTE_AGGREGATE too, whose hop it reads out of
+// MGPipeNoteAggregate's own switch, and through the function-like macros of MG_State, which
+// it EXPANDS - sixteen of RenderState.cpp's writes exist only after the preprocessor has
+// pasted them together) to the SAME two-level token, MEM:<member> plus FIELD:<member>.<leaf>,
+// and fails a row that names a bit whose shutter its mutator moves on no path at all. That
+// half is one-directional on purpose - "it does write something the shutter reads" cannot
+// prove it does so on EVERY path - so it catches under-firing and not over-claiming.
 //
-// AN ABSENCE CLAIM IS ONLY WORTH THE READING BEHIND IT, and this gate learned that the
-// expensive way: its write analysis used to record a write through a member's field
-// (m_foo.bar = v) as the FIELD alone and never as the member, while the shutter side
-// resolves an accessor to the MEMBER - so the two halves could not meet for any
-// struct-valued member, and --check printed, as a fact about RenderState.cpp, that
+// AN ABSENCE CLAIM IS ONLY WORTH THE READING BEHIND IT, and this gate learned that twice:
+// its write analysis first recorded a write through a member's field as the field alone
+// and never the member, so --check printed, as a fact about RenderState.cpp, that
 // SetPixelStoreParam "writes nothing NEW_PIXEL_PACK's shutter reads" about a setter whose
-// whole body is sixteen writes to exactly that member. The answer below is what that put in
-// this file. So the derivation now DECLINES rather than answers whenever it cannot say it
-// read every writer: a body carrying a construct it does not model (an unexpandable token
-// paste), anything that reaches such a body, and any shutter member written outside
-// MG_State/GLState + MG_Impl/Pipe at all. --check prints every decline with the site that
-// caused it, and prints how many bodies and files the claim rests on.
+// whole body is sixteen writes to exactly that member; then, once it read the member, it
+// still could not see a write through a REFERENCE (SetBlendEquation's `for (auto&
+// blendState : m_parameters.BlendStates)`) and said the same false thing about seven more
+// setters - while its reader side resolved `render.PatchVertices` to the WHOLE of
+// m_parameters, so every setter that touched any byte of it "supported" NEW_PATCH_STATE and
+// a row saying glClearColor publishes the patch state was green. So now: a reference or
+// pointer bound to a member-rooted lvalue is followed, and its writes are credited to the
+// member and the field it was bound to; a write whose root the analysis cannot place (a
+// reference parameter, a call result, a member without the m_ prefix, a token it could not
+// expand) TAINTS the function, and every answer that depends on a tainted function is
+// UNDECIDED - printed with its reason, never a verdict; a writer supports a bit only when
+// the two sides share a member AND, both resolved to fields, their field sets intersect (a
+// whole-member write or read is every field); a member in common with no field information
+// on one side is COARSE, reported and never counted. --check counts only the supported
+// answers as derived, prints the COARSE and UNDECIDED tallies, and FAILS on an UNDECIDED
+// row unless MGP_DIRTY_SURFACE_UNDECIDED_LIST at the bottom of this file marks it - a
+// mark that outlives its reason is a red gate too. What it still cannot claim: a shutter
+// member written outside MG_State/GLState + MG_Impl/Pipe is undecided in the absence
+// direction, a call is resolved by NAME to every body of that name, and a FIELD token is
+// not scoped to a type - all three only widen what a mutator is credited with, and the
+// second is also how a taint spreads.
 //
 // The prose answers (kImmediate, kExplicitDestroy, kUnpublishedDestroy, kNoBackendRead,
 // kPulledEveryVerb, kPulledPartialShutter, kReverseChannel) are statements no derivation
@@ -261,5 +274,14 @@
     X(AddTransformFeedbackInputPrimitives, kPulledEveryVerb)                                    \
     X(AddTransformFeedbackPausedPrimitives, kPulledEveryVerb)                                   \
     X(AddTransformFeedbackPrimitives,     kPulledEveryVerb)
+
+// X(Mutator, Bit) - the (row, bit) pairs above whose derivation is KNOWN to come out
+// UNDECIDED, each with the reason --check prints for it. Every bit answer NOT listed here
+// is marked derived: --check fails when the derivation cannot decide it, and fails again
+// when a mark here names a pair the derivation now decides, so this list can neither hide a
+// row nor outlive its reason. Empty today: every bit answer above is supported at field
+// level. The ten mutators that reach a tainted body (--check prints the count) all carry a
+// prose answer, which no derivation checks.
+#define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)
 
 // clang-format on
