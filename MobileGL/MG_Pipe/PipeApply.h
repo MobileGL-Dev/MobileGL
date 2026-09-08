@@ -774,10 +774,30 @@ namespace MobileGL::MG_Pipe {
         Uint16 Level = 0;
     };
 
+    // THE THREE ACCEPTANCE RETURNS, AND WHY ALL THREE (ID-18 M3, clientfb review M3). D-D5
+    // step 1 says the client clears a level's dirty flags "for the levels whose record the
+    // applier ACCEPTED", and the emitter cannot answer that for itself: an `if constexpr` that
+    // discarded the call, a dead or stale handle (a counted no-op) and a corrupt record (a Fatal
+    // that deliberately moves no counter) are all invisible from the call site, so a client that
+    // clears on the strength of having EMITTED drops those texels for good. resource_subdata
+    // returns it, and so must the two calls that DEFINE the storage a subsequent upload lands
+    // in - a create or a respecify the applier refused leaves no record for the upload to
+    // accumulate onto, and B's own bookkeeping (its per-entry descriptor dedupe, its drain list)
+    // must not advance past a call that never landed.
+    //
+    // ALL THREE ARE SOURCE-COMPATIBLE: a Bool return is ignorable, P3a's call sites in
+    // MG_Impl/Pipe/PipeFill.cpp discard it, and gen_pipe.py never parses this header - the wire
+    // path calls no MGPipeApply* at all (wire review W1), so PipeCalls.def and
+    // MobileGL/MG_Pipe/generated do not move.
+
     // resource_create: mints the record and marks the slot Live. Emitted from the buffer
     // object's CONSTRUCTOR, so a resource exists before anything can name it; storage is
     // defined lazily by the first respecify and a backend tolerates a resource with none.
-    void MGPipeApplyResourceCreate(const MGPResourceDesc& desc);
+    //
+    // Returns true when the record was minted. False for the three refusals: the reserved slot
+    // 0, a descriptor whose target names no resource kind, and a slot at or above
+    // kMGPipeMaxResourceSlots.
+    Bool MGPipeApplyResourceCreate(const MGPResourceDesc& desc);
     // resource_respecify: replaces the stored descriptor and bumps Serial. `initialBytes` is
     // the shadow when desc.HasDefinedContent, else null. kNeedsAck on the call,
     // MGPipeResourceRespecifyNeedsAck(desc) per record - only an immutable store acks.
@@ -798,7 +818,34 @@ namespace MobileGL::MG_Pipe {
     // Trailing and defaulted for W1's reason: P3a's buffer call site (PipeFill.cpp:691) and
     // every existing case compile unchanged. PACKAGE B PASSES THE PAIR IT JUST ALLOCATED at
     // every per-level respecify; it has both halves in hand at the AllocateStorage call site.
-    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
+    //
+    // A METADATA RESPECIFY IS A RESPECIFY THAT REDEFINES NO STORAGE (ID-18 M4). A sticky
+    // BindMask / ImageBindableHint bit reaches the applier only on a respecify, and an
+    // IMMUTABLE texture has no further one - that is what immutable means - so the canonical
+    // order (glTexStorage2D, then glBindImageTexture or an FBO attachment) would leave the
+    // record's hint at 0 for ever, and the hint is the PREVENTION half of the texture-remint
+    // stall class. So B re-emits the descriptor when the mask moves, and a record whose
+    // STORAGE-DEFINING fields all equal the stored descriptor's is applied as a metadata
+    // update:
+    //
+    //   - the descriptor is replaced, so BindMask and ImageBindableHint take their new values;
+    //   - NO pending upload is dropped, whatever `level` says. This REFINES the rule above
+    //     rather than contradicting it: that rule drops the uploads against the storage a
+    //     respecify REPLACES, and a call that replaces no storage replaces no coordinate system
+    //     either, so there is nothing to drop. A mask change arriving between a
+    //     glTexSubImage2D and the sync that consumes it must not eat the texels;
+    //   - the serial advances, which is the whole publication - the twin re-derives its storage
+    //     flags from the new mask at its next sync and recreates only where the backend needs
+    //     it (D's side);
+    //   - and MGPipeResourceRespecifyNeedsAck is false for it BY CONSTRUCTION, because a buffer
+    //     is never classified this way (see the body: glBufferData at an unchanged size is a
+    //     real orphaning reallocation, and glBufferStorage is the one entry point allowed a
+    //     synchronous ack).
+    //
+    // Returns true when the descriptor was stored - metadata updates included, since the record
+    // did move - and false when the call was refused: a descriptor whose target names no
+    // resource kind, or a handle this applier has no live record for at that generation.
+    Bool MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                       const MGPRespecifiedLevel* level = nullptr);
     // resource_subdata, buffer half: the destination range rides in the record's box through
     // MGPipeSetSubDataBufferRange, and a false from that helper is where the EMITTER split.

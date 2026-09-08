@@ -512,21 +512,73 @@ namespace MobileGL::MG_Pipe {
             return record.Target == kMGPipeResourceTargetBuffer;
         }
 
-        // THE VALUE SPACE OF MGPSubData::Target, written down here because the record itself does
-        // not say it and package B is about to encode cube faces into the same field. It is
-        // PACKED (integrator ruling ID-12, the DV-3 seam): the LOW byte is the MGPipeResourceTarget
-        // that owns the storage and the HIGH byte is the TextureUploadTarget the upload names -
-        // which is what makes the packing necessary at all, since TextureUploadTarget::Texture1D
-        // is 0 and the bare enumerator would collide with Buffer. Both halves are therefore
-        // free to take any value their own enum defines and neither may be read without the mask.
+        // THE VALUE SPACE OF MGPSubData::Target IS THE CONTRACT'S, AND THIS FILE NO LONGER
+        // RESTATES IT. c0c (ID-12, the DV-3 seam) moved the encoding into MGPipeTypes.h as
+        // MGPipePackSubDataTarget / MGPipeSubDataResourceTargetOf / MGPipeSubDataUploadTargetOf,
+        // so wire v2's local `SubDataResourceTargetOf` - written because those helpers were not
+        // on that round's base - is gone and every half-read below goes through the contract's
+        // accessor. Nothing here open-codes `& 0xFF`.
         //
-        // MGPipeTypes.h IS SUPPOSED TO OWN THE THREE HELPERS (MGPipePackSubDataTarget /
-        // MGPipeSubDataResourceTargetOf / MGPipeSubDataUploadTargetOf, contract commit c0c);
-        // they are NOT on this package's base (feat/disaggregated = c0 + c0b), so this is the
-        // local decode and it is one line to retire the day c0c lands. The applier still matches
-        // the WHOLE field for the buffer question above, exactly as ID-12 says it does.
-        Uint16 SubDataResourceTargetOf(const MGPSubData& record) {
-            return static_cast<Uint16>(record.Target & 0x00FFu);
+        // The applier still matches the WHOLE field for the buffer question above, exactly as
+        // ID-12 says it does, and c0c's own static_assert is what keeps the two readings in
+        // step: a buffer record's Target is exactly kMGPipeResourceTargetBuffer.
+
+        // ID-18 M4: DOES THIS RESPECIFY REDEFINE ANY STORAGE, OR IS IT CARRYING METADATA?
+        //
+        // The question exists because a sticky BindMask / ImageBindableHint bit has exactly one
+        // way onto the wire - a respecify - and an IMMUTABLE texture has no further respecify to
+        // ride on. So B re-publishes the descriptor when the mask moves, and the applier has to
+        // tell that call apart from a real redefinition: the first must NOT drop the pending
+        // uploads standing against the storage (nothing replaced them), the second must.
+        //
+        // THE COMPARISON IS FIELD BY FIELD AND NOT A memcmp. MGPResourceDesc carries Pad0/Pad1
+        // and neither side of this comparison is guaranteed to have written them - the client
+        // fills a stack descriptor field by field - so a byte comparison of 88 bytes is a coin
+        // flip on padding, which is the defect clientsp's SamplerParameters cache already paid
+        // for once.
+        //
+        // WHAT IS NOT COMPARED IS THE SHORT LIST AND IT IS THE DEFINITION: BindMask and
+        // ImageBindableHint (the two this call exists to carry), GlNameForDiag (diagnostics, and
+        // never an identity - section 4.2.1) and the two padding words. EVERYTHING ELSE IS
+        // COMPARED, which is deliberately WIDER than "the fields that define an allocation":
+        // being wide can only mis-classify a metadata update as a redefinition, whose cost is
+        // one level's pending upload dropped by a call B does not emit; being narrow would
+        // mis-classify a REDEFINITION as metadata and keep boxes in a coordinate system that no
+        // longer exists, which is an upload past the end of the new level. The asymmetry decides
+        // the direction.
+        //
+        // A BUFFER IS NEVER METADATA-ONLY, and that is a rule rather than a consequence.
+        // glBufferData at an unchanged size is the canonical ORPHANING idiom - a real
+        // reallocation whose whole purpose is that the old store is gone - and glBufferStorage
+        // is the one entry point in the catalogue allowed a synchronous acknowledgement
+        // (MGPipeResourceRespecifyNeedsAck). Excluding the target here is what makes ID-18 M4's
+        // "no reallocation ack" true by construction instead of by a second suppression rule,
+        // and it costs nothing: the mask that M4 is about is a TEXTURE's (and a renderbuffer's),
+        // and a buffer has no pending upload for the arm to protect anyway.
+        Bool RespecifyRedefinesNoStorage(const MGPResourceDesc& stored, const MGPResourceDesc& next) {
+            if (next.Target == kMGPipeResourceTargetBuffer) return false;
+            if (stored.Target != next.Target) return false;
+            if (stored.StorageKind != next.StorageKind) return false;
+            if (stored.InternalFormat != next.InternalFormat) return false;
+            if (stored.Width != next.Width || stored.Height != next.Height ||
+                stored.Depth != next.Depth) {
+                return false;
+            }
+            if (stored.ArrayLayers != next.ArrayLayers || stored.Levels != next.Levels ||
+                stored.Samples != next.Samples) {
+                return false;
+            }
+            if (stored.FixedSampleLocations != next.FixedSampleLocations) return false;
+            if (stored.Immutable != next.Immutable) return false;
+            if (stored.HasDefinedContent != next.HasDefinedContent) return false;
+            if (stored.Usage != next.Usage || stored.StorageFlags != next.StorageFlags) return false;
+            // The view and buffer-texture fields: a texture view's storage OWNER and a buffer
+            // texture's backing range are its storage exactly as an extent is one, and
+            // re-pointing either is a redefinition however unchanged the extent looks.
+            if (!(stored.ViewOf == next.ViewOf)) return false;
+            if (!(stored.BufferForTexBuffer == next.BufferForTexBuffer)) return false;
+            if (stored.BufOffset != next.BufOffset || stored.BufSize != next.BufSize) return false;
+            return true;
         }
 
         // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are - and
@@ -1469,10 +1521,10 @@ namespace MobileGL::MG_Pipe {
     // is why they are incremented here rather than carried in a payload.
     // ================================================================================
 
-    void MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
+    Bool MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
         MOBILEGL_ASSERT(desc.Resource.Slot >= kMGPipeFirstAllocatableSlot,
                         "resource_create named the reserved slot 0");
-        if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return;
+        if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return false;
 
         // P4a: THE TABLE IS CHOSEN BY THE DESCRIPTOR'S TARGET, and getting that wrong is the one
         // way this call can damage an object it was not about - slot 7 is a live Buffer, a live
@@ -1483,7 +1535,7 @@ namespace MobileGL::MG_Pipe {
                                  " resource_create {slot=%u, gen=%u, glName=%u}: the descriptor names no "
                                  "resource target (%u)",
                                  desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
-            return;
+            return false;
         }
 
         // A CREATE STARTS THE RECORD OVER rather than editing it. The slot it names may be a
@@ -1499,7 +1551,7 @@ namespace MobileGL::MG_Pipe {
                                  "record table's bound (%u)",
                                  desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag,
                                  kMGPipeMaxResourceSlots);
-            return;
+            return false;
         }
         *record = MGPipeResourceRecord{};
         record->Gen = desc.Resource.Gen;
@@ -1514,13 +1566,14 @@ namespace MobileGL::MG_Pipe {
         // lazily inside SyncMipmapsToBackend and a renderbuffer's inside its own SyncToBackend,
         // so there is no GL-call-time hook to dispatch to and P4a adds none: the record IS the
         // publication, and the backend reads it at the sync point it already has.
-        if (desc.Target != kMGPipeResourceTargetBuffer) return;
+        if (desc.Target != kMGPipeResourceTargetBuffer) return true;
         if (g_resourceOps != nullptr && g_resourceOps->Create != nullptr) {
             g_resourceOps->Create(desc.Resource, desc);
         }
+        return true;
     }
 
-    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
+    Bool MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
                                       const MGPRespecifiedLevel* level) {
         Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
         if (table == nullptr) {
@@ -1528,17 +1581,28 @@ namespace MobileGL::MG_Pipe {
                                  " resource_respecify {slot=%u, gen=%u, glName=%u}: the descriptor names "
                                  "no resource target (%u)",
                                  desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
-            return;
+            return false;
         }
         MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_respecify", desc.Resource);
-        if (record == nullptr) return;
+        if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
+
+        // IS THIS A REDEFINITION AT ALL? Asked BEFORE the descriptor is replaced, because the
+        // stored one is the only thing there is to compare against (ID-18 M4). See
+        // RespecifyRedefinesNoStorage: true means every storage-defining field is unchanged and
+        // the call exists to carry a BindMask / ImageBindableHint that moved after the
+        // allocation - the immutable-texture case, where there is no later respecify to ride on.
+        const Bool metadataOnly = RespecifyRedefinesNoStorage(record->Desc, desc);
 
         // The descriptor is replaced WHOLE, because that is what a respecify is: the store's
         // extent, usage, storage flags, immutability and defined-content flag are all restated
         // by the call that redefines it, and the backend reads them from here instead of
-        // asking a frontend object for them.
+        // asking a frontend object for them. A metadata update replaces it too - that is how
+        // the mask arrives - and by construction only the non-storage fields differ.
         record->Desc = desc;
+        // THE SERIAL MOVES EITHER WAY, and for a metadata update it is the entire publication:
+        // the twin re-derives its storage flags from the new mask at its next sync and decides
+        // for itself whether the backend needs a recreate.
         ++record->Serial;
 
         // A RESPECIFY REDEFINES A STORE, SO THE PENDING UPLOADS AGAINST THE STORE IT REPLACES
@@ -1561,8 +1625,21 @@ namespace MobileGL::MG_Pipe {
         //     the arm this set exists for) -> glTexImage2D(1, data), which under a blanket
         //     clear destroys level 0's entry before anything ever uploaded it.
         //
-        // A buffer never has a pending upload at all, so both arms are inert for P3a's half.
-        if (level == nullptr) {
+        //   - and a METADATA update (ID-18 M4) drops NOTHING, whatever `level` says. It is the
+        //     third arm and it refines the first two rather than contradicting them: the rule
+        //     is "the uploads against the storage this call REPLACES go with it", and a call
+        //     whose storage-defining fields all equal the stored descriptor replaces no
+        //     storage, so no level's coordinate system has moved and every pending box is still
+        //     described in the space it was accumulated in. B re-emits the descriptor when a
+        //     sticky bind bit moves, which can land between a glTexSubImage2D and the sync that
+        //     consumes it; eating those texels there would be C1's bug with a different
+        //     trigger, and just as silent.
+        //
+        // A buffer never has a pending upload at all, so all three arms are inert for P3a's
+        // half - which is also why a buffer is never classified as metadata-only (below).
+        if (metadataOnly) {
+            // nothing to drop, deliberately.
+        } else if (level == nullptr) {
             record->PendingUploads.clear();
         } else {
             // The keys are unique by AccumulatePendingUpload's construction - it looks for the
@@ -1583,10 +1660,19 @@ namespace MobileGL::MG_Pipe {
         // branch whose arms were identical would be dead code the transport would then have to
         // find and remove. PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage is what
         // keeps the predicate honest until the doorbell reads it.
-        if (desc.Target != kMGPipeResourceTargetBuffer) return;
+        //
+        // ID-18 M4 ASKS FOR "NO REALLOCATION ACK" ON A METADATA UPDATE, AND IT IS TRUE HERE BY
+        // CONSTRUCTION RATHER THAN BY A BRANCH: the predicate is false for every target that is
+        // not a buffer, and RespecifyRedefinesNoStorage refuses the buffer target outright, so
+        // MGPipeResourceRespecifyNeedsAck(desc) is false for every record this applier
+        // classifies as metadata-only. That is why the classification excludes buffers rather
+        // than suppressing the ack afterwards - a suppression would have been a second rule the
+        // transport would then have to learn.
+        if (desc.Target != kMGPipeResourceTargetBuffer) return true;
         if (g_resourceOps != nullptr && g_resourceOps->Respecify != nullptr) {
             g_resourceOps->Respecify(desc.Resource, desc, initialBytes);
         }
+        return true;
     }
 
     Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
@@ -1609,14 +1695,20 @@ namespace MobileGL::MG_Pipe {
         // accumulate a pending upload onto whatever TEXTURE holds slot N in the texture slot
         // space. Renderbuffers have no sub-data path at all, so no correct client can produce
         // one and this is a protocol fault rather than a dropped call.
-        const Uint16 resourceTarget = SubDataResourceTargetOf(record);
+        const Uint8 resourceTarget = MGPipeSubDataResourceTargetOf(record.Target);
         if (resourceTarget == kMGPipeResourceTargetBuffer ||
-            resourceTarget == static_cast<Uint16>(MGPipeResourceTarget::Renderbuffer) ||
-            resourceTarget >= static_cast<Uint16>(MGPipeResourceTarget::Count)) {
+            resourceTarget == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
+            resourceTarget >= static_cast<Uint8>(MGPipeResourceTarget::Count)) {
+            // BOTH HALVES GO IN THE LINE. The packed field alone leaves a reader doing the
+            // arithmetic the encoding exists to stop anyone doing by hand, and the upload half
+            // is what says whether the emitter packed the pair the wrong way round.
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
                                  " resource_subdata {slot=%u, gen=%u}: the record's resource target names "
-                                 "no texture to upload into (target=%u, resource target=%u)",
-                                 record.Res.Slot, record.Res.Gen, record.Target, resourceTarget);
+                                 "no texture to upload into (target=%u, resource target=%u, upload "
+                                 "target=%u)",
+                                 record.Res.Slot, record.Res.Gen, record.Target,
+                                 static_cast<Uint32>(resourceTarget),
+                                 static_cast<Uint32>(MGPipeSubDataUploadTargetOf(record.Target)));
             return false;
         }
         return ApplyTextureUpload(record, bytes, regions);

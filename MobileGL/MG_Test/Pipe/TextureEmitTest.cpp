@@ -479,17 +479,32 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
     const Uint8 texels[4096] = {};
     MGPipeApplyResourceCreate(TextureDesc(texture, 0, 121));
 
+    // EVERY DESCRIPTOR BELOW CARRIES THE LEVEL COUNT THE CALL IT MODELS WOULD CARRY, and that
+    // is not decoration. A mutable mip build grows MipmapStorage's level count as it defines
+    // levels, so package B's descriptor (TextureEmit.h: `desc.Levels =
+    // mipmap->GetMipmapLevelCount()`) MOVES on the glTexImage2D that adds level 1 - which is
+    // also why B's own memcmp dedupe emits that respecify at all. A respecify whose
+    // storage-defining fields are all unchanged is a METADATA update (ID-18 M4) and drops
+    // nothing whatever level it names, so a case that fed the same descriptor three times would
+    // be exercising that arm rather than this one.
+    auto levelDesc = [&](Uint16 levels, Uint32 internalFormat) {
+        MGPResourceDesc desc = TextureDesc(texture, 64, 121);
+        desc.Levels = levels;
+        desc.InternalFormat = internalFormat;
+        return desc;
+    };
+
     // glTexImage2D(level 0, data): the respecify names the level it defines, and the drain then
     // emits level 0's shape, which the applier accepts.
     const MGPRespecifiedLevel levelZero{kTex2D, 0};
-    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelZero);
+    MGPipeApplyResourceRespecify(levelDesc(1, 0x8058u /*GL_RGBA8*/), nullptr, &levelZero);
     ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels));
     // A SECOND FACE OF THE SAME LEVEL, keyed the way the packed Target keys it (ID-12: high
     // byte = the cube-face upload target, low byte = the resource target), so what survives is
     // a SET and not one lucky entry - and so that the level number alone cannot be what matched.
-    const Uint16 secondFace = static_cast<Uint16>((1u << 8) | kTex2D);
+    const Uint16 secondFace = MGPipePackSubDataTarget(kTex2D, 1u);
     const MGPRespecifiedLevel faceOfLevelZero{secondFace, 0};
-    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &faceOfLevelZero);
+    MGPipeApplyResourceRespecify(levelDesc(1, 0x8058u), nullptr, &faceOfLevelZero);
     MGPSubData otherFace = TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0);
     otherFace.Target = secondFace;
     ASSERT_TRUE(MGPipeApplyResourceSubData(otherFace, texels));
@@ -498,9 +513,10 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
     // Espryt BAILS - the texture is not mipmap-complete for its min filter - so both entries
     // are still owed when the next GL call arrives.
     //
-    // glTexImage2D(level 1, data): this redefines level 1 of the (kTex2D, *) face only.
+    // glTexImage2D(level 1, data): this redefines level 1 of the (kTex2D, *) face only, and the
+    // level count moves 1 -> 2 with it.
     const MGPRespecifiedLevel levelOne{kTex2D, 1};
-    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelOne);
+    MGPipeApplyResourceRespecify(levelDesc(2, 0x8058u), nullptr, &levelOne);
 
     ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u)
         << "a respecify of level 1 dropped the pending uploads of levels it never redefined - "
@@ -511,9 +527,12 @@ TEST(TextureEmit, ARespecifyOfOneLevelKeepsThePendingUploadsOfTheOthers) {
     EXPECT_EQ(TextureRecordOf(10).PendingUploads[1].UploadTarget, secondFace);
 
     // And the key it DOES name goes, because that level's coordinate system has been replaced.
+    // The redefinition modelled here is glTexImage2D(level 1) with a NEW internal format - a
+    // legal thing to do to a mutable texture, and a real redefinition of that level's storage,
+    // so the descriptor moves and the metadata arm does not claim it.
     ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 1, MGPBox{0, 0, 0, 32, 32, 1}, 0), texels));
     ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 3u);
-    MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 121), nullptr, &levelOne);
+    MGPipeApplyResourceRespecify(levelDesc(2, 0x8051u /*GL_RGB8*/), nullptr, &levelOne);
     ASSERT_EQ(TextureRecordOf(10).PendingUploads.size(), 2u)
         << "the level the respecify DOES redefine kept its box across the redefinition";
     for (const auto& entry : TextureRecordOf(10).PendingUploads) {
