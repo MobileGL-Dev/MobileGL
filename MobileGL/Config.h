@@ -357,12 +357,17 @@ namespace MobileGL::MG_Config {
         // Fatal{UnmigratedPipeInput} (negative control B). Unknown name is
         // Fatal{PipeVerifyBadKnob}.
         String PipePoisonOmit;
-        // MOBILEGL_PIPE_HANDLE_ABA_CONTROL (negative control C, P2 brief D18): defeat the
-        // two guards the {slot, gen} re-key replaces - hash the raw BufferObject* instead
-        // of its lifetime id, and skip the VAO lifetime-id compare - so
-        // HandleRecycleScenario.AbaControl reproduces the ABA and asserts the WRONG pixels.
-        // That is what proves the reproducer still reproduces. Under MOBILEGL_PIPE_PUSH
-        // only, so it cannot exist in a shipping pull build.
+        // MOBILEGL_PIPE_HANDLE_ABA_CONTROL (negative control C, P2 brief D18): replace the
+        // OBJECT IDENTITY in every DirectVulkan vertex-input memo key with a constant, on
+        // whichever arm the run is on - the pre-handle (address, lifetime id) pair AND the
+        // handle arm's {slot, gen} generation - so a replacement object inherits its dead
+        // predecessor's resolved vertex bindings and HandleRecycleScenario.AbaControl asserts
+        // the WRONG pixels. That is what proves the reproducer still reproduces. D18 wrote
+        // this as "hash the raw BufferObject* instead of its lifetime id"; measured, the heap
+        // block is never handed back, so that spelling collided with nothing and the control
+        // went vacuous - see MagmaPipeArms.h's MagmaPipeAbaControlDefeatsIdentity for the
+        // measurement and for what the control still leaves standing. Under
+        // MOBILEGL_PIPE_PUSH only, so it cannot exist in a shipping pull build.
         Bool PipeHandleAbaControl = false;
 #endif
         // MOBILEGL_PIPE_STATS: dump the boundary counters (bytes, calls, roundtrips,

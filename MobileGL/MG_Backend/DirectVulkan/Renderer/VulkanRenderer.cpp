@@ -3650,6 +3650,23 @@ void main() {
             m_vaoDrawMemoTable.resize(kVaoDrawMemoSlotCount);
         }
 #if MOBILEGL_PIPE_PUSH
+        if (MagmaPipeAbaControlDefeatsIdentity()) {
+            // Negative control C (P2 brief D18), ahead of BOTH arms because it defeats the
+            // identity half of both keys at once: the legacy arm's (address, lifetime id) pair
+            // and the handle arm's {slot, gen}. Every VAO lands on one entry and the entry is
+            // handed back without an identity compare and WITHOUT being cleared - which is
+            // exactly what this table would do if a replacement object reproduced its dead
+            // predecessor's address, or reused its slot without the generation moving.
+            //
+            // Nothing else about the entry is relaxed: whether the resolved bindings it holds
+            // are then USED is still decided by TryBindResolvedVertexBindings' frame serial,
+            // content hash, active-attribute mask and slice epochs. That is what keeps the arm
+            // an assertion about identity rather than about the memo as a whole.
+            VaoDrawMemo& aliased = m_vaoDrawMemoTable[kMagmaPipeAbaControlSlotIndex];
+            aliased.vaoKey = vao;
+            aliased.vaoLifetimeId = vao->GetLifetimeId();
+            return &aliased;
+        }
         // ---- P2 D12.4, the handle arm ----
         //
         // The slot PICKS the entry, and the handle DECIDES whether the entry is this VAO's -

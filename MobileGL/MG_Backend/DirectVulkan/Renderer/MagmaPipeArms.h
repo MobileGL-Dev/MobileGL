@@ -131,6 +131,57 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     // ---------------------------------------------------------------------------------
+    // Negative control C (P2 brief D18): MOBILEGL_PIPE_HANDLE_ABA_CONTROL
+    // ---------------------------------------------------------------------------------
+    //
+    // "Is the object-identity half of every vertex-input memo key deliberately defeated in
+    // this run?" - the ONE question the control's sites ask, for the same reason
+    // MagmaPipeTrackHArmIsHandles exists: three sites deciding separately could disagree,
+    // and a control that defeats two of three guards proves nothing.
+    //
+    // WHAT IT DEFEATS, AND WHY IT IS SPELLED AS "REPLACE THE IDENTITY WITH A CONSTANT"
+    // RATHER THAN "USE THE HEAP ADDRESS".
+    //
+    // D18 wrote the control as "hash attr.Buffer.get() instead of GetLifetimeId(), and skip
+    // the vaoLifetimeId compare", on the theory that a deleted object's replacement lands at
+    // the freed heap block and so reproduces the key. Measured, it does not: in
+    // HandleRecycleScenario the GL NAMES come back (glGen* hands the deleted name straight
+    // out) but the C++ heap blocks do not - a VertexArrayObject is 3920 bytes, too large for
+    // glibc's tcache, so its chunk goes to the unsorted bin and is split by the very next
+    // allocation the replacement path makes. Four create/delete cycles in one run produced
+    // four distinct addresses, ~1 MiB apart. With no address reuse there is nothing for
+    // "hash the address" to collide with: the replacement hashes differently, indexes a
+    // different memo slot, and inherits nothing - so the arm asserted stale pixels and saw
+    // fresh ones, which is a FAILING negative control that had stopped controlling anything.
+    //
+    // So the control no longer asks the allocator for the collision; it manufactures it. On
+    // both arms the object identity is replaced by a constant, which is the strongest form of
+    // "the allocator handed the block back" and is deterministic. That covers strictly more
+    // than D18's spelling, and in particular it covers the arm P2 SHIPS: on the handle arm
+    // the constant defeats the GENERATION in {slot, gen}, which is the whole of what makes
+    // the re-keyed memos ABA-safe. Defeating only the retired lifetime-id/address guards
+    // would leave the shipped key untested, which is exactly the vacuity this control exists
+    // to catch.
+    //
+    // Everything the control does NOT defeat is as load-bearing as what it does. It never
+    // touches a guard that is not an IDENTITY guard: the resolved-bindings memo's frame
+    // serial, its slice-epoch compares and its host-map check all stay in force, so a green
+    // AbaControl arm still means "a replacement object was handed its dead predecessor's
+    // resolved vertex bindings because the identity halves of the keys were defeated", not
+    // "every safety net was switched off until something broke".
+    //
+    // Off by default (Config.h), set only by the HandleRecycle AbaControl ctest lanes, and
+    // #if MOBILEGL_PIPE_PUSH throughout, so no shipping pull build can even parse it.
+    inline Bool MagmaPipeAbaControlDefeatsIdentity() {
+        return MG_Config::Features.PipeHandleAbaControl;
+    }
+
+    // The single consumer-table entry every VAO collapses onto while the control is on. Slot
+    // 0 is a real, ordinary entry of both tables (MagmaPipeSlotIndex maps the first allocatable
+    // handle onto it), so nothing about the tables changes shape for the control's sake.
+    inline constexpr Uint32 kMagmaPipeAbaControlSlotIndex = 0;
+
+    // ---------------------------------------------------------------------------------
     // The {slot, gen} mint
     // ---------------------------------------------------------------------------------
     //

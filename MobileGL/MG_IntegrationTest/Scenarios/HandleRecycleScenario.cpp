@@ -26,32 +26,42 @@
 //   2. it is unbound (so the frontend's last SharedPtr drops - a still-bound object keeps living,
 //      TextureState.cpp) and deleted;
 //   3. a replacement is created IMMEDIATELY, with a byte-identical configuration, so that a
-//      content hash over the configuration matches the dead object's, and so that the allocator
-//      is as likely as it can be made to hand back the address it just freed;
+//      content hash over the configuration matches the dead object's;
 //   4. the replacement is given DIFFERENT CONTENTS - a different vertex buffer, different texels,
 //      a different attachment;
 //   5. one draw, one readback. The pixels must come from the replacement.
 //
-// The allocator is not under our control, so step 3 is a likelihood, not a guarantee, and a
-// scenario that silently passed because the address was never reused would prove nothing. The
-// public-GL proxy for "the allocator repeated itself" is the GL NAME: MobileGL's name allocators
-// hand a deleted name straight back, so `TheReproducerRecyclesEveryName` asserts the recycle
-// happened and every other case asserts on the name it got. When a name is NOT recycled the case
-// SKIPS with that reason rather than passing - the shape MG_Test/State/ObjectLifetimeIdTest.cpp
-// already uses for exactly this ("inconclusive, not proven").
+// The public-GL proxy for "the allocator repeated itself" is the GL NAME: MobileGL's name
+// allocators hand a deleted name straight back, so `TheReproducerRecyclesEveryName` asserts the
+// recycle happened and every other case asserts on the name it got. When a name is NOT recycled
+// the case SKIPS with that reason rather than passing - the shape
+// MG_Test/State/ObjectLifetimeIdTest.cpp already uses for exactly this ("inconclusive, not
+// proven").
 //
-// WHAT THAT PROXY COSTS THE CI LANE, WRITTEN DOWN ON PURPOSE. The name is only a proxy: the
-// corruption the AbaControl arm asserts needs the freed HEAP BLOCK to be handed back, and public
-// GL cannot see that. So on a run where the allocator returns the name but not the block, the two
-// arms behave differently - the correctness arms (Handles, Legacy) still expect correct pixels and
-// still pass, but AbaControl expects the corruption and FAILS. It does that inside
-// `ctest -L integration-gpu`, a lane P2 requires green (gate G2), so this scenario can red a
-// required lane for an allocator reason. That is chosen, not overlooked: an arm that skipped
-// whenever it could not prove the ABA would also be green on the day the reproducer stopped
-// reproducing one, and "green because nothing was tested" is precisely what this file exists to
-// prevent. ObjectLifetimeIdTest makes the opposite choice because it is a unit test with no
-// always-on lane behind it. If the arm ever does flake, the fix is a stronger address-reuse proxy
-// - a backend counter for "a recycled slot was handed back out" - and not a looser assertion.
+// WHAT THE NAME PROXY DOES NOT BUY, MEASURED RATHER THAN ASSUMED. The name comes back; the C++
+// HEAP BLOCK does not. A VertexArrayObject is 3920 bytes - past glibc's tcache - so its chunk goes
+// to the unsorted bin and is split by the very next allocation the replacement path makes; four
+// create/delete cycles in one run of this file produced four distinct addresses about a mebibyte
+// apart, and the same is true of the BufferObject. An earlier revision of this file left the
+// AbaControl arm's collision to that allocator, and the consequence was the failure mode this file
+// exists to prevent, in its most literal form: with nothing colliding, the replacement inherited
+// nothing, the arm asserted stale pixels, saw fresh ones, and went RED in an always-on
+// integration-gpu lane while every guard it was supposed to be defeating was still standing.
+//
+// So the AbaControl arm no longer asks the allocator for the collision - MOBILEGL_PIPE_HANDLE_ABA_CONTROL
+// manufactures it, by replacing the object identity in each key with a constant (see
+// MagmaPipeArms.h's MagmaPipeAbaControlDefeatsIdentity). That is the strongest form of "the
+// allocator handed the block back", it is deterministic, and - the reason it matters - it defeats
+// the {slot, gen} GENERATION as well as the retired lifetime id, so the control covers the key P2
+// actually ships instead of only the one it replaced.
+//
+// AND THE ABA HAPPENS INSIDE ONE FRAME, which is not a detail. The only backend structure that can
+// hand a draw a dead object's GPU slice is VulkanRenderer::ResolvedVertexBindings, and it refuses
+// to be trusted across a frame boundary by design ("NO cross-frame trust"). Every other memo the
+// recycle can poison holds LAYOUT, which is byte-identical between the two objects by construction
+// and so cannot be seen in pixels. A reproducer that puts a frame boundary between the arming draw
+// and the recycled draw therefore cannot produce wrong pixels no matter how completely the keys
+// collide - it would be asserting a fact about the frame gate, not about identity.
 //
 // THREE ARMS, ALL ALWAYS ON (P2 brief D18). The arm is named by MGITEST_HANDLE_ARM, which is a
 // HARNESS marker - the library never reads it - and the CMake wiring registers one lane per arm:
@@ -61,13 +71,15 @@
 //   Legacy      MOBILEGL_PIPE_PUSH=0. Today's lifetimeId + weak_ptr guards. Expects correct
 //               pixels - they work, which is the point: the re-key is not fixing a live bug, it
 //               is replacing a guard, and the replacement has to be at least as strong.
-//   AbaControl  MOBILEGL_PIPE_PUSH=0 AND MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1. The knob reverts
-//               exactly the two guards the re-key replaces (VertexInputStateFactory::ComputeHash
-//               hashes attr.Buffer.get() instead of GetLifetimeId(); LookupVaoDrawMemo skips the
-//               vaoLifetimeId compare), so this arm expects the CORRUPTION. It is what makes
-//               `HandleRecycleScenario green, and red before the re-key` an always-on CI fact
-//               instead of a one-off manual demonstration: if the reproducer ever stops
-//               reproducing the ABA, this arm fails.
+//   AbaControl  MOBILEGL_PIPE_HANDLE_ABA_CONTROL=1, on TWO lanes: one with MOBILEGL_PIPE_PUSH=0
+//               (the pre-handle arm, D18's lane verbatim) and one on the handle arm
+//               (MOBILEGL_PIPE_LEGACY_MEMOS=0). The knob defeats the object-identity half of
+//               every vertex-input memo key on whichever arm is running - the pre-handle
+//               (address, lifetime id) pair and the handle arm's {slot, gen} generation - so both
+//               lanes expect the CORRUPTION. Two lanes rather than one because the guard P2 SHIPS
+//               is the generation: a control that only defeated the retired guards would be green
+//               forever without saying anything about the re-key, which is exactly how this arm
+//               went vacuous once packages C and D landed.
 //
 // WHY AN ARM CAN SKIP, AND WHY THAT IS NOT A HOLE. Two of the three arms assert something that
 // only EXISTS once another P2 package has landed: `Handles` needs the backend's {slot, gen} arm
@@ -95,6 +107,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -238,11 +251,25 @@ void main() { oColor = texture(uTex, vUv); }
         // (`fresh`) or from the object that died (`stale`)? The arm decides which is the pass.
         void ExpectPixelsFor(Arm arm, bool armExpectsCorruption, const Image& image, const char* fresh,
                              const char* stale, const std::string& when) {
-            if (arm == Arm::AbaControl && armExpectsCorruption) {
+            // Say which of the two was actually observed, on EVERY arm and whether or not the case
+            // passes. The arm's expectation is only half the evidence, and a reader of the CI log
+            // should not have to infer the other half from the exit status - least of all for a
+            // control whose whole claim is "the corruption is still reproducible here".
+            const bool sawStale = static_cast<bool>(RegionIsMostly(
+                image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, stale, 0.0, when));
+            const bool sawFresh = static_cast<bool>(RegionIsMostly(
+                image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, fresh, 0.0, when));
+            const bool expectsStale = arm == Arm::AbaControl && armExpectsCorruption;
+            std::cout << "[ HandleRecycle ] arm=" << ArmName(arm) << " expected="
+                      << (expectsStale ? "STALE" : "FRESH") << " observed="
+                      << (sawStale ? "STALE" : (sawFresh ? "FRESH" : "NEITHER")) << " (stale=" << stale
+                      << ", fresh=" << fresh << ") - " << when << std::endl;
+            if (expectsStale) {
                 // The corruption IS the assertion. If this ever goes green-by-being-correct the
                 // reproducer has stopped reproducing and the other two arms prove nothing.
                 ExpectWholeViewportIs(image, stale, when + " [AbaControl expects the STALE object's pixels: "
-                                                          "the two guards are deliberately defeated]");
+                                                          "the identity half of every key is deliberately "
+                                                          "defeated]");
                 return;
             }
             ExpectWholeViewportIs(image, fresh,
@@ -458,7 +485,21 @@ void main() { oColor = texture(uTex, vUv); }
             SkipUnlessTheArmIsAssertableHere();
             if (IsSkipped()) return;
 
+            // BOTH buffers are created, and both are DRAWN WITH, before the recycle happens.
+            // Creating a buffer - or touching one for the first time - moves VkBufferManager's
+            // manager-wide slice-epoch counter, and a moved counter sends the resolved-bindings
+            // memo into a revalidation that re-reads every binding from the live VAO. That gate is
+            // not an identity gate and it is not what this case is about, so both buffers are
+            // realised up front and the ABA window contains no buffer traffic at all.
             const GLuint redBuffer = MakeQuadBuffer(1.0f, 0.0f, 0.0f);
+            const GLuint greenBuffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
+
+            GLuint primerVao = 0;
+            glGenVertexArrays(1, &primerVao);
+            ConfigureQuadVao(primerVao, greenBuffer);
+            const Image primed = DrawQuadAndRead(primerVao);
+            ExpectWholeViewportIs(primed, "green", "priming the replacement's buffer");
+
             GLuint redVao = 0;
             glGenVertexArrays(1, &redVao);
             ConfigureQuadVao(redVao, redBuffer);
@@ -469,44 +510,55 @@ void main() { oColor = texture(uTex, vUv); }
                 ExpectWholeViewportIs(warm, "red", "warm-up frame " + std::to_string(frame));
             }
 
+            // ---- the ABA window: ONE frame, two draws ----
+            //
+            // The arming draw and the recycled draw share a frame because
+            // ResolvedVertexBindings - the only memo that carries a GPU slice rather than a
+            // layout - declines across frames by design. See the header.
+            BindDefaultFramebuffer();
+            ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
+            glUseProgram(m_colorProgram);
+            glBindVertexArray(redVao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+
             // Unbind FIRST: a still-bound object keeps living, so the last SharedPtr would not
-            // drop and there would be no freed block for the replacement to land in.
+            // drop and the object would not die here at all.
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
             glDeleteVertexArrays(1, &redVao);
-            GLuint doomedBuffer = redBuffer;
-            glDeleteBuffers(1, &doomedBuffer);
 
-            // The replacement, immediately and in the reverse order of the frees, which is the
-            // order a size-classed allocator is most likely to answer from its free lists.
-            const GLuint greenBuffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
+            // The replacement, immediately, byte-identically configured, and reading the OTHER
+            // buffer - so its pixels differ from its predecessor's by exactly the thing a stale
+            // vertex binding would get wrong.
             GLuint greenVao = 0;
             glGenVertexArrays(1, &greenVao);
             ConfigureQuadVao(greenVao, greenBuffer);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the replacement VAO left a GL error behind";
 
-            // The skip below is the LAST thing that can save a run in which the allocator did not
-            // repeat itself, and it only sees half of what matters: the names. If the names come
-            // back but the heap blocks do not, execution continues into an assertion the
-            // AbaControl arm expects to see corrupted pixels from - and that arm then FAILS
-            // rather than skipping, in an always-on integration-gpu lane. The header says why that
-            // trade is taken deliberately; this is where the consequence lands.
-            if (greenVao != redVao || greenBuffer != redBuffer) {
-                GTEST_SKIP() << "inconclusive, not proven: the name allocator did not hand both names back "
-                                "(vao " << redVao << " -> " << greenVao << ", buffer " << redBuffer << " -> "
-                             << greenBuffer << "), so no ABA was constructed";
+            glBindVertexArray(greenVao);
+            glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
+            const Image image = ReadPixels(Gl().Width(), Gl().Height());
+            Gl().EndFrame();
+
+            // The name proxy. It no longer constructs the AbaControl arm's collision - the knob
+            // does that, deterministically, because the heap block is never handed back (header) -
+            // but it is still what makes this a RECYCLE rather than two unrelated objects, and it
+            // is what the Handles and Legacy arms are asserting is not enough to inherit anything.
+            if (greenVao != redVao) {
+                GTEST_SKIP() << "inconclusive, not proven: glGenVertexArrays returned " << greenVao
+                             << " rather than the deleted " << redVao << ", so no ABA was constructed";
             }
             RecordProperty("recycled_vao_name", static_cast<int>(greenVao));
 
-            const Image image = DrawQuadAndRead(greenVao);
             ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/true, image, "green", "red",
-                            "the draw after the VAO and its buffer were both recycled");
+                            "the draw after the VAO was recycled inside one frame");
 
             glBindVertexArray(0);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
-            glDeleteVertexArrays(1, &greenVao);
-            GLuint cleanup = greenBuffer;
-            glDeleteBuffers(1, &cleanup);
+            GLuint cleanupVaos[2] = {greenVao, primerVao};
+            glDeleteVertexArrays(2, cleanupVaos);
+            GLuint cleanupBuffers[2] = {redBuffer, greenBuffer};
+            glDeleteBuffers(2, cleanupBuffers);
         }
 
         // ------------------------------------------------------------------------------------

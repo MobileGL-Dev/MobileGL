@@ -824,10 +824,18 @@ gtest_discover_tests(MobileGLIntegrationTest
 # block: a ctest ENVIRONMENT property REPLACES the job environment for the names it lists, so an
 # entry naming only its own knobs would lose the EGL vendor and Vulkan ICD pinning.
 #
-# The AbaControl arm is DirectVulkan only. The knob reverts two DirectVulkan guards
-# (VertexInputStateFactory::ComputeHash's key and LookupVaoDrawMemo's lifetimeId compare); it
-# steers nothing on DirectGLES, and a lane that configured it there would be a permanent skip
-# claiming to be a control.
+# The AbaControl arm is DirectVulkan only. The knob defeats the object-identity half of
+# DirectVulkan's vertex-input memo keys (VertexInputStateFactory::ComputeHash, its per-VAO memo
+# table, and LookupVaoDrawMemo); it steers nothing on DirectGLES, and a lane that configured it
+# there would be a permanent skip claiming to be a control.
+#
+# It gets TWO lanes, because there are two arms and the control has to cover the one P2 SHIPS.
+# `AbaControl` is D18's lane verbatim (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) and defeats the
+# lifetime-id/address guards; `AbaControlHandles` runs the handle arm (MOBILEGL_PIPE_LEGACY_MEMOS=0,
+# the default push mask) and defeats the {slot, gen} GENERATION, which is what makes the re-keyed
+# memos ABA-safe. With only the first lane the control says nothing at all about the re-key: the
+# handle arm is not executed under MOBILEGL_PIPE_PUSH=0, so every guard it would have to defeat is
+# in another branch.
 #
 # The two PUSH-ONLY knobs of those arms are set only in a push build, and the lane NAMES are
 # unaffected by that (an ENVIRONMENT property is not part of a test's name, so G2 still sees the
@@ -859,6 +867,10 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_LEGACY_ENVIRONMENT
 mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba" "MOBILEGL_PIPE_PUSH=0"
     ${MGL_ITEST_ABA_ARM_KNOBS}
+    ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
+mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_HANDLE_ARM=aba"
+    ${MGL_ITEST_HANDLES_ARM_KNOBS} ${MGL_ITEST_ABA_ARM_KNOBS}
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
 gtest_discover_tests(MobileGLIntegrationTest
@@ -905,6 +917,15 @@ gtest_discover_tests(MobileGLIntegrationTest
         LABELS integration-gpu
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_ABA_ENVIRONMENT}"
+)
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.HandleRecycle.AbaControlHandles."
+    TEST_FILTER "HandleRecycleScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_ABA_HANDLES_ENVIRONMENT}"
 )
 
 # --- G12: the CSO content-addressing negative control ---------------------------------

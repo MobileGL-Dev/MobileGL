@@ -63,14 +63,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     const MG_Pipe::MGPipeHandle handle =
                         m_identity->HandleOf(MG_Pipe::MGPipeKind::Buffer, attr.Buffer->GetLifetimeId());
                     bufferKey = static_cast<Uint64>(handle.Slot) | (static_cast<Uint64>(handle.Gen) << 32);
-                } else if (MG_Config::Features.PipeHandleAbaControl) {
-                    // Negative control C (P2 brief D18), and it applies to the PRE-HANDLE arm
-                    // on purpose: hash the raw BufferObject* the way this did before the
-                    // lifetime-id fix, so HandleRecycleScenario.AbaControl can reproduce the
-                    // ABA and assert the WRONG pixels. That arm is what proves the reproducer
-                    // still reproduces; if the allocator stops handing the address back, it
-                    // fails instead of passing for the wrong reason.
-                    bufferKey = static_cast<Uint64>(reinterpret_cast<SizeT>(attr.Buffer.get()));
+                }
+                if (MagmaPipeAbaControlDefeatsIdentity()) {
+                    // Negative control C (P2 brief D18), on WHICHEVER arm this run is on - the
+                    // pre-handle lifetime id and the handle's {slot, gen} are the same guard
+                    // wearing two hats, and a control that defeated only the retired one would
+                    // say nothing about the key P2 ships.
+                    //
+                    // The identity is replaced by a constant rather than by the raw
+                    // BufferObject*, because the address is not recycled in practice and so
+                    // never collides (see MagmaPipeAbaControlDefeatsIdentity). Zero is what a
+                    // key with NO buffer identity in it looks like - the exact defect this
+                    // hash was fixed for: "the hash is what TryBindResolvedVertexBindings
+                    // accepts as proof that a memoised binding still reads the buffer it was
+                    // resolved from", and with the identity gone it accepts a binding resolved
+                    // from a different buffer. HandleRecycleScenario.AbaControl then draws a
+                    // replacement VAO and gets its dead predecessor's vertex data.
+                    bufferKey = 0;
                 }
             }
 #endif
@@ -89,6 +98,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // does this, and no two live VAOs can share an entry however large the working set is.
         // There is no probe in front of it because the mint itself is one - a one-entry memo
         // hit for every acquisition after this draw's first, and a hash probe otherwise.
+        if (MagmaPipeAbaControlDefeatsIdentity()) {
+            // Negative control C: one entry for every VAO, claimed without the Owner compare,
+            // which is precisely "the slot was recycled and Gen did not move". The replacement
+            // therefore inherits the dead VAO's content hash and its resolved-entry pointer -
+            // the two facts the generation is the only thing protecting.
+            return m_vaoMemos[kMagmaPipeAbaControlSlotIndex];
+        }
         VaoBackendMemos& memos = m_vaoMemos[MagmaPipeSlotIndex(handle)];
         if (!(memos.Owner == handle)) {
             // A slot whose Gen moved because the identity table recycled it for a different
