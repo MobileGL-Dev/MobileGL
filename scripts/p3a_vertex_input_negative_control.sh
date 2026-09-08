@@ -171,7 +171,13 @@ say "$TEST_NAME is green before the patch"
 
 # --- 2. stop copying IsBgra ------------------------------------------------------------------
 cp -f "$HEADER" "$BACKUP" || exit 2
+# m3: INT and TERM as well as EXIT. A Ctrl-C during the rebuild used to leave the patched header
+# in the tree - bash runs no EXIT trap for an uncaught SIGINT - and the next thing that reader
+# does is build, from a hard-zeroed field, with nothing saying so. The two extra traps repair and
+# then re-raise with the default disposition, so the exit status still reports the signal.
 trap 'repair' EXIT
+trap 'repair; trap - INT; kill -INT $$' INT
+trap 'repair; trap - TERM; kill -TERM $$' TERM
 # Armed BEFORE the patcher runs, not after: a python that died half-way through the write must
 # still be repaired. The cost of arming it early is one unnecessary rebuild in the case where the
 # patcher matched nothing and the file is byte-identical (cp refreshes its mtime).
@@ -216,9 +222,18 @@ say "running $TEST_NAME against the dropped field"
 if ctest --test-dir "$BUILD_DIR" -R "$TEST_NAME" --no-tests=error --output-on-failure \
      > "$LOG_DIR/ctest-after.log" 2>&1; then
   VERDICT=did-not-trip
-elif grep -q "$FIELD" "$LOG_DIR/ctest-after.log"; then
+elif grep -qE "^.*(Failure|error:|Expected).*$FIELD|$FIELD.*(Failure|Which is|Expected)" \
+       "$LOG_DIR/ctest-after.log"; then
   # A red is not yet a pass: a suite that had started failing for an unrelated reason satisfies the
   # first half of the claim and none of the second.
+  #
+  # m3: matched against the FAILING ASSERTION's own lines rather than against the whole ctest log.
+  # A bare `grep -q IsBgra` over the log was exact today only because the field name happens to
+  # appear exactly once in the tree, inside the case that fails; a future case NAMED after the
+  # field, a skip reason quoting it, or a compiler note echoed into the log would all have made
+  # "tripped" mean "the string exists somewhere". The alternation keeps both orders because gtest
+  # prints the field on the `Failure`/`Expected` line for an EXPECT_EQ and on the following
+  # `Which is` line for a streamed message.
   VERDICT=tripped
 else
   VERDICT=wrong-reason

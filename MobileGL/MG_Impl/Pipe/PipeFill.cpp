@@ -1587,10 +1587,12 @@ namespace MobileGL::MG_Pipe {
         }
 
         // P3a's vertex segment, in the order the design fixes: vertex elements, then the
-        // vertex buffers that fill them, then the index binding. All three still resolve to
-        // false today - their dirty bits map to no subsystem until the tracker's arms land -
-        // and all three emitters are stubs; the call sites are here so the commit that gives
-        // them bodies does not also have to edit the validate point.
+        // vertex buffers that fill them, then the index binding. All three are LIVE now (m1):
+        // bits 5 / 9 / 10 map onto kMGPipeSubsystemVertexInput in Tracker.h:145-148 and all
+        // three emitters have bodies, so `wants()` answers true whenever bit 8 is in the push
+        // mask - which the phase default 0x1ff sets, on every backend. The sentence that used
+        // to stand here ("all three still resolve to false today - their dirty bits map to no
+        // subsystem") was the contract commit's and stopped being true when the client landed.
         if (wants(MGPipeDirty::NewVertexElements)) {
             payloadBytes += EmitVertexElements(*ctx);
         }

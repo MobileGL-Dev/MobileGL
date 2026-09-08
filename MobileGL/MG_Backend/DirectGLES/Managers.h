@@ -979,6 +979,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             struct ResolvedDrawBuffers {
                 struct Entry {
                     MG_State::GLState::BufferObject* frontend = nullptr;
+                    // A RAW TWIN POINTER, AND IT MAY DANGLE - the invariant that makes that safe
+                    // is stated here rather than left in the two callers (espryt-v3 §8, m8).
+                    //
+                    // Nothing tells this memo when a twin dies: on the handle arm a
+                    // resource_destroy takes the twin out of the slot table (ReleaseByHandle)
+                    // while this entry still holds its address, and on the legacy arm the same
+                    // is true of the registry's own release. So the rule is: THIS POINTER IS
+                    // ONLY EVER DEREFERENCED AFTER THE ENTRY'S IDENTITY HAS BEEN RE-RESOLVED IN
+                    // THE SAME PASS - FindByHandle(handle) on the handle arm, the frontend
+                    // identity compare on the legacy one - and a miss re-resolves through
+                    // EnsureBufferResource rather than trusting what is stored here. Both
+                    // consumers do that today; a third one that read `resource` straight out of
+                    // a "valid" memo would be reading freed memory, and no compare in this
+                    // struct would catch it. The pointer stays raw because the alternative -
+                    // owning a reference from a per-draw memo - is what keeps a dead driver
+                    // buffer alive, which is the leak class P2's death notice exists to remove.
                     BufferImpl::GLESBufferResource* resource = nullptr;
                     Uint8 attribIndex = 0;
 #if MOBILEGL_PIPE_PUSH
