@@ -177,6 +177,21 @@ namespace MobileGL::MG_Pipe {
         desc.StorageKind = kMGPipeResourceStorageKindBuffer;
         desc.BindMask = bindMask;
         if (storageDefined) {
+            // MGPResourceDesc::Width is a Uint32 and that is the CONTRACT's shape, not this
+            // package's, so a store of 4 GiB or more cannot be declared at all. Truncating it
+            // silently is the one answer that must not happen: the applier's range gate would
+            // then refuse the first legal write past the truncated extent as
+            // Fatal{ProtocolCorruption} and name a corruption that is really a narrowing here.
+            // So it is said out loud, once, in every build - the assertion compiles out at
+            // INFO, which is what all three gate builds are.
+            if (buffer.GetSize() > static_cast<SizeT>(0xFFFFFFFFull)) {
+                MGLOG_E_ONCE("MGPipe: buffer %u declares a store of %llu bytes, which does not fit "
+                             "MGPResourceDesc::Width - the descriptor's extent is narrowed and every "
+                             "write past 4 GiB will be refused by the applier's range gate",
+                             buffer.GetExternalIndex(),
+                             static_cast<unsigned long long>(buffer.GetSize()));
+                MOBILEGL_ASSERT(false, "MGPResourceDesc::Width cannot carry this buffer's size");
+            }
             desc.Width = static_cast<Uint32>(buffer.GetSize());
             desc.Usage = static_cast<Uint32>(buffer.GetUsage());
             desc.StorageFlags = static_cast<Uint32>(buffer.GetStorageFlags());
@@ -193,11 +208,26 @@ namespace MobileGL::MG_Pipe {
     // coordinate and first extent, and MGPipeSetSubDataBufferRange is the ONLY spelling of
     // that convention. Returns false, with the record untouched, when the range does not fit
     // one record - which is where MGPipeForEachSubDataRecordRange comes in.
-    inline Bool MGPipeBuildSubDataRecord(MGPipeHandle res, Uint64 offset, Uint64 size, MGPSubData& out) {
+    //
+    // `sourceIsVerbatimLevelShadow` is the record's own question - "are these bytes an
+    // untransformed level shadow?" - and it is a PARAMETER because the answer differs by
+    // caller: resource_subdata hands over the client's own shadow at an offset into it and
+    // says yes; buffer_subdata_resident hands over the application's staging store, or the
+    // locally expanded pattern FillSubData built, and both say no. Nothing reads it on the
+    // buffer path today, which is exactly why it must not be a hard-coded 1 that becomes
+    // wrong the moment something does.
+    //
+    // Blob is FILLED, exactly: Seg is kMGHostSpanSegNone (monolith - the bytes travel beside
+    // the record through the entry point's companion pointer) and Size is the piece's own
+    // byte length, which is what the applier's ONE Blob rule holds a non-zero declaration to
+    // (PipeApply.cpp's SubDataBoxFault: != 0 && != MGPipeSubDataBufferSize is refused).
+    // Leaving it 0 would be legal too; declaring it correctly is the stronger of the two.
+    inline Bool MGPipeBuildSubDataRecord(MGPipeHandle res, Uint64 offset, Uint64 size, MGPSubData& out,
+                                         Bool sourceIsVerbatimLevelShadow) {
         out = MGPSubData{};
         out.Res = res;
         out.Target = kMGPipeResourceTargetBuffer;
-        out.SourceIsVerbatimLevelShadow = 1; // the bytes ARE the client's shadow, unmodified
+        out.SourceIsVerbatimLevelShadow = sourceIsVerbatimLevelShadow ? 1 : 0;
         if (!MGPipeSetSubDataBufferRange(out, offset, size)) return false;
         out.Blob.Seg = kMGHostSpanSegNone;
         out.Blob.Size = size;
@@ -298,6 +328,27 @@ namespace MobileGL::MG_Pipe {
             m_bySlot[slot] = Entry{};
         }
 
+        // ---- D-L: was resource_create actually EMITTED for this slot? ----
+        //
+        // The create is gated at its call site (BufferObject's constructor) and the destroy
+        // is gated inside MGPipeEmitResourceDestroyAndFree, so the two ask the SAME question
+        // at two different moments. A buffer constructed while a backend's table was
+        // registered and destroyed after UnregisterBufferBackendOps() would take the second
+        // answer, free its slot, and leave the applier's record Live - on a slot the
+        // allocator is about to hand out again, with the backend's twin (a driver buffer id)
+        // still attached to it. So the answer is LATCHED at the create and the destroy uses
+        // the latched one; the two are then a pair by construction rather than by the
+        // registration outliving every buffer.
+        void NotePublished(MGPipeHandle handle) {
+            const SizeT slot = handle.Slot;
+            if (slot >= m_bySlot.size()) return;
+            m_bySlot[slot].Published = true;
+        }
+        Bool WasPublished(MGPipeHandle handle) const {
+            const SizeT slot = handle.Slot;
+            return slot < m_bySlot.size() && m_bySlot[slot].Published;
+        }
+
         // The sticky everBoundAs mask. Sticky exactly as MGPResourceDesc::ImageBindableHint's
         // everImageBound is: ORed, never cleared, so a buffer that was an element array once
         // keeps saying so.
@@ -306,29 +357,53 @@ namespace MobileGL::MG_Pipe {
             return slot < m_bySlot.size() ? m_bySlot[slot].BindMask : Uint16{0};
         }
 
+        // OR one target's bit into a handle's sticky mask, without looking at the context at
+        // all. This is what closes the sampling window for the two bits anything keys on:
+        // the vertex-input emitters resolve, at EVERY draw, exactly the attribute buffers and
+        // the element-slot buffer, so any buffer ever DRAWN FROM carries its ARRAY_BUFFER /
+        // ELEMENT_ARRAY bit for the rest of its life whether or not it happened to be bound
+        // at a storage op. It grows the table rather than dropping the note: it is called
+        // from the validate point, which is GL-thread by construction, and a slot outside the
+        // table is a buffer whose mint this process has not seen (a unit fixture's
+        // ResetForTest, in practice).
         void NoteBoundAs(MGPipeHandle handle, BufferTarget target) {
+            if (MGPipeHandleIsNull(handle)) return;
             const SizeT slot = handle.Slot;
-            if (slot >= m_bySlot.size()) return;
+            if (slot >= m_bySlot.size()) m_bySlot.resize(slot + 1);
             m_bySlot[slot].BindMask |= static_cast<Uint16>(MGPipeBindMaskForBufferTarget(target));
         }
 
         // Accumulates into the sticky mask every target `buffer` is bound to RIGHT NOW, and
         // returns the accumulated value.
         //
-        // [DEVIATION, recorded in client-v1.md] D-A3 asks for the OR at every glBindBuffer /
-        // glBindBufferBase / glBindBufferRange / VAO element-slot bind. Those entry points
-        // are MG_Impl/GLImpl/Buffer/GL_Buffer.cpp's, which C.5 assigns to no package and
-        // C.1 does not list for this one, so the mask is accumulated by SAMPLING the
-        // frontend's live binding state instead - here, at every resource emission, which is
-        // the only place its value is read. It is still STICKY (the union over every sample
-        // this buffer has ever been part of), and it is exact for the GL idiom the bit
-        // matters for: bind, then define or update the store. What it cannot see is a bind
-        // that happens after the buffer's LAST storage or content operation and is never
-        // followed by another - the fix is one line in BindBuffer_State, and it is handed to
-        // the integrator rather than taken here.
+        // [DEVIATION, recorded in client-v2.md] D-A3 asks for the OR at every glBindBuffer /
+        // glBindBufferBase / glBindBufferRange / VAO element-slot bind, and C.1 points at
+        // MG_State/GLState/BufferState/BufferState.{h,cpp} for it - a file this package DOES
+        // own. The brief is wrong about where the entry points are: BufferState only VENDS
+        // BindingSlot<BufferObject>& / BindingSlotRange1D&, and the .Bind() calls are
+        // MG_Impl/GLImpl/Buffer/GL_Buffer.cpp's (BindBuffer_State, BindBufferBase_State,
+        // BindBufferRange_State), which C.5 assigns to no package. So the mask is accumulated
+        // by SAMPLING the frontend's live binding state instead - here, at every create and
+        // respecify, which is where the value is PUBLISHED - and ORed into a per-slot sticky
+        // field that is never cleared.
+        //
+        // WHAT SAMPLING ALONE CANNOT SEE is not "a bind after the last respecify" (which the
+        // specified design misses too) but a TRANSIENT bind: bind an EBO, draw, unbind, then
+        // define it through DSA - the respecify's sample sees no binding at all, and the DSA
+        // idiom makes that the common case rather than a corner (TryAdoptLargeStorage's own
+        // comment names glNamedBufferSubData as what MC 26.3 streams with). That hole is
+        // closed for the two bits anything keys on by NoteBoundAs above, called from
+        // EmitVertexBuffers / EmitIndexBuffer at every draw. What is left unpublished is a
+        // buffer that is bound, never drawn from, and never re-specified afterwards; the
+        // remaining fix is one line in each of GL_Buffer.cpp's three *_State binders, for the
+        // seven bits nothing keys on yet, and it stays handed to whoever owns that file.
         //
         // The scan is skipped unless a binding-slot version moved since the last one, which
-        // is one Uint16 load per global target and none per binding point.
+        // is one Uint16 load per global target and none per binding point. It is NOT called
+        // from the content emitters, deliberately: it walks the whole context's binding state
+        // and writes the tracker, and one of those emitters (resource_subdata) is on the path
+        // D-A2 preserves as reachable off the render thread. Extra sampling could only widen
+        // a sticky union, but not at the price of a context-wide read from the wrong thread.
         Uint16 RefreshBindMask(GLContext& ctx, const BufferObject& buffer, MGPipeHandle handle) {
             const SizeT slot = handle.Slot;
             if (slot >= m_bySlot.size()) return 0;
@@ -387,9 +462,34 @@ namespace MobileGL::MG_Pipe {
         void NoteDestroy() { ++m_destroys; }
         void NoteMapPersistent() { ++m_mapPersistents; }
 
-        // A unit fixture's per-case reset. Never called by the library: a context change
-        // does not invalidate a handle, because the handle is the CLIENT's identity for a
-        // frontend object that outlives it.
+        // A unit fixture's per-case reset, and the library never calls it. THE RULE, stated
+        // rather than left as an absence, because "nothing resets this" is not a reason:
+        //
+        //   A buffer handle and the applier record it names are SHARE-GROUP OBJECT STATE.
+        //   A GL object lives in a share group, not in a context, so a make-current changes
+        //   neither. The applier's MGPipeApplierReset() is a make-current and deliberately
+        //   keeps its Resources / VertexElementsCsos (PipeApply.h says so beside them); the
+        //   ONLY things that drop a record are the object's own death signal -
+        //   resource_destroy, which ~BufferObject raises through
+        //   MGPipeEmitResourceDestroyAndFree, and delete_vertex_elements - and
+        //   MGPipeApplierReleaseObjectRecords(), which is the SERVED CONTEXT's teardown and
+        //   is deliberately wired to nothing in the monolith (there is one applier behind
+        //   every context, so calling it on one context's destruction would drop every other
+        //   context's records).
+        //
+        // So this tracker needs no re-publication path on a fresh context and must not have
+        // one: re-emitting resource_create for a record the applier still holds would move
+        // its Serial for nothing. What the client owes instead is the destroy - which
+        // ~BufferObject already emits, in the fixed emit-then-free order (D-L) - and that is
+        // the whole of the client's side of the record lifecycle.
+        //
+        // The vertex-input emitter's latches are the OTHER half and are genuinely per
+        // context: MGPipeVertexInputEmitter::Reset() is called from the FreshlyPrimed arm
+        // because the applier's vertex-input WORKING state (the bound handle, the window, the
+        // fetch shift) IS cleared there. Its vertex-elements RECORDS are not, which is why
+        // the emitter's Reset drops the "already published" latches but no create is lost:
+        // the latch is what says "re-publish", and re-publishing an unchanged configuration
+        // is a bounded over-fire, not a dropped write.
         void ResetForTest() {
             m_bySlot.clear();
             m_bindEpoch = 0;
@@ -402,6 +502,7 @@ namespace MobileGL::MG_Pipe {
             BufferObject* Object = nullptr;
             Uint32 Gen = 0;
             Uint16 BindMask = 0;
+            Bool Published = false;
             Uint64 BindMaskEpoch = 0;
         };
 
@@ -411,6 +512,13 @@ namespace MobileGL::MG_Pipe {
         // emission whose epoch differs, so it can delay a bit by one storage op and never
         // drop one - the same over-fire-is-free / under-fire-is-fatal direction every
         // shutter in Tracker.h takes.
+        //
+        // IT DOES NOT SEE THE 84x4 INDEXED BINDING POINTS, and that is sound only because
+        // BindBufferBase_State / BindBufferRange_State also bind the GENERIC slot for the
+        // same target (GL_Buffer.cpp:1531 says why), so an indexed bind always moves one of
+        // the versions summed here. If that ever stops being true, the CONSTANT /
+        // SHADER_BUFFER / ATOMIC / STREAM_OUTPUT bits start being missed silently and the
+        // repair is to fold GetTouchedBufferBindingPointCount into the epoch.
         static Uint64 BindEpoch(GLContext& ctx) {
             Uint64 epoch = 1;
             for (const auto target : MG_State::GLState::GlobalBufferTargets) {
@@ -483,9 +591,27 @@ namespace MobileGL::MG_Pipe {
     // the three Espryt MarkGpuWritten sites mark today and the observable behaviour is
     // unchanged. The narrowing itself is P8/P9's.
     inline void MGPipeClientOnGpuWritten(MGPipeHandle res, Uint rangeCount, const MGPRange* ranges) {
-        (void)rangeCount;
+        // THE SHAPE IS A CONTRACT POINT, not a formality: the announcement is ONE range
+        // covering kMGPipeWholeBuffer, deliberately not ZERO ranges, because zero will mean
+        // "a fully narrowed set - nothing is dirty" at P8/P9. Marking the whole buffer
+        // written for a zero-range announcement would be the narrowing channel run backwards,
+        // so the shape is asserted here rather than assumed.
+        MOBILEGL_ASSERT(rangeCount == 1 && ranges != nullptr,
+                        "OnGpuWritten {slot=%u, gen=%u}: P3a announces exactly one whole-buffer range, "
+                        "not %u",
+                        res.Slot, res.Gen, static_cast<Uint>(rangeCount));
         (void)ranges;
-        if (auto* buffer = MGPipeResourceTrackerInstance().Resolve(res)) buffer->MarkGpuWritten();
+        if (rangeCount == 0) return;
+        auto* buffer = MGPipeResourceTrackerInstance().Resolve(res);
+        if (buffer == nullptr) {
+            // Loud, like its sibling above: a backend announcing a write against a handle
+            // this client cannot resolve is a dropped MarkGpuWritten, and a dropped
+            // MarkGpuWritten is a stale shadow read back as if it were current.
+            MGLOG_E_ONCE("MGPipe: OnGpuWritten for a handle {%u,%u} that resolves to no buffer", res.Slot,
+                         res.Gen);
+            return;
+        }
+        buffer->MarkGpuWritten();
     }
 
     // Installed once, and never over an entry a backend already claimed: these two are the

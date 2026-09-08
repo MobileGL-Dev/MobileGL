@@ -292,6 +292,10 @@
     /*   MarkVertexArrayForDeletion -> delete_vertex_elements, published through the */        \
     /*     death notice ~VertexArrayObject already raises for the VertexElementsCso  */        \
     /*     kind; the CSO handle is minted per frontend VAO off its lifetime id.      */        \
+    /*     THE PUBLISHER IS THE BACKEND'S (Managers.cpp's OnFrontendStateObject-     */        \
+    /*     Destroyed consumer, package espryt), not the client's: the client mints   */        \
+    /*     the CSO handle and emits create/bind, and the free rides with that        */        \
+    /*     consumer. Until it lands the row states the design, not the tree.         */        \
     X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
     X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
     X(MarkProgramForDeletion,             kUnpublishedDestroy)                                  \

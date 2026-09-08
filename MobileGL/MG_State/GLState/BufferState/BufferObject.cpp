@@ -52,9 +52,12 @@ namespace MobileGL::MG_State::GLState {
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
         // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
         // inside the helper and is not negotiable.
-        const Bool pushedResources = MG_Pipe::MGPipeResourceSubsystemEnabled();
-        MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this);
-        if (pushedResources) return;
+        // The answer is the helper's LATCH - "was resource_create emitted for this buffer" -
+        // not a second reading of MGPipeResourceSubsystemEnabled(): a buffer constructed
+        // while a backend's table was registered and destroyed after it was unregistered has
+        // a pipe record to drop and no legacy backend object, and one constructed the other
+        // way round has the opposite, so the create's answer is the only one that pairs.
+        if (MG_Pipe::MGPipeEmitResourceDestroyAndFree(*this)) return;
 #endif
         if (m_resource.Backend() && g_bufferBackendOps && g_bufferBackendOps->OnDestroy) {
             g_bufferBackendOps->OnDestroy(m_resource.ReleaseBackend());

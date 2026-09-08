@@ -37,6 +37,7 @@
 //
 // HEADER-ONLY, for the ownership reason Tracker.h states in full.
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/Tracker.h>
@@ -76,6 +77,16 @@ namespace MobileGL::MG_Pipe {
     //     workaround both key on telling the two apart.
     inline MGPVertexAttribWire MGPipeBuildVertexAttribWire(const MG_State::GLState::VertexAttribute& attrib,
                                                            Uint32 bindingIndex) {
+        // ASSERT RATHER THAN ASSUME, in both directions, because the three narrowing casts
+        // below cross a package boundary: VertexArrayObject is another package's file and its
+        // 32-slot bound is its invariant, not this one's, so a BindingIndex of 256 would wrap
+        // to 0 and silently point every attribute at binding 0, and a negative Stride (the
+        // frontend field is a signed int) would arrive as a ~4 GiB unsigned distance.
+        MOBILEGL_ASSERT(bindingIndex < 256u,
+                        "MGPVertexAttribWire::BindingIndex is a Uint8 and cannot carry %u",
+                        static_cast<Uint>(bindingIndex));
+        MOBILEGL_ASSERT(attrib.Size >= 0 && attrib.Size <= 255,
+                        "MGPVertexAttribWire::Size is a Uint8 and cannot carry %d", attrib.Size);
         MGPVertexAttribWire wire{};
         wire.Offset = static_cast<Uint64>(attrib.Offset);
         wire.Stride = static_cast<Int32>(attrib.Stride);
@@ -200,9 +211,19 @@ namespace MobileGL::MG_Pipe {
                     entry.Res = attrib.Buffer ? MGPipeSlots().Acquire(MGPipeKind::Buffer,
                                                                      attrib.Buffer->GetLifetimeId())
                                               : kMGPipeNullHandle;
+                    // D-A3's sticky mask, ORed HERE rather than only sampled at a storage op.
+                    // This is the bit that survives the DSA idiom: a buffer defined through
+                    // glNamedBuffer* may never be bound at any resource emission, but a draw
+                    // that fetches from it resolves it right here, on the GL thread, at every
+                    // draw. Sticky, so one draw is enough for the rest of its life.
+                    MGPipeResourceTrackerInstance().NoteBoundAs(entry.Res, BufferTarget::Vertex);
                     // The attribute's own byte offset lives in MGPVertexAttribWire::Offset,
                     // so the entry's is the BINDING's, which the frontend already folded in.
                     entry.Offset = 0;
+                    // Signed on the frontend, unsigned on the wire, and a negative one would
+                    // arrive as a ~4 GiB fetch distance rather than as an error.
+                    MOBILEGL_ASSERT(attrib.Stride >= 0, "a resolved vertex stride is never negative (%d)",
+                                    attrib.Stride);
                     entry.Stride = static_cast<Uint32>(attrib.Stride);
                     entry.Divisor = static_cast<Uint32>(attrib.Divisor);
                     entry.BindingIndex = static_cast<Uint32>(i);
@@ -238,6 +259,12 @@ namespace MobileGL::MG_Pipe {
             if (vao) {
                 if (const auto& bound = vao->GetIndexBufferBindingSlot().GetBoundObject()) {
                     m_lastIndex.Res = MGPipeSlots().Acquire(MGPipeKind::Buffer, bound->GetLifetimeId());
+                    // The ELEMENT_ARRAY bit, and it is the one the split path keys on
+                    // (kCapNeedsHostIndexBytes -> restart rewriting, multi-draw flattening).
+                    // Noted at every draw for RefreshBindMask's reason: an EBO defined through
+                    // DSA and unbound before its last respecify would otherwise never publish
+                    // it, and getting that bit wrong is invisible in monolith.
+                    MGPipeResourceTrackerInstance().NoteBoundAs(m_lastIndex.Res, BufferTarget::Index);
                 }
             }
             MGPipeApplySetIndexBuffer(m_lastIndex);

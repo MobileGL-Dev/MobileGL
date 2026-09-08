@@ -1571,7 +1571,8 @@ namespace {
             // And every piece the walk produced has to be encodable by the record builder -
             // a piece the box refuses is a record the applier's bounds gate would abort on.
             MGPSubData record{};
-            EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second, record))
+            EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second, record,
+                                                 /*verbatimShadow=*/true))
                 << "a piece the splitter produced does not fit one record";
             EXPECT_EQ(MGPipeSubDataBufferOffset(record), piece.first);
             EXPECT_EQ(MGPipeSubDataBufferSize(record), piece.second);

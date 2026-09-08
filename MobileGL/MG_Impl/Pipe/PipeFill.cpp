@@ -564,6 +564,30 @@ namespace MobileGL::MG_Pipe {
             only.Kind = static_cast<Uint32>(MGPipeKind::Buffer);
             return only;
         }
+
+        // THE CONTENT PATHS LOOK THE HANDLE UP, THEY DO NOT MINT IT. Acquire mutates the
+        // process-global slot allocator (a map insert on a miss, a free-list pop) and then
+        // resizes the tracker's inverse vector; D-A2 preserves the off-thread/stale-queue arm
+        // of Ops_SubData, so BufferObject::NotifySubData is reachable off the render thread,
+        // and two threads inside Acquire - or one there while ~BufferObject is in Free - is a
+        // torn free list and a dangling span. The mint happens ONCE, on the GL thread, in the
+        // BufferObject constructor (MGPipeMintResourceHandle), so on every content path the
+        // handle already exists and a pure lookup is not merely safe but strictly correct.
+        //
+        // A null answer therefore means a buffer whose constructor did not mint - which
+        // cannot happen in a push build - or a lifetime id already freed. Either way the call
+        // is dropped, so it is said out loud rather than passing kMGPipeNullHandle to the
+        // applier, which would count it as a refusal with no way back to the cause.
+        MGPipeHandle ContentHandleFor(const BufferObject& buffer, const char* call) {
+            const MGPipeHandle handle = MGPipeResourceTrackerInstance().Find(buffer);
+            if (MGPipeHandleIsNull(handle)) {
+                MGLOG_E_ONCE("MGPipe: %s on buffer %u has no resource handle - the call is dropped; a "
+                             "push build mints one in the BufferObject constructor, so this is a lifetime "
+                             "id that was already freed",
+                             call, buffer.GetExternalIndex());
+            }
+            return handle;
+        }
     } // namespace
 
     Bool MGPipeResourceSubsystemEnabled() {
@@ -596,6 +620,9 @@ namespace MobileGL::MG_Pipe {
         // that has none.
         const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, false);
         tracker.NoteDesc(desc, true);
+        // LATCHED, so the destroy is gated on whether this create actually went out rather
+        // than on whether a table is still registered when the object dies (D-L, m12).
+        tracker.NotePublished(handle);
         MGPipeApplyResourceCreate(desc);
     }
 
@@ -619,12 +646,16 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
-        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_subdata");
+        if (MGPipeHandleIsNull(handle)) return;
         const Uint8* base = buffer.MappedData();
         const Bool encodable =
             MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
                 MGPSubData record{};
-                MGPipeBuildSubDataRecord(handle, at, length, record);
+                // The pre-pass inside the walk proved every piece encodable before the first
+                // one was emitted, so this cannot be false - but a zeroed record (null
+                // handle, size 0) is not the answer if that pre-pass is ever relaxed.
+                if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/true)) return;
                 MGPipeApplyResourceSubData(record, base + at);
             });
         if (!encodable) {
@@ -636,12 +667,16 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeEmitBufferSubDataResident(BufferObject& buffer, SizeT offset, const void* bytes, SizeT size) {
-        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const MGPipeHandle handle = ContentHandleFor(buffer, "buffer_subdata_resident");
+        if (MGPipeHandleIsNull(handle)) return;
         const auto* base = static_cast<const Uint8*>(bytes);
         const Bool encodable =
             MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
                 MGPSubData record{};
-                MGPipeBuildSubDataRecord(handle, at, length, record);
+                // NOT a verbatim level shadow: these bytes are the application's staging
+                // store, or the pattern FillSubData expanded locally, and neither is this
+                // client's untransformed shadow of the level.
+                if (!MGPipeBuildSubDataRecord(handle, at, length, record, /*verbatimShadow=*/false)) return;
                 // The application's STAGING store, valid for the duration of the call only.
                 MGPipeApplyBufferSubDataResident(record, base + (at - offset));
             });
@@ -653,7 +688,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeEmitResourceFlushRange(BufferObject& buffer, SizeT offset, SizeT size, Uint32 accessFlags) {
-        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_flush_range");
+        if (MGPipeHandleIsNull(handle)) return;
         MGPFlushRange record{};
         record.Res = handle;
         record.Offset = offset;
@@ -666,7 +702,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeEmitResourceReadback(BufferObject& buffer) {
-        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const MGPipeHandle handle = ContentHandleFor(buffer, "resource_readback");
+        if (MGPipeHandleIsNull(handle)) return;
         MGPReadback record{};
         record.Res = handle;
         // Whole-buffer by contract (BufferObject.h: the op pulls the backend's current
@@ -678,8 +715,17 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplyResourceReadback(record);
     }
 
+    // NO UnmapPersistent PRODUCER IN P3a, AND THAT IS DELIBERATE. The catalogue has the call
+    // and wire implemented it, but D-J forbids new behaviour and there is nothing to convert:
+    // BufferBackendOps has seven hooks and none of them is an unmap, and
+    // PipeResource::ReleasePersistentMap() (BufferObject.cpp, from RedefineStorage) tells the
+    // backend nothing today - it learns from the Respecify that follows. Emitting
+    // unmap_persistent here would therefore be a new call to a backend that has never been
+    // told about a release, so the client emits none and the applier's refusal counter stays
+    // at 0 for it. The producer lands with the phase that gives the backend an unmap hook.
     void* MGPipeEmitMapPersistent(BufferObject& buffer) {
-        const MGPipeHandle handle = MGPipeResourceTrackerInstance().Acquire(buffer);
+        const MGPipeHandle handle = ContentHandleFor(buffer, "map_persistent");
+        if (MGPipeHandleIsNull(handle)) return nullptr;
         MGPipeResourceTrackerInstance().NoteMapPersistent();
         // THE map-persistent-roundtrips SITE, and it counts every EMISSION - mint OR
         // DECLINE - because every one of them needs an answer from the resource owner. A
@@ -692,11 +738,17 @@ namespace MobileGL::MG_Pipe {
         return MGPipeApplyMapPersistent(BufferHandleOnly(handle), buffer.GetSize(), buffer.MappedData());
     }
 
-    void MGPipeEmitResourceDestroyAndFree(BufferObject& buffer) {
+    Bool MGPipeEmitResourceDestroyAndFree(BufferObject& buffer) {
         MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
         const MGPipeHandle handle = tracker.Find(buffer);
-        if (MGPipeHandleIsNull(handle)) return;
-        if (MGPipeResourceSubsystemEnabled()) {
+        if (MGPipeHandleIsNull(handle)) return false;
+        // THE LATCHED ANSWER, not the live one (m12): create and destroy are gated at two
+        // different moments, and a buffer constructed while a backend's table was registered
+        // and destroyed after UnregisterBufferBackendOps() would otherwise free its slot with
+        // the applier's record still Live and the backend's twin still attached to it - on a
+        // slot the allocator is about to hand out again.
+        const Bool published = tracker.WasPublished(handle);
+        if (published) {
             tracker.NoteDestroy();
             MGPipeApplyResourceDestroy(BufferHandleOnly(handle));
         }
@@ -707,6 +759,7 @@ namespace MobileGL::MG_Pipe {
         // so a double free cannot skip a generation.
         tracker.Retire(handle);
         MGPipeSlots().Free(MGPipeKind::Buffer, handle);
+        return published;
     }
 
     void MGPipeSetPoisonOmission(const char* verb, const char* field) {
@@ -921,6 +974,14 @@ namespace MobileGL::MG_Pipe {
         //     through bind_vertex_elements - and EmittedCallSuppliesTheWholeField below says
         //     false for it, with the reason. So this bit switches the EMISSION on and
         //     changes nothing about the fill loop.
+        //
+        // THE TWO BITS ARE NOT AN INDEPENDENT A/B IN ONE DIRECTION, and an operator turning
+        // them on one at a time has to know which: set_vertex_buffers and set_index_buffer
+        // name their buffers by {slot, gen} whether or not the resource family created a
+        // record for them, so bit 8 WITHOUT bit 7 sends the server handles it cannot resolve
+        // and every one of those calls lands in RefusedResourceCalls. Bit 7 without bit 8 is
+        // fine. Neither the P3a default (0x1ff, both on) nor G12's control (0x7f, both off)
+        // is in that arm, which is why nothing in the phase trips over it.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
@@ -1419,9 +1480,15 @@ namespace MobileGL::MG_Pipe {
             MGPipeCsoCacheInstance().Reset();
             MGPipeApplierReset();
             MGPipeSetHashSuppressorInstance().InvalidateAll();
-            // P3a: and the vertex-input emitter's latches, for the same reason - they say
-            // "this handle has already published this configuration" about an applier whose
-            // vertex-elements records the reset above has just dropped.
+            // P3a: and the vertex-input emitter's latches. NOT because the applier dropped
+            // its vertex-elements records - it does not, they are share-group object state
+            // and survive a make-current - but because the emitter's OTHER latch, the bound
+            // handle, mirrors the applier's BoundVertexElements, which MGPipeApplierReset
+            // DOES clear. Without this the bind after a make-current would be suppressed as
+            // unchanged and the server would draw with no vertex elements bound. Re-creating
+            // an unchanged configuration alongside it is a bounded over-fire; a dropped bind
+            // is not. The resource tracker is deliberately NOT reset here for the same
+            // reason its records survive: see ResourceTracker.h's ResetForTest.
             MGPipeVertexInputEmitterInstance().Reset();
             g_residualDue = true;
         }

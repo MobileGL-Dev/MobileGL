@@ -115,7 +115,14 @@ namespace MobileGL::MG_Pipe {
     void MGPipeMintResourceHandle(MG_State::GLState::BufferObject& buffer);
     // In this order, and it is not negotiable (D-L): the destroy resolves the handle, and
     // MGPipeSlotAllocator::Free erases the lifetimeId -> slot mapping it resolves through.
-    void MGPipeEmitResourceDestroyAndFree(MG_State::GLState::BufferObject& buffer);
+    //
+    // RETURNS whether resource_destroy was emitted, which is the LATCH taken at this buffer's
+    // create and not a second reading of MGPipeResourceSubsystemEnabled(). The destructor
+    // needs that answer to decide whether the legacy OnDestroy still owes a call: asking the
+    // predicate twice pairs a create emitted under one registration with a destroy gated on
+    // another, and either direction leaks - a live applier record on a slot about to be
+    // re-handed-out, or a backend object nobody releases.
+    Bool MGPipeEmitResourceDestroyAndFree(MG_State::GLState::BufferObject& buffer);
 
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
