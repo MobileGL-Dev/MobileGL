@@ -421,6 +421,146 @@ TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatC
 #endif
 }
 
+// ID-19's CORRECTION, AND THE CASE THAT SAYS WHAT THE FOURTH TARGET IS FOR. Every DSA entry
+// point - BlitNamedFramebuffer and the four ClearNamedFramebuffer* - hands Espryt a framebuffer
+// BY NAME, and that framebuffer is very often bound to neither binding. With only the two bound
+// records the server had no description of it at all, bound its driver FBO with no attachments
+// and cleared or blitted into nothing (esprytobj C-1). A Named record fixes that WITHOUT lying
+// about the bindings: the record is written and addressable by handle, and BoundFramebuffer
+// does not move. Making the Named arm touch either binding leaves this red.
+TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEitherBinding) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    // TWO DIFFERENT FRAMEBUFFERS ON THE TWO BINDINGS FIRST, so "the bindings did not move" is an
+    // assertion about values rather than about null.
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Draw, 100));
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{5, 2}, MGPipeFramebufferTarget::Read, 200));
+    const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
+
+    MGPFramebufferState named = FramebufferRecord(MGPipeHandle{6, 3}, MGPipeFramebufferTarget::Draw, 300);
+    named.Target = kMGPipeFramebufferTargetNamed;
+    named.Color[0].Res = MGPipeHandle{21, 1};
+    MGPipeApplySetFramebufferState(named);
+
+    // (a) THE DSA LOOKUP FINDS IT, BY HANDLE, WITH ITS ATTACHMENTS. This is the call package D
+    // makes at every named blit and clear.
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3}), nullptr)
+        << "a framebuffer handed to the server by name has no record, which is the state that "
+           "clears into a driver framebuffer with no attachments";
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Width, 300u);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Color[0].Res, (MGPipeHandle{21, 1}));
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Target, kMGPipeFramebufferTargetNamed);
+
+    // (b) AND NEITHER BINDING MOVED.
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    ASSERT_NE(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{4, 1}))
+        << "a Named record claimed the draw binding";
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Fbo, (MGPipeHandle{5, 2}))
+        << "a Named record claimed the read binding";
+    EXPECT_EQ(MGPipeApplier().BoundFramebuffer[0], (MGPipeHandle{4, 1}));
+    EXPECT_EQ(MGPipeApplier().BoundFramebuffer[1], (MGPipeHandle{5, 2}));
+
+    // (c) The serial moves for a Named record too: a twin memoising a framebuffer's attachments
+    // has to hear that they moved, and whether it is bound is a different question.
+    EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore + 1);
+
+    // (d) And the same framebuffer can then be BOUND, which moves the binding and restates the
+    // record - the two targets are not two tables.
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{6, 3}, MGPipeFramebufferTarget::Draw, 400));
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{6, 3}));
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 400u);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Fbo, (MGPipeHandle{5, 2}));
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u);
+#endif
+}
+
+// STALE-GENERATION REFUSAL, ON THE ONE TABLE WHOSE OBJECT HAS NO WIRE LIFETIME. A framebuffer is
+// never destroyed on the wire, so its slot is simply overwritten by its successor - and until
+// that successor describes itself, a handle naming the DEAD one must be refused rather than
+// answered with the predecessor's attachments. That answer would be a blit or a clear into
+// somebody else's colour buffer. It is LOUD (counted, and logged once) because the only way to
+// reach it is an emitter defect, and it is counted APART from RefusedObjectCalls because this is
+// a read by the server's own sync path and not a call the applier refused.
+TEST(FramebufferEmit, AFramebufferHandleWhoseGenerationHasMovedOnIsRefusedRatherThanAnswered) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{12, 1}, MGPipeFramebufferTarget::Draw, 100));
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 1}), nullptr);
+    const Uint64 staleBefore = MGPipeApplier().StaleFramebufferRecordLookups;
+
+    // The slot has been recycled and the successor has not described itself yet.
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 2}), nullptr)
+        << "a handle at a recycled slot was answered with its predecessor's record";
+    EXPECT_EQ(MGPipeApplier().StaleFramebufferRecordLookups, staleBefore + 1);
+
+    // Now it does, and the predecessor's handle becomes the stale one - in the other direction.
+    MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{12, 2}, MGPipeFramebufferTarget::Draw, 200));
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 2}), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 2})->Width, 200u);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{12, 1}), nullptr);
+    EXPECT_EQ(MGPipeApplier().StaleFramebufferRecordLookups, staleBefore + 2);
+
+    // THE TWO SILENT NULLS, and they are silent on purpose. "Nothing is bound to this binding"
+    // is what a make-current leaves behind and arrives on every draw of a context that has not
+    // described its framebuffers; "no record at this slot" is what every framebuffer looks like
+    // before its first set_framebuffer_state. Counting either would bury the one that matters.
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(kMGPipeNullHandle), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{99, 1}), nullptr);
+    EXPECT_EQ(MGPipeApplier().StaleFramebufferRecordLookups, staleBefore + 2)
+        << "an unbound binding or an undescribed slot was counted as a stale generation";
+    EXPECT_EQ(MGPipeApplier().RefusedObjectCalls, 0u)
+        << "the framebuffer family may never move the object-refusal counter";
+#endif
+}
+
+// THE TWO REFUSALS THE PER-OBJECT TABLE ADDED. The null handle is what "nothing is bound" reads
+// as, so a record installed at {0,0} would be answered to every caller asking about an EMPTY
+// binding; and Slot is a client-supplied Uint32 that now reaches an allocator, so it takes the
+// same bound the five object tables take. Every emitter has a handle for every framebuffer it
+// describes - kMGPipeDefaultFramebuffer {0,1} for the default one - so neither value is
+// producible by a correct client, which is why both are Fatal rather than counted refusals.
+TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherThanStored) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    // The positive control first: the DEFAULT framebuffer is slot 0 at generation 1 and is
+    // perfectly legal, so what follows refuses the null handle and not slot 0.
+    MGPipeApplySetFramebufferState(
+        FramebufferRecord(kMGPipeDefaultFramebuffer, MGPipeFramebufferTarget::Both, 128));
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(kMGPipeDefaultFramebuffer), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(kMGPipeDefaultFramebuffer)->Width, 128u);
+    const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
+
+    MGPFramebufferState nullHandle = FramebufferRecord(kMGPipeNullHandle, MGPipeFramebufferTarget::Draw, 300);
+    ExpectRefusedNaming("set_framebuffer_state {slot=0, gen=0, target=0}: the record names the null "
+                        "framebuffer handle",
+                        [&nullHandle]() { MGPipeApplySetFramebufferState(nullHandle); });
+
+    MGPFramebufferState pastTheBound = FramebufferRecord(
+        MGPipeHandle{kMGPipeMaxFramebufferSlots, 1}, MGPipeFramebufferTarget::Draw, 400);
+    ExpectRefusedNaming("set_framebuffer_state {slot=65536, gen=1, target=0}: the framebuffer slot is "
+                        "outside the record table's bound",
+                        [&pastTheBound]() { MGPipeApplySetFramebufferState(pastTheBound); });
+    static_assert(kMGPipeMaxFramebufferSlots == 65536u,
+                  "the refusal line above names the bound; move both together");
+
+    EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore) << "a refused record moved the serial";
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, kMGPipeDefaultFramebuffer)
+        << "a refused record took the draw binding";
+    EXPECT_LT(MGPipeApplier().FramebufferRecords.size(),
+              static_cast<SizeT>(kMGPipeMaxFramebufferSlots))
+        << "an out-of-range slot resized the table instead of being refused";
+#endif
+}
+
 int main(int argc, char** argv) {
     // Before anything logs: the logger reads this variable once, on its first write, and
     // caches the handle. The name carries this process's pid, and the file is removed on the

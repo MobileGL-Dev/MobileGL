@@ -675,6 +675,126 @@ TEST(TextureEmit, TheTextureRecordAndItsParamsAndPendingUploadsSurviveAMakeCurre
 #endif
 }
 
+// ID-18 M4, AND IT IS THE ONE ARM AN IMMUTABLE TEXTURE HAS. A sticky BindMask /
+// ImageBindableHint bit has exactly one way onto the wire - a respecify - and glTexStorage2D
+// leaves a texture with no further respecify to carry it, so for the canonical order (allocate,
+// THEN bind as an image or attach) the hint that exists to prevent a texture re-mint would never
+// arrive at all. B therefore republishes the descriptor when the mask moves, and the applier has
+// to tell that call apart from a redefinition: it replaces the descriptor and moves the serial,
+// and it drops NOTHING - the storage it is against was not replaced, so no level's coordinate
+// system moved. A mask change landing between a glTexSubImage2D and the sync that consumes it
+// must not eat those texels, which is C1's bug with a different trigger and just as silent.
+TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsThePendingUploads) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{11, 1};
+    const Uint8 texels[4096] = {};
+    MGPipeApplyResourceCreate(TextureDesc(texture, 0, 151));
+
+    // glTexStorage2D: an IMMUTABLE store, which is the whole reason this arm exists.
+    MGPResourceDesc allocated = TextureDesc(texture, 64, 151);
+    allocated.Immutable = 1;
+    allocated.Levels = 1;
+    allocated.InternalFormat = 0x8058u; // GL_RGBA8
+    allocated.BindMask = static_cast<Uint16>(kMGPipeBindSampler);
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(allocated, nullptr));
+
+    // glTexSubImage2D: texels whose client-side dirty flag was cleared at THIS emission, so the
+    // applier's entry is the only thing that still owes them.
+    ASSERT_TRUE(MGPipeApplyResourceSubData(TextureUpload(texture, 0, MGPBox{0, 0, 0, 64, 64, 1}, 0), texels));
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u);
+    const Uint64 serialBefore = TextureRecordOf(11).Serial;
+
+    // glBindImageTexture: the mask moves and nothing about the storage does.
+    MGPResourceDesc masked = allocated;
+    masked.BindMask = static_cast<Uint16>(allocated.BindMask | kMGPipeBindShaderImage);
+    masked.ImageBindableHint = 1;
+    ASSERT_FALSE(MGPipeResourceRespecifyNeedsAck(masked))
+        << "a metadata respecify must never ask for a reallocation acknowledgement";
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(masked, nullptr));
+
+    EXPECT_EQ(TextureRecordOf(11).Desc.BindMask, masked.BindMask)
+        << "the mask this call exists to carry did not reach the record";
+    EXPECT_EQ(TextureRecordOf(11).Desc.ImageBindableHint, 1);
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
+        << "a respecify that redefined no storage ate the texels standing against it";
+    EXPECT_EQ(TextureRecordOf(11).PendingUploads[0].UnionBox.W, 64u);
+    EXPECT_GT(TextureRecordOf(11).Serial, serialBefore)
+        << "the serial is the whole publication of a metadata update - the twin re-derives its "
+           "storage flags from the new mask on the strength of it";
+
+    // AND THE LEVEL POINTER DOES NOT CHANGE THE ANSWER. This is where ID-18 M4 refines C1:
+    // C1's rule drops the uploads against the storage a call REPLACES, and a call that replaces
+    // no storage replaces no level's coordinate system either, whatever level it names.
+    const MGPRespecifiedLevel levelZero{kTex2D, 0};
+    MGPResourceDesc maskedAgain = masked;
+    maskedAgain.BindMask = static_cast<Uint16>(masked.BindMask | kMGPipeBindRenderTarget);
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(maskedAgain, nullptr, &levelZero));
+    ASSERT_EQ(TextureRecordOf(11).PendingUploads.size(), 1u)
+        << "a metadata update dropped the level it named";
+    EXPECT_EQ(TextureRecordOf(11).Desc.BindMask, maskedAgain.BindMask);
+
+    // THE NEGATIVE CONTROL, in the same case: move ONE storage-defining field and the same call
+    // is a redefinition again, which takes the level it names with it.
+    MGPResourceDesc reallocated = maskedAgain;
+    reallocated.Width = 32;
+    reallocated.Height = 32;
+    ASSERT_TRUE(MGPipeApplyResourceRespecify(reallocated, nullptr, &levelZero));
+    EXPECT_TRUE(TextureRecordOf(11).PendingUploads.empty())
+        << "a 64-wide box survived a redefinition onto a 32-wide level";
+    EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
+#endif
+}
+
+// D-D5 step 1 again, for the two calls that DEFINE the storage an upload lands in (ID-18 M3).
+// The emitter cannot see either refusal from its call site: a dead or stale handle is a counted
+// no-op and a corrupt record is a Fatal that deliberately moves no counter, so a create or a
+// respecify the applier dropped is indistinguishable from one it took. A client that goes on to
+// clear a level's dirty flags, or to advance its own descriptor dedupe, on the strength of
+// having emitted has lost those texels for good.
+TEST(TextureEmit, TheCreateAndRespecifyCallsAnswerWhetherTheRecordWasAccepted) {
+#if !MOBILEGL_PIPE_PUSH
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
+#else
+    ApplierGuard guard;
+    const MGPipeHandle texture{12, 1};
+    EXPECT_TRUE(MGPipeApplyResourceCreate(TextureDesc(texture, 0, 161)));
+    EXPECT_TRUE(MGPipeApplyResourceRespecify(TextureDesc(texture, 64, 161), nullptr));
+    ASSERT_TRUE(TextureRecordOf(12).Live);
+
+    // THE RESERVED SLOT is refused by the create, and the answer says so.
+    EXPECT_FALSE(MGPipeApplyResourceCreate(TextureDesc(MGPipeHandle{0, 1}, 0, 162)))
+        << "resource_create answered accepted for the reserved slot 0";
+
+    // A STALE GENERATION is the one refusal that is not a Fatal, so it is the only one the
+    // return can carry, and it is counted on the way out.
+    const Uint64 refusedBefore = MGPipeApplier().RefusedResourceCalls;
+    MGPipeHandle recycled = texture;
+    recycled.Gen = 2;
+    EXPECT_FALSE(MGPipeApplyResourceRespecify(TextureDesc(recycled, 64, 161), nullptr))
+        << "resource_respecify answered accepted for a handle it refused";
+    EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusedBefore + 1);
+    EXPECT_EQ(TextureRecordOf(12).Desc.Width, 64u) << "a refused respecify moved the record anyway";
+
+    // AND THE BUFFER HALF ANSWERS ON THE SAME TERMS WITH NO BACKEND TABLE REGISTERED. Whether a
+    // backend installed MGPipeResourceOps is a property of the BUILD and not of the record; an
+    // emitter that read "not accepted" off an unregistered table would re-send a call the
+    // applier has already taken responsibility for.
+    MGPResourceDesc buffer{};
+    buffer.Resource = MGPipeHandle{13, 1};
+    buffer.Target = kMGPipeResourceTargetBuffer;
+    buffer.GlNameForDiag = 163;
+    EXPECT_TRUE(MGPipeApplyResourceCreate(buffer));
+    buffer.Width = 256;
+    EXPECT_TRUE(MGPipeApplyResourceRespecify(buffer, nullptr));
+    MGPResourceDesc deadBuffer = buffer;
+    deadBuffer.Resource.Gen = 7;
+    EXPECT_FALSE(MGPipeApplyResourceRespecify(deadBuffer, nullptr));
+#endif
+}
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
