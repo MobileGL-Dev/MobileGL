@@ -15,6 +15,9 @@
 #include "Init.h"
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
+#if MOBILEGL_PIPE_PUSH
+#include <MG_Pipe/PipeApply.h>
+#endif
 
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GetProcAddress.h>
@@ -1647,11 +1650,28 @@ namespace {
         .ReadbackFromGpu = ZeroCopyMock_ReadbackFromGpu,
     };
 
+    // These cases are BufferBackendOps dispatch tests. Since P3a a push build also installs the
+    // handle-shaped MGPipeResourceOps table at backend bring-up, and the frontend's push arms route
+    // every buffer mutation there first; the fixture therefore scopes BOTH tables, the way
+    // ResourceEmitTest's ApplierGuard scopes the applier, so the mock installed here is the arm
+    // that actually runs. The pipe-side dispatch has its own coverage in ResourceEmitTest.
     struct ScopedBackendOps {
         explicit ScopedBackendOps(const MG_State::GLState::BufferBackendOps* ops) {
             MG_State::GLState::SetBufferBackendOps(ops);
+#if MOBILEGL_PIPE_PUSH
+            m_savedResourceOps = MG_Pipe::MGPipeGetResourceOps();
+            MG_Pipe::MGPipeSetResourceOps(nullptr);
+#endif
         }
-        ~ScopedBackendOps() { MG_State::GLState::SetBufferBackendOps(nullptr); }
+        ~ScopedBackendOps() {
+#if MOBILEGL_PIPE_PUSH
+            MG_Pipe::MGPipeSetResourceOps(m_savedResourceOps);
+#endif
+            MG_State::GLState::SetBufferBackendOps(nullptr);
+        }
+#if MOBILEGL_PIPE_PUSH
+        const MG_Pipe::MGPipeResourceOps* m_savedResourceOps = nullptr;
+#endif
     };
 } // namespace
 
