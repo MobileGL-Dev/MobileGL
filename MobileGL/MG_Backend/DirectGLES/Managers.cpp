@@ -2724,7 +2724,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Read AFTER SyncPersistentMappedRange above, and through liveHostBase for the
             // reason written where it is declared.
             const Uint8* const hostBase = liveHostBase();
-            const void* initialData = record->Desc.HasDefinedContent != 0 ? hostBase : nullptr;
+            // "DOES THE SHADOW THIS PATH IS ABOUT TO UPLOAD HOLD MEANINGFUL BYTES?" - and it has
+            // to be asked of the SAME thing the bytes come from, which is why it is not
+            // record->Desc.HasDefinedContent. The descriptor states what was true at the last
+            // resource_respecify and NOTHING refreshes it afterwards: resource_subdata,
+            // resource_flush_range, buffer_subdata_resident and OnGpuWritten all define content
+            // (BufferObject.cpp:85, :101, :127, :365, :441) without re-emitting a descriptor,
+            // and re-emitting one per glBufferSubData would be new wire traffic D-J forbids. So
+            // after the ordinary glBufferData(NULL) + glBufferSubData idiom the descriptor still
+            // says "undefined", this full re-upload passed nullptr, RespecifyStorageWith
+            // CLEARED the queued ranges and stamped syncedChangeSerial - i.e. an empty store
+            // declared current, with the application's bytes dropped and nothing saying so.
+            // The legacy arm pairs bufferObject.MappedData() with bufferObject.HasDefinedContent()
+            // (RespecifyStorageNow) and this arm pairs the same two, so the source of the bytes
+            // and the statement about them can never disagree. Declared, like C-1's IsMapped():
+            // it is a frontend read this function keeps for P3a and it retires the moment the
+            // client publishes a live content flag beside the descriptor (P5/P8). With no
+            // frontend object (the handle-only drains) the descriptor is all there is.
+            const Bool shadowHasContent =
+                bufferObject ? bufferObject->HasDefinedContent() : (record->Desc.HasDefinedContent != 0);
+            const void* initialData = shadowHasContent ? hostBase : nullptr;
 
             if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
