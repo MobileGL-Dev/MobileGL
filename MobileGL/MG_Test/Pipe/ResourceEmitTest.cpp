@@ -1791,6 +1791,63 @@ namespace {
         EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Buffer, handle));
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u);
     }
+
+    // M-1: ...AND THE LATCH HEALS IN THE OTHER DIRECTION TOO. The case above covers a buffer
+    // that was published and then lost its backend; this is the mirror - a buffer BORN while no
+    // resource op table was registered, which is a real window and not a theoretical one:
+    // UnregisterBufferBackendOps nulls the table from OnBackendContextDestroyed and the
+    // re-register happens at the next MakeCurrent, while D-A2 keeps the content path reachable
+    // off the render thread.
+    //
+    // Before the repair the buffer latched Published = false, so no applier record existed;
+    // every later respecify was REFUSED and the backend's ensure path then read a null record,
+    // took size 0 and drew through id 0, silently, for the object's whole life. The legacy arm
+    // recovers from the same window by twinning lazily and full-uploading from the shadow.
+    TEST(ResourceEmit, ARespecifyPublishesTheCreateAHandleNeverGot) {
+        PushArm arm;
+        MGPipeResourceTracker& tracker = MGPipeResourceTrackerInstance();
+
+        // The window: the table is gone, so the constructor mints the handle (unconditional)
+        // and emits nothing.
+        MGPipeSetResourceOps(nullptr);
+        ASSERT_FALSE(MGPipeResourceSubsystemEnabled());
+        const SharedPtr<BufferObject> buffer = MakeBuffer(1);
+        const MGPipeHandle handle = tracker.Find(*buffer);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle)) << "the constructor did not mint a handle";
+        ASSERT_FALSE(tracker.WasPublished(handle));
+        // Not through RecordOf: the applier's vector may not even reach this slot yet, which is
+        // the whole point, and RecordOf would index past its end to find out.
+        ASSERT_TRUE(MGPipeApplier().Resources.size() <= static_cast<SizeT>(handle.Slot) ||
+                    !MGPipeApplier().Resources[handle.Slot].Live)
+            << "a create went out with no table registered";
+
+        // The window closes - MakeCurrent re-registers - and the application defines the store.
+        MGPipeSetResourceOps(&arm.m_ops);
+        ASSERT_TRUE(MGPipeResourceSubsystemEnabled());
+        const Uint64 createsBefore = tracker.CreateCount();
+        const Uint64 refusalsBefore = MGPipeApplier().RefusedResourceCalls;
+        buffer->Respecify(256, nullptr);
+
+        EXPECT_EQ(tracker.CreateCount(), createsBefore + 1)
+            << "the respecify did not publish the create this handle never got, so the applier "
+               "still has no record to respecify into";
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusalsBefore)
+            << "the respecify was refused: the record the create should have opened is missing";
+        EXPECT_TRUE(tracker.WasPublished(handle)) << "the repair did not latch";
+        ASSERT_TRUE(RecordOf(handle.Slot).Live);
+        EXPECT_EQ(RecordOf(handle.Slot).Gen, handle.Gen);
+        EXPECT_EQ(RecordOf(handle.Slot).Desc.Width, 256u)
+            << "the storage the repair's create deliberately does not carry was not defined by "
+               "the respecify that follows it";
+
+        // ...and the repair is once, not per respecify.
+        const Uint64 createsAfterRepair = tracker.CreateCount();
+        buffer->Respecify(512, nullptr);
+        EXPECT_EQ(tracker.CreateCount(), createsAfterRepair)
+            << "every respecify re-published a create; the latch is not being read";
+        EXPECT_EQ(RecordOf(handle.Slot).Desc.Width, 512u);
+        EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusalsBefore);
+    }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace
 

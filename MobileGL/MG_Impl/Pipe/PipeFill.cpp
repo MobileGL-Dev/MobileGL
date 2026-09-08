@@ -634,6 +634,33 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle = tracker.Acquire(buffer);
         Uint16 bindMask = tracker.BindMask(handle);
         if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
+        // M-1: THE CREATE FIRST, IF THIS HANDLE NEVER PUBLISHED ONE - which makes the
+        // create/destroy latch self-healing in both directions instead of only one.
+        //
+        // The constructor's create is gated on MGPipeResourceSubsystemEnabled(), which is bit 7
+        // AND "a backend registered MGPipeResourceOps"; the CONSUMER's gate is bit 7 alone. The
+        // two disagree across a register/unregister boundary, and there is a real window:
+        // UnregisterBufferBackendOps nulls the table from OnBackendContextDestroyed
+        // (DestroyEGLContext) and the re-register happens at the next MakeCurrent, while D-A2
+        // deliberately keeps NotifySubData reachable off the render thread. A buffer born in
+        // that window latched Published = false, so the applier had no record for it and every
+        // later respecify was REFUSED - after which EnsureBufferResourceForHandle read
+        // ResourceRecordOf == nullptr, took size 0, returned a twin with no store and drew
+        // through id 0, with no diagnostic anywhere. The legacy arm recovers from the same
+        // window by twinning lazily off the frontend object and full-uploading from the shadow;
+        // this is the handle arm's equivalent, and it costs one bool compare per respecify.
+        //
+        // A create rather than a respecify because that is what the record's absence means: the
+        // applier starts the record over on a create (it does not edit one), so this cannot
+        // resurrect a field from a recycled slot, and the respecify below then defines the
+        // storage exactly as it would have.
+        if (!tracker.WasPublished(handle)) {
+            const MGPResourceDesc createDesc =
+                MGPipeBuildResourceDesc(buffer, handle, bindMask, /*storageDefined=*/false);
+            tracker.NoteDesc(createDesc, true);
+            tracker.NotePublished(handle);
+            MGPipeApplyResourceCreate(createDesc);
+        }
         const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, true);
         tracker.NoteDesc(desc, false);
         // initialBytes is the client's own shadow base - zero copy, and null is a real answer
