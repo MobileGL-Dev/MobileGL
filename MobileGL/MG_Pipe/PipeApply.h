@@ -229,6 +229,22 @@ namespace MobileGL::MG_Pipe {
         // cannot be recomputed after emission, so the tracker retains the pre-clear set and
         // the comparator compares the emitted (UnionBox, RegionCount, Regions[]) against it
         // field by field.
+        //
+        // THE SET IS KEYED (UploadTarget, Level) AND EVERY KEY IS INDEPENDENT OF EVERY OTHER.
+        // That is not a detail: a respecify redefines ONE level when it arrives from
+        // glTexImage*D (MGPipeApplyResourceRespecify's trailing MGPRespecifiedLevel*), so it
+        // may only drop that one key - the frontend's AllocateStorage / MarkStorageDirty are
+        // per (uploadTarget, level) too, and the other levels' dirty flags were cleared at
+        // THEIR emission, so nothing anywhere still owes them.
+        //
+        // THE ACCUMULATED RECT LIST MAY OVERLAP, AND A CONSUMER MUST TOLERATE THAT. Behind one
+        // level the frontend's own model is pairwise disjoint (MipmapStorage keeps it so), but
+        // this list CONCATENATES the lists of successive emissions and the applier's gate only
+        // asks that each rect be inside the record's own union box - so two emissions that
+        // touch the same texels leave two rects that do. Staging N rects therefore uploads
+        // those texels twice, which is a cost and never a correctness problem; nothing here
+        // de-duplicates and nothing downstream may assume "the frontend's model" means disjoint
+        // once the shapes have been accumulated.
         struct PendingUpload {
             Uint16 UploadTarget = 0;
             Uint16 Level = 0;
@@ -607,6 +623,20 @@ namespace MobileGL::MG_Pipe {
     // the backend and the gates compile against, and the records above are what they write
     // into; the bodies land in the two commits that follow this one on the same branch.
 
+    // The scope of one resource_respecify, and it is an APPLIER-SIDE ARGUMENT and not a wire
+    // record: it is not in PipeFields.def, it crosses no payload, and the transport reads the
+    // scope off the call it is replaying rather than off a field. The two members mirror
+    // MGPipeResourceRecord::PendingUpload's key exactly, which is the only thing the applier
+    // does with them - so UploadTarget is MGPSubData::Target VERBATIM, the whole packed field
+    // (ID-12: low byte = MGPipeResourceTarget, high byte = the cube-face upload target), the
+    // same value the emission of that level put in the record. A per-face respecify therefore
+    // drops the face it redefines and leaves the other five standing, and a caller that packs
+    // the pair differently here than it packs it there simply matches nothing.
+    struct MGPRespecifiedLevel {
+        Uint16 UploadTarget = 0;
+        Uint16 Level = 0;
+    };
+
     // resource_create: mints the record and marks the slot Live. Emitted from the buffer
     // object's CONSTRUCTOR, so a resource exists before anything can name it; storage is
     // defined lazily by the first respecify and a backend tolerates a resource with none.
@@ -614,7 +644,25 @@ namespace MobileGL::MG_Pipe {
     // resource_respecify: replaces the stored descriptor and bumps Serial. `initialBytes` is
     // the shadow when desc.HasDefinedContent, else null. kNeedsAck on the call,
     // MGPipeResourceRespecifyNeedsAck(desc) per record - only an immutable store acks.
-    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes);
+    //
+    // P4a: `level` IS THE SCOPE OF THE REDEFINITION, and MGPResourceDesc cannot carry it - the
+    // descriptor describes the resource, and a mutable texture redefines its levels ONE
+    // glTexImage*D AT A TIME. Null means "this respecify redefines the WHOLE resource" - every
+    // glBufferData / glBufferStorage, every glTexStorage*, every texture view - and drops every
+    // pending upload, which is right because every level's coordinate system has just been
+    // replaced. Non-null names the single (uploadTarget, level) the call redefines and drops
+    // ONLY that key: the frontend's AllocateStorage / MarkStorageDirty are per
+    // (uploadTarget, level) as well (MG_State/GLState/TextureState/TextureObject.h), so a
+    // glTexImage2D(level 1) re-marks level 1 AND NOTHING ELSE, while the levels already
+    // emitted had their client dirty flags cleared at THEIR emission (D-D5 step 1) and nothing
+    // anywhere still owes them. Clearing the whole set here would lose exactly those texels,
+    // silently, in every build - the loss the server-side set exists to prevent.
+    //
+    // Trailing and defaulted for W1's reason: P3a's buffer call site (PipeFill.cpp:691) and
+    // every existing case compile unchanged. PACKAGE B PASSES THE PAIR IT JUST ALLOCATED at
+    // every per-level respecify; it has both halves in hand at the AllocateStorage call site.
+    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
+                                      const MGPRespecifiedLevel* level = nullptr);
     // resource_subdata, buffer half: the destination range rides in the record's box through
     // MGPipeSetSubDataBufferRange, and a false from that helper is where the EMITTER split.
     // The applier stores nothing per record - contents are the backend's - and bumps Serial.
@@ -625,7 +673,24 @@ namespace MobileGL::MG_Pipe {
     // applier's pending-upload set is (UnionBox, RegionCount, Regions[]) and the verify lane's
     // retain mode compares all three. The buffer half declares no regions, so P3a's one call
     // site and every existing case are unchanged by the default.
-    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
+    //
+    // THE RETURN IS THE ACCEPTANCE SIGNAL D-D5 STEP 1 NAMES: true when the record was stored -
+    // the buffer half landed its range, or the texture half accumulated the shape onto the
+    // record - and false when it was refused. THE EMITTER MUST GATE ITS DIRTY-FLAG CLEAR ON IT
+    // ("only for levels whose record the applier ACCEPTED"), because the two refusal paths are
+    // otherwise invisible to it: a dead or stale handle is a counted no-op and a corrupt record
+    // is a Fatal that does NOT move RefusedResourceCalls, so in a shipped push build a refused
+    // upload and an accumulated one are indistinguishable from the call site. A client that
+    // clears on the strength of having emitted drops those texels for good.
+    //
+    // THE RESOURCE-TARGET HALF OF record.Target PICKS THE HALF. MGPSubData::Target is PACKED
+    // (ID-12): low byte = MGPipeResourceTarget, high byte = the cube-face upload target. The
+    // buffer half is the whole field being 0 - the encoding the emitter is held to, since a
+    // buffer has no upload target - and the texture half additionally requires the low byte to
+    // name a TEXTURE target: Buffer, Renderbuffer and anything at or above
+    // MGPipeResourceTarget::Count are Fatal{ProtocolCorruption} rather than an upload onto
+    // whatever object holds that slot in the texture slot space.
+    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
                                     const MGPSubRegion* regions = nullptr);
     // buffer_subdata_resident: same shape; `bytes` is the application's staging store and is
     // valid for the duration of the call only. The op-table entry may be null.

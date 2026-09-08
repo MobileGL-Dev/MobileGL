@@ -502,12 +502,31 @@ namespace MobileGL::MG_Pipe {
         }
 
         // A sub-data record's own discriminator, and it is DELIBERATELY NOT the table selector
-        // above: MGPSubData::Target is the UPLOAD target - a cube face is one, and those are
-        // not MGPipeResourceTarget enumerators - so the only thing it can be asked is the one
-        // question that has an answer for every value. kMGPipeResourceTargetBuffer is 0 and no
-        // texture upload target is, which is the contract the emitter is held to.
+        // above: MGPSubData::Target carries the UPLOAD target as well - a cube face is one, and
+        // those are not MGPipeResourceTarget enumerators - so the buffer question is asked of
+        // the whole field, which is the one question that has an answer for every value.
+        // kMGPipeResourceTargetBuffer is 0, a buffer has no upload target to pack beside it, and
+        // no texture emission leaves the whole field 0: that is the contract the emitter is
+        // held to.
         Bool SubDataNamesABuffer(const MGPSubData& record) {
             return record.Target == kMGPipeResourceTargetBuffer;
+        }
+
+        // THE VALUE SPACE OF MGPSubData::Target, written down here because the record itself does
+        // not say it and package B is about to encode cube faces into the same field. It is
+        // PACKED (integrator ruling ID-12, the DV-3 seam): the LOW byte is the MGPipeResourceTarget
+        // that owns the storage and the HIGH byte is the TextureUploadTarget the upload names -
+        // which is what makes the packing necessary at all, since TextureUploadTarget::Texture1D
+        // is 0 and the bare enumerator would collide with Buffer. Both halves are therefore
+        // free to take any value their own enum defines and neither may be read without the mask.
+        //
+        // MGPipeTypes.h IS SUPPOSED TO OWN THE THREE HELPERS (MGPipePackSubDataTarget /
+        // MGPipeSubDataResourceTargetOf / MGPipeSubDataUploadTargetOf, contract commit c0c);
+        // they are NOT on this package's base (feat/disaggregated = c0 + c0b), so this is the
+        // local decode and it is one line to retire the day c0c lands. The applier still matches
+        // the WHOLE field for the buffer question above, exactly as ID-12 says it does.
+        Uint16 SubDataResourceTargetOf(const MGPSubData& record) {
+            return static_cast<Uint16>(record.Target & 0x00FFu);
         }
 
         // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are - and
@@ -785,9 +804,13 @@ namespace MobileGL::MG_Pipe {
         // buffer_subdata_resident differ only in which backend hook takes the bytes and in the
         // fact that one of them is allowed to be absent, so a second copy of this arithmetic
         // would be a second place to get it wrong.
-        void ApplyBufferWrite(const char* call, const MGPSubData& record, const void* bytes, Bool resident) {
+        // RETURNS THE ACCEPTANCE, for D-D5 step 1's reason: the emitter clears its own dirty
+        // state on the strength of this answer and neither refusal path is otherwise visible
+        // from the call site (a dead handle is a counted no-op, a corrupt record is a Fatal
+        // that deliberately moves no counter).
+        Bool ApplyBufferWrite(const char* call, const MGPSubData& record, const void* bytes, Bool resident) {
             MGPipeResourceRecord* stored = ResolveResource(call, record.Res);
-            if (stored == nullptr) return;
+            if (stored == nullptr) return false;
 
             const Uint64 offset = MGPipeSubDataBufferOffset(record);
             const Uint64 size = MGPipeSubDataBufferSize(record);
@@ -803,7 +826,7 @@ namespace MobileGL::MG_Pipe {
                                      call, record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
                                      fault, static_cast<unsigned long long>(offset),
                                      static_cast<unsigned long long>(size), stored->Desc.Width);
-                return;
+                return false;
             }
             PinNoLiveHostWrites(*stored, record.Res, call);
 
@@ -813,7 +836,12 @@ namespace MobileGL::MG_Pipe {
             // draw would re-upload what it had just landed.
             ++stored->Serial;
 
-            if (g_resourceOps == nullptr) return;
+            // THE RANGE IS LANDED FROM HERE ON, so every path below returns true: whether a
+            // backend table is registered, and whether it implements the optional resident
+            // hook, is a property of the BUILD and not of the record. An emitter that read
+            // "not accepted" off an unregistered table would keep re-sending a write the
+            // applier has already taken responsibility for.
+            if (g_resourceOps == nullptr) return true;
             if (resident) {
                 // kOptional, and the frontend already checks the same way for the table this
                 // one replaces: a backend that does not implement the resident path leaves the
@@ -821,9 +849,10 @@ namespace MobileGL::MG_Pipe {
                 if (g_resourceOps->SubDataResident != nullptr) {
                     g_resourceOps->SubDataResident(record.Res, record, bytes);
                 }
-                return;
+                return true;
             }
             if (g_resourceOps->SubData != nullptr) g_resourceOps->SubData(record.Res, record, bytes);
+            return true;
         }
 
         // The texture half of resource_subdata, and it DISPATCHES TO NOBODY. Nothing in this
@@ -831,10 +860,10 @@ namespace MobileGL::MG_Pipe {
         // and Espryt uploads it at its own sync point, out of the accumulated set below. So the
         // whole of this function is the gate, the accumulation and the serial - which is also
         // why MGPipeResourceOps did not have to grow a member for it.
-        void ApplyTextureUpload(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
+        Bool ApplyTextureUpload(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
             MGPipeResourceRecord* stored =
                 ResolveResourceIn(g_applier.TextureResources, "resource_subdata", record.Res);
-            if (stored == nullptr) return;
+            if (stored == nullptr) return false;
 
             const char* fault = SubDataTextureFault(record, regions);
             // A whole-level upload declares no regions and a non-empty box; a record that
@@ -854,7 +883,7 @@ namespace MobileGL::MG_Pipe {
                                      record.Target, record.Level, record.UnionBox.X, record.UnionBox.Y,
                                      record.UnionBox.Z, record.UnionBox.W, record.UnionBox.H,
                                      record.UnionBox.D, record.RegionCount);
-                return;
+                return false;
             }
             if (!AccumulatePendingUpload(*stored, record, regions)) {
                 MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
@@ -863,14 +892,16 @@ namespace MobileGL::MG_Pipe {
                                      "have (%u)",
                                      record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
                                      kMGPipeMaxPendingUploads);
-                return;
+                return false;
             }
             // The serial moves for the buffer half's reason: the twin stamps its own synced
             // serial from inside the sync that reads this record, so a bump afterwards would
             // leave it one mutation behind and the next draw would re-upload what it had just
             // landed. The ACCEPTANCE is what the client reads to clear its own dirty flag - the
-            // record was accumulated, so the texels are the server's now.
+            // record was accumulated, so the texels are the server's now, and that is the true
+            // this returns.
             ++stored->Serial;
+            return true;
         }
 
         // ----------------------------------------------------------------------------
@@ -1455,7 +1486,8 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
-    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes) {
+    void MGPipeApplyResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
+                                      const MGPRespecifiedLevel* level) {
         Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
         if (table == nullptr) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
@@ -1475,14 +1507,38 @@ namespace MobileGL::MG_Pipe {
         record->Desc = desc;
         ++record->Serial;
 
-        // A RESPECIFY REDEFINES THE STORE, SO THE PENDING UPLOADS AGAINST THE OLD ONE GO WITH
-        // IT. They are boxes and rects in a level's coordinate system, and the level that space
-        // belonged to has just been replaced - a box kept across a shrink would have Espryt
-        // upload past the end of the new level. Nothing is lost by it: the frontend entry
-        // points that respecify a texture re-mark the levels they define
-        // (AllocateStorage then MarkStorageDirty), so what is still owed is re-emitted against
-        // the storage that now exists. A buffer never has one, so this is inert for P3a's half.
-        record->PendingUploads.clear();
+        // A RESPECIFY REDEFINES A STORE, SO THE PENDING UPLOADS AGAINST THE STORE IT REPLACES
+        // GO WITH IT - AND ONLY THOSE. They are boxes and rects in a level's coordinate system
+        // and that space has just been replaced, so a box kept across a shrink would have
+        // Espryt upload past the end of the new level. But WHICH storage a respecify replaces
+        // is the call's to say and the descriptor's to say nothing about:
+        //
+        //   - `level == nullptr` is a WHOLE-RESOURCE redefinition - every glBufferData /
+        //     glBufferStorage, every glTexStorage* (which defines every level at once), every
+        //     texture view - and every key goes.
+        //   - a non-null `level` is ONE glTexImage*D on a mutable texture, which redefines that
+        //     (uploadTarget, level) AND NOTHING ELSE. Dropping the other keys here would lose
+        //     texels the client no longer owes: MG_State's AllocateStorage / MarkStorageDirty
+        //     are per (uploadTarget, level) too, so the re-mark this call causes covers ITS
+        //     level only, while every other level's dirty flag was cleared at its own emission
+        //     (D-D5 step 1). The canonical sequence that loses them is glTexImage2D(0, data) ->
+        //     draw (the shape is emitted and accumulated; Espryt bails because the texture is
+        //     not yet mipmap-complete, Managers.cpp's incomplete-texture early return, which is
+        //     the arm this set exists for) -> glTexImage2D(1, data), which under a blanket
+        //     clear destroys level 0's entry before anything ever uploaded it.
+        //
+        // A buffer never has a pending upload at all, so both arms are inert for P3a's half.
+        if (level == nullptr) {
+            record->PendingUploads.clear();
+        } else {
+            // The keys are unique by AccumulatePendingUpload's construction - it looks for the
+            // pair before it appends - so this erases at most one entry and stops.
+            for (auto it = record->PendingUploads.begin(); it != record->PendingUploads.end(); ++it) {
+                if (it->UploadTarget != level->UploadTarget || it->Level != level->Level) continue;
+                record->PendingUploads.erase(it);
+                break;
+            }
+        }
 
         // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half
         // of that flag is MGPipeResourceRespecifyNeedsAck(desc): glBufferStorage is a real
@@ -1499,7 +1555,7 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
-    void MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
+    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
                                     const MGPSubRegion* regions) {
         // ONE CALL, TWO HALVES, and the branch is one comparison. For a buffer the applier
         // stores NOTHING per record - the contents are the backend's, and the range is the
@@ -1509,10 +1565,27 @@ namespace MobileGL::MG_Pipe {
         if (SubDataNamesABuffer(record)) {
             MOBILEGL_ASSERT(regions == nullptr,
                             "resource_subdata: the buffer half declares no sub-regions and carries none");
-            ApplyBufferWrite("resource_subdata", record, bytes, /*resident=*/false);
-            return;
+            return ApplyBufferWrite("resource_subdata", record, bytes, /*resident=*/false);
         }
-        ApplyTextureUpload(record, bytes, regions);
+        // AND THE TEXTURE HALF IS NOT "EVERYTHING ELSE". The table selector's own argument -
+        // acting on the wrong table would have this applier act outside the storage the record
+        // names - is exactly the argument for refusing a resource-target half that names no
+        // texture, and Renderbuffer is the reachable one: it is enumerator 10 and therefore a
+        // perfectly well-formed MGPSubData::Target, so without this a renderbuffer record would
+        // accumulate a pending upload onto whatever TEXTURE holds slot N in the texture slot
+        // space. Renderbuffers have no sub-data path at all, so no correct client can produce
+        // one and this is a protocol fault rather than a dropped call.
+        const Uint16 resourceTarget = SubDataResourceTargetOf(record);
+        if (resourceTarget == kMGPipeResourceTargetBuffer ||
+            resourceTarget == static_cast<Uint16>(MGPipeResourceTarget::Renderbuffer) ||
+            resourceTarget >= static_cast<Uint16>(MGPipeResourceTarget::Count)) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " resource_subdata {slot=%u, gen=%u}: the record's resource target names "
+                                 "no texture to upload into (target=%u, resource target=%u)",
+                                 record.Res.Slot, record.Res.Gen, record.Target, resourceTarget);
+            return false;
+        }
+        return ApplyTextureUpload(record, bytes, regions);
     }
 
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes) {
