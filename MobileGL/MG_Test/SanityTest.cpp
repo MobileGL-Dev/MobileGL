@@ -3129,6 +3129,170 @@ TEST(DirectGLESTextureSync, UnitMemoRefusesToDriveATwinFromAnotherTexture) {
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
 }
 
+namespace {
+    // What glTexParameteri actually reached the driver, and which backend texture was bound
+    // when it did. The G9 probe below is a WHITE-BOX assertion (ID-19): the parameter push is
+    // not observable through public GL without creating the very sampler view whose absence is
+    // the subject, so the observation is taken at the driver boundary instead.
+    struct TexParamCall {
+        GLuint texture;
+        GLenum pname;
+        GLint value;
+    };
+    MobileGL::Vector<TexParamCall>* g_texParamCalls = nullptr;
+    GLuint g_texParamBoundTexture = 0;
+
+    void TP_BindTexture(GLenum, GLuint texture) { g_texParamBoundTexture = texture; }
+    void TP_ActiveTexture(GLenum) {}
+    void TP_TexParameteri(GLenum, GLenum pname, GLint value) {
+        if (g_texParamCalls) {
+            g_texParamCalls->push_back({g_texParamBoundTexture, pname, value});
+        }
+    }
+    void TP_TexParameterf(GLenum, GLenum, GLfloat) {}
+    void TP_TexParameterfv(GLenum, GLenum, const GLfloat*) {}
+    void TP_PixelStorei(GLenum, GLint) {}
+    void TP_BindBuffer(GLenum, GLuint) {}
+
+    struct ScopedTexParamRecording {
+        explicit ScopedTexParamRecording(MobileGL::Vector<TexParamCall>& sink) {
+            g_texParamCalls = &sink;
+            g_texParamBoundTexture = 0;
+        }
+        ~ScopedTexParamRecording() { g_texParamCalls = nullptr; }
+        ScopedTexParamRecording(const ScopedTexParamRecording&) = delete;
+        ScopedTexParamRecording& operator=(const ScopedTexParamRecording&) = delete;
+    };
+} // namespace
+
+// G9 AS A WHITE-BOX ASSERTION (gates review R1, ID-19), AND IT COVERS THE HALF THE PUBLIC-GL
+// SCENARIO CANNOT.
+//
+// TextureParamsWithoutASamplerViewScenario catches "the parameters were EMITTED and marked
+// synced but never applied": its observation is a sample, the sample creates the sampler view,
+// and IsDrawSyncClean then skips the sync. What it cannot catch is a backend that merely DEFERS
+// the apply to the first sampler view - the observation creates that view, the parameters land
+// at that moment, and the case is green. Here the reading is taken while the texture is still
+// attachment-only: nothing is ever bound to a unit, no sampler view is minted, and the
+// assertion is that the parameter reached the driver ANYWAY.
+//
+// RED ON THE PRE-P4a BEHAVIOUR: with set_texture_params addressed by resource, this twin's
+// parameter push no longer needs anything to be bound. A backend that reinstated the deferral -
+// resolving the params through a sampler view, or gating the push on a unit binding - leaves
+// the recording empty and this case fails, which is exactly the regression the scenario's
+// self-repair hides.
+TEST(DirectGLESTextureSync, AnAttachmentOnlyTexturesParametersReachTheDriverWithNoSamplerView) {
+    using namespace MobileGL;
+    ScopedDirectGLESTextureBindings scoped; // fresh GLContext + registry + binding caches
+    Vector<TexParamCall> params;
+    ScopedTexParamRecording recording(params);
+
+    auto functions = MG_Backend::DirectGLES::g_GLESFuncs;
+    functions.glBindTexture = TP_BindTexture;
+    functions.glActiveTexture = TP_ActiveTexture;
+    functions.glTexParameteri = TP_TexParameteri;
+    functions.glTexParameterf = TP_TexParameterf;
+    functions.glTexParameterfv = TP_TexParameterfv;
+    functions.glPixelStorei = TP_PixelStorei;
+    functions.glBindBuffer = TP_BindBuffer;
+    MG_Backend::DirectGLES::SetGLESFuncsTable(functions);
+
+    GLuint name = 0;
+    MG_Impl::GLImpl::GenTextures(1, &name);
+    const auto texture = MakeComplete2DTexture(name, 8);
+    ASSERT_NE(texture, nullptr);
+    // ATTACHMENT-ONLY from here on: the unit that specified it is released, so nothing in this
+    // test ever binds this texture for sampling and nothing mints a sampler view for it.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+
+    // The parameter that has to travel. Red -> Green is not any texture's default, so a driver
+    // that never hears about it is distinguishable from one that does.
+    texture->SetSwizzleParam(TextureSwizzleParam::Red, TextureSwizzleParam::Green);
+
+    auto& registry = MG_Backend::DirectGLES::TextureImpl::g_backendTextureObjects;
+    auto& twin = registry.GetOrCreate(texture);
+    if (!twin) {
+        twin = MakeShared<MG_Backend::DirectGLES::TextureImpl::BackendTextureObject>();
+    }
+    ASSERT_NE(twin, nullptr);
+
+#if MOBILEGL_PIPE_PUSH
+    const MG_Pipe::MGPipeHandle res = registry.HandleOf(texture.get());
+    MG_Pipe::MGPipeHandle builtinSampler = MG_Pipe::kMGPipeNullHandle;
+    if (MG_Backend::DirectGLES::TextureResourceSubsystemEnabled()) {
+        // The handle arm reads the applier, so the applier is what this probe writes - which is
+        // also what makes it a white-box test rather than a scenario: no client emitter exists
+        // on this tree, and the point is Espryt's behaviour given a record, not the client's.
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(res));
+        MG_Pipe::MGPResourceDesc desc{};
+        desc.Resource = res;
+        desc.Target = static_cast<Uint8>(MG_Pipe::MGPipeResourceTarget::Tex2D);
+        desc.StorageKind = static_cast<Uint8>(TextureStorageType::Mipmap);
+        desc.InternalFormat = static_cast<Uint32>(TextureInternalFormat::RGBA8);
+        desc.Width = 8;
+        desc.Height = 8;
+        desc.Depth = 1;
+        desc.ArrayLayers = 1;
+        desc.Levels = 1;
+        EXPECT_TRUE(MG_Pipe::MGPipeApplyResourceCreate(desc));
+
+        // Every ITextureObject owns a sampler object, so the built-in sampler CSO is not
+        // optional (a null one is Fatal{ProtocolCorruption} in the applier). It is a SAMPLER
+        // CSO and not a sampler VIEW - the distinction this case exists for.
+        auto samplerOwner = MakeShared<MG_State::GLState::SamplerObject>(0u);
+        builtinSampler = MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::SamplerCso,
+                                                        samplerOwner->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(builtinSampler));
+        MG_Pipe::MGPSamplerDesc samplerDesc{};
+        samplerDesc.Cso = builtinSampler;
+        SamplerParameters samplerParams{};
+        MG_Pipe::MGPipeApplyCreateSamplerState(samplerDesc, &samplerParams);
+
+        MG_Pipe::MGPTextureParams pushed{};
+        pushed.Res = res;
+        pushed.BuiltinSampler = builtinSampler;
+        pushed.MaxLevel = 0;
+        pushed.Swizzle[0] = static_cast<Uint8>(TextureSwizzleParam::Green);
+        pushed.Swizzle[1] = static_cast<Uint8>(TextureSwizzleParam::Green);
+        pushed.Swizzle[2] = static_cast<Uint8>(TextureSwizzleParam::Blue);
+        pushed.Swizzle[3] = static_cast<Uint8>(TextureSwizzleParam::Alpha);
+        MG_Pipe::MGPipeApplySetTextureParams(pushed);
+
+        // THE OBSERVATION IS TAKEN WHILE THE TEXTURE IS STILL ATTACHMENT-ONLY: no sampler view
+        // record exists, and no sampler-view twin does either. This is the assertion the public
+        // scenario cannot make, because making it there would create the view.
+        EXPECT_EQ(MG_Backend::DirectGLES::SamplerViewImpl::g_backendSamplerViews.FindByHandle(
+                      MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::SamplerViewCso,
+                                                              texture->GetLifetimeId())),
+                  nullptr)
+            << "a sampler view was minted for a texture nothing sampled";
+    }
+#endif
+
+    const SizeT before = params.size();
+    twin->SyncTextureParamsToBackend(texture);
+
+    Bool sawSwizzleR = false;
+    for (SizeT i = before; i < params.size(); ++i) {
+        if (params[i].pname == GL_TEXTURE_SWIZZLE_R) {
+            sawSwizzleR = true;
+            EXPECT_EQ(params[i].value, static_cast<GLint>(GL_GREEN))
+                << "the swizzle reached the driver with the wrong value";
+        }
+    }
+    EXPECT_TRUE(sawSwizzleR)
+        << "an attachment-only texture's GL_TEXTURE_SWIZZLE_R never reached the driver: the "
+           "parameter push is gated on something being bound, which is the deferral G9's public "
+           "scenario cannot observe";
+
+#if MOBILEGL_PIPE_PUSH
+    if (!MG_Pipe::MGPipeHandleIsNull(builtinSampler)) {
+        MG_Pipe::MGPipeApplyDeleteSamplerState(MG_Pipe::MGPHandleOnly{builtinSampler});
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerCso, builtinSampler);
+    }
+#endif
+}
+
 TEST(DirectVulkanSanity, GraphicsSamplerFeedbackOnlyAliasesWritableOverlappingMip) {
     using MobileGL::MG_Backend::DirectVulkan::UniformManager;
 
@@ -4026,10 +4190,21 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
         // other handle-keyed table (SlotTables.h:301-321). Forward is a recycle; adopting a
         // backward one would retire the incumbent LIVE twin and then stamp the slot back to the
         // dead view's generation.
+        //
+        // m-8: THE FIRST ASSERTION BELOW CANNOT DISTINGUISH THE TWO OUTCOMES and its message
+        // must not claim it does. GetOrCreate(handle) calls entry.backend.reset() before it
+        // stamps, so an ADOPTED backward generation yields a null BackendPtr& just as a refused
+        // one does. What separates refusal from adoption is the SECOND assertion: after an
+        // adoption the live twin at `second` is gone. The first is kept because a non-null there
+        // would mean the table handed back the incumbent's own twin under the dead handle, which
+        // is a third outcome and a worse one.
         auto& stale = table.GetOrCreate(first);
-        EXPECT_EQ(stale, nullptr) << "SamplerViewCso: a generation BEHIND the live twin was adopted";
+        EXPECT_EQ(stale, nullptr)
+            << "SamplerViewCso: a stale handle was answered with the LIVE twin at its slot (this "
+               "assertion cannot tell a refusal from an adoption - the next one does)";
         EXPECT_NE(table.FindByHandle(second), nullptr)
-            << "SamplerViewCso: the live twin was destroyed by a handle from its slot's past";
+            << "SamplerViewCso: the live twin was destroyed by a handle from its slot's past - "
+               "the backward generation was ADOPTED rather than refused";
 
         table.ReleaseByHandle(second);
         MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, second);
@@ -4106,6 +4281,11 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         const char* name;
         MG_Pipe::MGPipeKind kind;
         Uint64 lifetimeId;
+        // m-9: the handle the object held before it died, so the ABA leg below can prove the
+        // slot came back AT A MOVED GENERATION. ID-8's third case ("a notice for a slot
+        // re-minted at a new generation") was covered for SamplerViewCso only; a double free
+        // skips a generation, and nothing here would have caught that for the other five.
+        MG_Pipe::MGPipeHandle handle;
     };
     Vector<KindCase> cases;
     {
@@ -4121,11 +4301,19 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         SamplerImpl::g_backendSamplerObjects.GetOrCreate(sampler);
         PrgramImpl::g_backendProgramObjects.GetOrCreate(program);
 
-        cases.push_back({"Texture", MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId()});
-        cases.push_back({"Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId()});
-        cases.push_back({"Framebuffer", MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId()});
-        cases.push_back({"SamplerCso", MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId()});
-        cases.push_back({"ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId()});
+        const auto handleFor = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+            return MG_Pipe::MGPipeSlots().FindByLifetimeId(kind, lifetimeId);
+        };
+        cases.push_back({"Texture", MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId())});
+        cases.push_back({"Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId())});
+        cases.push_back({"Framebuffer", MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId())});
+        cases.push_back({"SamplerCso", MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId())});
+        cases.push_back({"ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId(),
+                         handleFor(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId())});
 
         for (const auto& one : cases) {
             EXPECT_FALSE(MG_Pipe::MGPipeHandleIsNull(
@@ -4145,6 +4333,22 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
             MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
             << one.name << ": a redundant notice resurrected a mapping";
+
+        // m-9, THE ABA LEG: the slot really came back, and its generation MOVED. Two redundant
+        // notices plus the object's own death are three chances to free one slot twice, and a
+        // double free is invisible in every assertion above - it shows up here, as a successor
+        // handed the same {slot, gen} the dead object held, which is precisely the handle a
+        // surviving memo would still be naming.
+        auto successor = MakeShared<TextureObject2D>(0u);
+        const MG_Pipe::MGPipeHandle reused =
+            MG_Pipe::MGPipeSlots().Acquire(one.kind, successor->GetLifetimeId());
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(reused)) << one.name;
+        if (reused.Slot == one.handle.Slot) {
+            EXPECT_NE(reused.Gen, one.handle.Gen)
+                << one.name << ": the slot came back at the SAME generation, so a memo holding "
+                              "the dead object's handle would resolve to its successor's twin";
+        }
+        MG_Pipe::MGPipeSlots().Free(one.kind, reused);
     }
 }
 
