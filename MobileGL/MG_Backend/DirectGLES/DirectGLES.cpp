@@ -600,13 +600,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& st = MG_Pipe::MGPipeApplier();
             const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
             Uint64 elementsSerial = 0;
+            Bool haveElementsRecord = false;
             if (!MG_Pipe::MGPipeHandleIsNull(elements) && elements.Slot < st.VertexElementsCsos.size()) {
                 const auto& record = st.VertexElementsCsos[elements.Slot];
-                if (record.Live && record.Gen == elements.Gen) elementsSerial = record.ContentSerial;
+                if (record.Live && record.Gen == elements.Gen) {
+                    elementsSerial = record.ContentSerial;
+                    haveElementsRecord = true;
+                }
             }
             const Uint64 buffersSerial = st.VertexBuffersSerial;
 
-            if (memo && memo->valid && memo->elementsHandle == elements &&
+            // NO LIVE ELEMENTS RECORD IS A MISS, NEVER A HIT. With none, the key above is
+            // {null, 0, buffersSerial} - a key that describes no configuration at all and that
+            // NEVER CHANGES while the state stays that way, so a memo stamped with it would hit
+            // on every later draw of a VAO whose attributes have moved. That state is reachable:
+            // MGPipeApplierReset() empties VertexElementsCsos and BoundVertexElements at every
+            // change of the current context, and the client re-emits only at its next
+            // create/bind. The legacy arm's configuration version caught exactly this by moving.
+            const Bool memoKeyIsMeaningful = haveElementsRecord;
+
+            if (memo && memo->valid && memoKeyIsMeaningful && memo->elementsHandle == elements &&
                 memo->elementsSerial == elementsSerial && memo->buffersSerial == buffersSerial) {
                 if (memo->vboCleanEpoch != bufferEpoch) {
                     Bool allClean = true;
@@ -660,7 +673,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo->elementsHandle = elements;
                 memo->elementsSerial = elementsSerial;
                 memo->buffersSerial = buffersSerial;
-                memo->valid = true;
+                // Only a key that describes a real configuration is worth remembering; see
+                // memoKeyIsMeaningful above. The walk still ran and the buffers are ensured -
+                // this only refuses to let the NEXT draw skip it.
+                memo->valid = memoKeyIsMeaningful;
                 // Rebuilt via EnsureBufferResource, not probed clean: the next probe pass
                 // stamps the epoch.
                 memo->vboCleanEpoch = 0;

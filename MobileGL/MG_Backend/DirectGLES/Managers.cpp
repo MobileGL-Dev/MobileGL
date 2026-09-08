@@ -3971,6 +3971,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             const Uint64 currentBufferIdGeneration = BufferImpl::g_bufferBackendIdGeneration;
             const Bool bufferIdsRemitted = m_syncedBufferIdGeneration != currentBufferIdGeneration;
+            // THIS GATE DEPENDS ON A SERIAL RULE THAT LIVES IN ANOTHER PACKAGE, and it is named
+            // here because nothing else in this file would say it: MGPipeApplierReset() runs on
+            // EVERY change of the current GLContext (MG_Impl/Pipe/Tracker.h's `if (m_context !=
+            // &ctx) Reset();`, not only on a fresh one), while this twin SURVIVES the excursion -
+            // BackendVertexArrayObject has no context-generation member and
+            // OnBackendContextDestroyed runs on destroy, not on make-current. A reset that sent
+            // VertexBuffersSerial and IndexBufferSerial back to ZERO would therefore walk them
+            // back through values this twin has already stamped, and a memo could read clean over
+            // state the applier had just cleared. MG_Pipe/PipeApply.cpp's reset must ADVANCE
+            // those two serials instead (wire's C2), which is what makes
+            // m_syncedVertexBuffersSerial below unable to match after a reset - and that in turn
+            // forces the whole AND dirty, which is also what rescues the per-record ContentSerial
+            // half (an applier reset is not a slot recycle, so a re-created CSO at the same
+            // {slot, gen} restarts its ContentSerial at 1). If that rule is ever reverted, this
+            // gate is unsafe on any application that changes contexts.
             const Bool attributesDirty = bufferIdsRemitted || !m_hasSyncedElements ||
                                          !(m_syncedElementsHandle == st.BoundVertexElements) ||
                                          m_syncedElementsSerial != rec->ContentSerial ||
