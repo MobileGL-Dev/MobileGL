@@ -41,12 +41,19 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR, and it is 0 until the emitter below
-    // has a body. PipeFill.cpp ORs the four per-family constants into kMGPipeWiredSubsystems,
-    // so the bit is added by the commit that gives the emitters their bodies, with no file
-    // touched twice - and a Coverage.def row can never silently drop a field on the floor
-    // before the call that carries it exists.
-    inline constexpr Uint64 kMGPipeWiredFramebufferSubsystem = 0;
+    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR. PipeFill.cpp ORs the four per-family
+    // constants into kMGPipeWiredSubsystems, so the bit is added by the commit that gives the
+    // emitters their bodies, with no file touched twice - and a Coverage.def row can never
+    // silently drop a field on the floor before the call that carries it exists.
+    //
+    // TURNING IT ON RETIRES NO PULL. GetFramebufferBindingSlot is the family's one
+    // Coverage.def emitted row and PipeFill.cpp's EmittedCallSuppliesTheWholeField answers
+    // FALSE for it, with the reason: the field's storage is a BindingSlot<FramebufferObject> -
+    // a frontend heap reference - and the call that supplies it carries eight-byte {slot, gen}
+    // handles and a fully resolved descriptor. So this bit switches the EMISSION on and the
+    // residual fill keeps writing the mirror, which is what keeps the verify lane at zero
+    // divergence.
+    inline constexpr Uint64 kMGPipeWiredFramebufferSubsystem = kMGPipeSubsystemFramebuffer;
 
     inline Bool MGPipeFramebufferSubsystemEnabled() {
         return (kMGPipeWiredFramebufferSubsystem & kMGPipeSubsystemFramebuffer) != 0 &&

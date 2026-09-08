@@ -67,22 +67,61 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR, and it is 0 until the emitter below
-    // has a body. PipeFill.cpp ORs the four per-family constants into kMGPipeWiredSubsystems,
-    // so the bit is added by the commit that gives the emitters their bodies, with no file
-    // touched twice - and a Coverage.def row can never silently drop a field on the floor
-    // before the call that carries it exists.
+    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR. PipeFill.cpp ORs the four per-family
+    // constants into kMGPipeWiredSubsystems, so the bit is added by the commit that gives the
+    // emitters their bodies, with no file touched twice - and a Coverage.def row can never
+    // silently drop a field on the floor before the call that carries it exists.
+    //
+    // IT IS STILL 0, AND THAT IS A BLOCKED FLIP RATHER THAN AN UNFINISHED ONE. Unlike the other
+    // three P4a families, this one does not get four fresh apply entry points: the catalogue is
+    // closed and a texture rides P3a's OWN resource_create / resource_respecify /
+    // resource_subdata / resource_destroy rows. On a base without the wire package's `w1` those
+    // four have P3a's BUFFER bodies, and two of their properties make a texture record actively
+    // harmful rather than merely ignored:
+    //
+    //   * MGPipeApplierState::Resources is ONE vector indexed by SLOT (D-B2 makes it three, one
+    //     per resource kind). Buffer, Texture and Renderbuffer slot spaces are independent, so
+    //     a texture create at slot 12 OVERWRITES the buffer record at slot 12, and the next
+    //     write to that buffer is refused against the texture's extent - a dropped content
+    //     write with no diagnostic beyond the refusal counter;
+    //   * SubDataBoxFault validates every record as the buffer half of MGPSubData, so a texture
+    //     sub-data record is Fatal{ProtocolCorruption} on `record.Level != 0` alone (D-D4's
+    //     drain cases and TextureTest.GetTexImageReadsALevelWhoseLowerLevelsWereNeverDefined
+    //     abort in a verify build, which is how this was found rather than argued).
+    //
+    // So the flip is `w1`'s to unblock and the integrator's to make, in the rebase of this
+    // branch onto the wire branch: change the 0 below to kMGPipeSubsystemTextureResources, and
+    // nothing else. The whole conversion is already gated by TextureEmit's cases, which arm the
+    // emitter directly (ArmForTest) and assert on the EMITTED records rather than on applier
+    // state - so the flip cannot land untested, and until it lands nothing this file builds
+    // reaches an applier that cannot hold it.
     inline constexpr Uint64 kMGPipeWiredTextureSubsystem = 0;
 
     // BOTH HALVES MATTER, exactly as MGPipeResourceSubsystemEnabled()'s two do. The bit is the
-    // operator's per-subsystem A/B; the constant above is "has the client's texture family been
-    // given a body in this build at all". There is no third half - no MGPipeResourceOps member
-    // and no backend op table (D-B1: every P4a call is an object record or working state the
-    // applier stores, and none of them dispatches to a backend function pointer) - which is
-    // what makes the A/B a pure configuration question rather than a bring-up-order one.
-    inline Bool MGPipeTextureSubsystemEnabled() {
-        return (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0 &&
-               (MG_Config::Features.PipePush & kMGPipeSubsystemTextureResources) != 0;
+    // operator's per-subsystem A/B; the emitter's arm is "has this build's texture family been
+    // switched on at all", and it is initialised from the constant above. There is no third
+    // half - no MGPipeResourceOps member and no backend op table (D-B1: every P4a call is an
+    // object record or working state the applier stores, and none of them dispatches to a
+    // backend function pointer) - which is what makes the A/B a pure configuration question
+    // rather than a bring-up-order one.
+    inline Bool MGPipeTextureSubsystemEnabled();
+
+    // DO THE RECORDS THIS EMITTER BUILDS REACH THE APPLIER ON THIS BASE? It is the wired
+    // constant asked as a predicate, and it is a SECOND gate rather than the same one because
+    // the two questions really are different while the flip is blocked:
+    //
+    //   * the emitter's ARM decides whether the family runs at all - the handles, the sticky
+    //     bind mask, the descriptor dedupe, the drain list and the record construction;
+    //   * this decides whether the four resource_* records are handed to P3a's apply bodies,
+    //     which cannot hold them until the wire package's w1 gives them their Desc.Target
+    //     branch and their three per-kind vectors.
+    //
+    // set_texture_params is deliberately NOT behind it: MGPipeApplySetTextureParams is one of
+    // P4a's OWN fifteen entry points and is a stub at the contract tag, so a record handed to it
+    // is stored by nobody and refused by nobody. Sending it is what keeps that seam exercised
+    // rather than merely declared.
+    inline constexpr Bool MGPipeTextureRecordsReachTheApplier() {
+        return (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
     }
 
     // ---------------------------------------------------------------------------------
@@ -455,8 +494,8 @@ namespace MobileGL::MG_Pipe {
         }
         void NoteRenderbufferBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
-            EntryFor(m_renderbuffers, handle).BindMask = static_cast<Uint16>(
-                EntryFor(m_renderbuffers, handle).BindMask | bit);
+            Entry& entry = EntryFor(m_renderbuffers, handle);
+            entry.BindMask = static_cast<Uint16>(entry.BindMask | bit);
         }
         Uint16 TextureBindMask(MGPipeHandle handle) const { return MaskOf(m_textures, handle); }
         Uint16 RenderbufferBindMask(MGPipeHandle handle) const { return MaskOf(m_renderbuffers, handle); }
@@ -489,7 +528,7 @@ namespace MobileGL::MG_Pipe {
             entry.LastDesc = desc;
             entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/true);
-            MGPipeApplyResourceCreate(desc);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
         }
 
         // resource_create for a texture whose DERIVED object does not exist yet - the base
@@ -510,7 +549,7 @@ namespace MobileGL::MG_Pipe {
             entry.LastDesc = desc;
             entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/true);
-            MGPipeApplyResourceCreate(desc);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
         }
 
         // resource_respecify, from every storage-defining entry point. DEDUPED ON THE
@@ -565,7 +604,7 @@ namespace MobileGL::MG_Pipe {
                     bufOffset, bufSize);
                 entry.Published = true;
                 NoteDesc(createDesc, /*isCreate=*/true);
-                MGPipeApplyResourceCreate(createDesc);
+                if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(createDesc);
             }
             entry.LastDesc = desc;
             entry.HasLastDesc = true;
@@ -573,7 +612,7 @@ namespace MobileGL::MG_Pipe {
             // NO initial bytes: a texture's texels travel as resource_subdata out of the drain
             // list, never inside its storage definition. This is what keeps glTexImage2D's
             // "define the level and upload it" one allocation and one upload rather than two.
-            MGPipeApplyResourceRespecify(desc, nullptr);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceRespecify(desc, nullptr);
         }
 
         void EmitTextureParams(ITextureObject& texture) {
@@ -614,7 +653,7 @@ namespace MobileGL::MG_Pipe {
             entry.LastDesc = desc;
             entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/true);
-            MGPipeApplyResourceCreate(desc);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(desc);
         }
 
         // D-D2: THE RENDERBUFFER PUBLICATION HOLE, CLOSED BY EMISSION.
@@ -639,12 +678,12 @@ namespace MobileGL::MG_Pipe {
                     renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
                 entry.Published = true;
                 NoteDesc(createDesc, /*isCreate=*/true);
-                MGPipeApplyResourceCreate(createDesc);
+                if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceCreate(createDesc);
             }
             entry.LastDesc = desc;
             entry.HasLastDesc = true;
             NoteDesc(desc, /*isCreate=*/false);
-            MGPipeApplyResourceRespecify(desc, nullptr);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceRespecify(desc, nullptr);
         }
 
         // ---- the drain list (D-D4) ----
@@ -755,6 +794,18 @@ namespace MobileGL::MG_Pipe {
 
         void ResetCounters() { m_creates = m_respecifies = m_paramSets = m_subDatas = 0; }
 
+        // ---- the arm (see kMGPipeWiredTextureSubsystem) ----
+        //
+        // "Does this build's texture family emit at all", initialised from the wired constant.
+        // It is a RUNTIME latch and not a constant only because the flip is blocked on the wire
+        // package's `w1` while the conversion below is finished: a unit case arms it, drives a
+        // frontend mutation and asserts on the record the emitter built, so the conversion is
+        // gated by a test on a base whose applier could not yet hold that record. Once the
+        // constant is flipped this stays true for the life of the process and ArmForTest is
+        // redundant rather than wrong.
+        Bool Armed() const { return m_armed; }
+        void ArmForTest(Bool armed) { m_armed = armed; }
+
         // A unit fixture's per-case reset; the library never calls it. See
         // MGPipeResourceTracker::ResetForTest for the rule this restates: a texture handle and
         // the applier record it names are SHARE-GROUP OBJECT STATE, so nothing here is
@@ -768,6 +819,7 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc = MGPResourceDesc{};
             m_lastParams = MGPTextureParams{};
             m_lastSubData = MGPSubData{};
+            m_armed = (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
             ResetCounters();
         }
 
@@ -884,7 +936,9 @@ namespace MobileGL::MG_Pipe {
             m_lastSubData.Blob.Offset = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow));
             m_lastSubData.Blob.Size = 0;
 
-            MGPipeApplyResourceSubData(m_lastSubData, shadow);
+            if constexpr (MGPipeTextureRecordsReachTheApplier()) {
+                MGPipeApplyResourceSubData(m_lastSubData, shadow);
+            }
             ++m_subDatas;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ClientTextureUploadEmissions, 1);
@@ -911,6 +965,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_respecifies = 0;
         Uint64 m_paramSets = 0;
         Uint64 m_subDatas = 0;
+        Bool m_armed = (kMGPipeWiredTextureSubsystem & kMGPipeSubsystemTextureResources) != 0;
     };
 
     inline MGPipeTextureEmitter& MGPipeTextureEmitterInstance() {
@@ -920,6 +975,11 @@ namespace MobileGL::MG_Pipe {
         // destroyed emitter answers out of a freed Vector and the write grows it.
         static MGPipeTextureEmitter* emitter = new MGPipeTextureEmitter();
         return *emitter;
+    }
+
+    inline Bool MGPipeTextureSubsystemEnabled() {
+        return MGPipeTextureEmitterInstance().Armed() &&
+               (MG_Config::Features.PipePush & kMGPipeSubsystemTextureResources) != 0;
     }
 
     // ---------------------------------------------------------------------------------
@@ -1004,7 +1064,7 @@ namespace MobileGL::MG_Pipe {
         MGPHandleOnly only{};
         only.Handle = handle;
         only.Kind = static_cast<Uint32>(MGPipeKind::Texture);
-        MGPipeApplyResourceDestroy(only);
+        if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceDestroy(only);
         emitter.NoteTextureRecordDestroyed(handle);
         return true;
     }
@@ -1016,7 +1076,7 @@ namespace MobileGL::MG_Pipe {
         MGPHandleOnly only{};
         only.Handle = handle;
         only.Kind = static_cast<Uint32>(MGPipeKind::Renderbuffer);
-        MGPipeApplyResourceDestroy(only);
+        if constexpr (MGPipeTextureRecordsReachTheApplier()) MGPipeApplyResourceDestroy(only);
         emitter.NoteRenderbufferRecordDestroyed(handle);
         return true;
     }
