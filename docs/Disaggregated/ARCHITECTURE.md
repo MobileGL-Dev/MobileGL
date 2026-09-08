@@ -62,6 +62,8 @@
 
 CSO 在 client 侧内容寻址（Mesa `cso_cache` 先例）：每类一张 `ska::flat_hash_map<xxHash, MGPipeHandle>`，容量上限 render-state 64 / vertex-elements 1024 / sampler 256 / sampler-view 4096 / shader 跟随 `ProgramObject` 生命周期，LRU 淘汰时发 `delete_*`。两个不同 program 设置了相同状态时 server 零状态转换。
 
+**[deviation] D-G1（P3a 落地）：vertex-elements CSO 在 P3a 是身份寻址，不是内容寻址。** Espryt 根本没有 vertex-elements CSO，它有的是**逐 VAO 的 twin**（`BackendVertexArrayObject`，`MobileGL/MG_Backend/DirectGLES/Managers.h:957-1163`），twin 持有一个驱动 VAO 名（`:1096`）、32 个 client-array scratch buffer id（`:1097`）与 32 个 fp64 scratch id（`:1101`）；两个格式相同的前端 VAO 不能共享它，因为驱动 VAO 同时持有 element-array 绑定与逐属性缓冲绑定，共享 CSO 会把它们变成每次 `BindVertexElements` 都要重发——严格比今天更慢。所以 P3a 逐前端 `VertexArrayObject` 铸一个 `VertexElementsCso` 句柄（配置变化时**在同一句柄上重发** `CreateVertexElements`，`MGPipeHandle::Gen` 只在槽位复用时递增），**这是一个命中率恒为 1 的合法内容寻址缓存**。上面那张 1024 项的内容寻址表是 **P7** 的活——Magma 的 `VertexInputStateFactory` 接管 CSO 时，`VkPipelineVertexInputStateCreateInfo` 要的正是内容寻址；它加在 P3a 同一组 `CreateVertexElements`/`BindVertexElements`/`DeleteVertexElements` 与同一个 slot 分配器**之上**，P3a 的线上形状与 applier 记录都不妨碍它。
+
 ## 3. 调用目录（P0 已落地）
 
 ### 3.1 单一真相源
@@ -127,7 +129,7 @@ Flags：`kNeedsAck`（调用方等 server 确认；目录里目前无条目携�
 |---|---|---|
 | `MGPResourceDesc` | 88 | buffer / 全部纹理 target / renderbuffer 一个判别式 create/respecify 形状；`BindMask` 的 `ELEMENT_ARRAY` 位是索引镜像的开关；`ImageBindableHint` 预防性分配 image-bindable 存储；`ViewOf` 是纹理视图的存储属主（server 侧 keep-alive）；`BufferForTexBuffer/BufOffset/BufSize` 实时解析（`kMGPipeWholeBuffer = ~0`）。Renderbuffer 保持独立类（自己的 format-capability target、`ComponentSizes`、twin） |
 | `MGPRenderStateDesc` / `MGPBindRenderState` / `MGPDynamicState` | 48 / **12** / 32 | §5.3 |
-| `MGPVertexElements` | 40 | blob 同时带解析后的 `VertexAttribute[]` **和** `VertexBufferBindingPoint[]`，缺一不可（pointer 调用的 stride 0 = element size，binding 模型的 stride 0 = 每顶点读同一 element）；`IsLong` 与 `Type == Float64` 分开携带；仅供查询的 `LegacyStride/LegacyPointer` 留在 client |
+| `MGPVertexElements` | 40 | blob 同时带解析后的 `MGPVertexAttribWire[]` **和** `MGPVertexBindingPointWire[]`（P3a 落地的两个 POD 线上形，24 B / 16 B，`MobileGL/MG_Pipe/MGPipeValueTypes.h:568-600`）。**两个视图都过线的理由是记录自洽，不是 stride 消歧**：前端已经把 pointer 调用的 stride 0 解析成 element size，一个活到 `VertexAttribute::Stride` 的 0 只可能来自 binding 模型（`MobileGL/MG_Pipe/MGPipeValueTypes.h:496-503`），后端从来不读 binding point（`MG_Backend` 里 `VertexBufferBindingPoint` / `GetAttributeBindingIndex` / `GetAttributeRelativeOffset` 零命中）；真正承重的是 `MGPVertexElements` **声明**了 `BindingPointCount`，一条不描述自己 blob 的记录会让 applier 的边界门永远无法收口。代价按配置变化付一次、不按 draw 付（blob 只搭 `CreateVertexElements`），裁掉第二个视图是 P13 的重调项。`IsLong` 与 `Type == Float64` 分开携带；`Divisor` 不在属性视图里（走 `MGPVertexBuffer::Divisor`）；仅供查询的 `LegacyStride/LegacyPointer` 留在 client |
 | `MGPSamplerDesc` | 32 | `SamplerParameters` 逐字节过线**含 `borderColorForm`**（三种 border color 表示永远都被数值填满，没有它后端无法在 `Iiv`/`fv` 或 `VkBorderColor` 家族间选择） |
 | `MGPSamplerView` / `MGPTextureParams` | 36 / 32 | view 只带视图限制（min/num level、min/num layer、别名格式）；纹理参数（base/max level、swizzle、depth-stencil mode、LOD 钳、`ForceResync`）挂在纹理对象上 |
 | `MGPProgramDesc` | 192 | 逐 stage SPIR-V blob ×6 + 反射归档 blob + `StageMask`/`GlobalUboSize`/`ReservedNumSamplesOffset` + 四个状态字节，§7 |
@@ -281,7 +283,7 @@ GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 samp
 | `OnLog(level, text)` | ≤WARN 有损，≥ERROR 无损 + 速率限制 |
 | `OnXfbScatterReady(scratch, packedStride, vertices)` | §8.5 |
 
-95 个写回点的其余归属：`MarkStorageDirty` 大多是 server 本地记账（零消息）；后端凭空造的前端对象（Magma 占位纹理、swapchain default-FB 占位）→ server 原生；`SetBackendResource` 删除（server 拥有资源表）；`SetBackendStateMemo`（前端 VAO 里存后端堆裸指针）直接删除；`SetBackendHashMemo/AuxMemo` → server 侧 per-slot 字段。20 处 `SyncPersistentMappedRange` + 6 处 `SyncGpuWrites` 按 §5.7 逐站点归属，其中至少一处消费者搬不走：Magma 的 `ResolveUniformBufferPayload` 把具名 UBO 打进自己的 UBO ring → `SetShaderBuffers` 的 host payload（D-B8）。
+95 个写回点的其余归属：`MarkStorageDirty` 大多是 server 本地记账（零消息）；后端凭空造的前端对象（Magma 占位纹理、swapchain default-FB 占位）→ server 原生；`SetBackendResource` 删除（server 拥有资源表）——**[deviation] D-K（P3a）：P3a 并没有删它**。`PipeResource::m_backend`、`SetBackendResource`、`ReleaseBackend`、`BackendBufferResource` 在 push 下只是**不再被写**（buffer twin 已经搬进第七张 slot 表，§9.5），真删掉会移动 pull 构建里 `sizeof(BufferObject)`，那是直接的 G1 破坏；这组删除随 pull 路径在 **P13** 退役。`SetBackendStateMemo`（前端 VAO 里存后端堆裸指针）直接删除；`SetBackendHashMemo/AuxMemo` → server 侧 per-slot 字段。20 处 `SyncPersistentMappedRange` + 6 处 `SyncGpuWrites` 按 §5.7 逐站点归属，其中至少一处消费者搬不走：Magma 的 `ResolveUniformBufferPayload` 把具名 UBO 打进自己的 UBO ring → `SetShaderBuffers` 的 host payload（D-B8）。
 
 ### 8.2 有序性是正确性要求
 
@@ -290,7 +292,7 @@ GL 是每 unit 每 target 各一个绑定；shader 看见哪一个取决于 samp
 ### 8.3 错误、ack 与日志
 
 - 纹理分配的 OOM 在 monolith 里就已推迟到 sync 时刻（`glTexImage*`/`glTexStorage*` 只 `MarkStorageDirty`，Espryt 惰性分配；连 `glRenderbufferStorage*` 也在 `SyncToBackend` 里惰性做），拆分不改变可观察行为，这批不同步 ack。
-- **唯一允许同步 ack 的入口是 `glBufferStorage`（真同步分配）**。`glRenderbufferStorage*` 不 ack：41 个 trace fixture 里 OOM 探测惯用法出现 0 次（9 次调用散在 5 个 fixture，无一在 3 个调用内跟 `glGetError`；语料里的成功性检查是 `glCheckFramebufferStatus`，client 本地作答）。目录里目前没有条目携带 `kNeedsAck`（`ResourceRespecify` 是 `kNone`），标记随 P3a 的 buffer 路径落地。
+- **唯一允许同步 ack 的入口是 `glBufferStorage`（真同步分配）**。`glRenderbufferStorage*` 不 ack：41 个 trace fixture 里 OOM 探测惯用法出现 0 次（9 次调用散在 5 个 fixture，无一在 3 个调用内跟 `glGetError`；语料里的成功性检查是 `glCheckFramebufferStatus`，client 本地作答）。**P3a 起 `ResourceRespecify` 携带 `kNeedsAck`，并且带一个逐记录谓词**：flag 是**逐调用**的静态属性，而 `ResourceRespecify` 同时服务 `glBufferData` 与 `glBufferStorage`，裸 flag 会把 Minecraft 的整块 chunk 上传变成每 store 一次往返。所以真正拍板的是 `MGPipeResourceRespecifyNeedsAck(desc) == (desc.Immutable != 0)`（`MobileGL/MG_Pipe/MGPipeTypes.h:680`），`PipeCalls.def:18-24` 的图例把这条规则写在目录里（调用行 `:82`），`MG_Test/Pipe/PipeCatalogueTest.cpp:552-585` 的 `ResourceRespecifyAcksOnlyImmutableStorage` 对两种惯用法各钉一次。monolith 下 ack 是 `((void)0)`（applier 只隔一次函数调用），P5 把门铃接到这个谓词上。
 - 其余错误一律晚到，走有序的 `OnGlError`。
 - `OnLog` 分级：≤WARN 有损（覆盖最旧 + `eventDropped` 计数）；≥ERROR 无损，加入触发 `eventRingFull` + 停止 apply 的语义事件集；每秒 ERROR 速率限制器，超限发一条 "N errors suppressed"；`MGLOG_E_ONCE` 的 latch 变 per-server。理由：后端 link 失败只以一行 ERROR 呈现，统一有损会让最有诊断价值的那一行在日志压力下消失。
 
@@ -365,6 +367,12 @@ Track V 的 55% 不需要逐字段接口条目就能跑起来，所以 P2 发一
 ### 9.6 A/B 与口径收窄
 
 `MOBILEGL_PIPE_PUSH` 子系统位图（含一位关闭 CSO 内容寻址，负面对照）在阶段 B 是真正的旧-vs-新 A/B；阶段 C 之后不是——位清零时 `SnapshotFromGLContext()` 仍要合成句柄，后端仍跑重键后的 memo 代码，一个重键 bug 两臂都在。对策：**编译期** `MOBILEGL_PIPE_LEGACY_MEMOS`（默认 ON）在 P3a/P4a 期间保留 registry / `TwinLookupMemo` 实现活在同一个 `PipeInputs` 接口之下，随 pull 路径在 P13 退役（各阶段 +1 天维护）。
+
+**P3a 的臂，逐项点名**（两个子系统的 arm 判定在 `MobileGL/MG_Backend/DirectGLES/Managers.cpp:2292`（resources，位 7）与 `:2312`（vertex input，位 8），逐进程各打一行 `MGLOG_D`）：
+
+- **buffer 家族的 pre-handle 臂是 `Ops_*` 表加 `g_glesBufferBackendOps`，它们无条件编译**，不在 `MOBILEGL_PIPE_LEGACY_MEMOS` 之下——所以位 7 单独清零永远有一条真臂可跑，`NoArm` 对这个家族不可达（`Managers.cpp:2294-2298` 把这句写在代码里）。前端的十一处分发点（`MobileGL/MG_State/GLState/BufferState/BufferObject.cpp:45`、`:71`、`:87`、`:103`、`:237`、`:375`、`:438`、`:450`、`:493`、`:602`、`:656`）按 `MGPipeResourceSubsystemEnabled()` 二选一。
+- **VAO twin 的前端读取臂是有条件的**：pre-handle 的 `SyncToBackend` 本体与它读的那组 memo（`m_syncedIndexBufferVersion` / `m_syncedIndexBufferObject` / `m_hasSyncedConfigVersion` / `m_syncedConfigVersion` / `m_syncedAttributeVersions`）都在 `MOBILEGL_PIPE_LEGACY_MEMOS` 里（`MobileGL/MG_Backend/DirectGLES/Managers.h:1109-1130`）。位 8 清零 + `LEGACY_MEMOS=0` 是**没有任何 vertex-input 臂**的配置，`Managers.cpp:2343-2351` 明确报 `PipeLegacyMemosDisabled` 而不是静默。位 8 还要求位 7（属性的缓冲 id 经资源 slot 表解析），`0x17f` 会点名拒绝并回落到 legacy 臂。
+- **base-instance 的 ambient 作用域同在其中**：`SetPendingFetchBaseInstance` / `GetPendingFetchBaseInstance` / `ScopedFetchBaseInstance` 与 `DirectGLES.cpp:5293` 的三个 scope（`Managers.h:1189-1200`）。句柄臂改由 `MGPipeApplierState::VertexFetchBaseInstance` 供给，但这三个声明**不能删**：删掉会从 pull 构建移走两个符号（G1）。
 
 P13：删 `SnapshotFromGLContext()` 的非 verify 分支、`MGB_CTX`、`MOBILEGL_PIPE_PUSH`、`MOBILEGL_PIPE_LEGACY_MEMOS`；**保留 `MOBILEGL_PIPE_VERIFY` 连同它需要的 `SnapshotFromGLContext()` 与 `MG_State` include**（D-B5，verify 构建永不出货）；三道纯度门在非 verify 构建上转绿。
 
@@ -473,6 +481,8 @@ server 没有第二份 `BufferObject`，所以不存在"staging → server 侧 s
 | T1 — server 导出自己的映射 | `VK_KHR_external_memory_fd` opaque fd，client `mmap` + 导入 | 只有 Adreno 的 Vulkan 路径可用；Adreno 的 GLES 导入 `glMapBufferRange` 全部 `GL_INVALID_OPERATION`；Mali 不可导出。**每次存储定义一次 round trip**（不是每 store 一次），`StorageBufferRegrowScenario` 发布 `map-persistent-roundtrips` |
 | T3 — host pointer 导入（`VK_EXT_external_memory_host`） | | Adreno 无扩展；Mali 只读（GPU 写对宿主映射不可见） |
 | T2 — 拒绝（永久正确回退） | `AcquirePersistentMap` 返回 `nullptr`，前端已在三处容忍 | 此档下 client 侧推送强制 |
+
+**`map-persistent-roundtrips`（`mpr`）的定义，P3a 拍板并落地**：它数的是**每一次 `MapPersistent` 发射，铸成还是拒绝都算**（`MobileGL/MG_Impl/Pipe/PipeFill.cpp:736`，client 侧发射器，`CallClass::MapPersistentRoundtrips`，`MobileGL/MG_Util/Metrics/PipeStats.h:126`，摘要行印 `mpr=`）。理由是 `ROADMAP.md:7` 的"每个门必须能因它存在的理由变红"：定义成"真正发生的往返次数"在 monolith 下按构造恒为 0，永远红不了。按"每次获取尝试"计数则两种模式下**数字相同**，恰好等于上表 T1 那句"每次存储定义一次 round trip"，在 monolith 下就非零、就可断言，而一个改成逐 draw 获取的回归立刻现形。门是 `StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw`（`MobileGL/MG_IntegrationTest/Scenarios/StorageBufferRegrowScenario.cpp:255`）与 `LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip`（`MobileGL/MG_IntegrationTest/Scenarios/LargeArenaAdoptionScenario.cpp:450`）。
 
 `MOBILEGL_IPC_ADOPT_TIER`（`auto`/0/1/2）做负面对照；与 `MOBILEGL_IPC_RESPAWN` 互斥（被采纳的 store 是 server 拥有的内存）。
 
@@ -585,7 +595,7 @@ CMake：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `MOBILEGL_PIPE_PUSH` | pull 构建 `0`；**push 构建 `0x7f`**（`kMGPipeSubsystemsMigratedAtP2`，`MobileGL/ConfigLoader.cpp:254`） | 子系统位图，十进制或 `0x`；位按 ROADMAP 顺序分配、永不复用（`MobileGL/MG_Pipe/MGPipe.h:72-85`）：`0x01` 渲染状态、`0x02` pixel pack、`0x04` patch state、`0x08` vertex attrib defaults、`0x10` residual values、`0x20` Espryt slots（Track H）、`0x40` Magma vertex input（Track H）；位 7..62 留给后续阶段。**位 63 不是子系统而是行为**：`kMGPipeBehaviourNoCsoContentAddressing` 关掉 client 侧 CSO 内容寻址（每次 pipeline 版本变化都铸新 CSO、永不探测 map），即 P2 的负面对照。`0` = 全 pull，但 P2 之后只有在 `MOBILEGL_PIPE_LEGACY_MEMOS` 编进了 pre-handle 臂时才是有效对照 |
+| `MOBILEGL_PIPE_PUSH` | pull 构建 `0`；**push 构建 `0x1ff`**（`kMGPipeSubsystemsMigratedAtP3a`，`MobileGL/MG_Pipe/MGPipe.h:95`，读入点 `MobileGL/ConfigLoader.cpp:257`；P2 的默认是 `0x7f` = `kMGPipeSubsystemsMigratedAtP2`，`MGPipe.h:94`，保留作分阶段对照） | 子系统位图，十进制或 `0x`；位按 ROADMAP 顺序分配、永不复用（`MobileGL/MG_Pipe/MGPipe.h:72-95`）：`0x01` 渲染状态、`0x02` pixel pack、`0x04` patch state、`0x08` vertex attrib defaults、`0x10` residual values、`0x20` Espryt slots（Track H）、`0x40` Magma vertex input（Track H）、**`0x80` 位 7 resources（P3a：`resource_*` 家族，`kMGPipeSubsystemResources`，`MGPipe.h:84`）**、**`0x100` 位 8 vertex input（P3a：vertex elements / vertex buffers / index buffer，`kMGPipeSubsystemVertexInput`，`MGPipe.h:85`）**；位 9..62 留给后续阶段。**位 8 依赖位 7**：属性的缓冲 id 经资源 slot 表解析，只有位 7 填那张表，所以 `0x17f` 会打一行 ERROR 点名拒绝位 8 并回落到 legacy vertex-input 臂（`MobileGL/MG_Backend/DirectGLES/Managers.cpp:2312`）。**位 63 不是子系统而是行为**：`kMGPipeBehaviourNoCsoContentAddressing`（`MGPipe.h:90`）关掉 client 侧 CSO 内容寻址（每次 pipeline 版本变化都铸新 CSO、永不探测 map），即 P2 的负面对照。`0` = 全 pull，但 P2 之后只有在 `MOBILEGL_PIPE_LEGACY_MEMOS` 编进了 pre-handle 臂时才是有效对照 |
 | `MOBILEGL_PIPE_HANDLE_ABA_CONTROL` | 0 | 负面对照 C（push 构建才有，`MobileGL/Config.h:360-371`）：故意打掉句柄身份，让 `HandleRecycle` 的 ABA 臂重现旧的 A-B-A 污染。它变绿即为控制失效 |
 | `MOBILEGL_PIPE_VERIFY` | 0 | 逐 draw 逐字段影子比对 |
 | `MOBILEGL_PIPE_STATS` | 0 | 边界计数器（§附 B） |
