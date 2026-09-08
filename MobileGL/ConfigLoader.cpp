@@ -8,8 +8,9 @@
 
 #include "Config.h"
 #if MOBILEGL_PIPE_PUSH
-// For kMGPipeSubsystemsMigratedAtP2, the push build's PipePush default. Push-only, so
-// the pull build's translation unit is unchanged.
+// For kMGPipeSubsystemsMigratedAtP3a, the push build's PipePush default (the P2 constant
+// beside it is the phase-by-phase control, not the default). Push-only, so the pull
+// build's translation unit is unchanged.
 #include <MG_Pipe/MGPipe.h>
 #endif
 

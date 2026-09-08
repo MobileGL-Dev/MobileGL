@@ -37,21 +37,34 @@
     /* Polymorphic over BufferTarget, and P3a SPLITS it - not by re-vendoring the   */  \
     /* inventory (the extractor lives in MobileGL-CS and still does not carry the   */  \
     /* target argument), but by supplying the target from the EMISSION SITE, which  */  \
-    /* knows it exactly. The split, target by target:                               */  \
-    /*   ArrayBuffer, and the per-attribute buffer of a VAO -> set_vertex_buffers   */  \
-    /*   ElementArrayBuffer                                 -> set_index_buffer     */  \
-    /*   DrawIndirectBuffer, ParameterBuffer                -> set_indirect_buffers */  \
-    /*   Uniform/ShaderStorage/AtomicCounter/TransformFeedback                      */  \
-    /*                                                      -> set_shader_buffers   */  \
-    /*   CopyRead/CopyWrite/PixelPack/PixelUnpack/Texture   -> still pulled: the    */  \
-    /*     transfer and pixel-store targets have no call of their own yet.          */  \
+    /* knows it exactly. The split, target by target, in BufferTarget's OWN         */  \
+    /* spelling (BufferObject.h:15-33) so the list cross-checks mechanically:       */  \
+    /*   Vertex, and the per-attribute buffer of a VAO     -> set_vertex_buffers    */  \
+    /*   Index                                             -> set_index_buffer      */  \
+    /*   DrawIndirect, Parameter                           -> set_indirect_buffers  */  \
+    /*   Uniform, ShaderStorage, AtomicCounter,                                     */  \
+    /*   TransformFeedback                                 -> set_shader_buffers    */  \
+    /*   CopyRead, CopyWrite, PixelPack, PixelUnpack,                               */  \
+    /*   Texture                                           -> still pulled: the     */  \
+    /*     transfer and pixel-store targets have no call of their own yet;          */  \
+    /*   DispatchIndirect                                  -> still pulled, and     */  \
+    /*     it is the one a reader most plausibly assumes set_indirect_buffers       */  \
+    /*     covers: BOTH backends read it (SyncBoundBuffer at every                  */  \
+    /*     glDispatchComputeIndirect) and NO call carries it - MGPIndirectBuffers   */  \
+    /*     is the DrawIndirect + Parameter pair only - so the field stays the       */  \
+    /*     fill loop's for this target;                                             */  \
+    /*   Query                                             -> still pulled: no      */  \
+    /*     backend reads it at all and no call names it.                            */  \
+    /* That is 15 of 15; a target missing from this list is a target a later        */  \
+    /* phase would retire the pull for on the strength of a split that never        */  \
+    /* covered it.                                                                  */  \
     /* THE ROW STAYS ONE ROW, and that is structural rather than a shortcut: this   */  \
     /* list IS the MGPipeInputField enum and the PipeInputs field set, and the      */  \
     /* field is ONE array (m_bufferBindingSlot[kBufferTargetCount]) that a second   */  \
     /* row of the same name could only duplicate. So the split lives here and in    */  \
     /* the emitters, and the row keeps naming set_indirect_buffers for the plan's   */  \
     /* explicit replacement of the DrawIndirect/Parameter pair. It is deliberately  */  \
-    /* NOT in the EMITTED list below: five targets above are still pulled, and a    */  \
+    /* NOT in the EMITTED list below: seven targets above are still pulled, and a   */  \
     /* row there says "the whole field is supplied", which for this field would be  */  \
     /* the same half-truth GetPixelStoreParameters is kept out for.                 */  \
     X(GetBufferBindingSlot,                     SetIndirectBuffers)      \
@@ -184,9 +197,9 @@
 // rather than silently by this row's presence.
 #define MGP_COVERAGE_EMITTED_LIST(X)                                     \
     X(GetBlendColor,                            SetDynamicState)         \
-    X(GetBoundVertexArray,                      BindVertexElements)      \
     X(GetBlendEquationIndexed,                  CreateRenderState)       \
     X(GetBlendFuncIndexed,                      CreateRenderState)       \
+    X(GetBoundVertexArray,                      BindVertexElements)      \
     X(GetClampReadColor,                        SetDynamicState)         \
     X(GetClearColor,                            SetDynamicState)         \
     X(GetClearDepth,                            SetDynamicState)         \
