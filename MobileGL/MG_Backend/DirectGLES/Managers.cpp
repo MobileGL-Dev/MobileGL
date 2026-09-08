@@ -1846,6 +1846,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (resource->id != 0 && CanTouchGLNow() &&
                         resource->contextGeneration == g_bufferContextGeneration) {
                         NoteBufferIdDeleted(resource->id);
+                        // Frontend VAO bindings survive respecification; force their
+                        // backend twins to bind the replacement buffer name. (dev@d7655247,
+                        // carried into this arm as well: the handle arm duplicates the
+                        // immediate retire path, so a fix that lands in only one of the two
+                        // leaves the bug alive on whichever arm the operator selects.)
+                        ++g_bufferBackendIdGeneration;
                         g_GLESFuncs.glDeleteBuffers(1, &resource->id);
                         resource->id = 0;
                         resource->immutableStorage = false;
