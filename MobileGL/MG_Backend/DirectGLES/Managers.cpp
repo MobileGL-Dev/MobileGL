@@ -8212,11 +8212,105 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
+#if MOBILEGL_PIPE_PUSH
+        const MG_Pipe::MGPFramebufferState* PushedFramebufferRecord(FramebufferTarget asTarget,
+                                                                    MG_Pipe::MGPipeHandle fbo) {
+            if (MG_Pipe::MGPipeHandleIsNull(fbo)) return nullptr;
+            const auto& applier = MG_Pipe::MGPipeApplier();
+            const MG_Pipe::MGPFramebufferState& record =
+                asTarget == FramebufferTarget::Read ? applier.ReadFramebuffer : applier.DrawFramebuffer;
+            // A record the client has never sent is all zeroes, whose Fbo is the null handle and
+            // therefore matches no twin. That is the same test as "is this record mine", so
+            // there is no second emptiness check to get out of step with it.
+            if (!(record.Fbo == fbo)) return nullptr;
+            return &record;
+        }
+
+        // The record's DrawBuffers[] is an ATTACHMENT INDEX with -1 for None (D-C1), which is
+        // what the frontend array holds for every framebuffer that has a twin. It deliberately
+        // cannot spell FrontLeft / FrontRight / BackLeft / BackRight: those are the DEFAULT
+        // framebuffer's own tokens, the default framebuffer has no BackendFramebufferObject at
+        // all (it is pDefaultFramebufferInfo->defaultFBO, which is why MGPipeHandles.h reserves
+        // {0,1} for it), and the legacy arm's branch for them says so in as many words - "shouldn't
+        // remap". So the conversion below is total for every object that reaches this twin, and
+        // the record's IsDefault is the thing a later phase would test if that ever changed.
+        static void DecodePushedDrawBuffers(const MG_Pipe::MGPFramebufferState& record,
+                                            FramebufferAttachmentType* out) {
+            for (Uint i = 0; i < MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS; ++i) {
+                const Int8 index = record.DrawBuffers[i];
+                out[i] = index < 0 ? FramebufferAttachmentType::None
+                                   : static_cast<FramebufferAttachmentType>(
+                                         static_cast<Int>(FramebufferAttachmentType::Color0) + index);
+            }
+        }
+#endif
+
         void BackendFramebufferObject::SyncReadBufferToBackend(
             const SharedPtr<MG_State::GLState::FramebufferObject>& stateFBOObject) {
             if (!stateFBOObject) {
                 return;
             }
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-C2): the READ buffer is answered from the RESOLVED read surface of the READ
+            // framebuffer's own record, which is what structurally closes the read-buffer
+            // shared-FBO defect class. The comment two lines below - "when this is reached from
+            // SyncCurrentFBO's 'same FBO as draw' skip path" - describes a hazard that becomes
+            // unrepresentable: the record says which target it is, and ReadSurface was resolved
+            // from the read framebuffer's own read buffer before it ever crossed.
+            //
+            // The record carries the resolved SURFACE and not an index, so the attachment POINT
+            // is recovered by matching it against Color[] - the one place both spellings sit
+            // side by side. An empty surface (Res == the null handle, which D-C1 makes the
+            // spelling of "no attachment" independently of Kind's numbering) is
+            // FramebufferAttachmentType::None, i.e. GL_NONE. A surface that matches no colour
+            // point cannot be a legal read buffer and is refused rather than guessed.
+            if (FramebufferSubsystemEnabled()) {
+                const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                const auto* record = PushedFramebufferRecord(FramebufferTarget::Read, fbo);
+                if (record == nullptr) {
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no read-target applier record on the "
+                                 "handle arm, so its read buffer cannot be pushed (handle {%u, %u})",
+                                 stateFBOObject->GetExternalIndex(), fbo.Slot, fbo.Gen);
+                    return;
+                }
+                FramebufferAttachmentType pushedReadBuf = FramebufferAttachmentType::None;
+                if (!MG_Pipe::MGPipeHandleIsNull(record->ReadSurface.Res)) {
+                    Bool matched = false;
+                    for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                        const auto& color = record->Color[i];
+                        if (color.Res == record->ReadSurface.Res && color.Level == record->ReadSurface.Level &&
+                            color.Layer == record->ReadSurface.Layer) {
+                            pushedReadBuf = static_cast<FramebufferAttachmentType>(
+                                static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        MGLOG_E_ONCE("MGPipe: framebuffer %u's resolved read surface {%u, %u} matches no "
+                                     "colour attachment of its own record - refusing to guess a read "
+                                     "buffer",
+                                     stateFBOObject->GetExternalIndex(), record->ReadSurface.Res.Slot,
+                                     record->ReadSurface.Res.Gen);
+                        return;
+                    }
+                }
+                if (pushedReadBuf == m_frontendReadBuffer) {
+                    return;
+                }
+                m_frontendReadBuffer = pushedReadBuf;
+
+                const GLenum glPushedReadBuffer = GetBackendAttachmentType(pushedReadBuf);
+                if (m_backendReadBuffer != glPushedReadBuffer) {
+                    m_backendReadBuffer = glPushedReadBuffer;
+                    // Still bound as READ first, for the reason the legacy arm gives below:
+                    // glReadBuffer targets whatever FBO is bound to GL_READ_FRAMEBUFFER.
+                    Bind(FramebufferTarget::Read);
+                    g_GLESFuncs.glReadBuffer(glPushedReadBuffer);
+                }
+                return;
+            }
+#endif
             auto frontendReadBuf = stateFBOObject->GetReadBuffer();
             if (frontendReadBuf == m_frontendReadBuffer) {
                 return;
@@ -8337,9 +8431,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum glFBOTarget = MG_Util::ConvertFramebufferTargetToGLEnum(asTarget);
             Bind(asTarget);
 
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-C2): the record for THIS bound target. The client emits one per bound
+            // target that moved, or one with Target = Both when the two bindings name the same
+            // object, so a record that reaches this twin always describes the target it is
+            // being synced as - and the "same FBO as draw" skip whose one surviving job was
+            // SyncReadBufferToBackend stops being a hazard, because the record says which
+            // target it is instead of the call site having to remember.
+            const MG_Pipe::MGPFramebufferState* pushedRecord = nullptr;
+            FramebufferObject::FramebufferAttachmentArray pushedDrawBuffers{};
+            if (FramebufferSubsystemEnabled()) {
+                // MONOLITH GLUE, named as such: the Framebuffer handle of an object this backend
+                // still arrives holding. A framebuffer has a handle but NO wire lifetime (D-I2) -
+                // there is no framebuffer create or destroy in the catalogue and none is invented
+                // - so the handle exists purely to key set_framebuffer_state, which is exactly
+                // what it is used for here.
+                const MG_Pipe::MGPipeHandle fbo = g_backendFramebufferObjects.HandleOf(stateFBOObject.get());
+                pushedRecord = PushedFramebufferRecord(asTarget, fbo);
+                if (pushedRecord == nullptr) {
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u has no %s-target applier record on the handle "
+                                 "arm, so it cannot be synced from the pushed record (handle {%u, %u})",
+                                 stateFBOObject->GetExternalIndex(),
+                                 asTarget == FramebufferTarget::Draw ? "draw" : "read", fbo.Slot, fbo.Gen);
+                    return;
+                }
+                // The record's own Target has to agree with the binding it is being applied to.
+                // Both is legal for either; anything else means a record was written into the
+                // wrong applier slot, which is the mistake D-C2 exists to make visible rather
+                // than a call-site discipline nobody can check.
+                const Uint8 expected = asTarget == FramebufferTarget::Read
+                                           ? static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Read)
+                                           : static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Draw);
+                if (pushedRecord->Target != expected &&
+                    pushedRecord->Target != static_cast<Uint8>(MG_Pipe::MGPipeFramebufferTarget::Both)) {
+                    MGLOG_E_ONCE("MGPipe: framebuffer %u's record says Target=%u but it is being synced "
+                                 "as the %s target - refusing rather than applying it to the wrong "
+                                 "binding",
+                                 stateFBOObject->GetExternalIndex(), pushedRecord->Target,
+                                 asTarget == FramebufferTarget::Draw ? "draw" : "read");
+                    return;
+                }
+                DecodePushedDrawBuffers(*pushedRecord, pushedDrawBuffers.data());
+            }
+#endif
+
             // -------------------- Connect attachments (set buffers) -----------------------
             // 1. Remap draw buffers
+#if MOBILEGL_PIPE_PUSH
+            const FramebufferObject::FramebufferAttachmentArray& stateDrawBuffers =
+                pushedRecord != nullptr ? pushedDrawBuffers : stateFBOObject->GetDrawBuffers();
+#else
             auto& stateDrawBuffers = stateFBOObject->GetDrawBuffers();
+#endif
             Bool drawBufferClean = false;
             if (memcmp(m_frontendDrawBuffers, stateDrawBuffers.data(),
                        FramebufferObject::MAX_DRAW_BUFFERS * sizeof(FramebufferAttachmentType)) == 0) {
@@ -8439,6 +8582,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
                           static_cast<Uint16>(~0u));
                 m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
             }
+#if MOBILEGL_PIPE_PUSH
+            // P4a (D-C4): the record's ContentHash is what says this target's resolved state
+            // moved, and it REPLACES the frontend attachment versions AS A KEY. It covers every
+            // field the record carries, so an attachment set that moved, a draw-buffer array
+            // that moved, an extent that moved and a recycled Fbo whose successor happens to
+            // carry an identical attachment set are all one compare - and it moves in ONE place
+            // rather than in an array of 41 the twin had to walk.
+            //
+            // The re-arm is expressed through m_syncedFrontendAttachmentVersions rather than
+            // around it, so the attachment loop below is unchanged on both arms: a moved record
+            // arms every point and the loop then does exactly what it does today, including the
+            // empty-colour-point detach that keeps m_backendColorSlots a permutation of the
+            // PHYSICAL layout.
+            //
+            // OVER-FIRING IS FREE AND UNDER-FIRING IS FATAL, so the per-attachment versions stay
+            // as a second, narrower gate underneath: a frontend attachment that moved without
+            // the record moving still re-attaches. That direction is the safe one and it is the
+            // reason the array is re-armed rather than retired here; the array itself retires
+            // with the frontend attachment objects, which is E's SyncAttachmentObject work.
+            if (pushedRecord != nullptr && m_syncedRecordHashes[SizeT(asTarget)] != pushedRecord->ContentHash) {
+                std::fill(m_syncedFrontendAttachmentVersions.begin(), m_syncedFrontendAttachmentVersions.end(),
+                          static_cast<Uint16>(~0u));
+                m_syncedRecordHashes[SizeT(asTarget)] = pushedRecord->ContentHash;
+            }
+#endif
             const auto& attachments = stateFBOObject->GetAllAttachmentObjects();
             const auto& attachmentVersions = stateFBOObject->GetAllFramebufferAttachmentVersions();
             for (SizeT i = 0; i < attachments.size(); ++i) {
