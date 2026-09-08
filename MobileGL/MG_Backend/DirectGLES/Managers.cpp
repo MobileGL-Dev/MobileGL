@@ -3825,6 +3825,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+    Bool RearmPipeTextureLevelUpload(MG_Pipe::MGPipeHandle res, Uint16 packedTarget, Uint16 level,
+                                     const MG_Pipe::MGPBox& wholeLevel) {
+        // THE SERVER RE-DIRTYING THE CLIENT'S MODEL IS THE ONE DIRECTION D-D5's INVERSION DOES
+        // NOT COVER, and this is the server-side answer to it (esprytobj review M-1).
+        //
+        // D-D5 moves the rect model and the emission cursor to the CLIENT, which clears its own
+        // flags at emission - so on the handle arm IsStorageDirty is already false for every
+        // level the applier accepted, and the upload loop reads the applier's pending set
+        // instead. But three sites in this backend still write into the frontend dirty model,
+        // and the pending set cannot see them:
+        //
+        //   Managers.cpp  RequireImageBindableStorage  - re-dirties every defined level so the
+        //                 widened image carrier is replayed rather than allocated empty (LIVE,
+        //                 and it is this helper's only caller);
+        //   DirectGLES.cpp:7406  GenerateThreeChannelFloatMipmapOnCpu - same shape, milder
+        //                 outcome (package E's file; E's verification round calls this helper
+        //                 there, or states why not);
+        //   DirectGLES.cpp:6735  the CLEAR half (MarkStorageDirty(..., false)) after a
+        //                 glGetTexImage shadow refresh - it clears rather than dirties, so
+        //                 nothing is owed and there is nothing to re-arm.
+        //
+        // The alternative the review offered - OR the frontend flag back into the per-level
+        // question - was NOT taken: it would put two authorities back on the handle arm, and
+        // "the server never clears the client's flag" (D-D5) would then have to grow an
+        // exception for the levels the OR consumed. Re-arming the set keeps ONE authority; the
+        // consume path is unchanged and clears exactly what it uploaded.
+        //
+        // The entry is WHOLE-LEVEL and carries no regions (RegionCount 0 = "the union box is the
+        // whole story", D-D3), because a replay owes every texel of the level, and it MERGES
+        // with an entry the client already emitted rather than duplicating it - a whole-level
+        // box subsumes any scatter behind it. Returns false, loudly, when the set is at its
+        // bound: a dropped replay is the bug this exists to stop, so it must not be silent.
+        auto& applier = MG_Pipe::MGPipeApplier();
+        if (MG_Pipe::MGPipeHandleIsNull(res) || res.Slot >= applier.TextureResources.size()) return false;
+        auto& record = applier.TextureResources[res.Slot];
+        if (!record.Live || record.Gen != res.Gen) return false;
+        const Uint8 uploadHalf = MG_Pipe::MGPipeSubDataUploadTargetOf(packedTarget);
+        for (auto& pending : record.PendingUploads) {
+            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) != uploadHalf ||
+                pending.Level != level) {
+                continue;
+            }
+            pending.UnionBox = wholeLevel;
+            pending.Regions.clear();
+            return true;
+        }
+        if (record.PendingUploads.size() >= MG_Pipe::kMGPipeMaxPendingUploads) {
+            MGLOG_E_ONCE("MGPipe: texture handle {%u, %u} already holds the applier's %u pending "
+                         "uploads, so the server's own re-dirty of (uploadTarget=%u, level=%u) "
+                         "cannot be armed - that level will not be replayed",
+                         res.Slot, res.Gen, MG_Pipe::kMGPipeMaxPendingUploads, uploadHalf, level);
+            return false;
+        }
+        MG_Pipe::MGPipeResourceRecord::PendingUpload entry;
+        entry.UploadTarget = packedTarget;
+        entry.Level = level;
+        entry.UnionBox = wholeLevel;
+        record.PendingUploads.push_back(std::move(entry));
+        return true;
+    }
+
     namespace SamplerViewImpl {
         BackendSamplerViewTable g_backendSamplerViews;
 
@@ -5167,6 +5228,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             MG_Pipe::MGPipeUnmigratedEmulation("texture-remint-pull");
 #endif
+#if MOBILEGL_PIPE_PUSH
+            // P4a (review M-1): ON THE HANDLE ARM THE RE-DIRTY HAS TO REACH THE APPLIER'S SET,
+            // not only the frontend's model. The client cleared its own flags when it emitted
+            // those levels, so MarkStorageDirty below re-arms a model the handle arm does not
+            // read: the pending set would stay empty, MGB_LEVEL_NEEDS_UPLOAD would answer false
+            // for every level, and the widened image carrier this transition schedules would be
+            // allocated EMPTY - the very bug the paragraph above says "survived so long",
+            // re-introduced one arm over. The dispatch that triggered the bind would read zeroes.
+            //
+            // Both models are written, not one: the frontend's because the legacy arm reads it
+            // and because the client's own NoteLevelDirty hook rides on it, the applier's
+            // because that is what this arm consumes.
+            const MG_Pipe::MGPipeHandle rearmRes =
+                TextureResourceSubsystemEnabled() ? g_backendTextureObjects.HandleOf(stateTextureObject.get())
+                                                  : MG_Pipe::kMGPipeNullHandle;
+            const Uint32 rearmResourceTarget =
+                MG_Pipe::MGPipeResourceTargetForTextureTarget(stateTextureObject->GetTarget());
+            if (TextureResourceSubsystemEnabled() && MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
+                MGLOG_E_ONCE("MGPipe: texture %u needs image-bindable storage but has no handle on the "
+                             "handle arm, so the levels it owes cannot be re-armed in the applier's "
+                             "pending set - they would be allocated empty",
+                             stateTextureObject->GetExternalIndex());
+            }
+#endif
             if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
                 const auto levelCount = mipmapObject->GetMipmapLevelCount();
                 for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
@@ -5175,6 +5260,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
                         if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
                         mipmapObject->MarkStorageDirty(uploadTarget, level, true);
+#if MOBILEGL_PIPE_PUSH
+                        if (!MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
+                            const MG_Pipe::MGPBox wholeLevel{0,
+                                                             0,
+                                                             0,
+                                                             static_cast<Uint32>(levelTexelSize.x()),
+                                                             static_cast<Uint32>(levelTexelSize.y()),
+                                                             static_cast<Uint32>(std::max(levelTexelSize.z(), 1))};
+                            RearmPipeTextureLevelUpload(
+                                rearmRes,
+                                MG_Pipe::MGPipePackSubDataTarget(rearmResourceTarget,
+                                                                 static_cast<Uint32>(uploadTarget)),
+                                static_cast<Uint16>(level), wholeLevel);
+                        }
+#endif
                     }
                 }
             }
@@ -6113,6 +6213,57 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_LEVEL_UPLOAD_DONE(obj, tgt, lvl) (obj)->MarkStorageDirty(tgt, lvl, false)
 #endif
 
+        // THE STORAGE SHAPE, and on the handle arm it is the DESCRIPTOR's (C.3's d2: "the
+        // m_prevTextureInfo probe re-keyed onto the resource record's Serial AND Desc"; review
+        // M-2). v1 moved the parameters and the uploads and left the allocation reading the
+        // frontend object, which put TWO AUTHORITIES on one value inside one twin -
+        // SyncTextureParamsToBackend already answers MGB_TEXPARAM_FORMAT from
+        // Desc.InternalFormat while this function allocated from GetFormat(). In monolith they
+        // agree, so no lane can expose the split; under split the descriptor is all there is.
+        //
+        // WHAT THE DESCRIPTOR ANSWERS: internal format, base extent, level count, sample count,
+        // fixed sample locations, immutability, storage kind and the buffer-texture window. What
+        // it does NOT answer, and what still comes from the frontend shadow, is the PER-LEVEL
+        // extent and the level BYTES - MGPResourceDesc carries one base extent, the per-level
+        // sizes are derived from it, and the texels themselves ride on sub-data. A level the
+        // descriptor's Levels claims and the shadow has not defined reads back {0,0,0} and the
+        // per-level loops skip it, which is the same arm they take for a sparse chain today.
+        //
+        // MACROS, NOT LOCALS, FOR THE SAME REASON AS THE PAIR ABOVE (DV-9, and it was measured):
+        // routing these through locals resized SyncTextureParamsToBackend by +9 bytes in the
+        // PULL build and P4a's admitted-resize set is EMPTY. Each takes the object it would
+        // otherwise have been spelled on, so the pull expansion is the pre-P4a expression with
+        // one pair of parentheses around the receiver. All are #undef'd with the pair above.
+#if MOBILEGL_PIPE_PUSH
+#define MGB_STORAGE_FORMAT(obj)                                                                                        \
+    (pushedStorage != nullptr ? static_cast<TextureInternalFormat>(pushedStorage->Desc.InternalFormat)                  \
+                              : (obj)->GetFormat())
+#define MGB_STORAGE_BASE_SIZE(obj)                                                                                     \
+    (pushedStorage != nullptr ? IntVec3{static_cast<Int>(pushedStorage->Desc.Width),                                    \
+                                        static_cast<Int>(pushedStorage->Desc.Height),                                   \
+                                        static_cast<Int>(pushedStorage->Desc.Depth)}                                    \
+                              : (obj)->GetBaseSize())
+#define MGB_STORAGE_LEVELS(obj)                                                                                        \
+    (pushedStorage != nullptr ? static_cast<Uint>(pushedStorage->Desc.Levels) : (obj)->GetMipmapLevelCount())
+#define MGB_STORAGE_SAMPLES(obj)                                                                                       \
+    (pushedStorage != nullptr ? static_cast<Int>(pushedStorage->Desc.Samples) : (obj)->GetSamples())
+#define MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(obj)                                                                        \
+    (pushedStorage != nullptr ? pushedStorage->Desc.FixedSampleLocations != 0 : (obj)->HasFixedSampleLocations())
+#define MGB_STORAGE_IMMUTABLE(obj)                                                                                     \
+    (pushedStorage != nullptr ? pushedStorage->Desc.Immutable != 0 : (obj)->IsImmutable())
+#define MGB_STORAGE_KIND(obj)                                                                                          \
+    (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                        \
+                              : (obj)->GetStorageType())
+#else
+#define MGB_STORAGE_FORMAT(obj) ((obj)->GetFormat())
+#define MGB_STORAGE_BASE_SIZE(obj) ((obj)->GetBaseSize())
+#define MGB_STORAGE_LEVELS(obj) ((obj)->GetMipmapLevelCount())
+#define MGB_STORAGE_SAMPLES(obj) ((obj)->GetSamples())
+#define MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(obj) ((obj)->HasFixedSampleLocations())
+#define MGB_STORAGE_IMMUTABLE(obj) ((obj)->IsImmutable())
+#define MGB_STORAGE_KIND(obj) ((obj)->GetStorageType())
+#endif
+
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             if (!stateTextureObject) {
@@ -6156,6 +6307,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  stateTextureObject->GetExternalIndex(), pushedRes.Slot, pushedRes.Gen);
                     return;
                 }
+                // THE METADATA RESPECIFY, HONOURED (ID-18 M4, review M-2). BindMask and
+                // ImageBindableHint are STICKY facts the client discovers AFTER allocation - a
+                // texture first bound as a shader image - and an IMMUTABLE texture never has a
+                // later redefinition to carry them, so they arrive on a respecify that restates
+                // the storage the resource already has. The applier classifies such a record as a
+                // metadata update: no reallocation ack, no pending-upload clear, Serial moved.
+                // THE TWIN'S HALF IS TO RE-DERIVE ITS STORAGE FLAGS FROM THE NEW MASK AND
+                // RECREATE ONLY WHERE THE BACKEND NEEDS THE FLAG AT CREATION - and image
+                // bindability is exactly such a flag on this backend: the carrier may be channel-
+                // widened, which is a different allocation, not a different binding.
+                //
+                // RequireImageBindableStorage IS that path and it is idempotent, so this is the
+                // whole of the re-derivation: it sets the sticky flag, clears m_isInitialized so
+                // the storage below is regenerated, re-arms every defined level in BOTH dirty
+                // models (see its own comment) so the widened carrier is replayed rather than
+                // allocated empty, and forces the parameter resync the widening's swizzle needs.
+                // Arriving on the CREATE instead - the common case once B publishes the hint -
+                // costs nothing: m_isInitialized is already false and there are no levels to
+                // replay.
+                const Bool pushedWantsImageBindableStorage =
+                    pushedStorage->Desc.ImageBindableHint != 0 ||
+                    (pushedStorage->Desc.BindMask & MG_Pipe::kMGPipeBindShaderImage) != 0;
+                if (pushedWantsImageBindableStorage && !m_imageBindableStorageRequired) {
+                    RequireImageBindableStorage(stateTextureObject);
+                }
+
                 // ONE compare replaces the whole cheap-gate trio AND the content version. The
                 // applier bumps Serial on every respecify and every sub-data it applies to this
                 // resource, which is exactly the union those four keys covered - without the
@@ -6282,20 +6459,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
                 MGLOG_D("%s(%s:%d) ES error: %s", func, file, line, MG_Util::ConvertGLEnumToString(err).c_str());
             });
-            const auto baseSize = stateTextureObject->GetBaseSize();
-            StateTextureBasicInfo currentTextureInfo = {stateTextureObject->GetFormat(),
+            const auto baseSize = MGB_STORAGE_BASE_SIZE(stateTextureObject);
+            StateTextureBasicInfo currentTextureInfo = {MGB_STORAGE_FORMAT(stateTextureObject),
                                                         static_cast<SizeT>(baseSize.x()),
                                                         static_cast<SizeT>(baseSize.y()),
                                                         static_cast<SizeT>(baseSize.z()),
                                                         0,
                                                         0,
-                                                        stateTextureObject->GetSamples(),
-                                                        stateTextureObject->HasFixedSampleLocations()};
-            switch (stateTextureObject->GetStorageType()) {
+                                                        MGB_STORAGE_SAMPLES(stateTextureObject),
+                                                        MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(stateTextureObject)};
+            switch (MGB_STORAGE_KIND(stateTextureObject)) {
             case TextureStorageType::Mipmap: {
                 auto* textureMipmapObject =
                     static_cast<MG_State::GLState::TextureObjectMipmap*>(stateTextureObject.get());
-                const auto mipmapCount = textureMipmapObject->GetMipmapLevelCount();
+                const auto mipmapCount = MGB_STORAGE_LEVELS(textureMipmapObject);
                 currentTextureInfo.mipmapLevels = mipmapCount;
 
                 Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
@@ -6310,13 +6487,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // TextureImpl::GetImageBindableStorageWidening for what widens and why.
                 const TextureImpl::ImageBindableStorageWidening imageWidening =
                     m_imageBindableStorageRequired
-                        ? TextureImpl::GetImageBindableStorageWidening(textureMipmapObject->GetFormat())
+                        ? TextureImpl::GetImageBindableStorageWidening(MGB_STORAGE_FORMAT(textureMipmapObject))
                         : TextureImpl::ImageBindableStorageWidening{};
 
                 const Bool canAppendMipmaps =
                     m_isInitialized &&
                     !m_imageBindableStorageRequired &&
-                    !stateTextureObject->IsImmutable() &&
+                    !MGB_STORAGE_IMMUTABLE(stateTextureObject) &&
                     currentTextureInfo.internalFormat == m_prevTextureInfo.internalFormat &&
                     currentTextureInfo.width == m_prevTextureInfo.width &&
                     currentTextureInfo.height == m_prevTextureInfo.height &&
@@ -6329,14 +6506,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 MGLOG_D("%s: Got texture info: %dx%dx%d, mips %d, format %s", __func__, baseSize.x(), baseSize.y(),
                         baseSize.z(), mipmapCount,
-                        MG_Util::ConvertTextureInternalFormatToString(textureMipmapObject->GetFormat()).c_str());
+                        MG_Util::ConvertTextureInternalFormatToString(MGB_STORAGE_FORMAT(textureMipmapObject)).c_str());
 
                 if (canAppendMipmaps) {
                     MGLOG_D("Texture mip count increased for backend ID %u, appending levels %zu..%zu",
                             m_backendTextureId, m_prevTextureInfo.mipmapLevels, mipmapCount - 1);
 
                     GLenum glInternalFormat, glType, glFormat;
-                    TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
+                    TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureMipmapObject), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
 
                     const auto& uploadTargets = textureMipmapObject->GetUploadTargets();
@@ -6360,10 +6537,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             Vector<Float> convertedUploadData;
                             Vector<Uint8> widenedUploadData;
                             const void* uploadData = PrepareFallbackUpload(
-                                textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                MGB_STORAGE_FORMAT(textureMipmapObject), targetInternal, levelTexelSize, pData,
                                 levelByteSize, glType, convertedUploadData, widenedUploadData);
                             Vector<Uint8> packedUploadData;
-                            uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                            uploadData = PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), levelTexelSize,
                                                                  uploadData, levelByteSize, &glType, packedUploadData);
 
                             DebugImpl::ErrorLopper::Clear();
@@ -6416,7 +6593,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     // Regenerate all mipmap levels
                     GLenum glInternalFormat, glType, glFormat;
-                    TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
+                    TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureMipmapObject), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
                     ApplyImageBindableStorageWidening(imageWidening, &glInternalFormat, &glFormat, &glType);
 
@@ -6430,8 +6607,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // stateTextureObject keeps the requested count so GL_TEXTURE_SAMPLES and
                         // framebuffer completeness still report what the application asked for.
                         const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
-                            GetFormatCapabilityTargetIndex(targetInternal), textureMipmapObject->GetFormat(),
-                            glFormat, static_cast<Int>(stateTextureObject->GetSamples())));
+                            GetFormatCapabilityTargetIndex(targetInternal), MGB_STORAGE_FORMAT(textureMipmapObject),
+                            glFormat, static_cast<Int>(MGB_STORAGE_SAMPLES(stateTextureObject))));
                         // ES 3.1 8.19 requires width/height (and depth, for the array target) >= 1,
                         // so a degenerate size has nothing to allocate and must not reach the
                         // driver. The frontend deallocates such an image rather than defining it
@@ -6449,14 +6626,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 g_GLESFuncs.glTexStorage2DMultisample(
                                     target, backendSamples, glInternalFormat,
                                     static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                    MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(stateTextureObject) ? GL_TRUE : GL_FALSE);
                                 break;
                             case TextureTarget::Texture2DMultisampleArray:
                                 g_GLESFuncs.glTexStorage3DMultisample(
                                     target, backendSamples, glInternalFormat,
                                     static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
                                     static_cast<GLsizei>(baseSize.z()),
-                                    stateTextureObject->HasFixedSampleLocations() ? GL_TRUE : GL_FALSE);
+                                    MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(stateTextureObject) ? GL_TRUE : GL_FALSE);
                                 break;
                             default:
                                 MOBILEGL_ASSERT(false, "Unexpected multisample target: %d",
@@ -6482,7 +6659,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
                             }
                         }
-                    } else if (stateTextureObject->IsImmutable() || m_imageBindableStorageRequired) {
+                    } else if (MGB_STORAGE_IMMUTABLE(stateTextureObject) || m_imageBindableStorageRequired) {
                         DebugImpl::ErrorLopper::Clear();
                         BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
                         const IntVec3 storageSize = GetBackendUploadSize(targetInternal, baseSize);
@@ -6528,11 +6705,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     Vector<Float> convertedUploadData;
                                     Vector<Uint8> widenedUploadData;
                                     const void* uploadData = PrepareFallbackUpload(
-                                        textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                        MGB_STORAGE_FORMAT(textureMipmapObject), targetInternal, levelTexelSize, pData,
                                         levelByteSize, glType, convertedUploadData, widenedUploadData);
                                     Vector<Uint8> packedUploadData;
                                     uploadData =
-                                        PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                                        PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), levelTexelSize,
                                                                 uploadData, levelByteSize, &glType, packedUploadData);
                                     Vector<Uint8> imageWidenedUploadData;
                                     uploadData = PrepareImageWidenedUpload(imageWidening, levelTexelSize, uploadData,
@@ -6598,11 +6775,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 Vector<Float> convertedUploadData;
                                 Vector<Uint8> widenedUploadData;
                                 const void* uploadData = PrepareFallbackUpload(
-                                    textureMipmapObject->GetFormat(), targetInternal, levelTexelSize, pData,
+                                    MGB_STORAGE_FORMAT(textureMipmapObject), targetInternal, levelTexelSize, pData,
                                     levelByteSize, glType, convertedUploadData, widenedUploadData);
                                 Vector<Uint8> packedUploadData;
                                 uploadData =
-                                    PreparePackedNormUpload(textureMipmapObject->GetFormat(), levelTexelSize,
+                                    PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), levelTexelSize,
                                                             uploadData, levelByteSize, &glType, packedUploadData);
                                 MGLOG_D("%s: target: %s: syncing mip %d: %dx%dx%d, byteSize = %d, pData = %p, "
                                         "levelDirty = %s",
@@ -6672,9 +6849,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         break;
                     }
 
-                    const auto mipmapCount = textureMipmapObject->GetMipmapLevelCount();
+                    const auto mipmapCount = MGB_STORAGE_LEVELS(textureMipmapObject);
                     GLenum glInternalFormat, glType, glFormat;
-                    TextureImpl::GenerateTextureFormatInfo(textureMipmapObject->GetFormat(), &glInternalFormat,
+                    TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureMipmapObject), &glInternalFormat,
                                                            &glFormat, &glType, targetInternal);
                     // The storage this level is being written into was widened when it was minted
                     // (see above), so the transfer pair has to describe the carrier here too - ES
@@ -6714,10 +6891,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             Vector<Float> convertedUploadData;
                             Vector<Uint8> widenedUploadData;
                             const void* uploadData = PrepareFallbackUpload(
-                                textureMipmapObject->GetFormat(), targetInternal, texelSize, mipData, byteSize,
+                                MGB_STORAGE_FORMAT(textureMipmapObject), targetInternal, texelSize, mipData, byteSize,
                                 glType, convertedUploadData, widenedUploadData);
                             Vector<Uint8> packedUploadData;
-                            uploadData = PreparePackedNormUpload(textureMipmapObject->GetFormat(), texelSize,
+                            uploadData = PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), texelSize,
                                                                  uploadData, byteSize, &glType, packedUploadData);
                             // Leaves `uploadData` pointing at its own buffer when it fires, which
                             // is exactly what takes the sub-rect fast path below out of play: that
@@ -7088,13 +7265,45 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             stateTextureObject->GetExternalIndex());
                     return;
                 }
+#if MOBILEGL_PIPE_PUSH
+                // M-2: THE BUFFER-TEXTURE FIELDS ARE THE DESCRIPTOR'S TOO - BufferForTexBuffer
+                // names the backing store and BufOffset/BufSize name the window. The frontend
+                // binding slot above is still what hands over the BufferObject, because
+                // EnsureBufferResourceForHandle takes it as the one question P3a's record cannot
+                // answer (an emulated persistent map, D-A4's `frontend` argument) - but WHICH
+                // buffer, and which window of it, are read from the record.
+                MG_Pipe::MGPipeHandle pushedTexBuffer = MG_Pipe::kMGPipeNullHandle;
+                if (pushedStorage != nullptr) {
+                    pushedTexBuffer = pushedStorage->Desc.BufferForTexBuffer;
+                    if (MG_Pipe::MGPipeHandleIsNull(pushedTexBuffer)) {
+                        MGLOG_E_ONCE("MGPipe: buffer texture %u's descriptor names no backing buffer on "
+                                     "the handle arm, so it cannot be backed (handle {%u, %u})",
+                                     stateTextureObject->GetExternalIndex(), pushedRes.Slot, pushedRes.Gen);
+                        return;
+                    }
+                }
+#endif
                 auto bufferIndex = buffer->GetExternalIndex();
+#if MOBILEGL_PIPE_PUSH
+                // The memo key is the HANDLE's slot on the handle arm: a GL name is never an
+                // identity (section 4.2.1), and the record's Serial covers a slot recycled at a
+                // new generation because a respecify moves it.
+                currentTextureInfo.bufferExternalIndex =
+                    pushedStorage != nullptr ? static_cast<Uint>(pushedTexBuffer.Slot) : bufferIndex;
+#else
                 currentTextureInfo.bufferExternalIndex = bufferIndex;
+#endif
 
                 Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
 
                 // Need to sync texture buffer if not synced yet
+#if MOBILEGL_PIPE_PUSH
+                auto* backendBufferResource =
+                    pushedStorage != nullptr ? BufferImpl::EnsureBufferResourceForHandle(buffer, pushedTexBuffer)
+                                             : BufferImpl::EnsureBufferResource(buffer);
+#else
                 auto* backendBufferResource = BufferImpl::EnsureBufferResource(buffer);
+#endif
                 if (!backendBufferResource || backendBufferResource->id == 0) {
                     MGLOG_E_ONCE("Failed to sync backing buffer for texture buffer with ID: %u",
                             stateTextureObject->GetExternalIndex());
@@ -7105,7 +7314,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto backendId = backendBufferResource->id;
 
                 GLenum glInternalFormat, glType, glFormat;
-                TextureImpl::GenerateTextureFormatInfo(textureBufferObject->GetFormat(), &glInternalFormat, &glFormat,
+                TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureBufferObject), &glInternalFormat, &glFormat,
                                                        &glType, TextureTarget::TextureBuffer);
                 // The view half of the buffer-image SPLIT. A buffer texture has no storage of its
                 // own to widen, but the VIEW its format describes can be re-described one
@@ -7122,7 +7331,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // IMAGE binding needs the split, so only the image binding's name carries it.
                 const GLenum bufferImageSplitFormat =
                     m_imageBindableStorageRequired
-                        ? TextureImpl::GetImageBindableBufferSplitFormat(textureBufferObject->GetFormat())
+                        ? TextureImpl::GetImageBindableBufferSplitFormat(MGB_STORAGE_FORMAT(textureBufferObject))
                         : GL_UNKNOWN_MGL;
 
                 if (needsRegeneration) {
@@ -7157,8 +7366,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // whole-buffer forms report offset 0 and the buffer's current size, which
                     // glTexBuffer expresses more directly (and works where the range entry point
                     // is absent).
+#if MOBILEGL_PIPE_PUSH
+                    // The WINDOW is carried: MGPResourceDesc::BufOffset / BufSize, with
+                    // kMGPipeWholeBuffer (~0) meaning "the whole store, resolved live" - which is
+                    // why the whole-buffer arm still asks the BUFFER for its size. That is the
+                    // buffer family's own object (P3a's, not this record's), and resolving it
+                    // here is exactly what the sentinel is documented to mean.
+                    const SizeT rangeOffset = pushedStorage != nullptr
+                                                  ? static_cast<SizeT>(pushedStorage->Desc.BufOffset)
+                                                  : textureBufferObject->GetBufferRangeOffset();
+                    const SizeT rangeSize =
+                        pushedStorage == nullptr
+                            ? textureBufferObject->GetBufferRangeSizeInBytes()
+                            : (pushedStorage->Desc.BufSize == MG_Pipe::kMGPipeWholeBuffer
+                                   ? buffer->GetSize()
+                                   : static_cast<SizeT>(pushedStorage->Desc.BufSize));
+#else
                     const SizeT rangeOffset = textureBufferObject->GetBufferRangeOffset();
                     const SizeT rangeSize = textureBufferObject->GetBufferRangeSizeInBytes();
+#endif
                     // Through CallTexBuffer/CallTexBufferRange rather than g_GLESFuncs directly:
                     // the unsuffixed entry points are the ES 3.2 core spelling, and a driver
                     // whose buffer textures come from EXT/OES_texture_buffer exports the
@@ -7261,6 +7487,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 #undef MGB_LEVEL_NEEDS_UPLOAD
 #undef MGB_LEVEL_UPLOAD_DONE
+#undef MGB_STORAGE_FORMAT
+#undef MGB_STORAGE_BASE_SIZE
+#undef MGB_STORAGE_LEVELS
+#undef MGB_STORAGE_SAMPLES
+#undef MGB_STORAGE_FIXED_SAMPLE_LOCATIONS
+#undef MGB_STORAGE_IMMUTABLE
+#undef MGB_STORAGE_KIND
+#undef MGB_STORAGE_TEXBUFFER_HANDLE
+#undef MGB_STORAGE_TEXBUFFER_OFFSET
+#undef MGB_STORAGE_TEXBUFFER_SIZE
 
 #if MOBILEGL_PIPE_PUSH
         const SamplerParameters* BackendTextureObject::ResolvePushedBuiltinSampler(
