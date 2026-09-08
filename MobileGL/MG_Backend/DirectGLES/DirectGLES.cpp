@@ -4486,14 +4486,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Declines - falls through to the frontend walk - until the set has arrived, and the
         // COUNT says so rather than the serial (MGPipeApplierReset advances serials whether or
         // not anything was emitted).
+        // P4a decline-site S1: M - the mask says this family is not switched on; stays silent
+        //   at the verification round (becomes D's SamplerSubsystemEnabled()).
         if (EsprytDrawSamplerHandlesEnabled()) {
             const auto& st = MG_Pipe::MGPipeApplier();
+            // P4a decline-site S2: S - flips to loud-once-then-the-frontend-walk at the
+            //   verification round; a draw that touches units with no bind_sampler_states ever
+            //   received is a seam defect once bit 11 is on and C has landed.
             if (st.SamplerStateCount != 0) {
                 for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
                     const Uint32 index = static_cast<Uint32>(unit);
-                    // Outside the received window there is no answer to replay: the var-tail
-                    // window IS the bound, and entries outside it are not cleared.
+                    // P4a decline-site S3: the OUT-OF-WINDOW UNBIND (MAJOR-2, fixed here); no
+                    //   flip remains at the verification round, only the A8 measurement below.
+                    //
+                    // A UNIT THE RECORD DOES NOT DESCRIBE IS UNBOUND, NOT SKIPPED. The var-tail
+                    // window IS the bound for RECORD RETENTION - entries outside it are not
+                    // cleared in the applier - but this loop is not reading records, it is
+                    // writing DRIVER state, and for a driver binding "no record" means "no
+                    // sampler object", which is exactly what the pre-handle arm's
+                    // `else { UnbindSampler(unit); }` below says and why it was written: a
+                    // sampler object left on the unit by an earlier draw keeps being applied,
+                    // and on a multisample texture - which takes no sampler object at all - the
+                    // draw is rejected outright. `continue` here reintroduced that defect on
+                    // the new arm for every unit below SamplerStateStart or above the window,
+                    // which is the same smaller-window direction DEV-3 refused.
+                    //
+                    // A8 again: nothing in the contract pins the window to cover
+                    // [0, maxTouchedUnit]. If package C documents that it does, this branch
+                    // becomes unreachable and can be asserted rather than executed; until then
+                    // it is load-bearing, and the verification round measures
+                    // (SamplerStateStart, SamplerStateCount) against maxTouchedUnit to say so.
                     if (index < st.SamplerStateStart || index - st.SamplerStateStart >= st.SamplerStateCount) {
+                        SamplerImpl::UnbindSampler(unit);
                         continue;
                     }
                     const MG_Pipe::MGPipeHandle sampler = st.BoundSamplerStates[index];
@@ -4501,6 +4525,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         SamplerImpl::UnbindSampler(unit);
                         continue;
                     }
+                    // P4a decline-site S4: M - a live handle whose twin does not exist yet is
+                    //   left alone and deliberately NOT cached as a miss: the program pass
+                    //   creates the twin later in the same draw and its Bind moves the shadow
+                    //   row, which re-opens this memo. Parity with ResolveUnitSamplerBackend's
+                    //   null path; stays silent at the verification round.
                     if (auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(sampler);
                         slot && *slot) {
                         (*slot)->Bind(unit);
