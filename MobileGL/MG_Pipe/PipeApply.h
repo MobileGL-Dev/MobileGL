@@ -212,6 +212,14 @@ namespace MobileGL::MG_Pipe {
         // sampler view to hang its parameters on, and today the READ-attachment case reaches
         // no parameter push at all. ParamsSerial replaces the twin's
         // m_syncedTextureParamsVersion + m_forceTextureParamsResync pair.
+        //
+        // Params.BuiltinSampler MAY NAME A CSO WHOSE RECORD IS GONE. set_texture_params
+        // deliberately does not resolve it (the sampler CSO is content-addressed and shared,
+        // D-F1, and the ordering between the two families is the emitter's), and
+        // delete_sampler_state does not sweep the textures that name the CSO it drops. So a
+        // consumer that follows this handle must expect SamplerCsos[slot] to be dead or
+        // recycled and treat that as it treats any other stale handle - it is an ordering fact
+        // about the two emitters, not a corrupt record.
         MGPTextureParams Params{};
         Uint64 ParamsSerial = 0;
         // The SamplerViewCso minted for this texture (P4a D-F2: one per ITextureObject,
@@ -435,13 +443,20 @@ namespace MobileGL::MG_Pipe {
         // build. Per context, like the four render-state wire counters above.
         Uint64 RefusedResourceCalls = 0;
         Uint64 RefusedVertexInputCalls = 0;
-        // P4a's, in the same shape and for the same reason: every framebuffer, sampler,
-        // sampler-view, program and texture-params call this applier refused because it named
-        // a record this applier does not have. One counter rather than five, because the five
-        // families share one legal refusal sequence (teardown ->
-        // MGPipeApplierReleaseObjectRecords -> ~Object -> death notices naming records already
-        // dropped) and an operator reading a log wants to know that ANY object call was
-        // dropped; the log line names the call and the handle.
+        // P4a's, in the same shape and for the same reason: every sampler, sampler-view,
+        // program and texture-params call this applier refused because it named a record this
+        // applier does not have. One counter rather than four, because the families share one
+        // legal refusal sequence (teardown -> MGPipeApplierReleaseObjectRecords -> ~Object ->
+        // death notices naming records already dropped) and an operator reading a log wants to
+        // know that ANY object call was dropped; the log line names the call and the handle.
+        //
+        // set_framebuffer_state IS DELIBERATELY NOT ON THAT LIST AND CANNOT BE. D-I2 gives a
+        // framebuffer a handle and NO wire lifetime, so the call resolves no record - there is
+        // nothing to look up, nothing to find missing and therefore nothing to refuse - and
+        // MGPSurface::Res is likewise left unresolved on purpose (D-I3: the keep-alives are the
+        // frontend's SharedPtrs and enforcing them is a later phase's). Its only verdict is
+        // Fatal{ProtocolCorruption} on a malformed record, and this counter must stay at 0
+        // across every framebuffer call in every build.
         //
         // THE OTHER CLASS IS NOT COUNTED HERE AND MUST NOT BE: a var-tail window outside its
         // bound, or a set_texture_params whose BuiltinSampler is the null handle, would make
