@@ -221,32 +221,42 @@ TEST(FramebufferEmit, ADrawRecordAndAReadRecordAreKeptApartAndBothWritesBoth) {
     const Uint64 serialAtStart = MGPipeApplier().FramebufferSerial;
 
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Draw, 100));
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, (MGPipeHandle{4, 1}));
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Width, 100u);
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Color[0].InternalFormat, 0x8058u);
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.DrawBuffers[0], 0);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, kMGPipeNullHandle)
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{4, 1}));
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Color[0].InternalFormat, 0x8058u);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->DrawBuffers[0], 0);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr)
         << "a Draw record landed in the read binding as well";
     const Uint64 afterDraw = MGPipeApplier().FramebufferSerial;
     EXPECT_GT(afterDraw, serialAtStart) << "an applied record must move the serial the twin memoises";
 
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{5, 2}, MGPipeFramebufferTarget::Read, 200));
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, (MGPipeHandle{5, 2}));
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Width, 200u);
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, (MGPipeHandle{4, 1}))
-        << "a Read record overwrote the draw binding";
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Width, 100u);
+    ASSERT_NE(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Fbo, (MGPipeHandle{5, 2}));
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Width, 200u);
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr) << "a Read record overwrote the draw binding";
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{4, 1}));
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u);
     EXPECT_GT(MGPipeApplier().FramebufferSerial, afterDraw);
 
     // Both: one record, one serial bump, two destinations.
     const Uint64 beforeBoth = MGPipeApplier().FramebufferSerial;
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{6, 3}, MGPipeFramebufferTarget::Both, 300));
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, (MGPipeHandle{6, 3}));
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, (MGPipeHandle{6, 3}));
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Width, 300u);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Width, 300u);
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    ASSERT_NE(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{6, 3}));
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Fbo, (MGPipeHandle{6, 3}));
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 300u);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer()->Width, 300u);
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, beforeBoth + 1)
         << "a Both record is ONE record and moves the serial once";
+    // The two earlier framebuffers keep their own records - the table is keyed by the handle,
+    // so binding a third displaced neither (ID-19(b)).
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{4, 1}), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{4, 1})->Width, 100u);
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{5, 2}), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{5, 2})->Width, 200u);
 
     // A framebuffer has a handle but NO wire lifetime, so there is no record to refuse against
     // and this entry point never counts an object refusal.
@@ -254,22 +264,25 @@ TEST(FramebufferEmit, ADrawRecordAndAReadRecordAreKeptApartAndBothWritesBoth) {
 #endif
 }
 
-// A target outside the three is not a binding this server has, and guessing one would put a
-// draw's attachments into the read record or the other way round.
+// A target outside the FOUR is not a target this server has, and guessing one would put a
+// draw's attachments into the read binding or the other way round. Named (3) is legal since
+// ID-19(b) and has its own case below; the first refused value is the one above it.
 TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
 #if !MOBILEGL_PIPE_PUSH
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
 #else
     ApplierGuard guard;
     MGPFramebufferState bad = FramebufferRecord(MGPipeHandle{7, 4}, MGPipeFramebufferTarget::Draw, 100);
-    bad.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Count);
+    bad.Target = static_cast<Uint8>(kMGPipeFramebufferTargetNamed + 1);
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
 
-    ExpectRefusedNaming("set_framebuffer_state {slot=7, gen=4, target=3}: the record names no framebuffer "
+    ExpectRefusedNaming("set_framebuffer_state {slot=7, gen=4, target=4}: the record names no framebuffer "
                         "binding target",
                         [&bad]() { MGPipeApplySetFramebufferState(bad); });
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, kMGPipeNullHandle);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{7, 4}), nullptr)
+        << "a refused record was written into the per-object table anyway";
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore)
         << "a refused record must not move the serial";
 #endif
@@ -289,7 +302,8 @@ TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherTh
     MGPFramebufferState legal = FramebufferRecord(MGPipeHandle{8, 1}, MGPipeFramebufferTarget::Draw, 100);
     legal.DrawBuffers[7] = static_cast<Int8>(kMGPipeMaxColorAttachments - 1);
     MGPipeApplySetFramebufferState(legal);
-    ASSERT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, (MGPipeHandle{8, 1}));
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    ASSERT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, (MGPipeHandle{8, 1}));
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
 
     MGPFramebufferState past = FramebufferRecord(MGPipeHandle{8, 1}, MGPipeFramebufferTarget::Draw, 111);
@@ -304,15 +318,19 @@ TEST(FramebufferEmit, ADrawBufferEntryOutsideTheRecordsOwnArrayIsRefusedRatherTh
                         "colour attachment outside the record's own array",
                         [&negative]() { MGPipeApplySetFramebufferState(negative); });
 
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Width, 100u) << "a refused record was stored anyway";
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u) << "a refused record was stored anyway";
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore);
 #endif
 }
 
-// D-J4. The two framebuffer records are per-context WORKING state and a make-current takes
-// them - but their serial ADVANCES rather than restarting, because a counter that walks back
-// through values it has already stamped into a twin that outlived the switch is not a
-// generation at all. Restoring `= 0` anywhere in the reset leaves this red.
+// D-J4, as ID-19(b) leaves it. The two framebuffer BINDINGS are per-context working state and a
+// make-current takes them - so both accessors answer null afterwards, exactly as the zeroed
+// records used to answer a null Fbo - while the per-object RECORD survives, because a
+// framebuffer that is only ever addressed BY NAME has no re-emission trigger at all. The serial
+// ADVANCES rather than restarting, because a counter that walks back through values it has
+// already stamped into a twin that outlived the switch is not a generation at all. Restoring
+// `= 0` anywhere in the reset, or clearing the table there, leaves this red.
 TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherThanZeroingIt) {
 #if !MOBILEGL_PIPE_PUSH
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no applier in this build";
@@ -320,13 +338,18 @@ TEST(FramebufferEmit, AMakeCurrentClearsBothRecordsAndAdvancesTheSerialRatherTha
     ApplierGuard guard;
     MGPipeApplySetFramebufferState(FramebufferRecord(MGPipeHandle{4, 1}, MGPipeFramebufferTarget::Both, 100));
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
-    ASSERT_EQ(MGPipeApplier().DrawFramebuffer.Width, 100u);
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    ASSERT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u);
 
     MGPipeApplierReset(); // the make-current
 
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, kMGPipeNullHandle);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, kMGPipeNullHandle);
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Width, 0u);
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().BoundFramebuffer[0], kMGPipeNullHandle);
+    EXPECT_EQ(MGPipeApplier().BoundFramebuffer[1], kMGPipeNullHandle);
+    ASSERT_NE(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{4, 1}), nullptr)
+        << "the per-object record is not working state and a make-current may not take it";
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{4, 1})->Width, 100u);
     EXPECT_GT(MGPipeApplier().FramebufferSerial, serialBefore)
         << "the serial was carried over or restarted; the cleared window is itself a change the "
            "twin has to hear about, and no stamped value may ever recur";
@@ -369,7 +392,8 @@ TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatC
     image.InternalFormat = 0x8058u; // GL_RGBA8
     MGPipeApplySetShaderImages(MGPShaderImages{2, 1, 0xCCCCu}, &image);
 
-    ASSERT_EQ(MGPipeApplier().DrawFramebuffer.Color[0].Res, (MGPipeHandle{9, 1}));
+    ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
+    ASSERT_EQ(MGPipeApplier().DrawFramebuffer()->Color[0].Res, (MGPipeHandle{9, 1}));
     ASSERT_EQ(MGPipeApplier().SamplerViewCount, 1u);
     ASSERT_EQ(MGPipeApplier().BoundSamplerViews[2].View, (MGPipeHandle{3, 1}));
     ASSERT_EQ(MGPipeApplier().SamplerStateCount, 1u);
@@ -379,10 +403,12 @@ TEST(FramebufferEmit, AReleaseOfTheObjectRecordsAlsoClearsTheWorkingHandlesThatC
 
     MGPipeApplierReleaseObjectRecords();
 
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Fbo, kMGPipeNullHandle);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer.Fbo, kMGPipeNullHandle);
-    EXPECT_EQ(MGPipeApplier().DrawFramebuffer.Color[0].Res, kMGPipeNullHandle)
-        << "a surface handle into an emptied texture table survived the teardown";
+    EXPECT_EQ(MGPipeApplier().DrawFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{4, 1}), nullptr)
+        << "a framebuffer record holding eleven MGPSurface::Res into the emptied texture and "
+           "renderbuffer tables survived the teardown";
+    EXPECT_TRUE(MGPipeApplier().FramebufferRecords.empty());
     EXPECT_EQ(MGPipeApplier().SamplerViewStart, 0u);
     EXPECT_EQ(MGPipeApplier().SamplerViewCount, 0u);
     EXPECT_EQ(MGPipeApplier().BoundSamplerViews[2].View, kMGPipeNullHandle);

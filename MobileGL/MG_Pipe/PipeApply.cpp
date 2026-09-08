@@ -1110,11 +1110,18 @@ namespace MobileGL::MG_Pipe {
 
         // ---- P4a's working state, cleared for the same reason and with the same serial rule
         // (D-J4). The OBJECT records - texture and renderbuffer resources, sampler CSOs,
-        // sampler views, shader CSOs - are deliberately NOT here: a texture lives in a share
-        // group exactly as a buffer does, and its record is where the extent, the parameters
-        // and the pending-upload set the backend reads now live.
-        g_applier.DrawFramebuffer = MGPFramebufferState{};
-        g_applier.ReadFramebuffer = MGPFramebufferState{};
+        // sampler views, shader CSOs and, since ID-19(b), the FRAMEBUFFER RECORDS - are
+        // deliberately NOT here: a texture lives in a share group exactly as a buffer does, and
+        // its record is where the extent, the parameters and the pending-upload set the backend
+        // reads now live.
+        //
+        // WHAT A MAKE-CURRENT TAKES OF THE FRAMEBUFFER FAMILY IS THE TWO BOUND HANDLES AND
+        // NOTHING ELSE, and that is the same observable it always took: DrawFramebuffer() /
+        // ReadFramebuffer() answer null after this, exactly as the zeroed records used to answer
+        // a null Fbo. FramebufferRecords stays because a framebuffer that is only ever addressed
+        // BY NAME - the DSA blit and clear entry points - has no re-emission trigger at all, so
+        // dropping its record here would lose it for the life of the process.
+        g_applier.BoundFramebuffer = {};
         g_applier.BoundSamplerViews = {};
         g_applier.SamplerViewStart = 0;
         g_applier.SamplerViewCount = 0;
@@ -1154,21 +1161,27 @@ namespace MobileGL::MG_Pipe {
         g_applier.SamplerViewCsos.clear();
         g_applier.ShaderCsos.clear();
         g_applier.CompositeShaderCsos.clear();
+        // AND THE FRAMEBUFFER RECORDS, which MGPipeApplierReset above deliberately keeps. Here
+        // there is nothing for them to outlive: the served context is going away and the
+        // framebuffers it owned are container objects that go with it. A table left standing
+        // would answer a lookup from the NEXT context on a slot the allocator has re-minted -
+        // with the same generation, if the next context happens to reach the same one - and
+        // that is the aliasing every other table is cleared to prevent.
+        g_applier.FramebufferRecords.clear();
         g_applier.DrawProgram = kMGPipeNullHandle;
         g_applier.DispatchProgram = kMGPipeNullHandle;
         g_applier.BoundShaderCso = kMGPipeNullHandle;
         // AND "THE WORKING HANDLES THEY COULD NAME" IS ALL OF THEM, NOT JUST THE THREE ABOVE.
-        // The two framebuffer records hold eleven MGPSurface::Res naming texture and
-        // renderbuffer records this function has just dropped, and the three unit windows hold
-        // entries naming sampler-view, sampler-CSO and texture records it has just dropped. A
-        // window left populated here is a set of handles into empty tables: the next resolve
-        // either refuses and counts (a teardown-time refusal storm nothing asked for) or, on a
-        // slot the next context re-mints, resolves to somebody else's record. So this takes the
-        // same working state MGPipeApplierReset does - which is the honest reading of the rule
-        // as well: Reset keeps the object records BECAUSE they outlive a make-current, and here
-        // they do not outlive anything.
-        g_applier.DrawFramebuffer = MGPFramebufferState{};
-        g_applier.ReadFramebuffer = MGPFramebufferState{};
+        // Every framebuffer record holds eleven MGPSurface::Res naming texture and renderbuffer
+        // records this function has just dropped - which is why the table itself goes above -
+        // and the three unit windows hold entries naming sampler-view, sampler-CSO and texture
+        // records it has just dropped. A window left populated here is a set of handles into
+        // empty tables: the next resolve either refuses and counts (a teardown-time refusal
+        // storm nothing asked for) or, on a slot the next context re-mints, resolves to somebody
+        // else's record. So this takes the same working state MGPipeApplierReset does - which is
+        // the honest reading of the rule as well: Reset keeps the object records BECAUSE they
+        // outlive a make-current, and here they do not outlive anything.
+        g_applier.BoundFramebuffer = {};
         g_applier.BoundSamplerViews = {};
         g_applier.SamplerViewStart = 0;
         g_applier.SamplerViewCount = 0;
@@ -2037,14 +2050,31 @@ namespace MobileGL::MG_Pipe {
     // ================================================================================
 
     void MGPipeApplySetFramebufferState(const MGPFramebufferState& state) {
-        // GL HAS TWO INDEPENDENT FRAMEBUFFER BINDINGS AND THIS RECORD DESCRIBES ONE, so Target
-        // is what says which - and Both is one object bound to both, which writes both records
-        // from one call. A value outside the three is not a binding this server has, and
-        // guessing one would put a draw's attachments into the read record or the other way
-        // round, which is the defect class the per-target emission exists to close.
+        // GL HAS TWO INDEPENDENT FRAMEBUFFER BINDINGS AND THIS RECORD DESCRIBES ONE FRAMEBUFFER,
+        // so Target says which binding - if any - the description also BINDS it to. Both is one
+        // object bound to both and moves both handles from one call; Named
+        // (kMGPipeFramebufferTargetNamed) moves neither, which is how the DSA entry points
+        // describe a framebuffer they are about to blit into or clear without claiming it is
+        // bound (ID-19). A value above Named is not a target this server has, and guessing one
+        // would put a draw's attachments into the read binding or the other way round.
         const char* fault = nullptr;
-        if (state.Target >= static_cast<Uint8>(MGPipeFramebufferTarget::Count)) {
+        if (state.Target > kMGPipeFramebufferTargetNamed) {
             fault = "the record names no framebuffer binding target";
+        }
+        // THE RECORD IS ADDRESSED BY THE FRAMEBUFFER HANDLE NOW, so the handle has to be one.
+        // The null handle is refused rather than stored: {0,0} is what "nothing is bound to this
+        // binding" reads as on the other side of BoundFramebuffer, and a record installed there
+        // would be answered to every caller asking about an EMPTY binding. Every emitter has a
+        // handle for every framebuffer it describes - kMGPipeDefaultFramebuffer {0,1} for the
+        // default one, a minted {slot, gen} otherwise - so a null here is a malformed record.
+        else if (MGPipeHandleIsNull(state.Fbo)) {
+            fault = "the record names the null framebuffer handle";
+        }
+        // And the same bound gate the five object tables carry, for the same reason: Slot is a
+        // client-supplied Uint32 arriving in a payload and this is the one number in the call
+        // that reaches an allocator.
+        else if (state.Fbo.Slot >= kMGPipeMaxFramebufferSlots) {
+            fault = "the framebuffer slot is outside the record table's bound";
         }
         // THE DRAW-BUFFER ARRAY IS AN INDEX INTO THIS RECORD'S OWN Color[], and -1 is NONE. An
         // entry outside that range would have the server read a colour attachment the record
@@ -2069,21 +2099,84 @@ namespace MobileGL::MG_Pipe {
         // NO HANDLE IS RESOLVED HERE AND NONE MAY BE. A framebuffer has a handle but no wire
         // lifetime - the catalogue has no framebuffer create and no framebuffer destroy,
         // because a framebuffer is state and this call is the only one that names one - so
-        // there is no record to refuse against and this entry point never counts a refusal.
+        // there is nothing to look up, this entry point never counts a refusal, and the record
+        // it writes OVERWRITES whatever the slot held. That last part is the point rather than
+        // a compromise: the slot's previous occupant is dead by construction (the client frees
+        // a framebuffer's slot when the object dies and the allocator bumps the generation on
+        // reuse), and the record arriving now describes whatever holds the slot today.
+        //
         // The surfaces' Res handles are not resolved either: an attachment PINS its texture,
         // and in monolith the frontend's own SharedPtr is that keep-alive, so a refusal here
         // would be enforcing a lifetime rule monolith cannot need and split has not defined.
-        if (state.Target != static_cast<Uint8>(MGPipeFramebufferTarget::Read)) {
-            g_applier.DrawFramebuffer = state;
+        MGPipeFramebufferRecord* record =
+            RecordAt(g_applier.FramebufferRecords, state.Fbo.Slot, kMGPipeMaxFramebufferSlots);
+        // Unreachable: the bound was checked above, before anything moved. The null check is
+        // what makes that an argument rather than an assumption.
+        if (record == nullptr) return;
+        record->Gen = state.Fbo.Gen;
+        record->Live = true;
+        record->State = state;
+
+        // AND ONLY THEN THE BINDINGS. Named moves neither, which is the whole of the fourth
+        // target: "this record describes the framebuffer it names; no binding changes".
+        if (state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Draw) ||
+            state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Both)) {
+            g_applier.BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)] = state.Fbo;
         }
-        if (state.Target != static_cast<Uint8>(MGPipeFramebufferTarget::Draw)) {
-            g_applier.ReadFramebuffer = state;
+        if (state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Read) ||
+            state.Target == static_cast<Uint8>(MGPipeFramebufferTarget::Both)) {
+            g_applier.BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Read)] = state.Fbo;
         }
-        // ONE SERIAL FOR THE PAIR, and it moves once per applied record - a Both record is one
-        // record. It is what retires the four g_fboSynced* arrays and the twin's own
-        // {slot version, object version, backend id generation} quadruple: a compare that used
-        // to ask "is my memo still the frontend's" asks "is my serial still the server's".
+        // ONE SERIAL FOR THE FAMILY, and it moves once per applied record - a Both record is one
+        // record and a Named record is one record. It is what retires the four g_fboSynced*
+        // arrays and the twin's own {slot version, object version, backend id generation}
+        // quadruple: a compare that used to ask "is my memo still the frontend's" asks "is my
+        // serial still the server's". A Named record moves it for the same reason a bound one
+        // does - a twin that memoised a framebuffer's attachments has to hear that they moved,
+        // and whether the framebuffer happens to be bound is not that question.
         ++g_applier.FramebufferSerial;
+    }
+
+    // THE READ SIDE OF THE TABLE (ID-19(b)/(d)). Package D asks it by handle at every DSA entry
+    // point; the two accessors under it ask it through a binding, which is the question package
+    // E's SyncCurrentFBOByRecord has always asked.
+    const MGPFramebufferState* MGPipeApplierState::FramebufferRecordFor(MGPipeHandle fbo) const {
+        // "Nothing is bound" and "no record" are BOTH null and only the second of them is worth
+        // a word: the null handle is what a make-current leaves in BoundFramebuffer and what an
+        // unbound target reads as, it arrives here on every draw of a context that has not
+        // described its framebuffers yet, and logging it would be a storm about the ordinary
+        // transitional state. It is separated first so the generation test below can be loud.
+        if (MGPipeHandleIsNull(fbo)) return nullptr;
+        if (fbo.Slot >= FramebufferRecords.size()) return nullptr;
+        const MGPipeFramebufferRecord& record = FramebufferRecords[fbo.Slot];
+        // Nothing has been written at this slot. Also not an error, and also silent: it is what
+        // every framebuffer looks like before its first set_framebuffer_state, and the caller's
+        // answer to it is to run its pre-handle arm.
+        if (!record.Live) return nullptr;
+        if (record.Gen != fbo.Gen) {
+            // AND THIS ONE IS. A record exists at the slot and it describes a DIFFERENT object:
+            // either the caller is holding a handle whose framebuffer died and whose slot has
+            // been recycled, or an emitter minted the successor without ever describing it. On
+            // the handle arm the visible consequence is a DSA blit or clear into a driver
+            // framebuffer that never got its attachments, which is precisely the failure
+            // ID-19 exists to close - so this is the loud refusal P3a's lesson demands and
+            // never a quiet fall-back.
+            ++StaleFramebufferRecordLookups;
+            MGLOG_E_ONCE("MGPipe: the framebuffer record at slot %u is generation %u and the "
+                         "lookup named generation %u; refusing it rather than answering with "
+                         "another framebuffer's attachments",
+                         fbo.Slot, record.Gen, fbo.Gen);
+            return nullptr;
+        }
+        return &record.State;
+    }
+
+    const MGPFramebufferState* MGPipeApplierState::DrawFramebuffer() const {
+        return FramebufferRecordFor(BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)]);
+    }
+
+    const MGPFramebufferState* MGPipeApplierState::ReadFramebuffer() const {
+        return FramebufferRecordFor(BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Read)]);
     }
 
     // ================================================================================
