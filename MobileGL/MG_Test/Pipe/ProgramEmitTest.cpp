@@ -483,7 +483,8 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     X(ProgramEmit, TheEmitterJoinsAndTheTrackerDoesNot)                                             \
     X(ProgramEmit, AReLinkReIssuesOnTheSameHandle)                                                  \
     X(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots)                                \
-    X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)
+    X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)                                             \
+    X(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock)
 
 #define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
     TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
@@ -695,6 +696,66 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         EXPECT_EQ(Emitter().CreateCount(), 1u);
         EXPECT_EQ(Emitter().BindCount(), 1u);
         EXPECT_EQ(Emitter().DrawProgramSetCount(), 1u);
+    }
+
+    // set_global_constants is suppressed against a (ShaderCso, Version) key, and A RE-ISSUED
+    // create_shader_state CLEARS THE APPLIER's DEFAULT UNIFORM BLOCK (wire's W6). So the key
+    // has to die with the re-issue, or the block is never re-sent and the server draws the
+    // program with a zeroed one while the client's scratch still holds the live values.
+    //
+    // WHICH HALF OF THIS CASE IS THE DISCRIMINATOR, said plainly. The second half - "the block
+    // goes out again after a relink" - is also true without the fix, because
+    // BumpLinkObservableVersions bumps the UBO content version alongside the link version, so
+    // the Version half of the key moves on its own for the one re-issue trigger that exists
+    // today. The FIRST half is the one that goes red when the invalidation is deleted, and it
+    // is the property the contract actually needs: after a re-issue the emitter must hold NO
+    // key at all, so no future re-issue trigger - a recycled slot, a re-issue driven by
+    // anything that does not happen to move the content version - can leave the applier's
+    // cleared block latched as "already sent".
+    TEST(ProgramEmit, AReIssuedCreateReSendsTheDefaultUniformBlock) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+
+        ASSERT_GT(Emitter().EmitShaderState(Ctx()), 0u);
+        ASSERT_EQ(Emitter().CreateCount(), 1u);
+        // Driven to the fixed point rather than assumed to settle in one call: the first
+        // EmitGlobalConstants reads GetUBOContentVersion() BEFORE GetUBOSize() joins phase B,
+        // and that join bumps the counter, so the first key is one behind by construction.
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
+        }
+        const Uint64 setsBefore = Emitter().GlobalConstantsSetCount();
+        ASSERT_GT(setsBefore, 0u) << "this program declares a uniform, so a block must have gone out";
+        const MGPipeHandle cso = Emitter().GlobalConstantsCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        EXPECT_EQ(cso, Emitter().DrawCso());
+        // The latch really is latched.
+        EXPECT_EQ(Emitter().EmitGlobalConstants(Ctx()), 0u);
+        EXPECT_EQ(Emitter().GlobalConstantsSetCount(), setsBefore);
+
+        // A RELINK, which is the one thing that makes AcquireShaderCso re-issue on the same
+        // handle. A failed relink is the case the design worries about - GL keeps a program
+        // that is active for a stage running on its previous executable - and this frontend
+        // additionally clears the phase-B scratch in Link()'s prologue, so the populated-block
+        // half of that scenario is not reachable here; the re-issue is, and it is what the
+        // applier reacts to.
+        const Uint32 linkVersionBefore = program->GetLinkVersion();
+        GL::LinkProgram(name);
+        ASSERT_NE(program->GetLinkVersion(), linkVersionBefore) << "the relink really has to move it";
+
+        Emitter().EmitShaderState(Ctx());
+        ASSERT_EQ(Emitter().CreateCount(), 2u) << "the create really has to be re-issued";
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().GlobalConstantsCso()))
+            << "the applier cleared the record's default uniform block on the re-issue, so the "
+               "key that suppresses set_global_constants must not survive it";
+        EXPECT_EQ(Emitter().GlobalConstantsVersion(), kMGPipeGlobalConstantsNeverUploaded);
+
+        // And the block really is sent again.
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
+        }
+        EXPECT_GT(Emitter().GlobalConstantsSetCount(), setsBefore);
     }
 } // namespace
 #endif // MOBILEGL_PIPE_PUSH

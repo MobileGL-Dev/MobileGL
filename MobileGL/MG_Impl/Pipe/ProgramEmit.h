@@ -41,6 +41,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeHostSpan.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_Pipe/PipeMutation.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/ProgramState/ProgramObject.h>
 #include <MG_Util/Metrics/PipeStats.h>
@@ -49,9 +50,16 @@ namespace MobileGL::MG_Pipe {
 
     // WIRED. create/bind/delete_shader_state, set_draw_program, set_dispatch_program and
     // set_global_constants all have bodies, so this family contributes its bit to
-    // kMGPipeWiredSubsystems. See SamplerEmit.h's note for what the bit does and does not do:
-    // it states what this build emits for, and the EMISSION gate is the runtime
-    // MOBILEGL_PIPE_PUSH mask through the validate point's `wants()`, not this constant.
+    // kMGPipeWiredSubsystems.
+    //
+    // AND SINCE c0b THAT CONSTANT REALLY IS PART OF THE EMISSION GATE, so the note that used to
+    // say otherwise here was true only against the contract commit: the validate point's
+    // `wants()` asks the subsystem mapping, the operator's MOBILEGL_PIPE_PUSH mask, THIS
+    // CONSTANT and the dirty bit, and the birth hooks' `FamilyIsLive` asks the same pair one
+    // level in. It is also a compile-time contract - while it is non-zero PipeFill.cpp's
+    // `if constexpr` seam instantiates the forward to EmitShaderCso below, so a missing entry
+    // point is a build error here rather than at the merge. The RUNTIME A/B that switches the
+    // family off is still the mask. See SamplerEmit.h's twin note.
     inline constexpr Uint64 kMGPipeWiredProgramSubsystem = kMGPipeSubsystemPrograms;
 
     // D-H6. ~0u is the BACKENDS' "never uploaded" sentinel for a global-constants version, and
@@ -221,10 +229,15 @@ namespace MobileGL::MG_Pipe {
             // Blob rule); Offset carries the module's staging address so a reader can see which
             // slots are occupied without the record pretending to declare a length it does not
             // own.
+            //
+            // A COUNTED REFUSAL AND NOT AN ASSERTION (D-J3). MOBILEGL_ASSERT compiles out at
+            // INFO, which is all three gate builds and every shipped build, so an assert here
+            // would leave the truncation below completely silent in exactly the builds that
+            // run - which is the idiom D-J3 exists to forbid. generatedSpirv cannot exceed six
+            // stages today, so this is a guard against a seventh; truncation is the safe
+            // direction and the counter is what makes it visible.
             const SizeT moduleCount = spirv.generatedSpirv.size();
-            MOBILEGL_ASSERT(moduleCount <= 6,
-                            "MGPProgramDesc::Spirv[] carries six modules and this program linked %u",
-                            static_cast<Uint>(moduleCount));
+            if (moduleCount > 6) ++m_moduleTruncations;
             for (SizeT i = 0; i < moduleCount && i < 6; ++i) {
                 m_lastDesc.Spirv[i].Seg = kMGHostSpanSegNone;
                 m_lastDesc.Spirv[i].Offset = reinterpret_cast<Uint64>(spirv.generatedSpirv[i].data());
@@ -235,8 +248,27 @@ namespace MobileGL::MG_Pipe {
             m_lastDesc.Reflection.Size = 0;
 
             MGPipeApplyCreateShaderState(m_lastDesc, &link, &spirv);
+            // THE CREATE WENT OUT, so the publication latch is taken here and nowhere else
+            // (contract-v2 §3.1). MGPipeEmitShaderCsoDestroyAndFree reads it, and without it
+            // delete_shader_state can never go out - for an ordinary program or for a
+            // composite, both of which take that one helper.
+            MGPipeNoteHandlePublished(MGPipeKind::ShaderCso, handle);
             ++m_creates;
             payloadBytes += sizeof(MGPProgramDesc);
+
+            // A RE-ISSUED create_shader_state CLEARS THE APPLIER's DEFAULT UNIFORM BLOCK (wire
+            // W6), so the (Cso, Version) latch that suppresses set_global_constants has to go
+            // with it or the block is never re-sent. The case the design worries about is a
+            // FAILED relink of a bound program - GL keeps the previous executable and its
+            // uniforms running - and the general one is any future re-issue trigger that does
+            // not happen to move the content version, of which a recycled slot is one.
+            // Invalidated rather than re-emitted here, because this function has no business
+            // deciding when the constants go out: the next EmitGlobalConstants sees an
+            // unlatched key and sends them.
+            if (m_constantsCso == handle) {
+                m_constantsCso = kMGPipeNullHandle;
+                m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
+            }
 
             latch.RecordLive = true;
             latch.RecordGen = handle.Gen;
@@ -244,10 +276,32 @@ namespace MobileGL::MG_Pipe {
             return handle;
         }
 
-        // C-1's question for this kind - see MGPipeSamplerEmitter::RecordIsPublished for the
-        // full reason. A ShaderCso slot can exist with no record behind it, because a backend
-        // twin table mints one through MGPipeSlots().Acquire whether or not the program
-        // subsystem ever asked this client to emit a create.
+        // ---- THE CONTRACT ENTRY POINT THIS FAMILY OWES (contract-v2 §3.4) ----
+        //
+        // PipeFill.cpp's MGPipeEmitShaderCsoCreate forwards here through the `if constexpr`
+        // seam keyed on kMGPipeWiredProgramSubsystem, so while that constant is non-zero this
+        // must exist and be spelled exactly like this. A thin wrapper on purpose:
+        // AcquireShaderCso above IS this family's handle rule - identity-addressed per
+        // ProgramObject, the composite band entered through the one door, the re-issue on the
+        // same handle and the publication - and a second copy of any of it here would be a
+        // second authority.
+        //
+        // THE HOOK HAS ALREADY APPLIED BOTH GATES (the operator's mask and the wired constant),
+        // so this body applies none of its own. The byte count is discarded: a birth is not a
+        // validate-point emission and has no payload budget to report into.
+        void EmitShaderCso(ProgramObject& program) {
+            Uint64 bytes = 0;
+            AcquireShaderCso(program, bytes);
+        }
+
+        // The emitter's OWN record memo - "have I already published a create_shader_state at
+        // this slot, for this generation, at this link version".
+        //
+        // IT IS NOT WHAT THE DEATH PATH ASKS, and that changed at c0b (contract-v2 §3.1/D17):
+        // MGPipeEmitShaderCsoDestroyAndFree reads A's publication latch, which is one answer
+        // per {kind, slot, gen} that all six death helpers share. This stays because the
+        // VERSION-FIRST SKIP needs it - it is the same latch AcquireShaderCso consults before
+        // it builds a descriptor - and because a unit case reads it.
         //
         // THE COMPOSITE BAND IS INDEXED SEPARATELY, for the allocator's own reason: the band
         // base is 983040, so a slot-indexed vector would allocate ~983k latches for one program
@@ -261,6 +315,16 @@ namespace MobileGL::MG_Pipe {
             return latch.RecordLive && latch.RecordGen == handle.Gen;
         }
 
+        // The memo's other half, and the bound-mirror clearing beside it.
+        //
+        // NO PRODUCTION CALLER TODAY, stated rather than implied: since c0b the death path
+        // reads the contract's latch and never asks an emitter. It is kept because the memo
+        // above needs a way to be told, and because everything it clears SELF-HEALS if it is
+        // not called - the slot's Gen moves on reuse, so `RecordGen == handle.Gen` refuses a
+        // stale record latch, and the three bound mirrors below hold a handle whose generation
+        // can never be handed out again, so the next EmitShaderState compares against a
+        // different handle and re-binds. Clearing them here is the cheaper answer, not the
+        // load-bearing one.
         void NoteRecordDestroyed(MGPipeHandle handle) {
             if (MGPipeHandleIsNull(handle)) return;
             Vector<Latch>& table = TableOf(handle);
@@ -302,11 +366,20 @@ namespace MobileGL::MG_Pipe {
 
         void ResetCounters() {
             m_creates = m_binds = m_drawSets = m_dispatchSets = m_constantSets = 0;
+            m_moduleTruncations = 0;
         }
 
         // ---- what a unit case reads ----
         const MGPProgramDesc& LastProgramDesc() const { return m_lastDesc; }
         const MGPGlobalConstants& LastGlobalConstants() const { return m_lastConstants; }
+        // THE (Cso, Version) KEY set_global_constants is suppressed against. Exposed so a case
+        // can pin that a re-issued create_shader_state invalidates it - the applier clears the
+        // block on the re-issue (wire W6), so a latch that survived it would never re-send.
+        MGPipeHandle GlobalConstantsCso() const { return m_constantsCso; }
+        Uint32 GlobalConstantsVersion() const { return m_constantsVersion; }
+        // D-J3's counted refusal: programs whose linked snapshot carried more modules than
+        // MGPProgramDesc::Spirv[] can name, and whose tail was therefore dropped.
+        Uint64 TruncatedModuleCount() const { return m_moduleTruncations; }
         MGPipeHandle BoundCso() const { return m_boundCso; }
         MGPipeHandle DrawCso() const { return m_drawCso; }
         MGPipeHandle DispatchCso() const { return m_dispatchCso; }
@@ -391,6 +464,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_drawSets = 0;
         Uint64 m_dispatchSets = 0;
         Uint64 m_constantSets = 0;
+        Uint64 m_moduleTruncations = 0;
     };
 
     inline MGPipeProgramEmitter& MGPipeProgramEmitterInstance() {
