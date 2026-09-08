@@ -31,6 +31,9 @@
 #include <MG_Util/Math/FixedPointConversion.h>
 #include <MG_State/GLState/TextureState/TextureObjectBuffer.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+// P4a, ID-18 M2. The ONE door MG_State and MG_Impl have into the client's emitters; the three
+// call sites below are declarations only, exactly as the frontend's mutators are.
+#include <MG_Pipe/PipeMutation.h>
 
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
@@ -1337,6 +1340,30 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
+        // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
+        // publish through TextureObjectBase::PipePublishParams; the tenth is
+        // SetDepthStencilTextureMode; two more move fields MGPTextureParams does not carry. The
+        // last is SamplerObject::BumpVersion, whose own comment calls it "the one choke point
+        // every setter reaches" - and MGPTextureParams takes MinLod, MaxLod and LodBias off that
+        // object, so every glTexParameter that writes GL_TEXTURE_MIN_LOD / MAX_LOD / LOD_BIAS
+        // landed on state nothing watched and the applier's record kept saying MinLod = 0.
+        // Wrong pixels, not a lost optimisation.
+        //
+        // THE HOOK IS HERE RATHER THAN ON BumpVersion because MG_State/GLState/SamplerState is
+        // package C's after the tag; C.7 grants this file for exactly this class of path ("the
+        // grant is one call site per path"), and this switch IS the path - every arm of it
+        // either writes the built-in SamplerObject or writes a texture field that publishes for
+        // itself. Placed after the switch, so the error arms above return without emitting.
+        //
+        // IT IS ALSO ID-14's RE-EMIT HOOK. C's sampler CSO cache is content-addressed, so the
+        // handle MGPTextureParams::BuiltinSampler names MOVES WITH THE CONTENT; the emitter
+        // re-Acquires from the cache and releases the previous handle here. An over-call is
+        // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
+        // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
+        MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
+#endif
     }
 
     void TextureParameterObjectf_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLenum pname,
@@ -1415,6 +1442,30 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
+        // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
+        // publish through TextureObjectBase::PipePublishParams; the tenth is
+        // SetDepthStencilTextureMode; two more move fields MGPTextureParams does not carry. The
+        // last is SamplerObject::BumpVersion, whose own comment calls it "the one choke point
+        // every setter reaches" - and MGPTextureParams takes MinLod, MaxLod and LodBias off that
+        // object, so every glTexParameter that writes GL_TEXTURE_MIN_LOD / MAX_LOD / LOD_BIAS
+        // landed on state nothing watched and the applier's record kept saying MinLod = 0.
+        // Wrong pixels, not a lost optimisation.
+        //
+        // THE HOOK IS HERE RATHER THAN ON BumpVersion because MG_State/GLState/SamplerState is
+        // package C's after the tag; C.7 grants this file for exactly this class of path ("the
+        // grant is one call site per path"), and this switch IS the path - every arm of it
+        // either writes the built-in SamplerObject or writes a texture field that publishes for
+        // itself. Placed after the switch, so the error arms above return without emitting.
+        //
+        // IT IS ALSO ID-14's RE-EMIT HOOK. C's sampler CSO cache is content-addressed, so the
+        // handle MGPTextureParams::BuiltinSampler names MOVES WITH THE CONTENT; the emitter
+        // re-Acquires from the cache and releases the previous handle here. An over-call is
+        // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
+        // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
+        MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
+#endif
     }
 
     void GetTextureParameterObjectiv_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -2105,6 +2156,30 @@ namespace MobileGL::MG_Impl::GLImpl {
                     std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a, ID-18 M2 - THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE, and the one
+        // no publisher reached. Nine of the thirteen are TextureObject.cpp's own mutators and
+        // publish through TextureObjectBase::PipePublishParams; the tenth is
+        // SetDepthStencilTextureMode; two more move fields MGPTextureParams does not carry. The
+        // last is SamplerObject::BumpVersion, whose own comment calls it "the one choke point
+        // every setter reaches" - and MGPTextureParams takes MinLod, MaxLod and LodBias off that
+        // object, so every glTexParameter that writes GL_TEXTURE_MIN_LOD / MAX_LOD / LOD_BIAS
+        // landed on state nothing watched and the applier's record kept saying MinLod = 0.
+        // Wrong pixels, not a lost optimisation.
+        //
+        // THE HOOK IS HERE RATHER THAN ON BumpVersion because MG_State/GLState/SamplerState is
+        // package C's after the tag; C.7 grants this file for exactly this class of path ("the
+        // grant is one call site per path"), and this switch IS the path - every arm of it
+        // either writes the built-in SamplerObject or writes a texture field that publishes for
+        // itself. Placed after the switch, so the error arms above return without emitting.
+        //
+        // IT IS ALSO ID-14's RE-EMIT HOOK. C's sampler CSO cache is content-addressed, so the
+        // handle MGPTextureParams::BuiltinSampler names MOVES WITH THE CONTENT; the emitter
+        // re-Acquires from the cache and releases the previous handle here. An over-call is
+        // free: the emitter's version-first skip reads GetTextureParamsVersion() AND
+        // SamplerObject::GetVersion() and returns without hashing anything when neither moved.
+        MobileGL::MG_Pipe::MGPipeEmitTextureParams(*textureObject);
+#endif
     }
 
     void TexParameteri_State(GLenum target, GLenum pname, GLint param) {

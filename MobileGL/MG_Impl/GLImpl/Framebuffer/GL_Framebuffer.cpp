@@ -16,6 +16,14 @@
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Impl/Pipe/PipeFill.h>
+#if MOBILEGL_PIPE_PUSH
+// P4a, ID-19(c). This file is the ONLY place every DSA framebuffer entry point lives, and the
+// emitter it reaches is this package's own header rather than a declaration in one of the
+// contract's: MG_Pipe/PipeMutation.h is the door MG_State has into the client and carries no
+// framebuffer row, and MG_Impl/GLImpl and MG_Impl/Pipe are the same layer (this file already
+// includes MG_Impl/Pipe/PipeFill.h for MGP_FILL).
+#include <MG_Impl/Pipe/FramebufferEmit.h>
+#endif
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
@@ -613,6 +621,35 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, 0, layered);
         }
+#if MOBILEGL_PIPE_PUSH
+        // P4a, ID-19(c): ANY FRAMEBUFFER THE SERVER IS ABOUT TO RECEIVE BY NAME HAS A RECORD.
+        //
+        // The applier keeps framebuffer records PER OBJECT, keyed by the handle - but before
+        // ID-19 it held only the two BOUND-target records, and the emitter only ever built them
+        // at the validate point out of the two bindings. So glClearNamedFramebufferfv(fbo) or
+        // glBlitNamedFramebuffer(..., fbo, ...) on an fbo bound to NEITHER binding reached a
+        // backend that minted a fresh driver framebuffer with no attachments, found no record
+        // for it, declined, and issued the clear against it anyway: GL_INVALID_FRAMEBUFFER_-
+        // OPERATION and nothing cleared, where the legacy arm cleared correctly.
+        //
+        // TWO CLASSES OF SITE call this, and both are "the point at which the object is final
+        // for this call": the five CONSUMERS (blit and the four clears) publish immediately
+        // before MGP_FILL, so the record precedes the verb that hands the object over and a
+        // later bound-target record for the same object still wins; the ten MUTATORS (the DSA
+        // attachment, draw-buffer and read-buffer setters) publish immediately after the
+        // frontend mutation, because they have no validate point at all - FillPoints.def has no
+        // verb for any of them, so there is no MGP_FILL to sit in front of.
+        //
+        // A CALL THAT MOVED NOTHING IS FREE: the record's ContentHash is the emitter's own
+        // suppressor and it is keyed per framebuffer object, so a redundant publish emits zero
+        // bytes. EmitFramebufferByName picks Draw/Read/Both over Named when the object IS
+        // bound, so a Named record can never overwrite a bound record's Target underneath the
+        // binding that resolves through it.
+        void PipePublishFramebufferByName(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo) {
+            if (!fbo) return;
+            MG_Pipe::MGPipeFramebufferEmitterInstance().EmitFramebufferByName(*fbo);
+        }
+#endif
     } // namespace
 
     void BlitFramebuffer_Backend(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
@@ -631,6 +668,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glBlitNamedFramebuffer skipped: backend does not implement explicit framebuffer blit.");
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(readFramebuffer);
+        PipePublishFramebufferByName(drawFramebuffer);
+#endif
         MGP_FILL(BlitNamedFramebuffer);
         blitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1,
                              dstY1, mask, filter);
@@ -643,6 +684,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferfv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebuffer);
+#endif
         MGP_FILL(ClearNamedFramebufferfv);
         clearNamedFramebufferfv(framebuffer, buffer, drawbuffer, value);
     }
@@ -654,6 +698,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferfi skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebuffer);
+#endif
         MGP_FILL(ClearNamedFramebufferfi);
         clearNamedFramebufferfi(framebuffer, buffer, drawbuffer, depth, stencil);
     }
@@ -665,6 +712,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebuffer);
+#endif
         MGP_FILL(ClearNamedFramebufferiv);
         clearNamedFramebufferiv(framebuffer, buffer, drawbuffer, value);
     }
@@ -676,6 +726,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_E_ONCE("glClearNamedFramebufferuiv skipped: backend does not implement explicit framebuffer clear.");
             return;
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebuffer);
+#endif
         MGP_FILL(ClearNamedFramebufferuiv);
         clearNamedFramebufferuiv(framebuffer, buffer, drawbuffer, value);
     }
@@ -1404,6 +1457,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (texture == 0) {
             framebufferObject->Detach(attachmentType);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
             return;
         }
 
@@ -1430,6 +1486,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, 0, layered);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void NamedFramebufferTextureWithUploadTarget_State(const char* functionName, GLuint framebuffer, GLenum attachment,
@@ -1453,6 +1512,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (texture == 0) {
             framebufferObject->Detach(attachmentType);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
             return;
         }
 
@@ -1480,6 +1542,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void NamedFramebufferTexture1D_State(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
@@ -1534,6 +1599,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (texture == 0) {
             framebufferObject->Detach(attachmentType);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
             return;
         }
 
@@ -1636,6 +1704,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         framebufferObject->AttachTexture(attachmentType, textureObject, textureUploadTarget, level, layer,
                                          /*layered=*/false);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void FramebufferRenderbuffer_State(GLenum target, GLenum attachment, GLenum renderbuffertarget,
@@ -1705,6 +1776,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (renderbuffer == 0) {
             framebufferObject->Detach(attachmentType);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
             return;
         }
 
@@ -1714,6 +1788,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!renderbufferObject) return;
 
         framebufferObject->AttachRenderbuffer(attachmentType, renderbufferObject);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void DrawBuffersForFramebuffer_State(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, Bool isDefaultFBO,
@@ -1913,6 +1990,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             : GetNamedFramebufferObject_State(framebuffer, "NamedFramebufferDrawBuffers_State");
         if (!framebufferObject) return;
         DrawBuffersForFramebuffer_State(framebufferObject, framebuffer == 0, n, bufs, false);
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void NamedFramebufferDrawBuffer_State(GLuint framebuffer, GLenum buf) {
@@ -1927,6 +2007,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             const GLenum bufs[] = {buf};
             DrawBuffersForFramebuffer_State(framebufferObject, framebuffer == 0, 1, bufs, true);
         }
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     void NamedFramebufferReadBuffer_State(GLuint framebuffer, GLenum src) {
@@ -1936,6 +2019,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!framebufferObject) return;
         ReadBufferForFramebuffer_State(framebufferObject, framebuffer == 0, src,
                                        "NamedFramebufferReadBuffer_State");
+#if MOBILEGL_PIPE_PUSH
+        PipePublishFramebufferByName(framebufferObject);
+#endif
     }
 
     SharedPtr<MG_State::GLState::FramebufferObject> GetFramebufferObjectForNamedClear(GLuint framebuffer,
