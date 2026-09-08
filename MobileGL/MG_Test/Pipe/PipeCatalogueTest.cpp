@@ -236,6 +236,154 @@ TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
               MGPipeResourceTargetForTextureTarget(TextureTarget::TextureRectangle));
 }
 
+// P4a, D-D3 / ID-12: MGPSubData::Target is TWO facts in one Uint16 - the low byte says which
+// KIND of storage the destination is, the high byte which cube face / upload target the level
+// belongs to - and the packing is the contract's, not each emitter's.
+//
+// The property this case exists for is the COLLISION the packing prevents.
+// TextureUploadTarget::Texture1D is 0 and the applier's buffer branch tests the WHOLE field
+// == 0, so a texture record carrying the bare upload enumerator would be indistinguishable
+// from a buffer record exactly when its owner is a 1D texture, and that texture's upload
+// would be dispatched into the buffer path. Nothing else in the tree would have said so.
+TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
+    // Both halves must fit their byte, or the encoding is not an encoding.
+    static_assert(static_cast<Uint32>(MGPipeResourceTarget::Count) <= 0x100u);
+    static_assert(static_cast<Uint32>(TextureUploadTarget::TextureUploadTargetCount) <= 0x100u);
+
+    // 0 first, and deliberately: it is the enumerator that makes the collision possible. Then
+    // the plain 2D upload, the first and last cube face, and the largest enumerator the enum
+    // has, which is what proves the byte is wide enough in practice and not just in principle.
+    const Uint32 uploadTargets[] = {
+        0u,
+        static_cast<Uint32>(TextureUploadTarget::Texture2D),
+        static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX),
+        static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeZ),
+        static_cast<Uint32>(TextureUploadTarget::TextureUploadTargetCount) - 1u,
+    };
+    for (Uint32 resource = 0; resource < static_cast<Uint32>(MGPipeResourceTarget::Count);
+         ++resource) {
+        for (const Uint32 upload : uploadTargets) {
+            const Uint16 packed = MGPipePackSubDataTarget(resource, upload);
+            EXPECT_EQ(MGPipeSubDataResourceTargetOf(packed), static_cast<Uint8>(resource))
+                << "resource target " << resource << " upload target " << upload;
+            EXPECT_EQ(MGPipeSubDataUploadTargetOf(packed), static_cast<Uint8>(upload))
+                << "resource target " << resource << " upload target " << upload;
+        }
+    }
+
+    // THE BUFFER INVARIANT, at compile time in MGPipeTypes.h and again here so a failure names
+    // itself: a buffer record's Target is exactly kMGPipeResourceTargetBuffer, whole field,
+    // upload byte and all, so P3a's records are unchanged on the wire.
+    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) ==
+                  kMGPipeResourceTargetBuffer);
+    EXPECT_EQ(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u), kMGPipeResourceTargetBuffer);
+    EXPECT_EQ(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer,
+                                      static_cast<Uint32>(TextureUploadTarget::Texture1D)),
+              kMGPipeResourceTargetBuffer);
+    MGPSubData zeroed{};
+    EXPECT_EQ(zeroed.Target, kMGPipeResourceTargetBuffer);
+
+    // ...and the other side of it: a 1D texture's upload target IS 0, and packed it still
+    // cannot be mistaken for a buffer, because no texture's resource target is 0.
+    EXPECT_EQ(static_cast<Uint32>(TextureUploadTarget::Texture1D), 0u);
+    for (Uint32 resource = 1; resource < static_cast<Uint32>(MGPipeResourceTarget::Count);
+         ++resource) {
+        EXPECT_NE(MGPipePackSubDataTarget(resource, 0u), kMGPipeResourceTargetBuffer)
+            << "resource target " << resource << " collides with a buffer record";
+    }
+    EXPECT_NE(MGPipePackSubDataTarget(MGPipeResourceTargetForTextureTarget(TextureTarget::Texture1D),
+                                      static_cast<Uint32>(TextureUploadTarget::Texture1D)),
+              kMGPipeResourceTargetBuffer);
+
+    // What a real cube-face record reads back as, through the field rather than a local.
+    MGPSubData record{};
+    record.Target =
+        MGPipePackSubDataTarget(MGPipeResourceTargetForTextureTarget(TextureTarget::TextureCubeMap),
+                                static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeY));
+    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target),
+              static_cast<Uint8>(MGPipeResourceTarget::TexCube));
+    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target),
+              static_cast<Uint8>(TextureUploadTarget::CubeMapNegativeY));
+    // Six faces share one resource target: the high byte is the only thing that tells them
+    // apart, which is why it cannot be dropped.
+    EXPECT_EQ(MGPipeSubDataResourceTargetOf(
+                  MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::TexCube),
+                                          static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX))),
+              MGPipeSubDataResourceTargetOf(record.Target));
+    EXPECT_NE(MGPipeSubDataUploadTargetOf(
+                  MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::TexCube),
+                                          static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX))),
+              MGPipeSubDataUploadTargetOf(record.Target));
+}
+
+// P4a, ID-12: the three constants MGPSurface::Kind is spelled with, the texture target the
+// record grew where its Pad0 was, and MGPTextureParams::DepthStencilMode's two numbers.
+//
+// All three were UNSTATED in the contract and were being re-invented on both sides of the
+// boundary - which is the way a wire field acquires two meanings. The values themselves are
+// unremarkable; what this case pins is that there is exactly one spelling of each.
+TEST(PipeCatalogue, SurfaceNamesItsKindItsTextureTargetAndItsDepthStencilAspect) {
+    // MGPipeKind is REUSED rather than a second three-value enum minted beside the field.
+    EXPECT_EQ(kMGPipeSurfaceKindNone, static_cast<Uint8>(MGPipeKind::None));
+    EXPECT_EQ(kMGPipeSurfaceKindTexture, static_cast<Uint8>(MGPipeKind::Texture));
+    EXPECT_EQ(kMGPipeSurfaceKindRenderbuffer, static_cast<Uint8>(MGPipeKind::Renderbuffer));
+    EXPECT_NE(kMGPipeSurfaceKindTexture, kMGPipeSurfaceKindRenderbuffer);
+    // None == 0 is load-bearing: it is what makes a zero-initialised record already BE the
+    // empty attachment point, which every emitter and every reader relies on.
+    EXPECT_EQ(kMGPipeSurfaceKindNone, 0u);
+
+    // Pad0 -> Uint16 TextureTarget. THE SIZE DID NOT MOVE - the two bytes were already there -
+    // and neither did anything in front of it.
+    EXPECT_EQ(sizeof(MGPSurface), 24u);
+    EXPECT_EQ(offsetof(MGPSurface, UploadTarget), 20u);
+    EXPECT_EQ(offsetof(MGPSurface, TextureTarget), 22u);
+    // The sentinel is TextureTarget::Unknown widened, so it is a value no real target has.
+    EXPECT_EQ(kMGPipeSurfaceNoTextureTarget, 0xFFFFu);
+    EXPECT_EQ(kMGPipeSurfaceNoTextureTarget, static_cast<Uint16>(TextureTarget::Unknown));
+    for (SizeT i = 0; i < static_cast<SizeT>(TextureTarget::TextureTargetCount); ++i) {
+        EXPECT_NE(static_cast<Uint16>(i), kMGPipeSurfaceNoTextureTarget);
+    }
+
+    // A ZEROED MGPSurface CARRIES TextureTarget 0, AND 0 IS TextureTarget::Texture1D, NOT THE
+    // SENTINEL. That is documented rather than defended, and it is why the field's contract is
+    // "consulted only when Kind == kMGPipeSurfaceKindTexture": a zeroed record is Kind == None
+    // and names no texture at all, so a reader that gates on Kind can never see the 0. A
+    // reader that does not gate would read Texture1D out of an empty attachment point.
+    MGPSurface empty{};
+    EXPECT_EQ(empty.TextureTarget, 0u);
+    EXPECT_EQ(static_cast<Uint16>(TextureTarget::Texture1D), 0u);
+    EXPECT_EQ(empty.Kind, kMGPipeSurfaceKindNone);
+    EXPECT_TRUE(MGPipeHandleIsNull(empty.Res));
+
+    // A renderbuffer point names no texture and says so with the sentinel, which is what
+    // distinguishes "not a texture" from "a 1D texture" for a reader that looks anyway.
+    MGPSurface renderbuffer{};
+    renderbuffer.Kind = kMGPipeSurfaceKindRenderbuffer;
+    renderbuffer.TextureTarget = kMGPipeSurfaceNoTextureTarget;
+    EXPECT_NE(renderbuffer.TextureTarget, static_cast<Uint16>(TextureTarget::Texture1D));
+
+    // The half a compiler cannot catch: the PipeFields.def row. MGPSurface still asserts its
+    // size whether or not the field list names TextureTarget, so a comparator blind to the
+    // field would pass a target-only divergence under MOBILEGL_PIPE_VERIFY - and the field is
+    // exactly what the four cross-object masks key on.
+    MGPSurface a{};
+    MGPSurface b{};
+    const char* field = nullptr;
+    EXPECT_TRUE(MGPipeVerify(a, b, &field));
+    a.TextureTarget = static_cast<Uint16>(TextureTarget::TextureCubeMap);
+    EXPECT_FALSE(MGPipeVerify(a, b, &field));
+    EXPECT_STREQ(field, "TextureTarget");
+
+    // DepthStencilMode: 0 = GL_DEPTH_COMPONENT, 1 = GL_STENCIL_INDEX. Depth is 0 because it is
+    // the GL initial value and a texture that never asks for the stencil aspect never emits
+    // the call, so a zeroed record has to decode to what an untouched texture already has.
+    EXPECT_EQ(kMGPipeDepthStencilModeDepth, 0u);
+    EXPECT_EQ(kMGPipeDepthStencilModeStencil, 1u);
+    EXPECT_NE(kMGPipeDepthStencilModeDepth, kMGPipeDepthStencilModeStencil);
+    MGPTextureParams params{};
+    EXPECT_EQ(params.DepthStencilMode, kMGPipeDepthStencilModeDepth);
+}
+
 // G3's opcode numbering is the wire protocol. Position in PipeCalls.def, 1-based, no holes.
 TEST(PipeCatalogue, WireOpcodesAreThePositionsInTheCatalogue) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetCaps), 1);

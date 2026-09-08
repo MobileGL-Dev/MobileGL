@@ -89,8 +89,12 @@
     F(Cso) F(StageMask) F(GlobalUboSize) F(ReservedNumSamplesOffset) F(SpirvStatus) F(NativeFloat64) \
     F(PointSizeDemoted) F(EnableSpirvValidation) F(Spirv) F(Reflection)
 
+// P4a, ID-12 / esprytobj DV-5: Pad0 became Uint16 TextureTarget. Same trip wire as
+// MGPFramebufferState's Target below - PADDING_MEMBER_RE only excludes a member still NAMED
+// Pad<n>, so the rename without this row is a pipe-gates failure, and the row without the
+// rename is one too. A meaning-carrying byte cannot enter this record silently.
 #define MGP_FIELDS_MGPSurface(F) \
-    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget)
+    F(Res) F(InternalFormat) F(Kind) F(Layered) F(Level) F(Layer) F(UploadTarget) F(TextureTarget)
 
 // P4a, D-C2: Pad0 became Uint8 Target, and gen_pipe.py's PADDING_MEMBER_RE only excludes a
 // member still NAMED Pad<n> - so the rename without this row is a pipe-gates failure, which

@@ -471,6 +471,20 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPTextureParams, 40);
 
+    // MGPTextureParams::DepthStencilMode's two legal values, and the ONLY spelling of them
+    // (P4a, ID-12 / esprytobj DV-2). The frontend keeps a GLenum - GL_DEPTH_COMPONENT 0x1902,
+    // GL_STENCIL_INDEX 0x1901 - and a Uint8 cannot hold one, so the aspect is NUMBERED here
+    // rather than truncated there. The GLenum -> byte helper belongs to the client emitter;
+    // this header owns the two numbers, so the emitter and both backends cannot disagree.
+    //
+    // 0 IS DEPTH, AND THAT IS THE WHOLE REASON FOR THIS ORDER RATHER THAN THE ENUM'S LOW BYTE.
+    // GL_DEPTH_COMPONENT is the GL initial value of GL_DEPTH_STENCIL_TEXTURE_MODE and a
+    // texture that never asks for the stencil aspect never emits the call at all, so A ZEROED
+    // RECORD MUST DECODE TO EXACTLY WHAT AN UNTOUCHED TEXTURE ALREADY HAS. Numbering by the
+    // low byte would have made depth 0x02 and stencil 0x01 and left zero meaning nothing.
+    inline constexpr Uint8 kMGPipeDepthStencilModeDepth = 0;   // GL_DEPTH_COMPONENT
+    inline constexpr Uint8 kMGPipeDepthStencilModeStencil = 1; // GL_STENCIL_INDEX
+
     // create_shader_state. The reflection blob is the whole LinkArtifacts + SpirvArtifacts
     // archive; P0.5 extracts those types out of ProgramObject.h so a server can
     // deserialize into them without dragging in glslang (section 4.5.5).
@@ -492,17 +506,57 @@ namespace MobileGL::MG_Pipe {
     // set_*
     // ---------------------------------------------------------------------------------
 
+    // MGPSurface::Kind's three values (P4a, ID-12 / esprytobj DV-4). MGPipeKind is REUSED
+    // rather than a second three-value enum minted beside it: it already spells Texture and
+    // Renderbuffer, its None is 0, and a zero-initialised MGPSurface is therefore ALREADY the
+    // empty attachment point this record describes - {Res = kMGPipeNullHandle, Kind = None}
+    // and every other field zero. The static_assert is what keeps that true if MGPipeKind is
+    // ever reordered.
+    inline constexpr Uint8 kMGPipeSurfaceKindNone = static_cast<Uint8>(MGPipeKind::None);
+    inline constexpr Uint8 kMGPipeSurfaceKindTexture = static_cast<Uint8>(MGPipeKind::Texture);
+    inline constexpr Uint8 kMGPipeSurfaceKindRenderbuffer =
+        static_cast<Uint8>(MGPipeKind::Renderbuffer);
+    static_assert(kMGPipeSurfaceKindNone == 0,
+                  "a zero-initialised MGPSurface must already be the empty attachment point");
+
+    // MGPSurface::TextureTarget for a point that names no texture: the renderbuffer point and
+    // the empty point both carry it. It is MobileGL::TextureTarget::Unknown, which is -1 and
+    // therefore 0xFFFF in the field's Uint16 - a value no real target has, so a reader that
+    // forgets to gate on Kind gets a nonsense target rather than a plausible wrong one.
+    inline constexpr Uint16 kMGPipeSurfaceNoTextureTarget = 0xFFFF;
+    static_assert(kMGPipeSurfaceNoTextureTarget ==
+                      static_cast<Uint16>(MobileGL::TextureTarget::Unknown),
+                  "kMGPipeSurfaceNoTextureTarget is TextureTarget::Unknown widened to the "
+                  "field, and MG_State moved Unknown off -1");
+
     // = pipe_surface. internalFormat is INLINE so the four cross-object masks fall out at
     // push time with no lookup (section 4.5.6).
     struct MGPSurface {
         MGPipeHandle Res;
         Uint32 InternalFormat;
-        Uint8 Kind; // Texture | Renderbuffer | None
+        Uint8 Kind; // kMGPipeSurfaceKind{None,Texture,Renderbuffer}, above
         Uint8 Layered;
         Uint16 Level;
         Uint32 Layer;
-        Uint16 UploadTarget;
-        Uint16 Pad0;
+        Uint16 UploadTarget; // static_cast<Uint16>(MobileGL::TextureUploadTarget)
+        // P4a, ID-12 / esprytobj DV-5: WAS Pad0, and the size did not move - the two bytes
+        // were already here. static_cast<Uint16>(MobileGL::TextureTarget), and
+        // kMGPipeSurfaceNoTextureTarget on every point that is not a texture.
+        //
+        // THE FOUR CROSS-OBJECT MASKS ARE WHY IT EXISTS. IsSnormFallbackAttachment,
+        // IsUnormFallbackAttachment and IsAlphaWidenedColorAttachment all reduce to
+        // (format, TEXTURE TARGET) - ShouldUseCaveatTextureFormat(format, target) and
+        // BackendTextureFormatAddsAlpha(format, target) - and no TextureUploadTarget ->
+        // TextureTarget inverse exists anywhere in the tree, so UploadTarget cannot answer
+        // them. Without this field D-C1's promise that the inline InternalFormat makes the
+        // masks "fall out at push time with no lookup" is unkeepable and the backend keeps
+        // reading the frontend attachment objects.
+        //
+        // CONSULTED ONLY WHEN Kind == kMGPipeSurfaceKindTexture. A zero-initialised record
+        // carries 0, which is TextureTarget::Texture1D and not the sentinel; that is not a
+        // defect, because such a record is Kind == None and names no texture at all. Gating
+        // on Kind is the reader's contract.
+        Uint16 TextureTarget;
     };
     MGP_ASSERT_POD(MGPSurface, 24);
 
@@ -823,6 +877,30 @@ namespace MobileGL::MG_Pipe {
     // decision belongs on the side that pays the GPU cost. Mali prices texture upload by
     // JOB COUNT: ~100 sprite rects against one union box measured +6 ms/frame.
     //
+    // `Target` IS TWO FACTS IN ONE Uint16 (P4a, D-D3 / ID-12), and MGPipePackSubDataTarget
+    // under the struct is the only spelling of the encoding - nothing may open-code a half:
+    //
+    //   low byte  = MGPipeResourceTarget          - WHICH KIND of storage the destination is.
+    //                                               The applier branches on it: a buffer
+    //                                               target dispatches into MGPipeResourceOps,
+    //                                               every other target accumulates a pending
+    //                                               upload for the texture sync to consume.
+    //   high byte = MobileGL::TextureUploadTarget - WHICH cube face / upload target the level
+    //                                               belongs to. It is NOT derivable from the
+    //                                               resource target - six faces share TexCube
+    //                                               - and 26 enumerators leave a byte ample.
+    //
+    // WHY THAT WAY ROUND, AND WHY THE ENCODING LIVES HERE RATHER THAN IN EACH EMITTER. The
+    // applier's SubDataNamesABuffer tests the WHOLE field == 0, and
+    // TextureUploadTarget::Texture1D is 0 - so a texture record carrying the bare upload
+    // enumerator is indistinguishable from a buffer record exactly when its owner is a 1D
+    // texture, and that texture's upload is dispatched into the buffer path. With the
+    // resource target in the LOW byte a buffer record's Target stays EXACTLY
+    // kMGPipeResourceTargetBuffer - P3a's buffer records are unchanged on the wire, their
+    // upload byte being zero too - while a texture record can never be zero, because no
+    // texture's MGPipeResourceTarget is. The static_assert under the struct holds that
+    // invariant, and the applier's whole-field test stays right either way.
+    //
     // THE BUFFER HALF. With Target == Buffer there is no level and no box, so the destination
     // byte range rides in the box's first coordinate and first extent: UnionBox.X is the byte
     // offset, UnionBox.W the byte size, Y = Z = 0, H = D = 1, Level = 0, RegionCount = 0.
@@ -841,6 +919,8 @@ namespace MobileGL::MG_Pipe {
     // the only spelling of this convention; nothing else reads the box for a buffer.
     struct MGPSubData {
         MGPipeHandle Res;
+        // Target is PACKED - see the block above, and read it only through
+        // MGPipeSubDataResourceTargetOf / MGPipeSubDataUploadTargetOf below.
         Uint16 Target, Level;
         // Replaces the backend's `uploadData == mipData` pointer comparison: are these
         // bytes an untransformed level shadow?
@@ -852,6 +932,38 @@ namespace MobileGL::MG_Pipe {
         MGPBlobRef Blob;
     };
     MGP_ASSERT_POD(MGPSubData, 72);
+
+    // The one spelling of MGPSubData::Target's encoding, stated above the struct.
+    //
+    // Uint32 ARGUMENTS RATHER THAN THE TWO ENUM TYPES, and that is deliberate. This header is
+    // the contract: MGPipeResourceTarget is minted in it, but the upload half is MG_State's
+    // TextureUploadTarget, and nobody who reads the packed field ever needs that type - the
+    // applier and both backends read the halves BACK, as bytes, through the two accessors.
+    // Naming it in a signature would pin the contract's own API to a frontend enum for no
+    // reader's benefit, and would stop kMGPipeResourceTargetBuffer being passed as it stands.
+    // Callers pass static_cast<Uint32>(MobileGL::TextureUploadTarget) for `uploadTarget` and
+    // static_cast<Uint32>(MGPipeResourceTarget) - or kMGPipeResourceTargetBuffer - for
+    // `resourceTarget`.
+    constexpr inline Uint16 MGPipePackSubDataTarget(Uint32 resourceTarget, Uint32 uploadTarget) {
+        return static_cast<Uint16>((resourceTarget & 0xFFu) | ((uploadTarget & 0xFFu) << 8));
+    }
+    // Comparable against static_cast<Uint8>(MGPipeResourceTarget) / kMGPipeResourceTargetBuffer.
+    constexpr inline Uint8 MGPipeSubDataResourceTargetOf(Uint16 packed) {
+        return static_cast<Uint8>(packed & 0xFFu);
+    }
+    // Comparable against static_cast<Uint8>(MobileGL::TextureUploadTarget).
+    constexpr inline Uint8 MGPipeSubDataUploadTargetOf(Uint16 packed) {
+        return static_cast<Uint8>((packed >> 8) & 0xFFu);
+    }
+    // THE INVARIANT P3a's records and the applier's buffer test both rest on: a buffer
+    // record's Target is exactly kMGPipeResourceTargetBuffer, whole field, upload byte and
+    // all. TextureUploadTarget::Texture1D is 0, so the buffer case is the one place where the
+    // packed form and a bare enumerator agree - and it has to stay that place.
+    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) ==
+                      kMGPipeResourceTargetBuffer,
+                  "a buffer sub-data record's Target must stay exactly "
+                  "kMGPipeResourceTargetBuffer: the applier's SubDataNamesABuffer tests the "
+                  "whole field == 0");
 
     // Encodes a buffer byte range into the record's box. False, with the record untouched,
     // when the range does not fit one record: the emitter has to split it.
