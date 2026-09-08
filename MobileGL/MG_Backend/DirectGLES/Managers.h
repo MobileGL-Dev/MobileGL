@@ -651,15 +651,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_PIPE_PUSH
             // P3a: the client's shadow base as the last content-carrying resource call left
             // it. The handle-shaped ops carry `shadow + offset` beside their record, so the
-            // base is recovered by subtracting the record's own offset once, here, instead of
-            // asking a frontend object for MappedData() at every later drain. Everything the
-            // legacy arm reads through bufferObject.MappedData() - the three-tier range
-            // flush, the pool reseed, the full re-upload - reads this on the handle arm.
+            // base is recovered by subtracting the record's own offset once, here.
             //
-            // RAW, and it may not be dereferenced except while the client's shadow is known
-            // to be live: the client owns the allocation and hands the base over per call.
-            // Null until the first respecify/subdata/flush that carries content, which is
-            // exactly when nothing has bytes to move yet.
+            // IT IS A RAW POINTER INTO AN ALLOCATION THIS SIDE DOES NOT OWN, so its lifetime
+            // rule is written here and enforced at the three events that end it - a cached
+            // base with no invalidation is a use-after-free waiting for an ordinary call:
+            //
+            //   * a content-carrying call (respecify / sub-data / flush-range) REFRESHES it;
+            //   * an ORPHANING respecify (HasDefinedContent clear) CLEARS it, because that is
+            //     also the call that resizes the shadow - reserve + resize reallocates and
+            //     frees the old block - and it brings no replacement base;
+            //   * a successful map_persistent CLEARS it, because the client then adopts the
+            //     coherent pointer and drops the shadow (PipeResource::AdoptPersistentMap does
+            //     clear() + shrink_to_fit()). For such a resource the bytes are persistentPtr.
+            //
+            // Every reader treats null as "no bytes to move". And any path that STILL HOLDS the
+            // frontend object - the ensure path does, because D-N keeps SyncPersistentMappedRange
+            // there for all of P3a - re-reads MappedData() instead of reading this, exactly as
+            // the legacy arm did; this member exists for the drains that have no object, which
+            // in P3a is the readback flush and the fp64 narrowing.
             const Uint8* hostBytes = nullptr;
 #endif
         };

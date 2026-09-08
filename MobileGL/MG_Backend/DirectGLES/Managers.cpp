@@ -1851,9 +1851,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void Ops_H_Respecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
                                  const void* initialBytes) {
                 auto* resource = FindBufferResourceForHandle(res);
-                if (initialBytes != nullptr && resource != nullptr) {
-                    // A respecify's companion pointer IS the shadow base (offset 0).
-                    resource->hostBytes = static_cast<const Uint8*>(initialBytes);
+                if (resource != nullptr) {
+                    // A respecify's companion pointer IS the shadow base (offset 0) - and an
+                    // ORPHANING one (glBufferData with NULL) carries HasDefinedContent clear and
+                    // therefore no pointer at all. That is also the call that RESIZES the
+                    // client's shadow (PipeResource::ResizeShadow is reserve + resize, so a grow
+                    // past the reserve reallocates and frees the block a previous call's base
+                    // pointed into), so the recorded base is dead exactly when no new one
+                    // arrives. FORGET it here rather than leave a pointer nothing refreshes:
+                    // every reader below treats a null base as "no bytes to move", which is the
+                    // honest answer, and the ensure path re-reads the live base from the
+                    // frontend object it still holds.
+                    resource->hostBytes = (desc.HasDefinedContent != 0 && initialBytes != nullptr)
+                                              ? static_cast<const Uint8*>(initialBytes)
+                                              : nullptr;
                 }
                 if (!resource) return; // lazy: the ensure path full-uploads on creation
                 if (resource->immutableStorage) {
@@ -2150,6 +2161,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 resource->persistentPtr = ptr;
                 resource->persistentMapped = true;
+                // The ONE statement here that is not in Ops_AcquirePersistentMap, and it is
+                // about a member the legacy arm does not have rather than about the map: the
+                // client adopts this pointer the instant we return it and
+                // PipeResource::AdoptPersistentMap then does m_shadow->clear() +
+                // shrink_to_fit(), so the shadow base any earlier content-carrying call
+                // recorded is a FREED allocation from here on. The live bytes are persistentPtr.
+                resource->hostBytes = nullptr;
                 resource->storageSize = static_cast<SizeT>(size);
                 resource->storageInitialized = true;
                 resource->pendingRespecify = false;
@@ -2515,6 +2533,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto* resource = GetOrCreateBufferResourceForHandle(res);
             if (!resource) return nullptr;
 
+            // The client's shadow base, RE-READ at every use, exactly as the legacy arm re-read
+            // MappedData() at every use. It is deliberately NOT resource->hostBytes here: two
+            // ordinary events move or free what a base recorded by an earlier call points at -
+            // a shadow resize (PipeResource::ResizeShadow is reserve + resize, so a grow past
+            // the reserve reallocates) and persistent-map adoption (the shadow is cleared and
+            // shrunk to fit) - and this path still holds the frontend object anyway, because
+            // D-N keeps SyncPersistentMappedRange here for all of P3a. hostBytes stays the
+            // fallback for the drains that have NO object (the readback flush), and it is
+            // nulled at both of those events.
+            const auto liveHostBase = [&resource, &bufferObject]() -> const Uint8* {
+                if (bufferObject) return bufferObject->MappedData();
+                return resource->hostBytes;
+            };
+
             if (resource->contextGeneration != g_bufferContextGeneration) {
                 // The id (if any) belonged to a destroyed ES context.
                 resource->id = 0;
@@ -2549,20 +2581,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (resource->id == 0) {
                 const SizeT poolSize = ResourceWidthOf(res);
-                // The pool reseed is a whole-buffer upload and its only source of bytes on this
-                // arm is the shadow base the client last sent; with none, a recycled id could
-                // not be reseeded and a fresh store is the honest answer.
-                const Uint reused = (poolSize > 0 && !resource->persistentMapped &&
-                                     resource->hostBytes != nullptr)
-                                        ? AcquireFromPool(poolSize)
-                                        : 0;
+                // The pool DECISION is the legacy one, unchanged: extent and residence only.
+                // An earlier cut added "and a shadow base was recorded", which silently stopped
+                // a buffer recycling pool ids - a change to D-F's pool behaviour, not to "the
+                // source of bytes" the conversion is allowed to move, and one that moves
+                // AcquireFromPool call counts StreamedArenaScenario observes.
+                const Uint reused =
+                    (poolSize > 0 && !resource->persistentMapped) ? AcquireFromPool(poolSize) : 0;
                 if (reused != 0) {
                     resource->id = reused;
                     resource->storageSize = poolSize;
                     resource->storageInitialized = true;
                     resource->pendingRespecify = false;
                     BindBufferId(TempBufferTarget, reused);
-                    g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, resource->hostBytes);
+                    g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, liveHostBase());
                     if (MG_Util::PipeStats::Enabled()) {
                         MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
                                                      static_cast<Uint64>(poolSize));
@@ -2597,12 +2629,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const Uint64 serial = record->Serial;
             const GLenum usage = MG_Util::ConvertBufferUsageToGLEnum(static_cast<BufferUsage>(record->Desc.Usage));
-            const void* initialData = record->Desc.HasDefinedContent != 0 ? resource->hostBytes : nullptr;
+            // Read AFTER SyncPersistentMappedRange above, and through liveHostBase for the
+            // reason written where it is declared.
+            const Uint8* const hostBase = liveHostBase();
+            const void* initialData = record->Desc.HasDefinedContent != 0 ? hostBase : nullptr;
 
             if (resource->pendingRespecify || !resource->storageInitialized || resource->storageSize != size) {
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
             } else if (!resource->pendingRanges.empty()) {
-                FlushPendingRangesFrom(*resource, resource->hostBytes, size);
+                FlushPendingRangesFrom(*resource, hostBase, size);
                 resource->syncedChangeSerial = serial;
             } else if (resource->syncedChangeSerial != serial) {
                 // Mutations this backend could not track (the table was unregistered between
@@ -4263,7 +4298,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // client where the object lives; until then this is the one behavioural difference
             // between the two arms and it is confined to fp64 vertex arrays fed by
             // shader-written buffers.
-            const Uint8* const sourceBase = resource->hostBytes;
+            // WHERE THE BYTES ARE, and it is not one fixed place: an ADOPTED store has no client
+            // shadow left at all (PipeResource::AdoptPersistentMap clears and shrinks it), so
+            // the coherent map IS the source of truth - which is exactly the case the memo
+            // exclusion below makes the most frequent, since a persistently mapped source is
+            // never trusted and this narrowing therefore re-reads on every draw. Reading the
+            // recorded shadow base for such a resource read freed memory; hostBytes is nulled
+            // at adoption for the same reason, so the fallback below is a null and a refusal
+            // rather than a stale read.
+            const Uint8* const sourceBase =
+                (resource->persistentMapped && resource->persistentPtr != nullptr)
+                    ? static_cast<const Uint8*>(resource->persistentPtr)
+                    : resource->hostBytes;
             const SizeT sourceSize = BufferImpl::ResourceWidthForHandle(binding.Res);
             if (sourceBase == nullptr || attrib.Offset >= sourceSize) {
                 return false;
