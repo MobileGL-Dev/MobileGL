@@ -98,22 +98,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // does this, and no two live VAOs can share an entry however large the working set is.
         // There is no probe in front of it because the mint itself is one - a one-entry memo
         // hit for every acquisition after this draw's first, and a hash probe otherwise.
-        if (MagmaPipeAbaControlDefeatsIdentity()) {
-            // Negative control C: one entry for every VAO, claimed without the Owner compare,
-            // which is precisely "the slot was recycled and Gen did not move". The replacement
-            // therefore inherits the dead VAO's content hash and its resolved-entry pointer -
-            // the two facts the generation is the only thing protecting.
-            return m_vaoMemos[kMagmaPipeAbaControlSlotIndex];
-        }
-        VaoBackendMemos& memos = m_vaoMemos[MagmaPipeSlotIndex(handle)];
-        if (!(memos.Owner == handle)) {
-            // A slot whose Gen moved because the identity table recycled it for a different
-            // object. Claim it, contents cleared - never inherited, which is the whole point
-            // of keying on the generation.
-            memos = VaoBackendMemos{};
-            memos.Owner = handle;
-        }
-        return memos;
+        //
+        // The claim rule - the slot picks the entry, the whole handle (Gen included) decides
+        // whose it is - and negative control C's defeat of it are MagmaPipeArms.h's
+        // MagmaPipeClaimSlotMemos, so that the unit suite which drives a REAL slot reuse
+        // (MG_Test/Pipe/MagmaPipeIdentityTest.cpp) exercises this code and not a copy of it.
+        // What the control defeats HERE is the identity that SELECTS the entry: every VAO
+        // collapses onto one, handed back uncleared, so the replacement inherits the dead
+        // VAO's content hash and its resolved-entry pointer. The GENERATION half is the unit
+        // suite's business, for the reason MagmaPipeAbaControlDefeatsIdentity spells out.
+        return MagmaPipeClaimSlotMemos(m_vaoMemos, handle);
     }
 #endif
 

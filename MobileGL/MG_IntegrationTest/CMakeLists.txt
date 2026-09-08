@@ -829,13 +829,21 @@ gtest_discover_tests(MobileGLIntegrationTest
 # table, and LookupVaoDrawMemo); it steers nothing on DirectGLES, and a lane that configured it
 # there would be a permanent skip claiming to be a control.
 #
-# It gets TWO lanes, because there are two arms and the control has to cover the one P2 SHIPS.
+# It gets TWO lanes, because there are two arms and the control has to reach the one P2 SHIPS.
 # `AbaControl` is D18's lane verbatim (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) and defeats the
 # lifetime-id/address guards; `AbaControlHandles` runs the handle arm (MOBILEGL_PIPE_LEGACY_MEMOS=0,
-# the default push mask) and defeats the {slot, gen} GENERATION, which is what makes the re-keyed
-# memos ABA-safe. With only the first lane the control says nothing at all about the re-key: the
-# handle arm is not executed under MOBILEGL_PIPE_PUSH=0, so every guard it would have to defeat is
-# in another branch.
+# the default push mask) and defeats the object identity that SELECTS THE SLOT - the key the handle
+# arm ships. With only the first lane the control says nothing at all about the re-key: the handle
+# arm is not executed under MOBILEGL_PIPE_PUSH=0, so every guard it would have to defeat is in
+# another branch.
+#
+# NEITHER lane exercises the GENERATION half of {slot, gen}, and no lane of this shape can. Magma's
+# mint has no death notification and returns a slot only through its age sweep (256/1024 boundaries,
+# MagmaPipeArms.h), so the five frame boundaries this scenario issues always hand the replacement a
+# brand-new slot at Gen 1; a real reuse needs >= 1024 idle boundaries, which puts the two draws in
+# different frames - where the only pixel-visible memo declines by design. The generation is covered
+# by the unit suite MG_Test/Pipe/MagmaPipeIdentityTest.cpp instead, which drives a real
+# retire -> reuse; MagmaPipeAbaControlDefeatsIdentity carries the measurement.
 #
 # The two PUSH-ONLY knobs of those arms are set only in a push build, and the lane NAMES are
 # unaffected by that (an ENVIRONMENT property is not part of a test's name, so G2 still sees the

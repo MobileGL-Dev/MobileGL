@@ -107,8 +107,37 @@ if (MSVC)
         target_compile_options(RenderStateSpansTest PRIVATE /Zc:preprocessor)
 endif()
 
+# Magma's own {slot, gen} mint and the claim rule its per-slot memo tables use
+# (MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h, which is header-only). It sits here rather
+# than under Backend/DirectVulkan because it needs no device, no GLFW and no Vulkan loader - and
+# because that directory is registered only when ENABLE_INTEGRATION_TESTS is on, while this
+# suite is the only place in the tree where a deleted `++Gen` is caught. See the file header.
+add_executable(
+        MagmaPipeIdentityTest
+        MagmaPipeIdentityTest.cpp
+)
+
+target_include_directories(MagmaPipeIdentityTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+        ${MGL_ROOT}/MobileGL/MG_Pipe
+        ${MGL_ROOT}/3rdparty/xxHash
+        ${MGL_ROOT}/3rdparty/Vulkan-Headers/include
+        ${MGL_ROOT}/3rdparty/SPIRV-Reflect
+)
+
+target_link_libraries(MagmaPipeIdentityTest PRIVATE
+        GTest::gtest_main
+        ${LINK_LIBRARIES}
+)
+
+if (MSVC)
+        target_compile_options(MagmaPipeIdentityTest PRIVATE /Zc:preprocessor)
+endif()
+
 include(GoogleTest)
 gtest_discover_tests(PipeCatalogueTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+gtest_discover_tests(MagmaPipeIdentityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(PipeInputsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 gtest_discover_tests(RenderStateSpansTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 foreach(pipeTest TrackerTest SlotAllocatorTest CsoCacheTest)

@@ -157,11 +157,33 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // So the control no longer asks the allocator for the collision; it manufactures it. On
     // both arms the object identity is replaced by a constant, which is the strongest form of
     // "the allocator handed the block back" and is deterministic. That covers strictly more
-    // than D18's spelling, and in particular it covers the arm P2 SHIPS: on the handle arm
-    // the constant defeats the GENERATION in {slot, gen}, which is the whole of what makes
-    // the re-keyed memos ABA-safe. Defeating only the retired lifetime-id/address guards
-    // would leave the shipped key untested, which is exactly the vacuity this control exists
-    // to catch.
+    // than D18's spelling, and in particular it reaches the arm P2 SHIPS: on the handle arm
+    // the constant defeats the OBJECT IDENTITY THAT SELECTS THE SLOT - the key the handle arm
+    // ships - so the replacement VAO is handed the dead one's memo entry and its content hash.
+    // Defeating only the retired lifetime-id/address guards would leave that key untested,
+    // which is exactly the vacuity this control exists to catch.
+    //
+    // WHAT IT DOES NOT COVER, AND WHY NO REPRODUCER OF THIS SHAPE CAN [fix-aba review v1,
+    // MAJOR 1]. It does NOT exercise the GENERATION half of {slot, gen}:
+    //
+    //   * this mint has no death notification - nothing in MG_Backend/DirectVulkan consumes
+    //     NotifyStateObjectDestroyed - so a slot returns to the free list only through
+    //     OnFrameBoundary's age sweep (kSweepInterval 256, kRetireAgeBoundaries 1024, below);
+    //   * HandleRecycleScenario issues five frame boundaries, so the free list is empty when
+    //     the replacement VAO acquires and it gets a BRAND-NEW slot at Gen 1 (measured:
+    //     redVao slot=2 gen=1, greenVao slot=3 gen=1). The knob-off FRESH verdict there is
+    //     decided by the SLOT alone, and deleting the ++Gen below leaves all four arms green;
+    //   * a genuine slot REUSE needs >= 1024 idle boundaries after the dead object's last
+    //     draw, which necessarily puts the two draws in different frames - and the only memo
+    //     that carries a GPU slice rather than a layout, ResolvedVertexBindings, declines
+    //     across frames by design. The two requirements are mutually exclusive, so the
+    //     generation is out of reach of any same-frame pixel reproducer for this memo.
+    //
+    // The generation is covered where it IS expressible, over this mint and the claim rule
+    // MagmaPipeClaimSlotMemos below: MG_Test/Pipe/MagmaPipeIdentityTest.cpp drives a real
+    // retire -> reuse and asserts that a memo stamped at {slot, gen=N} is not served at
+    // {slot, gen=N+1} with the knob off and IS served with it on. Deleting the ++Gen reds that
+    // suite; it is the only place in the tree where that deletion is caught.
     //
     // Everything the control does NOT defeat is as load-bearing as what it does. It never
     // touches a guard that is not an IDENTITY guard: the resolved-bindings memo's frame
@@ -442,5 +464,35 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         Vector<UniquePtr<Chunk>> m_chunks;
     };
+
+    // The claim rule every per-slot memo table uses, in one place so that the rule and the
+    // negative control that defeats it cannot drift apart between consumers - and so that the
+    // unit suite which drives a REAL slot reuse (MG_Test/Pipe/MagmaPipeIdentityTest.cpp) tests
+    // this code rather than a copy of it.
+    //
+    // The SLOT picks the entry; the WHOLE handle - Gen included - decides whether the entry is
+    // this object's. A slot the mint recycled for a different object comes back with a moved
+    // Gen, so the compare fails and the entry is cleared rather than inherited. That is the
+    // half HandleRecycleScenario cannot reach (see MagmaPipeAbaControlDefeatsIdentity).
+    //
+    // With negative control C on, every object collapses onto one entry and the entry is handed
+    // back UNCLEARED and UNCLAIMED - at once "the replacement reproduced its predecessor's
+    // slot" and "the slot was reused and Gen did not move".
+    //
+    // `Memos` needs a MG_Pipe::MGPipeHandle member named Owner and a default constructor that
+    // means "empty"; VertexInputStateFactory::VaoBackendMemos is the one production instance.
+    template <typename Memos, Uint32 kChunkEntries>
+    inline Memos& MagmaPipeClaimSlotMemos(MagmaPipeSlotTable<Memos, kChunkEntries>& table,
+                                          const MG_Pipe::MGPipeHandle& handle) {
+        if (MagmaPipeAbaControlDefeatsIdentity()) {
+            return table[kMagmaPipeAbaControlSlotIndex];
+        }
+        Memos& memos = table[MagmaPipeSlotIndex(handle)];
+        if (!(memos.Owner == handle)) {
+            memos = Memos{};
+            memos.Owner = handle;
+        }
+        return memos;
+    }
 #endif // MOBILEGL_PIPE_PUSH
 } // namespace MobileGL::MG_Backend::DirectVulkan
