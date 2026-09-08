@@ -23,6 +23,7 @@
 // pins now reach. Push-only, like the translation unit that defines them - in a pull build the
 // symbol does not exist and the one case that calls it is compiled out.
 #if MOBILEGL_PIPE_PUSH
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
 #endif
 
@@ -777,5 +778,66 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // In monolith it really is a no-op: calling it changes nothing and returns nothing. The
     // teeth are a split server's, and the call site is what P8 gives them to.
     for (const char* name : kNames) MGPipeUnmigratedEmulation(name);
+#endif
+}
+
+// THE ShaderCso COMPOSITE BAND IS A SECOND SPACE, AND THE ALLOCATOR REPORTS IT SEPARATELY.
+//
+// The band's base is 983040, so a composite handle passes every bound an ordinary one does and
+// a slot-indexed table that forgets the band allocates ~983k entries for one program pipeline.
+// That is why the allocator keeps two dense tables - and it is also why the two must be
+// COUNTED apart: a high-water mark that folded them would be pinned at ~983k from the first
+// composite mint onward, and every "the high-water mark did not move over N churn rounds"
+// assertion about ORDINARY ShaderCso slots - the shape that catches a dense table that never
+// shrinks, i.e. the ~1.3 KB-per-record leak the P3a final review found - would be vacuously
+// true for the rest of the process. One merged number is one real assertion and one that
+// cannot go red; two numbers are two real assertions, which is what the per-kind leak cases
+// need.
+//
+// This case pins both halves: a leaked COMPOSITE moves the band's marks and not the ordinary
+// one, and an ordinary leak still moves the ordinary mark with a composite outstanding.
+TEST(PipeCatalogue, TheCompositeShaderBandIsCountedApartFromTheOrdinarySpace) {
+#if MOBILEGL_PIPE_PUSH
+    MGPipeSlotAllocator slots;
+
+    const Uint32 ordinaryBefore = slots.HighWater(MGPipeKind::ShaderCso);
+    EXPECT_EQ(slots.CompositeHighWater(), kMGPipeShaderCsoCompositeSlotBase)
+        << "the band's high-water mark starts at its base, so it is monotone from the first mint";
+    EXPECT_EQ(slots.CompositeLiveCount(), 0u);
+    EXPECT_EQ(slots.CompositeFreeCount(), 0u);
+
+    // A COMPOSITE MOVES THE BAND'S MARKS AND ONLY THOSE.
+    const MGPipeHandle composite = slots.AllocateComposite(9001);
+    ASSERT_FALSE(MGPipeHandleIsNull(composite));
+    ASSERT_TRUE(MGPipeIsCompositeShaderSlot(composite.Slot));
+    EXPECT_EQ(slots.HighWater(MGPipeKind::ShaderCso), ordinaryBefore)
+        << "a composite mint moved the ORDINARY high-water mark, so the ordinary space's leak "
+           "assertion is vacuous from here on";
+    EXPECT_EQ(slots.CompositeHighWater(), kMGPipeShaderCsoCompositeSlotBase + 1u);
+    EXPECT_EQ(slots.CompositeLiveCount(), 1u);
+    // A live composite IS a live ShaderCso: the merged count is deliberate and stays.
+    EXPECT_EQ(slots.LiveCount(MGPipeKind::ShaderCso), 1u);
+
+    // AND THE ORDINARY MARK STILL MOVES WITH A COMPOSITE OUTSTANDING - the half that stopped
+    // existing when one number carried both spaces.
+    const MGPipeHandle ordinary = slots.Allocate(MGPipeKind::ShaderCso);
+    ASSERT_FALSE(MGPipeHandleIsNull(ordinary));
+    EXPECT_FALSE(MGPipeIsCompositeShaderSlot(ordinary.Slot));
+    EXPECT_GT(slots.HighWater(MGPipeKind::ShaderCso), ordinaryBefore);
+    EXPECT_EQ(slots.CompositeHighWater(), kMGPipeShaderCsoCompositeSlotBase + 1u)
+        << "an ordinary mint moved the BAND's high-water mark";
+
+    // The slot goes back to the BAND's free list, and the high-water marks do not come back
+    // down - which is exactly what makes them a leak witness rather than a live count.
+    const Uint32 ordinaryHighWater = slots.HighWater(MGPipeKind::ShaderCso);
+    slots.Free(MGPipeKind::ShaderCso, composite);
+    EXPECT_EQ(slots.CompositeLiveCount(), 0u);
+    EXPECT_EQ(slots.CompositeFreeCount(), 1u);
+    EXPECT_EQ(slots.FreeCount(MGPipeKind::ShaderCso), 1u);
+    EXPECT_EQ(slots.CompositeHighWater(), kMGPipeShaderCsoCompositeSlotBase + 1u);
+    EXPECT_EQ(slots.HighWater(MGPipeKind::ShaderCso), ordinaryHighWater);
+    EXPECT_EQ(slots.LiveCount(MGPipeKind::ShaderCso), 1u);
+#else
+    GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client slot allocator in a pull build";
 #endif
 }

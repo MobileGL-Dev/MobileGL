@@ -860,6 +860,259 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
+    // P4a: the BIRTH half - the gate, the four mints, the publication latch and the seam
+    // ================================================================================
+    //
+    // Declared in MG_Pipe/PipeMutation.h, which is the one door MG_State has into the client
+    // (the closure gate's mutation-header probe keeps it a declaration), and defined here for
+    // the reason every other client-side emission point is: this file is package A's for the
+    // whole phase, so the gate is written ONCE and the packages that own the emitters never
+    // edit it.
+    namespace {
+        using MG_State::GLState::FramebufferObject;
+        using MG_State::GLState::ITextureObject;
+        using MG_State::GLState::ProgramObject;
+        using MG_State::GLState::RenderbufferObject;
+        using MG_State::GLState::SamplerObject;
+
+        // THE SAME PAIR `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
+        // deliberately the same predicate rather than a second copy of it: the operator's
+        // per-subsystem A/B bit in MOBILEGL_PIPE_PUSH, AND this build having WIRED the family
+        // at all. The second half is the family's own kMGPipeWired*Subsystem constant, which
+        // lives in the family's emit header and is 0 until the commit that gives the emitter
+        // its body - so a client path that lands before its emitter does is inert by
+        // construction rather than by everyone remembering to check.
+        Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
+            return (MG_Config::Features.PipePush & subsystem) != 0 && (wired & subsystem) != 0;
+        }
+
+        // ---- THE FAMILY SEAM ----
+        //
+        // The forwarding from a birth hook to its family's emitter has to be written HERE,
+        // once, against an emitter whose entry point does not exist yet: A owns this file for
+        // the whole phase and B/C own the five emit headers, and neither may edit the other's.
+        // A plain call would not compile against the stub emitter and a runtime `if` would not
+        // link. So the call is made from a TEMPLATE whose `if constexpr` condition is the
+        // family's own wired constant, passed as a template ARGUMENT so the condition is
+        // value-dependent: while the constant is 0 the statement is discarded and never
+        // instantiated, so this tree compiles against the stubs; the moment a family sets its
+        // constant the statement instantiates and a missing or misspelled entry point is a
+        // COMPILE ERROR in that family's own commit rather than a surprise at the merge. That
+        // is the same property the four `kMGPipeWired*Subsystem == 0 || == its own bit`
+        // asserts below give, one level further in.
+        //
+        // `call` must be a GENERIC lambda - `[&](auto& emitter) { ... }` - so its body is
+        // checked at instantiation and not at definition. A non-generic one would be checked
+        // here and would defeat the whole seam.
+        template <Uint64 kWired, class Emitter, class Fn>
+        constexpr void ForwardWhenWired(Emitter& emitter, Fn&& call) {
+            if constexpr (kWired != 0) {
+                call(emitter);
+            } else {
+                (void)emitter;
+                (void)call;
+            }
+        }
+
+        // THE SEAM'S POSITIVE CONTROL, and it is not decoration: every use of it in this tree
+        // passes a constant that is 0, so the TAKEN arm is never instantiated here and a seam
+        // that failed to compile or failed to call would be discovered by package B or C
+        // rather than by the commit that wrote it. This drives both arms against a probe
+        // emitter shaped like the ones the emit headers will carry, and asserts that exactly
+        // one call happened - so "discarded when 0, called when set" is a checked property of
+        // this build rather than a claim in the paragraph above.
+        struct SeamProbeEmitter {
+            Uint32 Calls = 0;
+            constexpr void Probe() { ++Calls; }
+        };
+
+        constexpr Bool SeamForwardsExactlyWhenWired() {
+            SeamProbeEmitter probe{};
+            ForwardWhenWired<1ull>(probe, [](auto& emitter) { emitter.Probe(); });
+            ForwardWhenWired<0ull>(probe, [](auto& emitter) { emitter.Probe(); });
+            return probe.Calls == 1;
+        }
+
+        static_assert(SeamForwardsExactlyWhenWired(),
+                      "the family seam must forward exactly when its wired constant is non-zero");
+
+        // ---- THE PUBLICATION LATCH (D-I1) ----
+        //
+        // "Did a create for exactly this handle actually go out?" - asked by the six death
+        // helpers below and answered by whatever emitted the create. It exists because the
+        // create is gated at its call site and the destroy inside the helper, so the two ask
+        // the same question at two different moments; and because A SLOT IS NOT EVIDENCE OF A
+        // RECORD - a backend twin table mints one through MGPipeSlots().Acquire whether or not
+        // the subsystem ever asked this client to emit anything, which is exactly what a
+        // MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs, and a delete_* on such a handle
+        // is a refused call the applier asserts on in a verify build.
+        //
+        // KEYED BY {kind, slot, gen}, so a recycled slot cannot inherit its predecessor's
+        // answer - the same reason the identity carries a generation at all.
+        //
+        // THE ShaderCso COMPOSITE BAND GETS A TABLE OF ITS OWN, exactly as the allocator's
+        // does and for the same arithmetic: the band's base is 983040, so a single composite
+        // in a slot-indexed vector would allocate ~983k entries. Anything that indexes a
+        // ShaderCso slot must test MGPipeIsCompositeShaderSlot(slot) FIRST; this is the
+        // client-side worked example of that rule.
+        class MGPipePublicationLatch {
+        public:
+            void NotePublished(MGPipeKind kind, MGPipeHandle handle) {
+                Entry* entry = Grow(kind, handle.Slot);
+                if (entry == nullptr) return;
+                entry->Gen = handle.Gen;
+                entry->Published = true;
+            }
+
+            Bool IsPublished(MGPipeKind kind, MGPipeHandle handle) const {
+                const Entry* entry = Find(kind, handle.Slot);
+                return entry != nullptr && entry->Published && entry->Gen == handle.Gen;
+            }
+
+            void NoteUnpublished(MGPipeKind kind, MGPipeHandle handle) {
+                Entry* entry = const_cast<Entry*>(Find(kind, handle.Slot));
+                if (entry == nullptr || entry->Gen != handle.Gen) return;
+                *entry = Entry{};
+            }
+
+        private:
+            struct Entry {
+                Uint32 Gen = 0;
+                Bool Published = false;
+            };
+
+            static constexpr SizeT kKindCount = static_cast<SizeT>(MGPipeKind::KindCount);
+
+            Bool IsBand(MGPipeKind kind, Uint32 slot) const {
+                return kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(slot);
+            }
+
+            Entry* Grow(MGPipeKind kind, Uint32 slot) {
+                const SizeT index = static_cast<SizeT>(kind);
+                if (index >= kKindCount) return nullptr;
+                if (IsBand(kind, slot)) {
+                    const SizeT banded = slot - kMGPipeShaderCsoCompositeSlotBase;
+                    if (banded >= m_band.size()) m_band.resize(banded + 1);
+                    return &m_band[banded];
+                }
+                Vector<Entry>& table = m_kinds[index];
+                if (slot >= table.size()) table.resize(static_cast<SizeT>(slot) + 1);
+                return &table[slot];
+            }
+
+            const Entry* Find(MGPipeKind kind, Uint32 slot) const {
+                const SizeT index = static_cast<SizeT>(kind);
+                if (index >= kKindCount) return nullptr;
+                if (IsBand(kind, slot)) {
+                    const SizeT banded = slot - kMGPipeShaderCsoCompositeSlotBase;
+                    return banded < m_band.size() ? &m_band[banded] : nullptr;
+                }
+                const Vector<Entry>& table = m_kinds[index];
+                return slot < table.size() ? &table[slot] : nullptr;
+            }
+
+            Array<Vector<Entry>, kKindCount> m_kinds{};
+            Vector<Entry> m_band{};
+        };
+
+        MGPipePublicationLatch& PublicationLatch() {
+            // NEVER DESTROYED, for MGPipeSlots()' reason: the six death helpers reach this
+            // from frontend destructors that __run_exit_handlers drives AFTER a function-local
+            // static would have gone, and a destroyed latch answers out of freed vectors.
+            static MGPipePublicationLatch* latch = new MGPipePublicationLatch();
+            return *latch;
+        }
+    } // namespace
+
+    void MGPipeNoteHandlePublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return;
+        PublicationLatch().NotePublished(kind, handle);
+    }
+
+    Bool MGPipeHandleIsPublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return false;
+        return PublicationLatch().IsPublished(kind, handle);
+    }
+
+    void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle) {
+        if (MGPipeHandleIsNull(handle)) return;
+        PublicationLatch().NoteUnpublished(kind, handle);
+    }
+
+    void MGPipeMintTextureHandle(ITextureObject& texture) {
+        MGPipeSlots().Acquire(MGPipeKind::Texture, texture.GetLifetimeId());
+    }
+
+    void MGPipeMintRenderbufferHandle(RenderbufferObject& renderbuffer) {
+        MGPipeSlots().Acquire(MGPipeKind::Renderbuffer, renderbuffer.GetLifetimeId());
+    }
+
+    void MGPipeMintFramebufferHandle(FramebufferObject& framebuffer) {
+        MGPipeSlots().Acquire(MGPipeKind::Framebuffer, framebuffer.GetLifetimeId());
+    }
+
+    void MGPipeMintShaderCsoHandle(ProgramObject& program) {
+        MGPipeSlots().Acquire(MGPipeKind::ShaderCso, program.GetLifetimeId());
+    }
+
+    void MGPipeEmitTextureResourceCreate(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitResourceCreate(texture); });
+    }
+
+    void MGPipeEmitTextureResourceRespecify(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitResourceRespecify(texture); });
+    }
+
+    void MGPipeEmitTextureParams(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitTextureParams(texture); });
+    }
+
+    void MGPipeNoteTextureLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(),
+            [&](auto& emitter) { emitter.NoteLevelDirty(storageOwner, uploadTarget, level); });
+    }
+
+    void MGPipeEmitRenderbufferResourceCreate(RenderbufferObject& renderbuffer) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(),
+            [&](auto& emitter) { emitter.EmitRenderbufferCreate(renderbuffer); });
+    }
+
+    void MGPipeEmitRenderbufferResourceRespecify(RenderbufferObject& renderbuffer) {
+        if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
+            MGPipeTextureEmitterInstance(),
+            [&](auto& emitter) { emitter.EmitRenderbufferRespecify(renderbuffer); });
+    }
+
+    void MGPipeEmitSamplerCsoCreate(SamplerObject& sampler) {
+        if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
+            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.EmitSamplerCso(sampler); });
+    }
+
+    void MGPipeEmitSamplerViewCreate(ITextureObject& texture) {
+        if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
+            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.EmitSamplerView(texture); });
+    }
+
+    void MGPipeEmitShaderCsoCreate(ProgramObject& program) {
+        if (!FamilyIsLive(kMGPipeSubsystemPrograms, kMGPipeWiredProgramSubsystem)) return;
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(
+            MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.EmitShaderCso(program); });
+    }
+
+    // ================================================================================
     // P4a: one client-side death helper per kind P4a mints (D-I1)
     // ================================================================================
     //
@@ -879,12 +1132,20 @@ namespace MobileGL::MG_Pipe {
     // record: a backend twin table mints one through MGPipeSlots().Acquire whether or not the
     // subsystem ever asked this client to emit a create - which is exactly what a
     // MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs - and a delete_* on such a handle is
-    // a refused call the applier counts and asserts on. So the emitter is asked
-    // RecordIsPublished(handle) before any delete goes out.
+    // a refused call the applier counts and asserts on. So the PUBLICATION LATCH above is
+    // asked before any delete goes out, and it is the SAME latch whatever emitted the create
+    // wrote - one answer per {kind, slot, gen}, not a second reading of a live predicate.
     //
-    // AT THE CONTRACT COMMIT the five family emitters are stubs that publish nothing, so every
-    // helper here answers false and the legacy path runs unchanged - which is what makes this
-    // commit behaviourally inert while the SHAPE is already the final one.
+    // THE LATCH RATHER THAN A PER-EMITTER RecordIsPublished(handle), deliberately, and it is
+    // the one place P4a's shape differs from P3a's: P3a had one kind and one emitter, so the
+    // emitter could hold the latch. P4a has six kinds behind FOUR emitters and one kind -
+    // SamplerViewCso - with no frontend object at all, and a ShaderCso whose composite band
+    // has two independent release paths. A latch this file owns is then the only thing all
+    // six can read, and it keeps the answer out of the emit headers B and C are writing.
+    //
+    // AT THE CONTRACT COMMIT nothing latches a publication, because every family emitter is a
+    // stub, so every helper here answers false and the legacy path runs unchanged - which is
+    // what makes this commit behaviourally inert while the SHAPE is already the final one.
     namespace {
         // Steps 2 and 3, shared: raise the notice while the handle still resolves, then return
         // the slot. Raised UNCONDITIONALLY, exactly as the five destructors raised it before
@@ -894,22 +1155,49 @@ namespace MobileGL::MG_Pipe {
             MG_State::GLState::NotifyStateObjectDestroyed(kind, lifetimeId);
             if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(kind, handle);
         }
+
+        MGPHandleOnly HandleOnly(MGPipeKind kind, MGPipeHandle handle) {
+            MGPHandleOnly only{};
+            only.Handle = handle;
+            only.Kind = static_cast<Uint32>(kind);
+            return only;
+        }
+
+        // Step 1, shared: the wire delete goes out FIRST and only for a PUBLISHED handle, and
+        // the latch is cleared with it so a second death path - a composite's two, a backend's
+        // redundant notice - cannot emit a second delete for a record that is already gone.
+        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle, void (*apply)(const MGPHandleOnly&)) {
+            if (!MGPipeHandleIsPublished(kind, handle)) return false;
+            apply(HandleOnly(kind, handle));
+            MGPipeNoteHandleUnpublished(kind, handle);
+            return true;
+        }
     } // namespace
 
     Bool MGPipeEmitSamplerViewCsoDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
-        const Bool published = false; // the sampler emitter publishes nothing yet
-        // A sampler view has no frontend object of its own - it is minted off the texture's
-        // lifetime id - so there is no NotifyStateObjectDestroyed for kind SamplerViewCso to
-        // raise and step 2 is vacuous here. The slot still goes back, last.
-        if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(MGPipeKind::SamplerViewCso, handle);
+        const Bool published =
+            EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeApplyDeleteSamplerView);
+        // THE NOTICE IS RAISED FOR THIS KIND TOO, and the reason it once was not is wrong:
+        // NotifyStateObjectDestroyed takes a KIND and a lifetime id, not an object
+        // (StateObjectDeathNotice.h - one entry point for every kind rather than one ops table
+        // per kind), MGPipeKind has SamplerViewCso, and the view IS keyed in that kind's
+        // ByLifetimeId map under the texture's id - which is exactly what the FindByLifetimeId
+        // above just resolved. "It has no frontend object of its own" is why it takes the
+        // lifetime id; it is not a reason to drop step 2. A backend that holds a twin per
+        // SamplerViewCso slot - which is the shape both backends' slot tables take - would
+        // otherwise never be told to drop it, and under a backend with no other per-kind free
+        // path never drop it at all: the C-1 leak, one kind later, and invisible to
+        // PipeSlotPeek because the SLOT was returned correctly.
+        NotifyAndFree(MGPipeKind::SamplerViewCso, lifetimeId, handle);
         return published;
     }
 
     Bool MGPipeEmitTextureDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
-        const Bool published = false; // the texture emitter publishes nothing yet
+        const Bool published =
+            EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeApplyResourceDestroy);
         NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
         // THE SAMPLER VIEW DIES WITH ITS TEXTURE, because it is minted off the same lifetime
         // id: one SamplerViewCso per ITextureObject (D-F2), re-issued on the same handle
@@ -921,18 +1209,31 @@ namespace MobileGL::MG_Pipe {
         // table rather than an omission: the SamplerObject every ITextureObject owns is a real
         // frontend object with its OWN lifetime id and its own #if MOBILEGL_PIPE_PUSH
         // destructor, so freeing it from the texture's lifetime id would resolve the wrong slot
-        // (or, worse, a live one belonging to another object). ~SamplerObject runs immediately
-        // after this - a member's destructor follows its owner's body - and takes
-        // MGPipeEmitSamplerCsoDestroyAndFree below, which is the same helper, the same order
-        // and idempotent.
-        MGPipeEmitSamplerViewCsoDestroyAndFree(lifetimeId);
-        return published;
+        // (or, worse, a live one belonging to another object). Its release therefore rides
+        // ~SamplerObject and MGPipeEmitSamplerCsoDestroyAndFree below - the same helper, the
+        // same three-step order, idempotent.
+        //
+        // WHEN that runs is NOT ordered against this body and nothing here may assume it is.
+        // m_sampler is a SharedPtr, so a texture unit slot or a sampler-view resolution that
+        // took a reference delays ~SamplerObject arbitrarily; "a member's destructor follows
+        // its owner's body" would be true of a by-value member and is not true of this one.
+        // The conclusion above does not depend on the timing - the two ids are different, so
+        // the two releases are independent whichever order they happen in - but a package must
+        // not build an ordering on it.
+        //
+        // AND THE VIEW'S ANSWER IS OR-ED IN, not dropped: a texture whose ResourceDestroy was
+        // suppressed (nothing ever published it) but whose DeleteSamplerView did go out has
+        // already spoken on the wire for this object, and reporting false would run the legacy
+        // path for both halves.
+        const Bool viewPublished = MGPipeEmitSamplerViewCsoDestroyAndFree(lifetimeId);
+        return published || viewPublished;
     }
 
     Bool MGPipeEmitRenderbufferDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
-        const Bool published = false; // the texture/renderbuffer emitter publishes nothing yet
+        const Bool published =
+            EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeApplyResourceDestroy);
         NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
         return published;
     }
@@ -949,6 +1250,12 @@ namespace MobileGL::MG_Pipe {
         // victim to framebuffer 0; and a RECYCLED framebuffer handle can never be suppressed
         // against its predecessor's record, because Fbo carries Gen and Gen is inside the
         // record's ContentHash.
+        //
+        // NOTHING EVER TAKES THE PUBLICATION LATCH FOR THIS KIND, by contract and not by
+        // omission: with no create there is nothing to latch, and with no delete there is
+        // nothing for a latch to gate. The answer is therefore the literal false rather than a
+        // latch read, and false is the right one - it means "the legacy path still owes
+        // whatever it owed", which for a framebuffer is the death notice this just raised.
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
         NotifyAndFree(MGPipeKind::Framebuffer, lifetimeId, handle);
@@ -958,7 +1265,8 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeEmitSamplerCsoDestroyAndFree(Uint64 lifetimeId) {
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
-        const Bool published = false; // the sampler emitter publishes nothing yet
+        const Bool published =
+            EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeApplyDeleteSamplerState);
         NotifyAndFree(MGPipeKind::SamplerCso, lifetimeId, handle);
         return published;
     }
@@ -973,7 +1281,8 @@ namespace MobileGL::MG_Pipe {
         // own (the bump rides the next handout).
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
-        const Bool published = false; // the program emitter publishes nothing yet
+        const Bool published =
+            EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeApplyDeleteShaderState);
         NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);
         return published;
     }
@@ -1861,10 +2170,22 @@ namespace MobileGL::MG_Pipe {
         // to the runtime subsystem that owns it. Naming the subsystem constants here instead
         // would be a second copy of that map in the only path that runs, and mis-gating a bit
         // in it would pass every test the map has.
+        //
+        // FOUR CONDITIONS, AND THE WIRED MASK IS ONE OF THEM. `kMGPipeWiredSubsystems` is the
+        // OR of the per-family constants each emit header defines, and the whole ownership
+        // design rests on it MEANING what the headers, this file and the result files all say
+        // it means: an emitter runs only once the commit that gave it a body set its family's
+        // constant. Without this condition a family whose header still says 0 would be CALLED
+        // at every verb whose bit fires under the shipped default mask, so the commit that
+        // lands the body would go live one commit early and every gate run in between would
+        // measure an arm nobody thinks is on - and the mirror error is worse: a family that
+        // lands its body and forgets the constant would emit nothing and look broken. The
+        // P2/P3a bits are all in the mask, so nothing that emits today changes.
         const Uint64 pushMask = MG_Config::Features.PipePush;
         const auto wants = [&](MGPipeDirty bit) {
             const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
             return subsystem != 0 && (pushMask & subsystem) != 0 &&
+                   (kMGPipeWiredSubsystems & subsystem) != 0 &&
                    (dirty & MGPipeDirtyBit(bit)) != 0;
         };
         Uint64 payloadBytes = 0;
@@ -1918,9 +2239,10 @@ namespace MobileGL::MG_Pipe {
         // is that the file reads in the order the design states.
         //
         // ALL SEVEN ARE STUBS AT THE CONTRACT COMMIT and all four family bits are absent from
-        // kMGPipeWiredSubsystems, so `wants()` is false for every one of them and this whole
-        // block is dead until the packages that own the emitters land. Placing it here, once,
-        // is what keeps those packages out of this file.
+        // kMGPipeWiredSubsystems, so `wants()` is false for every one of them - it tests that
+        // mask as its third condition, which is what makes the sentence true rather than
+        // merely intended - and this whole block is dead until the packages that own the
+        // emitters land. Placing it here, once, is what keeps those packages out of this file.
         if (wants(MGPipeDirty::NewFramebuffer)) {
             payloadBytes += EmitFramebufferState(*ctx);
         }

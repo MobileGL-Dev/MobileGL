@@ -94,6 +94,15 @@ namespace MobileGL::MG_Pipe {
 
 namespace MobileGL::MG_State::GLState {
     class BufferObject;
+    // P4a's five, for the BIRTH half at the tail of this header. Declarations only, exactly as
+    // BufferObject is: none of the hooks below needs a definition, and this header must not
+    // gain one - reaching a frontend class header from here would put the state machine's own
+    // types in front of every mutator that spells MGP_NOTE_MUTATION.
+    class ITextureObject;
+    class RenderbufferObject;
+    class FramebufferObject;
+    class SamplerObject;
+    class ProgramObject;
 }
 
 namespace MobileGL::MG_Pipe {
@@ -211,6 +220,142 @@ namespace MobileGL::MG_Pipe {
     // Returns the coherent host pointer the resource owner donated, or null for a DECLINE -
     // which is a real answer. Every call, mint or decline, is one map-persistent roundtrip.
     void* MGPipeEmitMapPersistent(MG_State::GLState::BufferObject& buffer);
+
+    // ================================================================================
+    // P4a: THE BIRTH HALF, one hook per client path MG_State owns (D-C .. D-I)
+    // ================================================================================
+    //
+    // The death helpers above are half a lifetime. The other half is emitted from MG_State
+    // too - a texture's create from its constructor, a renderbuffer's respecify from its
+    // storage mutators, a texture's params from glTexParameter*, a sampler CSO from the
+    // sampler object, a shader CSO from the program - because that is where the event
+    // happens, exactly as P3a's buffer family emits from BufferObject's own dispatchers
+    // (ARCHITECTURE.md 5.1 names those as the ONE exception to push-at-validate). Only the
+    // texture sub-data DRAIN runs at the validate point, and even it is fed from here: the
+    // drain list is appended on a level's first dirty mark.
+    //
+    // WHY THEY ARE DECLARED HERE. This header is the one door MG_State has into the client
+    // (check_include_closure.py's mutation-header probe pins it: reaching
+    // MG_Impl/Pipe/*Emit.h from a frontend mutator would pull the client's emitters into the
+    // state machine that calls them). So a hook a frontend mutator calls is DECLARED here and
+    // DEFINED in MG_Impl/Pipe/PipeFill.cpp, which is package A's for the whole phase - the
+    // same "declaration here, definition there" split MGPipeMintResourceHandle and
+    // MGPipeEmitResourceCreate use, and the reason no file is touched twice.
+    //
+    // WHAT EACH BODY DOES, and the division is fixed:
+    //   * PipeFill.cpp owns the GATE - the subsystem bit in MOBILEGL_PIPE_PUSH *and* the
+    //     family's own kMGPipeWired*Subsystem constant, the same pair the validate point's
+    //     `wants()` applies to every emission - and the four MINTS, which are pure allocator
+    //     work and need no family knowledge;
+    //   * the FAMILY EMITTER (MG_Impl/Pipe/<Family>Emit.h, owned by package B or C) owns the
+    //     payload build, the handle rule for its own kind and the PUBLICATION LATCH below.
+    //     PipeFill.cpp forwards to it through an entry point that is compiled only while that
+    //     family's wired constant is non-zero, so this tree links against the STUB emitters
+    //     and against the finished ones with no edit to PipeFill.cpp - and a family that sets
+    //     its constant without providing the entry point is a COMPILE ERROR in its own commit
+    //     rather than a surprise at the merge. The entry point each hook forwards to is named
+    //     beside it and spelled out in PipeFill.cpp's contract block.
+    //
+    // NOTHING CALLS ANY OF THEM AT THE CONTRACT COMMIT. B and C add the call sites in the
+    // five MG_State directories C.7 gives them, in the SAME commit that gives the emitter its
+    // body - by EDITING an existing constructor/mutator body, never by adding one (G1).
+
+    // ---- the publication latch (D-I1), and it is the ONE answer both halves read ----
+    //
+    // The create is gated at its call site and the destroy inside the death helper, so the
+    // two ask the same question at two different moments. An object born while its subsystem
+    // bit was clear and destroyed after it was set would otherwise free its slot with the
+    // applier's record still Live - on a slot the allocator is about to hand out again. A
+    // slot is NOT evidence of a record either: a backend twin table mints one through
+    // MGPipeSlots().Acquire whether or not the subsystem ever asked this client to emit a
+    // create, and a delete_* on such a handle is a refused call the applier asserts on.
+    //
+    // So the emitter latches the answer when its create actually goes out, the death helper
+    // reads the latch, and the latch is keyed by {kind, slot, gen} so a recycled slot cannot
+    // inherit its predecessor's answer. Defined in PipeFill.cpp beside the six death helpers,
+    // declared here because both the helpers and the five emit headers read it.
+    void MGPipeNoteHandlePublished(MGPipeKind kind, MGPipeHandle handle);
+    Bool MGPipeHandleIsPublished(MGPipeKind kind, MGPipeHandle handle);
+    void MGPipeNoteHandleUnpublished(MGPipeKind kind, MGPipeHandle handle);
+
+    // ---- the four mints (pure allocator work, no family knowledge) ----
+    //
+    // UNCONDITIONAL in a push build, for MGPipeMintResourceHandle's reason: a handle is CLIENT
+    // state and other subsystems name these objects by handle whether or not their own family
+    // is switched on - MGPSurface::Res names a Texture or a Renderbuffer out of the framebuffer
+    // subsystem, MGPBoundView::Texture and MGPImageView::Res name a Texture out of the sampler
+    // one. Gating the mint on the family bit would make those emit null handles in exactly the
+    // A/B arm that exists to isolate the families. Each costs one free-list pop and one map
+    // insert per object and emits nothing.
+    void MGPipeMintTextureHandle(MG_State::GLState::ITextureObject& texture);
+    void MGPipeMintRenderbufferHandle(MG_State::GLState::RenderbufferObject& renderbuffer);
+    // A framebuffer has a handle and NO wire lifetime (D-I2): set_framebuffer_state is the only
+    // call that names one, and there is no create or destroy for the kind. The mint is still
+    // the object's, so the identity exists before the first validate point that pushes it.
+    void MGPipeMintFramebufferHandle(MG_State::GLState::FramebufferObject& framebuffer);
+    // Ordinary programs only. A program-pipeline COMPOSITE is minted by the composite resolver
+    // out of the reserved band through MGPipeSlotAllocator::AllocateComposite, which is the one
+    // door into it, and it is not a frontend construction event.
+    void MGPipeMintShaderCsoHandle(MG_State::GLState::ProgramObject& program);
+
+    // ---- textures and renderbuffers: MG_Impl/Pipe/TextureEmit.h, package B ----
+    //
+    // resource_create from ITextureObject's constructor and RenderbufferObject's;
+    // resource_respecify from every storage-defining entry point, including
+    // RenderbufferObject::{SetInternalFormat, AllocateStorage, SetSamples}, which publish
+    // nothing at all today (D-D2); set_texture_params from the parameter mutators, which is
+    // where the READ-attachment-only gap D-E3 closes.
+    //
+    // Entry points MGPipeTextureEmitter must provide, all taking the frontend object by
+    // reference and returning void:
+    //   EmitResourceCreate(ITextureObject&) / EmitResourceRespecify(ITextureObject&)
+    //   EmitTextureParams(ITextureObject&)
+    //   NoteLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level)
+    //   EmitRenderbufferCreate(RenderbufferObject&) / EmitRenderbufferRespecify(RenderbufferObject&)
+    void MGPipeEmitTextureResourceCreate(MG_State::GLState::ITextureObject& texture);
+    void MGPipeEmitTextureResourceRespecify(MG_State::GLState::ITextureObject& texture);
+    void MGPipeEmitTextureParams(MG_State::GLState::ITextureObject& texture);
+    // The DRAIN LIST's append, on a level's FIRST dirty mark, keyed on the STORAGE OWNER from
+    // day one (D-D4: a view and its owner already share one dirty state, so an upload through
+    // either lands on the same key). The record itself is emitted at the validate point by
+    // MGPipeTextureEmitter::DrainTextureSubData; this is only what puts the level on the list,
+    // and walking every live texture per verb is the cost it exists to avoid.
+    void MGPipeNoteTextureLevelDirty(MG_State::GLState::ITextureObject& storageOwner, Uint32 uploadTarget,
+                                     Uint32 level);
+    void MGPipeEmitRenderbufferResourceCreate(MG_State::GLState::RenderbufferObject& renderbuffer);
+    void MGPipeEmitRenderbufferResourceRespecify(MG_State::GLState::RenderbufferObject& renderbuffer);
+
+    // ---- sampler CSOs and sampler views: MG_Impl/Pipe/SamplerEmit.h, package C ----
+    //
+    // Entry points MGPipeSamplerEmitter must provide, returning void:
+    //   EmitSamplerCso(SamplerObject&)     - D-F1's content-addressed mint-or-share at
+    //                                        capacity 256, hashed field-wise over a canonical
+    //                                        zero-initialised copy, behind the version-first
+    //                                        skip. The HANDLE RULE FOR THIS KIND IS THE
+    //                                        EMITTER'S, not this file's: two identical
+    //                                        samplers share one CSO, so there is deliberately
+    //                                        no per-object mint above, and it is the emitter
+    //                                        that decides which lifetime id (if any) owns the
+    //                                        slot the death helper will resolve.
+    //   EmitSamplerView(ITextureObject&)   - D-F2's ONE view per texture object, minted off
+    //                                        the texture's own lifetime id and re-issued on
+    //                                        the SAME handle when the restrictions move.
+    void MGPipeEmitSamplerCsoCreate(MG_State::GLState::SamplerObject& sampler);
+    void MGPipeEmitSamplerViewCreate(MG_State::GLState::ITextureObject& texture);
+
+    // ---- programs: MG_Impl/Pipe/ProgramEmit.h, package C ----
+    //
+    // Entry point MGPipeProgramEmitter must provide, returning void:
+    //   EmitShaderCso(ProgramObject&)
+    //
+    // Re-issued on the SAME handle whenever the link version moves, exactly as
+    // create_vertex_elements is (Gen moves only on slot reuse). D-H4 keeps the TRACKER out of
+    // it - bit 6's shutter reads GetCurrentProgram() and deliberately not GetProgramForDraw(),
+    // because the tracker must not force a compile to answer "did the shader move" - so the
+    // ordinary emission is the validate point's, from the join the verb was going to make
+    // anyway. This hook exists for the paths that are NOT a draw: a link that completes off
+    // the draw path still owns its own publication.
+    void MGPipeEmitShaderCsoCreate(MG_State::GLState::ProgramObject& program);
 } // namespace MobileGL::MG_Pipe
 #define MGP_NOTE_MUTATION(Field)                                                                                       \
     ::MobileGL::MG_Pipe::MGPipeNoteFrontendMutation(::MobileGL::MG_Pipe::MGPipeInputField::Field)

@@ -154,6 +154,8 @@ namespace MobileGL::MG_Pipe {
         entry->Live = true;
         entry->LifetimeId = lifetimeId;
         ++state.LiveCount;
+        // The band's share of LiveCount, so CompositeLiveCount() can answer without a walk.
+        ++state.BandLiveCount;
         if (lifetimeId != 0) {
             MOBILEGL_ASSERT(state.ByLifetimeId.find(lifetimeId) == state.ByLifetimeId.end(),
                             "lifetime id %llu already owns a ShaderCso slot",
@@ -197,6 +199,7 @@ namespace MobileGL::MG_Pipe {
         entry->LifetimeId = 0;
         --state.LiveCount;
         if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(handle.Slot)) {
+            --state.BandLiveCount;
             state.BandFreeList.push_back(handle.Slot);
         } else {
             state.FreeList.push_back(handle.Slot);
@@ -219,22 +222,35 @@ namespace MobileGL::MG_Pipe {
     }
 
     Uint32 MGPipeSlotAllocator::HighWater(MGPipeKind kind) const {
-        const KindState& state = StateOf(kind);
-        // Literally "one past the highest slot ever handed out", composites included, so a
-        // leaked composite slot moves it exactly as a leaked ordinary one does - which is what
-        // the per-kind leak cases assert on and what would otherwise make the composite case
-        // green for ever and mean nothing.
-        if (!state.BandSlots.empty()) {
-            return static_cast<Uint32>(kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size());
-        }
-        return static_cast<Uint32>(state.Slots.size());
+        // THE ORDINARY SPACE ONLY, and the band is reported by CompositeHighWater() below.
+        // Folding the two would pin this at ~983k from the first composite mint onward and
+        // take the ordinary space's "the high-water mark did not move" assertion away for the
+        // rest of the process - the assertion that catches a dense table that never shrinks,
+        // which is the leak shape this allocator exists to make visible. Two spaces, two
+        // numbers, two real assertions. See SlotAllocator.h.
+        return static_cast<Uint32>(StateOf(kind).Slots.size());
+    }
+
+    Uint32 MGPipeSlotAllocator::CompositeHighWater() const {
+        const KindState& state = StateOf(MGPipeKind::ShaderCso);
+        // One past the highest composite slot ever handed out; exactly the base when none ever
+        // was, so the number is monotone from the first mint and a LEAKED COMPOSITE MOVES IT.
+        return static_cast<Uint32>(kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size());
     }
 
     Uint32 MGPipeSlotAllocator::LiveCount(MGPipeKind kind) const { return StateOf(kind).LiveCount; }
 
+    Uint32 MGPipeSlotAllocator::CompositeLiveCount() const {
+        return StateOf(MGPipeKind::ShaderCso).BandLiveCount;
+    }
+
     Uint32 MGPipeSlotAllocator::FreeCount(MGPipeKind kind) const {
         const KindState& state = StateOf(kind);
         return static_cast<Uint32>(state.FreeList.size() + state.BandFreeList.size());
+    }
+
+    Uint32 MGPipeSlotAllocator::CompositeFreeCount() const {
+        return static_cast<Uint32>(StateOf(MGPipeKind::ShaderCso).BandFreeList.size());
     }
 
     void MGPipeSlotAllocator::Reset() {
@@ -245,6 +261,7 @@ namespace MobileGL::MG_Pipe {
             state.BandFreeList.clear();
             state.ByLifetimeId.clear();
             state.LiveCount = 0;
+            state.BandLiveCount = 0;
         }
     }
 

@@ -83,15 +83,40 @@ namespace MobileGL::MG_Pipe {
         // otherwise, live or not.
         Uint32 GenOfSlot(MGPipeKind kind, Uint32 slot) const;
         Uint64 LifetimeIdOfSlot(MGPipeKind kind, Uint32 slot) const;
-        // One past the highest slot ever handed out of this kind - which for ShaderCso means
-        // the COMPOSITE band's top once a composite has been minted, because that really is
-        // the highest slot handed out. It is what the leak cases read (a leaked slot of any
-        // kind, composite included, moves it), and it is NOT a table size for kind ShaderCso:
-        // the band is sparse against the ordinary space by design, so a consumer indexing by
-        // slot keeps the band in a table of its own, exactly as this allocator does.
+        // One past the highest ORDINARY slot ever handed out of this kind. For every kind but
+        // ShaderCso that is the whole story; for ShaderCso the composite band is a second,
+        // separately dense space and CompositeHighWater() below answers it.
+        //
+        // THE TWO SPACES ARE REPORTED SEPARATELY, and that is the point rather than a detail.
+        // Folding the band into this number pins it at ~983k from the first composite mint
+        // onward, and every later assertion of the "the high-water mark did not move over N
+        // churn rounds" shape - the one that catches a dense table that never shrinks, which
+        // is the ~1.3 KB-per-record leak C-1 produced - becomes vacuously true for ordinary
+        // ShaderCso slots for the rest of the process. A leak case per space is two real
+        // assertions; one merged number is one real assertion and one that cannot go red.
+        //
+        // It is also NOT a table size for kind ShaderCso even now: the band is sparse against
+        // the ordinary space by design, so a consumer indexing by slot must test
+        // MGPipeIsCompositeShaderSlot(slot) first and keep the band in a table of its own,
+        // exactly as this allocator does.
         Uint32 HighWater(MGPipeKind kind) const;
+        // One past the highest COMPOSITE slot ever handed out, i.e.
+        // kMGPipeShaderCsoCompositeSlotBase + (band slots ever handed out), and exactly the
+        // base when none ever was. Kind ShaderCso is the only kind with a band, so it is
+        // implied - as it is for AllocateComposite. A LEAKED COMPOSITE MOVES THIS and moves
+        // nothing else, which is what the composite's own leak case asserts on.
+        Uint32 CompositeHighWater() const;
+        // Live slots of this kind, ORDINARY AND COMPOSITE TOGETHER for ShaderCso: a live
+        // composite is a live ShaderCso, the applier's two record tables are one object class,
+        // and a caller asking "how many shader CSOs does this client hold" wants both. The
+        // band's own count is CompositeLiveCount(); the ordinary space's is the difference.
         Uint32 LiveCount(MGPipeKind kind) const;
+        Uint32 CompositeLiveCount() const;
+        // Slots waiting on a free list. Also BOTH SPACES for ShaderCso, for LiveCount's
+        // reason and with the same caveat: a caller that needs to know WHICH space a slot went
+        // back to reads CompositeFreeCount() and subtracts.
         Uint32 FreeCount(MGPipeKind kind) const;
+        Uint32 CompositeFreeCount() const;
 
         // Context teardown / server reset / a unit test's fixture.
         void Reset();
@@ -120,6 +145,9 @@ namespace MobileGL::MG_Pipe {
             Vector<Uint32> BandFreeList;
             UnorderedMap<Uint64, Uint32> ByLifetimeId;
             Uint32 LiveCount = 0;
+            // The band's share of LiveCount above, so the two spaces can be reported apart
+            // without walking either table. Always 0 for every kind but ShaderCso.
+            Uint32 BandLiveCount = 0;
         };
 
         KindState& StateOf(MGPipeKind kind);
