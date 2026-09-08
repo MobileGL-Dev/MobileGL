@@ -57,8 +57,19 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // 0 until the emitters below and in ImageEmit.h have bodies; see FramebufferEmit.h's note.
-    inline constexpr Uint64 kMGPipeWiredSamplerSubsystem = 0;
+    // WIRED. The sampler CSO, the sampler view and all three unit sets - set_shader_images
+    // included, whose emitter lives in ImageEmit.h - have bodies, so this file's family
+    // contributes its bit to kMGPipeWiredSubsystems. ONE bit for the whole family, because an
+    // operator switching samplers off has to get the whole family's legacy arm rather than two
+    // thirds of it.
+    //
+    // WHAT THE BIT DOES AND DOES NOT DO, said plainly because it is not what a reader expects:
+    // it is the honest statement of what this build emits for, and it feeds
+    // EmittedCallSuppliesTheWholeField's guard. It is NOT the emission gate - the validate
+    // point's `wants()` asks MGPipeSubsystemForDirty and the runtime MOBILEGL_PIPE_PUSH mask,
+    // so these emitters go live the moment their bodies exist and the mask carries bit 11. The
+    // A/B that switches this family off is the MASK, not this constant.
+    inline constexpr Uint64 kMGPipeWiredSamplerSubsystem = kMGPipeSubsystemSamplers;
 
     // ---------------------------------------------------------------------------------
     // D-F1: the canonical SamplerParameters copy, and why it is not a memcpy
@@ -83,10 +94,15 @@ namespace MobileGL::MG_Pipe {
     //
     // ONE COPY PER MINT ATTEMPT, never per draw: the version-first skip in the two emitters
     // below decides whether to come here at all.
-    inline SamplerParameters MGPipeCanonicalSamplerParameters(const SamplerParameters& src) {
+    // THE PRIMITIVE TAKES AN OUT-PARAMETER, and that is not a style preference either. A
+    // returned SamplerParameters is copied, and a copy of a trivially copyable type leaves the
+    // padding UNSPECIFIED - so a canonicaliser that returned by value would hand its caller a
+    // value whose three trailing bytes are whatever the copy left there, which is the very
+    // thing this function exists to make deterministic. Every producer of canonical bytes in
+    // this file, and every consumer that stores them, goes through this and through memcpy.
+    inline void MGPipeCanonicaliseSamplerParameters(const SamplerParameters& src, SamplerParameters& canon) {
         static_assert(std::is_trivially_copyable_v<SamplerParameters>,
                       "the canonical copy is memset and then assigned field by field");
-        SamplerParameters canon;
         std::memset(static_cast<void*>(&canon), 0, sizeof(canon));
         canon.wrapS = src.wrapS;
         canon.wrapT = src.wrapT;
@@ -109,11 +125,17 @@ namespace MobileGL::MG_Pipe {
         // of Espryt's redundancy filters compare all four. Dropping this one line is G7's
         // scripted negative control and SamplerEmit's suite must go red naming it.
         canon.borderColorForm = src.borderColorForm;
-        return canon;
     }
 
     inline Uint64 MGPipeHashSamplerParameters(const SamplerParameters& canon) {
         return XXH64(&canon, sizeof(canon), 0);
+    }
+
+    // Canonicalise and hash in one step, for a caller that wants only the hash.
+    inline Uint64 MGPipeHashOfSamplerParameters(const SamplerParameters& src) {
+        SamplerParameters canon;
+        MGPipeCanonicaliseSamplerParameters(src, canon);
+        return MGPipeHashSamplerParameters(canon);
     }
 
     // ---------------------------------------------------------------------------------
@@ -169,7 +191,8 @@ namespace MobileGL::MG_Pipe {
         // exactly the sharing that makes content addressing the right answer for this kind.
         MGPipeHandle Acquire(const SamplerParameters& params, Uint64& payloadBytes) {
             ++m_counters.Acquisitions;
-            const SamplerParameters canon = MGPipeCanonicalSamplerParameters(params);
+            SamplerParameters canon;
+            MGPipeCanonicaliseSamplerParameters(params, canon);
             const Uint64 hash = MGPipeHashSamplerParameters(canon);
             for (SizeT i = 0; i < m_entries.size(); ++i) {
                 if (m_entries[i].Hash != hash) continue;
@@ -245,12 +268,20 @@ namespace MobileGL::MG_Pipe {
             desc.Parameters.Offset = 0;
             desc.Parameters.Size = 0;
 
-            Entry entry;
+            // BUILT IN PLACE AND FILLED WITH A MEMCPY, not assigned from a local. This is the
+            // padding trap one level deeper than the one the design names: an assignment copies
+            // the sixteen MEMBERS and leaves the three trailing padding bytes of the
+            // destination at whatever was there, so the next probe's memcmp would reject its
+            // own entry, count a collision that never happened, evict and mint a fresh CSO - a
+            // cache with a hit rate of zero whose failure depends on heap contents, which is
+            // why it passes a case run alone and fails the same case run in a suite. The bytes
+            // stored here have to be the bytes compared later, padding included.
+            m_entries.push_back(Entry{});
+            Entry& entry = m_entries.back();
             entry.Hash = hash;
             entry.LastUsed = ++m_clock;
             entry.Cso = cso;
-            entry.Params = canon;
-            m_entries.push_back(entry);
+            std::memcpy(static_cast<void*>(&entry.Params), &canon, sizeof(canon));
             // The applier is handed the CACHE's copy, so the pointer stays valid for the whole
             // call and the bytes it stores are provably the bytes the memcmp will confirm
             // against later.

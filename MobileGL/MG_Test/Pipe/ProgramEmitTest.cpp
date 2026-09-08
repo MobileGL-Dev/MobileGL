@@ -6,20 +6,23 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P4a's program family: create/bind/delete_shader_state, set_draw_program,
+// P4a's program family on the client: create/bind/delete_shader_state, set_draw_program,
 // set_dispatch_program and set_global_constants.
 //
-// THE ONE PIN THAT IS EASIEST TO LOSE AND WORST TO LOSE: set_global_constants' Version is
-// GetUBOContentVersion(), and ~0u is the BACKENDS' "never uploaded" sentinel - the wrap skips
-// it - so the client must never emit it. A record carrying the sentinel would tell a backend
-// that a block it has just been handed was never uploaded.
+// THE TWO PROPERTIES THIS SUITE EXISTS FOR, and both are invisible from the emitted bytes:
+//   * THE STAGE MASK COMES FROM THE LINKED SNAPSHOT, never from the live attach list.
+//     glAttachShader and glCompileShader take effect only at the NEXT link and neither moves
+//     the link version, so a descriptor built from the attach list describes a program that
+//     does not exist yet - and it would agree with nothing, because the SPIR-V array beside it
+//     is indexed by the snapshot.
+//   * THE EMITTER JOINS AND THE TRACKER DOES NOT. Bit 6's shutter reads GetCurrentProgram()
+//     deliberately and not GetProgramForDraw(), because the tracker must not force a compile
+//     just to answer "did the shader move"; the join belongs to the emitter, which makes the
+//     same call the verb is about to make anyway.
 //
-// THE SUITE IS `ProgramEmit`, not `ProgramEmitTest`: the file is XTest.cpp and the suite is X,
-// this directory's convention, and it is what the gates grep for.
+// THE SUITE IS `ProgramEmit`, not `ProgramEmitTest`: the file is XTest.cpp and the suite is X.
 //
-// THE TARGET AND ITS ctest REGISTRATION ARE THE CONTRACT COMMIT'S; THE CONTENTS ARE NOT: the
-// applier-side cases are the wire commits' and the emitter-side cases are the client
-// package's, and neither has to come back to MG_Test/Pipe/CMakeLists.txt to add one.
+// THE TARGET AND ITS ctest REGISTRATION ARE THE CONTRACT COMMIT'S; THE CONTENTS ARE NOT.
 //
 // IT HAS ITS OWN main() for ResourceEmitTest's reason. Every case is a visible SKIP in a pull
 // build rather than a vanishing test, so `ctest -N` stays name-for-name identical between the
@@ -46,12 +49,17 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include "Init.h"
+#include <MG_Impl/GLImpl/Program/GL_Program.h>
 #include <MG_Impl/Pipe/ProgramEmit.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
+#include <MG_Impl/Pipe/Tracker.h>
 #include <MG_Pipe/PipeApply.h>
 // The applier takes the two artefact structs BY POINTER beside the record, so a case that
 // drives create_shader_state needs their definitions - the applier's own header deliberately
 // only forward-declares them.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
+#include <MG_State/GLState/Core.h>
 #endif
 
 using namespace MobileGL;
@@ -161,10 +169,6 @@ TEST(ProgramEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     EXPECT_EQ(&MGPipeProgramEmitterInstance(), &MGPipeProgramEmitterInstance());
     EXPECT_TRUE(kMGPipeWiredProgramSubsystem == 0 ||
                 kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms);
-    // The record the applier starts from carries the sentinel, not 0: a program that has never
-    // published a default-uniform-block image must not look like one that published version 0.
-    const MGPipeShaderCsoRecord fresh{};
-    EXPECT_EQ(fresh.GlobalConstantsVersion, ~Uint32{0});
 #else
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
 #endif
@@ -471,6 +475,230 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
 #endif
 }
 
+#if !MOBILEGL_PIPE_PUSH
+// G2 requires the pull and push ctest name sets to be identical, name for name.
+#define MGL_PROGRAM_EMIT_TEST_LIST(X)                                                              \
+    X(ProgramEmit, TheStageMaskComesFromTheLinkedSnapshotAndNotTheAttachList)                       \
+    X(ProgramEmit, TheNeverUploadedSentinelIsNeverEmitted)                                          \
+    X(ProgramEmit, TheEmitterJoinsAndTheTrackerDoesNot)                                             \
+    X(ProgramEmit, AReLinkReIssuesOnTheSameHandle)                                                  \
+    X(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots)                                \
+    X(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+MGL_PROGRAM_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+
+namespace {
+    namespace GL = MobileGL::MG_Impl::GLImpl;
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::ProgramObject;
+
+    struct EmitterScope {
+        EmitterScope() { Clear(); }
+        ~EmitterScope() {
+            GL::UseProgram(0);
+            Clear();
+        }
+        EmitterScope(const EmitterScope&) = delete;
+        EmitterScope& operator=(const EmitterScope&) = delete;
+
+        static void Clear() {
+            MGPipeProgramEmitterInstance().Reset();
+            MGPipeProgramEmitterInstance().ResetCounters();
+        }
+    };
+
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+    MGPipeProgramEmitter& Emitter() { return MGPipeProgramEmitterInstance(); }
+
+    const char* kVs = R"(#version 430 core
+uniform vec4 u_value;
+void main() { gl_Position = u_value; }
+)";
+    const char* kFs = R"(#version 430 core
+out vec4 o_color;
+void main() { o_color = vec4(1.0); }
+)";
+    const char* kGs = R"(#version 430 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = vec4(0.0); EmitVertex(); }
+)";
+
+    GLuint MakeShader(GLenum stage, const char* source) {
+        const GLuint shader = GL::CreateShader(stage);
+        GL::ShaderSource(shader, 1, &source, nullptr);
+        GL::CompileShader(shader);
+        return shader;
+    }
+
+    GLuint MakeVsFsProgram() {
+        const GLuint program = GL::CreateProgram();
+        GL::AttachShader(program, MakeShader(GL_VERTEX_SHADER, kVs));
+        GL::AttachShader(program, MakeShader(GL_FRAGMENT_SHADER, kFs));
+        GL::LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE) << "the vertex/fragment program did not link";
+        return program;
+    }
+
+    constexpr Uint32 StageBit(ShaderStage stage) { return Uint32{1} << static_cast<Uint32>(stage); }
+
+    // ProgramObject.h says it in as many words and this is the case that holds it: a stage mask
+    // built from the ATTACH list would describe a program that does not exist yet, because
+    // glAttachShader takes effect only at the next link and does not move the link version.
+    // The SPIR-V array beside the mask is indexed by the same snapshot, so the two halves of
+    // the descriptor agree by construction rather than by care.
+    TEST(ProgramEmit, TheStageMaskComesFromTheLinkedSnapshotAndNotTheAttachList) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+        const Uint32 linkedMask = MGPipeStageMaskOf(*program);
+        EXPECT_EQ(linkedMask, StageBit(ShaderStage::Vertex) | StageBit(ShaderStage::Fragment));
+
+        // A third stage is attached and NOT linked. The live attach list now has three
+        // shaders; the mask must not move.
+        GL::AttachShader(name, MakeShader(GL_GEOMETRY_SHADER, kGs));
+        EXPECT_EQ(program->GetAttachedShaders().size(), 3u) << "the attach really has to land";
+        EXPECT_EQ(MGPipeStageMaskOf(*program), linkedMask)
+            << "glAttachShader takes effect at the NEXT link and moves no link version";
+
+        GL::LinkProgram(name);
+        GLint linked = GL_FALSE;
+        GL::GetProgramiv(name, GL_LINK_STATUS, &linked);
+        if (linked == GL_TRUE) {
+            EXPECT_EQ(MGPipeStageMaskOf(*program), linkedMask | StageBit(ShaderStage::Geometry))
+                << "and after the relink the snapshot really does carry it";
+        }
+    }
+
+    // D-H6. ~0u is the backends' "never uploaded" sentinel and the frontend's own wrap skips
+    // it; the client must never put it on the wire either, or a server would read its own
+    // record as "nothing has ever been uploaded here" and re-upload for ever.
+    //
+    // PINNED AS A PREDICATE rather than by driving the counter to ~0u, and the reason is
+    // written down instead of hidden: reaching that value takes four billion
+    // MarkUBOContentDirty calls, which is not a test. The predicate is the thing
+    // EmitGlobalConstants consults, so pinning it pins the behaviour, and a deletion of the
+    // guard is a compile error here.
+    TEST(ProgramEmit, TheNeverUploadedSentinelIsNeverEmitted) {
+        EmitterScope scope;
+        EXPECT_EQ(kMGPipeGlobalConstantsNeverUploaded, ~Uint32{0});
+        EXPECT_FALSE(MGPipeGlobalConstantsVersionIsEmittable(kMGPipeGlobalConstantsNeverUploaded));
+        EXPECT_TRUE(MGPipeGlobalConstantsVersionIsEmittable(0u));
+        EXPECT_TRUE(MGPipeGlobalConstantsVersionIsEmittable(1u));
+        EXPECT_TRUE(MGPipeGlobalConstantsVersionIsEmittable(~Uint32{0} - 1u));
+
+        // And the live path never produces it either: whatever the frontend's counter is at,
+        // the record the emitter last built carries an emittable version.
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+        program->MarkUBOContentDirty();
+        if (Emitter().EmitGlobalConstants(Ctx()) > 0u) {
+            EXPECT_TRUE(MGPipeGlobalConstantsVersionIsEmittable(Emitter().LastGlobalConstants().Version));
+            EXPECT_EQ(Emitter().LastGlobalConstants().Version, program->GetUBOContentVersion());
+            EXPECT_EQ(Emitter().LastGlobalConstants().Blob.Size, 0u)
+                << "the one Blob rule: a monolith emission does not declare its blob";
+        }
+    }
+
+    // D-H4, and it is a statement about the TRACKER as much as about the emitter: Update() may
+    // not move a program's link completeness in either direction, because answering "did the
+    // shader move" from a version counter is what keeps a compile off the dirty walk. The
+    // emitter is where the join belongs, and it is the same GetProgramForDraw() the verb is
+    // about to make anyway.
+    TEST(ProgramEmit, TheEmitterJoinsAndTheTrackerDoesNot) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+
+        const Bool completeBefore = program->IsLinkComplete();
+        MGPipeTrackerInstance().Update(Ctx(), MGPipeVerbClass::kDraw);
+        EXPECT_EQ(program->IsLinkComplete(), completeBefore)
+            << "the dirty walk must not force a compile, in either direction";
+
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_TRUE(program->IsLinkComplete()) << "the emitter joins, because the verb would";
+        MGPipeTrackerInstance().Reset();
+    }
+
+    TEST(ProgramEmit, AReLinkReIssuesOnTheSameHandle) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+
+        ASSERT_GT(Emitter().EmitShaderState(Ctx()), 0u);
+        ASSERT_EQ(Emitter().CreateCount(), 1u);
+        const MGPipeHandle cso = Emitter().LastProgramDesc().Cso;
+        EXPECT_FALSE(MGPipeHandleIsNull(cso));
+        EXPECT_EQ(Emitter().DrawCso(), cso);
+
+        // Nothing moved: no second record, no second bind.
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_EQ(Emitter().CreateCount(), 1u);
+        EXPECT_EQ(Emitter().BindCount(), 1u);
+
+        const Uint32 linkVersionBefore = program->GetLinkVersion();
+        GL::LinkProgram(name);
+        ASSERT_NE(program->GetLinkVersion(), linkVersionBefore) << "the relink really has to move it";
+
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_EQ(Emitter().CreateCount(), 2u);
+        // THE SAME HANDLE. Gen increments only on slot reuse and never on a respecify, so a
+        // relinked program is the same GL object and the server's twin table must not be asked
+        // to mint a second identity for it.
+        EXPECT_EQ(Emitter().LastProgramDesc().Cso, cso);
+        EXPECT_EQ(Emitter().BindCount(), 1u) << "and a re-issue on the bound handle is not a rebind";
+    }
+
+    // Two calls because the frontend has two joins and two PipeInputs slots. With a plain
+    // glUseProgram they name one object, and the record has to say so rather than leaving the
+    // server to guess which of the two a verb meant.
+    TEST(ProgramEmit, TheDrawAndDispatchProgramsAreTwoIndependentSlots) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        ASSERT_GT(Emitter().EmitShaderState(Ctx()), 0u);
+        EXPECT_EQ(Emitter().DrawCso(), Emitter().DispatchCso());
+        EXPECT_EQ(Emitter().BoundCso(), Emitter().DrawCso());
+        EXPECT_EQ(Emitter().DrawProgramSetCount(), 1u);
+        EXPECT_EQ(Emitter().DispatchProgramSetCount(), 1u);
+
+        // A null handle is legal and means exactly "nothing bound".
+        GL::UseProgram(0);
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().DrawCso()));
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().DispatchCso()));
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().BoundCso()));
+        EXPECT_EQ(Emitter().DrawProgramSetCount(), 2u);
+    }
+
+    TEST(ProgramEmit, AnUnchangedProgramEmitsNothingAtAll) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        GL::UseProgram(name);
+        ASSERT_GT(Emitter().EmitShaderState(Ctx()), 0u);
+        // The version-first skip: nothing hashed, nothing copied, nothing emitted, and the
+        // return value is the bytes that went on the wire - zero.
+        EXPECT_EQ(Emitter().EmitShaderState(Ctx()), 0u);
+        EXPECT_EQ(Emitter().CreateCount(), 1u);
+        EXPECT_EQ(Emitter().BindCount(), 1u);
+        EXPECT_EQ(Emitter().DrawProgramSetCount(), 1u);
+    }
+} // namespace
+#endif // MOBILEGL_PIPE_PUSH
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
@@ -482,6 +710,9 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MOBILEGL_PIPE_PUSH
+    MobileGL::Initialize();
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

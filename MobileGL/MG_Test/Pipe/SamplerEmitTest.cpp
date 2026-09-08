@@ -53,8 +53,16 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include <cstring>
+
+#include "Init.h"
+#include <MG_Impl/GLImpl/Program/GL_Program.h>
+#include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/Pipe/SamplerEmit.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
 #endif
 
 using namespace MobileGL;
@@ -524,6 +532,365 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
 #endif
 }
 
+#if !MOBILEGL_PIPE_PUSH
+// G2 requires the pull and push ctest name sets to be identical, name for name, so every
+// push-only case is present here and SKIPS rather than being absent.
+#define MGL_SAMPLER_EMIT_TEST_LIST(X)                                                              \
+    X(SamplerEmit, EverySamplerParameterFieldSurvivesTheBlobConversion)                             \
+    X(SamplerEmit, PaddingCannotChangeTheHash)                                                      \
+    X(SamplerEmit, TwoIdenticalSamplersShareOneCso)                                                 \
+    X(SamplerEmit, ABorderColorFormChangeAloneMintsANewCso)                                         \
+    X(SamplerEmit, AHashCollisionDoesNotAliasTwoSamplerStates)                                      \
+    X(SamplerEmit, AViewIsReIssuedOnTheSameHandleWhenItsRestrictionsMove)                           \
+    X(SamplerEmit, AnUnchangedTextureReIssuesNothing)                                               \
+    X(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted)                                           \
+    X(SamplerEmit, AnUnchangedSetEmitsNothing)                                                      \
+    X(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+MGL_SAMPLER_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+
+namespace {
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::ITextureObject;
+    using MG_State::GLState::SamplerObject;
+
+    // AN RAII SCOPE RATHER THAN A gtest FIXTURE, for VertexInputEmitTest's reason: both gates
+    // grep `ctest -R 'SamplerEmit\.'`, a TEST_F files its cases under the FIXTURE's name, and
+    // gtest refuses to mix TEST and TEST_F under one suite name.
+    //
+    // UNLIKE VertexInputEmitTest's, this scope does NOT replace pGLContext: half these cases
+    // need a really linked program, so the process is initialised once in main() and the cases
+    // share that context, each using GL names of its own. What the scope does is put the
+    // emitter, its counters and the suppressor back to a known state.
+    struct EmitterScope {
+        EmitterScope() { Clear(); }
+        ~EmitterScope() { Clear(); }
+        EmitterScope(const EmitterScope&) = delete;
+        EmitterScope& operator=(const EmitterScope&) = delete;
+
+        static void Clear() {
+            MGPipeSamplerEmitterInstance().Reset();
+            MGPipeSamplerEmitterInstance().ResetCounters();
+            MGPipeSamplerCsoCacheInstance().ResetForTest();
+            MGPipeSamplerCsoCacheInstance().ResetCounters();
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+        }
+    };
+
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+    MGPipeSamplerEmitter& Emitter() { return MGPipeSamplerEmitterInstance(); }
+    MGPipeSamplerCsoCache& Cache() { return MGPipeSamplerCsoCacheInstance(); }
+
+    // Every field of SamplerParameters set to a value that is not its default, so a conversion
+    // that dropped one is caught by the field's own EXPECT rather than by a count.
+    SamplerParameters DistinctParameters() {
+        SamplerParameters params{};
+        params.wrapS = SamplerWrapMode::ClampToBorder;
+        params.wrapT = SamplerWrapMode::MirroredRepeat;
+        params.wrapR = SamplerWrapMode::MirrorClampToEdge;
+        params.minFilter = SamplerFilterMode::Linear;
+        params.magFilter = SamplerFilterMode::Nearest;
+        params.mipmapMode = SamplerMipmapMode::Nearest;
+        params.minLod = -3.5f;
+        params.maxLod = 7.25f;
+        params.lodBias = 1.5f;
+        params.maxAnisotropy = 2.0f;
+        params.compareFunc = SamplerCompareFunc::Greater;
+        params.compareMode = SamplerCompareMode::CompareToTexture;
+        params.borderColor = {0.25f, 0.5f, 0.75f, 1.0f};
+        params.borderColorI = {-1, 2, -3, 4};
+        params.borderColorUI = {5u, 6u, 7u, 8u};
+        params.borderColorForm = BorderColorForm::Int;
+        return params;
+    }
+
+    // A 2D texture with a single level and a mipmap mode of None, so it is mipmap-complete for
+    // its filter and therefore actually reaches the emitted set. A texture that samples as
+    // incomplete is dropped to a null view on purpose, which is the resolution DirectGLES
+    // performs by leaving the native target unbound.
+    const SharedPtr<ITextureObject>& MakeCompleteTexture(GLuint& name, Int width) {
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        GL::GenTextures(1, &name);
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, width, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        GL::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        GL::TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        return Ctx().GetTextureObject(name);
+    }
+
+    void BindTextureToUnit(Uint32 unit, const SharedPtr<ITextureObject>& texture) {
+        Ctx().GetTextureUnitObject(static_cast<Int>(unit))
+            .GetBindingSlot(TextureTarget::Texture2D)
+            .Bind(texture);
+        Ctx().NoteTextureUnitTouched(static_cast<Int>(unit));
+    }
+
+    // ============================ D-F1: the CSO cache ============================
+
+    // G6 for this family: every one of SamplerParameters' sixteen members survives the
+    // canonical copy the cache hashes and confirms over. Each member is its own EXPECT naming
+    // that member, which is what G7's scripted control needs - it stops the conversion copying
+    // borderColorForm and expects this case to go red NAMING it.
+    TEST(SamplerEmit, EverySamplerParameterFieldSurvivesTheBlobConversion) {
+        EmitterScope scope;
+        const SamplerParameters source = DistinctParameters();
+        SamplerParameters canon;
+        MGPipeCanonicaliseSamplerParameters(source, canon);
+
+        EXPECT_EQ(canon.wrapS, source.wrapS);
+        EXPECT_EQ(canon.wrapT, source.wrapT);
+        EXPECT_EQ(canon.wrapR, source.wrapR);
+        EXPECT_EQ(canon.minFilter, source.minFilter);
+        EXPECT_EQ(canon.magFilter, source.magFilter);
+        EXPECT_EQ(canon.mipmapMode, source.mipmapMode);
+        EXPECT_EQ(canon.minLod, source.minLod);
+        EXPECT_EQ(canon.maxLod, source.maxLod);
+        EXPECT_EQ(canon.lodBias, source.lodBias);
+        EXPECT_EQ(canon.maxAnisotropy, source.maxAnisotropy);
+        EXPECT_EQ(canon.compareFunc, source.compareFunc);
+        EXPECT_EQ(canon.compareMode, source.compareMode);
+        EXPECT_EQ(canon.borderColor, source.borderColor);
+        EXPECT_EQ(canon.borderColorI, source.borderColorI);
+        EXPECT_EQ(canon.borderColorUI, source.borderColorUI);
+        EXPECT_EQ(canon.borderColorForm, source.borderColorForm)
+            << "borderColorForm decides which of glSamplerParameterIiv / fv applies, and the "
+               "three representations are always numerically populated, so the value alone "
+               "cannot say";
+    }
+
+    // THE PADDING TRAP. SamplerParameters is 100 bytes and its members occupy 97 of them, so
+    // bytes 97..99 are padding no writer ever touches. A cache that hashed the object's own
+    // bytes would read them, miss on every probe and mint a fresh CSO per call - a 256-entry
+    // cache with a hit rate of zero that nobody notices, because the pixels are right.
+    TEST(SamplerEmit, PaddingCannotChangeTheHash) {
+        EmitterScope scope;
+        SamplerParameters clean = DistinctParameters();
+        SamplerParameters dirty = clean;
+        auto* bytes = reinterpret_cast<Uint8*>(&dirty);
+        // Written THROUGH A BYTE POINTER, past the last member and inside the object, which is
+        // the only way to make the difference this case is about.
+        for (SizeT i = 97; i < sizeof(SamplerParameters); ++i) bytes[i] = static_cast<Uint8>(0xA5 + i);
+
+        SamplerParameters canonClean;
+        SamplerParameters canonDirty;
+        MGPipeCanonicaliseSamplerParameters(clean, canonClean);
+        MGPipeCanonicaliseSamplerParameters(dirty, canonDirty);
+        EXPECT_EQ(MGPipeHashSamplerParameters(canonClean), MGPipeHashSamplerParameters(canonDirty));
+        // And the CONFIRM, not only the hash: the cache reuses a handle on a memcmp over these
+        // same canonical bytes, so the padding has to be deterministically zero in both.
+        EXPECT_EQ(std::memcmp(&canonClean, &canonDirty, sizeof(SamplerParameters)), 0);
+
+        Uint64 payload = 0;
+        const MGPipeHandle first = Cache().Acquire(clean, payload);
+        const MGPipeHandle second = Cache().Acquire(dirty, payload);
+        EXPECT_EQ(first, second) << "uninitialised padding must not mint a second CSO";
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        EXPECT_EQ(Cache().GetCounters().Hits, 1u);
+    }
+
+    TEST(SamplerEmit, TwoIdenticalSamplersShareOneCso) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        const SamplerParameters params = DistinctParameters();
+        const MGPipeHandle a = Cache().Acquire(params, payload);
+        const MGPipeHandle b = Cache().Acquire(params, payload);
+        EXPECT_FALSE(MGPipeHandleIsNull(a));
+        EXPECT_EQ(a, b);
+        EXPECT_EQ(Cache().Size(), 1u);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u);
+        // A SamplerObject is a pure value with no driver-side per-object binding state, so two
+        // identical samplers really can share one CSO and one server-side twin. That is what
+        // makes content addressing right for this kind and wrong for vertex elements.
+        EXPECT_GT(payload, 0u);
+    }
+
+    TEST(SamplerEmit, ABorderColorFormChangeAloneMintsANewCso) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters params = DistinctParameters();
+        const MGPipeHandle asInt = Cache().Acquire(params, payload);
+        params.borderColorForm = BorderColorForm::Uint;
+        const MGPipeHandle asUint = Cache().Acquire(params, payload);
+        EXPECT_NE(asInt, asUint) << "the form is the only thing that says which driver entry "
+                                    "point applies; the three colour values did not move";
+        EXPECT_EQ(Cache().GetCounters().Mints, 2u);
+    }
+
+    // The memcmp confirm exists because a bare 64-bit equality would alias two DIFFERENT
+    // sampler states onto one CSO - silent wrong filtering with no gate that can see it. Two
+    // states whose hashes happen to agree cannot be manufactured here, so the property is
+    // driven the other way: two states that differ in ONE field never share a handle, however
+    // small the difference is.
+    TEST(SamplerEmit, AHashCollisionDoesNotAliasTwoSamplerStates) {
+        EmitterScope scope;
+        Uint64 payload = 0;
+        SamplerParameters base = DistinctParameters();
+        const MGPipeHandle first = Cache().Acquire(base, payload);
+        base.maxLod = base.maxLod + 0.0009765625f; // one representable step, nothing else moves
+        const MGPipeHandle second = Cache().Acquire(base, payload);
+        EXPECT_NE(first, second);
+        EXPECT_EQ(Cache().GetCounters().Collisions, 0u)
+            << "a genuine collision would have been rejected by the memcmp, not accepted";
+    }
+
+    // ============================ D-F2: the sampler view ============================
+
+    TEST(SamplerEmit, AnUnchangedTextureReIssuesNothing) {
+        EmitterScope scope;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        ASSERT_TRUE(texture);
+        Uint64 payload = 0;
+        const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+        const MGPipeHandle view = Emitter().AcquireSamplerView(*texture, handle, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(view));
+        EXPECT_EQ(Emitter().ViewCreateCount(), 1u);
+        // THE VERSION-FIRST SKIP: nothing moved, so nothing is hashed, copied or emitted.
+        EXPECT_EQ(Emitter().AcquireSamplerView(*texture, handle, payload), view);
+        EXPECT_EQ(Emitter().ViewCreateCount(), 1u);
+    }
+
+    TEST(SamplerEmit, AViewIsReIssuedOnTheSameHandleWhenItsRestrictionsMove) {
+        EmitterScope scope;
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        ASSERT_TRUE(texture);
+        Uint64 payload = 0;
+        const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+        const MGPipeHandle view = Emitter().AcquireSamplerView(*texture, handle, payload);
+        ASSERT_FALSE(MGPipeHandleIsNull(view));
+        ASSERT_EQ(Emitter().ViewCreateCount(), 1u);
+        const Uint64 shapeBefore = texture->GetShapeVersion();
+
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        ASSERT_NE(texture->GetShapeVersion(), shapeBefore) << "the storage really has to move";
+
+        // THE SAME HANDLE, a second record. Gen increments only on slot reuse and never on a
+        // respecify, so re-issuing on the same handle is legal and is what keeps a server's
+        // twin table from minting a second identity for one texture.
+        const MGPipeHandle reissued = Emitter().AcquireSamplerView(*texture, handle, payload);
+        EXPECT_EQ(reissued, view);
+        EXPECT_EQ(Emitter().ViewCreateCount(), 2u);
+        EXPECT_EQ(Emitter().LastCreatedView().Cso, view);
+        EXPECT_EQ(Emitter().LastCreatedView().Texture, handle);
+        EXPECT_EQ(Emitter().LastCreatedView().Target, static_cast<Uint8>(TextureTarget::Texture2D));
+        EXPECT_EQ(Emitter().LastCreatedView().InternalFormat, static_cast<Uint32>(texture->GetFormat()));
+        // An ordinary texture carries no view restriction, and zero is that statement rather
+        // than a second spelling of it: glTextureView always writes NumLevels >= 1.
+        EXPECT_EQ(Emitter().LastCreatedView().NumLevels, 0u);
+        EXPECT_EQ(Emitter().LastCreatedView().NumLayers, 0u);
+    }
+
+    // ============================ D-G: the two unit sets ============================
+
+    Uint MakeSamplerProgram() {
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        static const char* kVs = "#version 330 core\nvoid main(){ gl_Position = vec4(0.0); }\n";
+        static const char* kFs =
+            "#version 330 core\n"
+            "uniform sampler2D sampled;\n"
+            "out vec4 color;\n"
+            "void main(){ color = texture(sampled, vec2(0.0)); }\n";
+        const Uint program = GL::CreateProgram();
+        const Uint vs = GL::CreateShader(GL_VERTEX_SHADER);
+        GL::ShaderSource(vs, 1, &kVs, nullptr);
+        GL::CompileShader(vs);
+        GL::AttachShader(program, vs);
+        const Uint fs = GL::CreateShader(GL_FRAGMENT_SHADER);
+        GL::ShaderSource(fs, 1, &kFs, nullptr);
+        GL::CompileShader(fs);
+        GL::AttachShader(program, fs);
+        GL::LinkProgram(program);
+        return program;
+    }
+
+    // ARCHITECTURE's third merge rule: the client emits the PROGRAM-RESOLVED set. A unit the
+    // shader does not sample carries no view, whatever is bound to it - which is exactly the
+    // gallium one-view-per-slot resolved form, and exactly what DirectGLES arrives at by
+    // asking the program which of a unit's aliased bindings is the sampled one.
+    TEST(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted) {
+        EmitterScope scope;
+        namespace GL = MobileGL::MG_Impl::GLImpl;
+        const Uint program = MakeSamplerProgram();
+        GLint linked = 0;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_TRUE);
+        GL::UseProgram(program);
+        const GLint location = GL::GetUniformLocation(program, "sampled");
+        ASSERT_GE(location, 0);
+        GL::Uniform1i(location, 3);
+
+        GLuint sampledName = 0;
+        GLuint unsampledName = 0;
+        const SharedPtr<ITextureObject> sampled = MakeCompleteTexture(sampledName, 4);
+        const SharedPtr<ITextureObject> unsampled = MakeCompleteTexture(unsampledName, 4);
+        BindTextureToUnit(3, sampled);
+        BindTextureToUnit(5, unsampled);
+
+        ASSERT_GT(Emitter().EmitSamplerViews(Ctx()), 0u);
+        ASSERT_EQ(Emitter().ViewSetCount(), 1u);
+        ASSERT_GE(Emitter().LastSamplerViews().Count, 6u);
+        EXPECT_EQ(Emitter().LastSamplerViews().Start, 0u);
+
+        const MGPBoundView& resolved = Emitter().LastBoundViews()[3];
+        EXPECT_EQ(resolved.Unit, 3u);
+        EXPECT_FALSE(MGPipeHandleIsNull(resolved.Texture)) << "unit 3 is what the shader samples";
+        EXPECT_FALSE(MGPipeHandleIsNull(resolved.View));
+
+        const MGPBoundView& ignored = Emitter().LastBoundViews()[5];
+        EXPECT_EQ(ignored.Unit, 5u);
+        EXPECT_TRUE(MGPipeHandleIsNull(ignored.Texture))
+            << "unit 5 has a texture bound but no sampler uniform resolves to it";
+        EXPECT_TRUE(MGPipeHandleIsNull(ignored.View));
+
+        GL::UseProgram(0);
+    }
+
+    TEST(SamplerEmit, AnUnchangedSetEmitsNothing) {
+        EmitterScope scope;
+        GLuint name = 0;
+        const SharedPtr<ITextureObject> texture = MakeCompleteTexture(name, 4);
+        BindTextureToUnit(1, texture);
+        Emitter().EmitSamplerViews(Ctx());
+        const Uint64 after = Emitter().ViewSetCount();
+        // The suppressor's whole job: an unchanged resolved set is not sent again. Without it
+        // this would be a several-hundred-byte variable-length record per batch, because a
+        // redundant re-bind moves the bind generation and the dirty bit with it.
+        Emitter().EmitSamplerViews(Ctx());
+        EXPECT_EQ(Emitter().ViewSetCount(), after);
+    }
+
+    TEST(SamplerEmit, ARedundantRebindOfTheSameSamplerEmitsNothing) {
+        EmitterScope scope;
+        const SharedPtr<MG_State::GLState::SamplerObject>& sampler = Ctx().CreateSamplerObject(4131);
+        ASSERT_TRUE(sampler);
+        Ctx().GetTextureUnitObject(2).SetSamplerObject(sampler);
+        Ctx().NoteTextureUnitTouched(2);
+
+        ASSERT_GT(Emitter().EmitSamplerStates(Ctx()), 0u);
+        ASSERT_EQ(Emitter().StateSetCount(), 1u);
+        ASSERT_GE(Emitter().LastSamplerStates().Count, 3u);
+        EXPECT_FALSE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[2]));
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastSamplerStateHandles()[0]))
+            << "a unit with no sampler object carries the null handle, and the texture's "
+               "built-in sampler then applies exactly as today";
+
+        // 26.2's idiom: the same sampler object re-bound at every texture-unit switch. The bind
+        // generation moves, so the dirty bit fires and this emitter runs - and emits nothing.
+        Ctx().BumpTextureBindGeneration();
+        Emitter().EmitSamplerStates(Ctx());
+        EXPECT_EQ(Emitter().StateSetCount(), 1u);
+        EXPECT_EQ(Cache().GetCounters().Mints, 1u) << "and it mints no second CSO either";
+    }
+} // namespace
+#endif // MOBILEGL_PIPE_PUSH
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
@@ -535,6 +902,11 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MOBILEGL_PIPE_PUSH
+    // ONE process-wide context for the whole suite, because half these cases need a really
+    // linked program and glslang lives behind this call. Each case uses GL names of its own.
+    MobileGL::Initialize();
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

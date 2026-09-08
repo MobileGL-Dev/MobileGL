@@ -50,8 +50,14 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include "Init.h"
+#include <MG_Impl/GLImpl/Program/GL_Program.h>
+#include <MG_Impl/GLImpl/Program/GL_ProgramPipeline.h>
+#include <MG_Impl/Pipe/CompositeResolver.h>
+#include <MG_Impl/Pipe/ProgramEmit.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
 // create_shader_state takes the two artefact structs by pointer beside the record, so a case
 // that mints a composite record needs their definitions.
 #include <MG_State/GLState/ProgramState/ProgramArtifacts.h>
@@ -347,6 +353,211 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
 #endif
 }
 
+#if !MOBILEGL_PIPE_PUSH
+// G2 requires the pull and push ctest name sets to be identical, name for name.
+#define MGL_COMPOSITE_RESOLVER_TEST_LIST(X)                                                        \
+    X(CompositeResolver, ACompositeIsMintedFromTheReservedBand)                                     \
+    X(CompositeResolver, ASignatureThatHasNotMovedReusesOneComposite)                               \
+    X(CompositeResolver, TwoPipelinesWithTheSameSignatureKeepTheirOwnComposite)                     \
+    X(CompositeResolver, EvictionThenDestructionFreesTheSlotExactlyOnce)                            \
+    X(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+MGL_COMPOSITE_RESOLVER_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+
+namespace {
+    namespace GL = MobileGL::MG_Impl::GLImpl;
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::ProgramObject;
+
+    struct ResolverScope {
+        ResolverScope() { Clear(); }
+        ~ResolverScope() {
+            GL::BindProgramPipeline(0);
+            GL::UseProgram(0);
+            Clear();
+        }
+        ResolverScope(const ResolverScope&) = delete;
+        ResolverScope& operator=(const ResolverScope&) = delete;
+
+        static void Clear() {
+            MGPipeProgramEmitterInstance().Reset();
+            MGPipeProgramEmitterInstance().ResetCounters();
+            MGPipeCompositeResolverInstance().ResetCounters();
+        }
+    };
+
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+
+    const char* kVs = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* kFs = R"(#version 430 core
+out vec4 o_color;
+void main() { o_color = vec4(1.0); }
+)";
+
+    // Built by hand rather than through glCreateShaderProgramv, for ProgramPipelineCompositeTest's
+    // reason: that entry point detaches the shader right after linking, so a relink would leave
+    // the stage program with nothing to composite from.
+    GLuint MakeSeparableProgram(GLenum stage, const char* source) {
+        const GLuint shader = GL::CreateShader(stage);
+        GL::ShaderSource(shader, 1, &source, nullptr);
+        GL::CompileShader(shader);
+        const GLuint program = GL::CreateProgram();
+        GL::ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
+        GL::AttachShader(program, shader);
+        GL::LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE) << "separable stage program did not link";
+        return program;
+    }
+
+    GLuint MakeBoundPipeline(GLuint vs, GLuint fs) {
+        GLuint pipeline = 0;
+        GL::GenProgramPipelines(1, &pipeline);
+        GL::BindProgramPipeline(pipeline);
+        GL::UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+        GL::UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+        GL::UseProgram(0);
+        return pipeline;
+    }
+
+    TEST(CompositeResolver, ACompositeIsMintedFromTheReservedBand) {
+        ResolverScope scope;
+        const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+        const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kFs);
+        MakeBoundPipeline(vs, fs);
+
+        const SharedPtr<ProgramObject> composite = Ctx().GetProgramForDraw();
+        ASSERT_TRUE(composite) << "the frontend has to flatten the pipeline for this to mean anything";
+        // The composite is the one ProgramObject in the system with external index 0: it is
+        // deliberately not a named program, must not answer glIsProgram and must not consume a
+        // name, and glCreateProgram never returns 0.
+        EXPECT_TRUE(MGPipeProgramIsPipelineComposite(*composite));
+        EXPECT_EQ(composite->GetExternalIndex(), 0u);
+
+        ASSERT_GT(MGPipeProgramEmitterInstance().EmitShaderState(Ctx()), 0u);
+        const MGPipeHandle cso = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        EXPECT_TRUE(MGPipeIsCompositeShaderSlot(cso.Slot))
+            << "a composite's slot comes out of the reserved band and nowhere else";
+        // AND IT IS AN ORDINARY create_shader_state. The server never learns it is a composite.
+        EXPECT_EQ(MGPipeProgramEmitterInstance().LastProgramDesc().Cso, cso);
+        EXPECT_TRUE(MGPipeProgramEmitterInstance().RecordIsPublished(cso));
+        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Mints, 1u);
+    }
+
+    TEST(CompositeResolver, ASignatureThatHasNotMovedReusesOneComposite) {
+        ResolverScope scope;
+        const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+        const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kFs);
+        MakeBoundPipeline(vs, fs);
+
+        ASSERT_GT(MGPipeProgramEmitterInstance().EmitShaderState(Ctx()), 0u);
+        const MGPipeHandle first = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(first));
+        ASSERT_EQ(MGPipeProgramEmitterInstance().CreateCount(), 1u);
+
+        // The stage set did not move, so the frontend hands back the cached composite and the
+        // resolver reuses its handle - no second identity, no second record, and nothing
+        // released. THE KEY IS ComputeDrawProgramSignature's {lifetimeId, linkVersion} array
+        // and deliberately NOT GetBackendStateVersion, which a glUniform1i to a sampler moves
+        // and which used to rebuild the composite on every draw.
+        MGPipeProgramEmitterInstance().EmitShaderState(Ctx());
+        EXPECT_EQ(MGPipeProgramEmitterInstance().DrawCso(), first);
+        EXPECT_EQ(MGPipeProgramEmitterInstance().CreateCount(), 1u);
+        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 0u);
+        EXPECT_GE(MGPipeCompositeResolverInstance().GetCounters().Reuses, 1u);
+    }
+
+    // [deviation] The brief names this case "TwoPipelinesWithTheSameSignatureShareOneComposite".
+    // Sharing one HANDLE between two pipeline objects is not implementable safely and the
+    // property that is true is the opposite one, so the case is named for what it asserts.
+    //
+    // The reason is the death path: a composite is an ordinary ProgramObject with its OWN
+    // lifetime id, and the client-side death helper resolves the handle FROM that lifetime id.
+    // Two composites sharing one handle would put only one of the two ids in the allocator's
+    // map, so the first ~ProgramObject would free a slot the second still names - a premature
+    // free that reappears later as slot theft, which is the exact class this whole band exists
+    // to prevent. The frontend does not share either: each ProgramPipelineObject carries its
+    // own one-slot draw-program cache, so two pipeline objects with identical stage sets are
+    // two composites in the frontend too.
+    TEST(CompositeResolver, TwoPipelinesWithTheSameSignatureKeepTheirOwnComposite) {
+        ResolverScope scope;
+        const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+        const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kFs);
+
+        MakeBoundPipeline(vs, fs);
+        ASSERT_GT(MGPipeProgramEmitterInstance().EmitShaderState(Ctx()), 0u);
+        const MGPipeHandle firstCso = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(firstCso));
+
+        MakeBoundPipeline(vs, fs); // a SECOND pipeline object, the same stage set
+        MGPipeProgramEmitterInstance().EmitShaderState(Ctx());
+        const MGPipeHandle secondCso = MGPipeProgramEmitterInstance().DrawCso();
+        ASSERT_FALSE(MGPipeHandleIsNull(secondCso));
+
+        EXPECT_NE(firstCso, secondCso);
+        EXPECT_TRUE(MGPipeIsCompositeShaderSlot(firstCso.Slot));
+        EXPECT_TRUE(MGPipeIsCompositeShaderSlot(secondCso.Slot));
+        // Both are still resolvable, which is the property a shared handle would have broken.
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, firstCso));
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, secondCso));
+    }
+
+    // THE TWO RELEASE ORDERS, driven at the level where both of them are representable. Either
+    // order frees the slot exactly once and the second call is a PROVEN no-op, because
+    // MGPipeSlotAllocator::Free refuses a slot that is not live at that generation and bumps no
+    // generation of its own - so a double release cannot skip a generation either.
+    TEST(CompositeResolver, EvictionThenDestructionFreesTheSlotExactlyOnce) {
+        ResolverScope scope;
+        constexpr Uint64 kCompositeLifetimeId = 918273645ull;
+        const Uint32 liveBefore = MGPipeSlots().LiveCount(MGPipeKind::ShaderCso);
+        const MGPipeHandle cso = MGPipeSlots().AllocateComposite(kCompositeLifetimeId);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        ASSERT_TRUE(MGPipeIsCompositeShaderSlot(cso.Slot));
+        ASSERT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore + 1);
+
+        // 1. the pipeline cache drops it
+        MGPipeEmitShaderCsoDestroyAndFree(kCompositeLifetimeId);
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, cso));
+        EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore);
+        // 2. and then ~ProgramObject runs, and finds nothing to do
+        MGPipeEmitShaderCsoDestroyAndFree(kCompositeLifetimeId);
+        EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore);
+    }
+
+    TEST(CompositeResolver, DestructionThenEvictionFreesTheSlotExactlyOnce) {
+        ResolverScope scope;
+        constexpr Uint64 kCompositeLifetimeId = 918273646ull;
+        const Uint32 liveBefore = MGPipeSlots().LiveCount(MGPipeKind::ShaderCso);
+        const MGPipeHandle cso = MGPipeSlots().AllocateComposite(kCompositeLifetimeId);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+
+        // The mirror order, and it is the one that actually happens today: the frontend's
+        // one-slot cache drops its SharedPtr as it overwrites it, so ~ProgramObject usually
+        // runs first and the resolver's release is the second, redundant path.
+        MGPipeEmitShaderCsoDestroyAndFree(kCompositeLifetimeId);
+        EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, cso));
+        MGPipeEmitShaderCsoDestroyAndFree(kCompositeLifetimeId);
+        EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore);
+
+        // And the slot really came back: the next composite is handed the same slot with a
+        // bumped generation, so the stale handle can never resolve to it.
+        const MGPipeHandle recycled = MGPipeSlots().AllocateComposite(kCompositeLifetimeId + 1);
+        EXPECT_EQ(recycled.Slot, cso.Slot);
+        EXPECT_NE(recycled.Gen, cso.Gen);
+        MGPipeSlots().Free(MGPipeKind::ShaderCso, recycled);
+    }
+} // namespace
+#endif // MOBILEGL_PIPE_PUSH
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
@@ -358,6 +569,9 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MOBILEGL_PIPE_PUSH
+    MobileGL::Initialize();
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

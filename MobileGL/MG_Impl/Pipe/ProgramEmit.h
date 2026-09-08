@@ -47,8 +47,12 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // 0 until the emitters below have bodies; see FramebufferEmit.h's note.
-    inline constexpr Uint64 kMGPipeWiredProgramSubsystem = 0;
+    // WIRED. create/bind/delete_shader_state, set_draw_program, set_dispatch_program and
+    // set_global_constants all have bodies, so this family contributes its bit to
+    // kMGPipeWiredSubsystems. See SamplerEmit.h's note for what the bit does and does not do:
+    // it states what this build emits for, and the EMISSION gate is the runtime
+    // MOBILEGL_PIPE_PUSH mask through the validate point's `wants()`, not this constant.
+    inline constexpr Uint64 kMGPipeWiredProgramSubsystem = kMGPipeSubsystemPrograms;
 
     // D-H6. ~0u is the BACKENDS' "never uploaded" sentinel for a global-constants version, and
     // ProgramObject::MarkUBOContentDirty skips it on the wrap for exactly that reason. The

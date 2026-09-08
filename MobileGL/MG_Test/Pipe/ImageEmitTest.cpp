@@ -6,20 +6,16 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P4a's image-unit set: set_shader_images, the third of the three kVarTail unit sets. It rides
-// the sampler family's subsystem bit - one family, one A/B - and has its own suite because its
-// content hash has to cover two fields the other two sets do not carry.
+// P4a's third kVarTail unit set, set_shader_images. It rides the sampler family's subsystem
+// bit: one family, one A/B.
 //
-// THE TWO CASES THIS SUITE EXISTS FOR: an ACCESS-mode change alone, and an INTERNAL-FORMAT
-// change alone, each has to move the hash and emit the set. Both are live glBindImageTexture
-// state, the format-less image bake keys on the format the shader was built against, and a
-// hash over the bindings alone would suppress exactly the record that says the bake is stale.
-// The behavioural gates beside them are the format-less bake and non-core-format scenarios,
-// and the photon fixture on desktop retrace - the only fixture that has ever caught an
-// image-binding-semantics regression, and one that must never be run on the Adreno.
+// WHAT THIS SUITE IS FOR. The image set is the one whose ContentHash has to cover more than
+// the binding: InternalFormat and Access are live glBindImageTexture state that the
+// format-less image bake keys on, so a set whose only movement is an access mode still has to
+// go out. And the zero early-out is the property an optimisation deletes by accident - it is
+// what makes every draw of every application that never binds an image pay one integer test.
 //
-// THE SUITE IS `ImageEmit`, not `ImageEmitTest`: the file is XTest.cpp and the suite is X,
-// this directory's convention, and it is what the gates grep for.
+// THE SUITE IS `ImageEmit`, not `ImageEmitTest`: the file is XTest.cpp and the suite is X.
 //
 // THE TARGET AND ITS ctest REGISTRATION ARE THE CONTRACT COMMIT'S; THE CONTENTS ARE NOT.
 //
@@ -48,8 +44,14 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #if MOBILEGL_PIPE_PUSH
+#include "Init.h"
+#include <MG_Impl/GLImpl/Program/GL_Program.h>
+#include <MG_Impl/GLImpl/Texture/GL_Texture.h>
 #include <MG_Impl/Pipe/ImageEmit.h>
+#include <MG_Impl/Pipe/SetHashSuppressor.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/PipeApply.h>
+#include <MG_State/GLState/Core.h>
 #endif
 
 using namespace MobileGL;
@@ -157,10 +159,9 @@ namespace {
 TEST(ImageEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 #if MOBILEGL_PIPE_PUSH
     EXPECT_EQ(&MGPipeImageEmitterInstance(), &MGPipeImageEmitterInstance());
-    // The image set's window is bounded by the same merged unit space the other two sets use;
-    // there is no separate image-unit capacity and there must not be one, because a record
-    // whose window is checked against a different bound from the array it indexes is the shape
-    // the applier's Fatal{ProtocolCorruption} exists to make impossible.
+    // The image set has no bit of its own: set_shader_images rides the SAMPLER subsystem,
+    // because the three unit sets are one family and an operator switching them off has to get
+    // the whole family's legacy arm.
     EXPECT_EQ(kMGPipeMaxImageUnits, kMGPipeMaxTextureUnits);
 #else
     GTEST_SKIP() << "MOBILEGL_PIPE_PUSH is off: there is no client emitter in a pull build";
@@ -323,6 +324,184 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
 #endif
 }
 
+#if !MOBILEGL_PIPE_PUSH
+// G2 requires the pull and push ctest name sets to be identical, name for name.
+#define MGL_IMAGE_EMIT_TEST_LIST(X)                                                                \
+    X(ImageEmit, AZeroHighWaterMarkEmitsNothingWithoutHashing)                                      \
+    X(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet)                                           \
+    X(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet)                                       \
+    X(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+MGL_IMAGE_EMIT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+
+namespace {
+    namespace GL = MobileGL::MG_Impl::GLImpl;
+    using GLContext = MG_State::GLState::GLContext;
+
+    struct EmitterScope {
+        EmitterScope() { Clear(); }
+        ~EmitterScope() { Clear(); }
+        EmitterScope(const EmitterScope&) = delete;
+        EmitterScope& operator=(const EmitterScope&) = delete;
+
+        static void Clear() {
+            MGPipeImageEmitterInstance().Reset();
+            MGPipeImageEmitterInstance().ResetCounters();
+            MGPipeProgramOpaqueUnitsShared().Invalidate();
+            MGPipeSetHashSuppressorInstance().InvalidateAll();
+        }
+    };
+
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+    MGPipeImageEmitter& Emitter() { return MGPipeImageEmitterInstance(); }
+
+    GLuint MakeComputeProgram(const char* source) {
+        const GLuint shader = GL::CreateShader(GL_COMPUTE_SHADER);
+        GL::ShaderSource(shader, 1, &source, nullptr);
+        GL::CompileShader(shader);
+        const GLuint program = GL::CreateProgram();
+        GL::AttachShader(program, shader);
+        GL::LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE) << "the compute program did not link";
+        return program;
+    }
+
+    GLuint MakeImageTexture() {
+        GLuint name = 0;
+        GL::GenTextures(1, &name);
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+        return name;
+    }
+
+    // PROPERTY 1 OF D-G4, and it is the one an optimisation deletes: an application that never
+    // binds an image pays one integer test per draw, taken BEFORE any hash and before any
+    // 192-entry walk.
+    //
+    // The frontend has no image-unit high-water mark of its own - NoteUnitTouched is the
+    // TEXTURE-unit path and glBindImageTexture does not reach it - so the window is derived
+    // from the highest image unit the CURRENT PROGRAM names. A program with no image uniform
+    // names none, and the set is not emitted at all.
+    TEST(ImageEmit, AZeroHighWaterMarkEmitsNothingWithoutHashing) {
+        EmitterScope scope;
+        static const char* kNoImages = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Out { uint value; } outBuf;
+void main() { outBuf.value = 1u; }
+)";
+        const GLuint program = MakeComputeProgram(kNoImages);
+        GL::UseProgram(program);
+
+        // A texture IS bound to an image unit. The set still does not go out, because no
+        // shader can read it - which is the whole point of deriving the window from the
+        // program rather than walking 192 units to find out.
+        const GLuint texture = MakeImageTexture();
+        GL::BindImageTexture(0, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+
+        EXPECT_EQ(Emitter().EmitShaderImages(Ctx()), 0u);
+        EXPECT_EQ(Emitter().ImageSetCount(), 0u);
+        EXPECT_EQ(Emitter().Window(), 0u);
+        GL::UseProgram(0);
+    }
+
+    const char* kImageCompute = R"(#version 430 core
+layout(local_size_x = 1) in;
+layout(binding = 1, rgba8) uniform image2D img;
+void main() { imageStore(img, ivec2(0), vec4(1.0)); }
+)";
+
+    // The record carries the APPLICATION's format and access verbatim. The bind-format recast -
+    // a GL_RG32F bind is INVALID_VALUE on most non-core formats on Adreno - and the
+    // buffer-texture split view are SERVER-side and stay there, so a client that pre-applied
+    // either of them would be answering a driver question from the wrong side of the boundary.
+    TEST(ImageEmit, TheApplicationsFormatAndAccessTravelUnrecast) {
+        EmitterScope scope;
+        const GLuint program = MakeComputeProgram(kImageCompute);
+        GL::UseProgram(program);
+        const GLuint texture = MakeImageTexture();
+        GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+        // THE FIXTURE HAS TO SET UP WHAT THE CASE IS ABOUT, and it is asserted rather than
+        // assumed: the window comes from the program's own image uniforms, so a shader whose
+        // image uniform did not reach the reflection would make every case below pass for the
+        // wrong reason - by emitting nothing at all.
+        const SharedPtr<MG_State::GLState::ProgramObject>& object = Ctx().GetProgramObject(program);
+        ASSERT_TRUE(object);
+        const auto& resolution = MGPipeProgramOpaqueUnitsShared().For(object.get());
+        ASSERT_EQ(resolution.MaxImageUnit, 1)
+            << "maxUniformLocation=" << object->GetMaxUniformLocation()
+            << " unit@0=" << object->GetUniformSamplerOrImageUnitIndex(0)
+            << " linked=" << object->GetLinkStatus();
+
+        // ASSERTED ON THE COUNTER, NOT ON THIS CALL'S RETURN VALUE, and the reason is worth
+        // writing down because it surprised this suite: the glBindImageTexture above ALREADY
+        // reached the validate point and emitted the set, so a direct call afterwards is
+        // correctly suppressed as unchanged. What the case is about is what went out, not who
+        // sent it.
+        Emitter().EmitShaderImages(Ctx());
+        ASSERT_GE(Emitter().ImageSetCount(), 1u);
+        ASSERT_GE(Emitter().LastShaderImages().Count, 2u);
+        const MGPImageView& view = Emitter().LastImageViews()[1];
+        EXPECT_EQ(view.Unit, 1u);
+        EXPECT_FALSE(MGPipeHandleIsNull(view.Res));
+        EXPECT_EQ(view.InternalFormat, static_cast<Uint32>(GL_RGBA8));
+        EXPECT_EQ(view.Access, 1u) << "GL_WRITE_ONLY, folded into the one byte the wire carries";
+        EXPECT_EQ(view.Level, 0u);
+        EXPECT_EQ(view.Layered, 0u);
+        EXPECT_EQ(view.Layer, 0u);
+        GL::UseProgram(0);
+    }
+
+    TEST(ImageEmit, AnAccessModeChangeAloneStillEmitsTheSet) {
+        EmitterScope scope;
+        const GLuint program = MakeComputeProgram(kImageCompute);
+        GL::UseProgram(program);
+        const GLuint texture = MakeImageTexture();
+        GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        Emitter().EmitShaderImages(Ctx());
+        const Uint64 before = Emitter().ImageSetCount();
+        ASSERT_GE(before, 1u);
+        ASSERT_EQ(Emitter().LastImageViews()[1].Access, 0u) << "GL_READ_ONLY";
+
+        // The same texture, the same unit, the same format - only the access mode moves. The
+        // hash has to cover it, or a shader that now writes where it used to read is bound with
+        // the previous barrier and coherence semantics.
+        GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+        Emitter().EmitShaderImages(Ctx());
+        EXPECT_GT(Emitter().ImageSetCount(), before);
+        EXPECT_EQ(Emitter().LastImageViews()[1].Access, 2u);
+        GL::UseProgram(0);
+    }
+
+    TEST(ImageEmit, AnInternalFormatChangeAloneStillEmitsTheSet) {
+        EmitterScope scope;
+        const GLuint program = MakeComputeProgram(kImageCompute);
+        GL::UseProgram(program);
+        const GLuint texture = MakeImageTexture();
+        GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        Emitter().EmitShaderImages(Ctx());
+        const Uint64 before = Emitter().ImageSetCount();
+        ASSERT_GE(before, 1u);
+        ASSERT_EQ(Emitter().LastImageViews()[1].InternalFormat, static_cast<Uint32>(GL_RGBA8));
+
+        // The format the shader was built against is live glBindImageTexture state, and the
+        // format-less image bake keys on it: a set suppressed because "the binding did not
+        // move" would leave the server baking against the previous format.
+        GL::BindImageTexture(1, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+        Emitter().EmitShaderImages(Ctx());
+        EXPECT_GT(Emitter().ImageSetCount(), before);
+        EXPECT_EQ(Emitter().LastImageViews()[1].InternalFormat, static_cast<Uint32>(GL_RGBA8UI));
+        GL::UseProgram(0);
+    }
+} // namespace
+#endif // MOBILEGL_PIPE_PUSH
+
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const fs::path path =
@@ -334,6 +513,9 @@ int main(int argc, char** argv) {
     _putenv_s("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str());
 #else
     setenv("MOBILEGL_LOG_FILE_PATH", g_logPath.c_str(), 1);
+#endif
+#if MOBILEGL_PIPE_PUSH
+    MobileGL::Initialize();
 #endif
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();
