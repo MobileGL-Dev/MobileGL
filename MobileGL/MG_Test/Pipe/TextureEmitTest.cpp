@@ -182,6 +182,817 @@ TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
 #endif
 }
 
+// ============================================================================
+// P4a package B's EMITTER-SIDE cases. The contract commit landed the file and its ctest
+// registration and one shape pin; the wire package's applier-side cases and these are disjoint
+// TEST bodies in one file, and a collision between them is resolved by UNION, never by
+// choosing a side.
+// ============================================================================
+#if !MOBILEGL_PIPE_PUSH
+#define MGL_TEXTURE_EMIT_CLIENT_TEST_LIST(X)                                                       \
+    X(TextureEmit, EveryTextureTargetMapsToItsOwnResourceTarget)                                   \
+    X(TextureEmit, EveryBindKindSetsItsBindMaskBit)                                                \
+    X(TextureEmit, ABindMaskBitIsStickyAcrossARespecify)                                           \
+    X(TextureEmit, AnImageBoundTextureCarriesTheImageBindableHintForever)                          \
+    X(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels)                               \
+    X(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero)                        \
+    X(TextureEmit, AWholeLevelUploadCarriesZeroStrides)                                            \
+    X(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero)                     \
+    X(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner)                                      \
+    X(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso)                                    \
+    X(TextureEmit, TwoTexturesWithIdenticalSamplingShareOneBuiltinCso)                             \
+    X(TextureEmit, ADestroyedTextureReleasesItsResourceViewAndBuiltinSamplerSlots)                 \
+    X(TextureEmit, ARenderbufferRespecifyPublishesItsExtentWithoutAVersionCounter)                 \
+    X(TextureEmit, ABailedLevelStaysDirtyAndStaysOnTheDrainList)                                   \
+    X(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne)                    \
+    X(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList)                              \
+    X(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation)         \
+    X(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams)                                \
+    X(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent)           \
+    X(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask)                       \
+    X(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain)
+
+#define MGL_DECLARE_PULL_SKIP(Suite, Name)                                                         \
+    TEST(Suite, Name) { GTEST_SKIP() << "compiled only under MOBILEGL_PIPE_PUSH"; }
+MGL_TEXTURE_EMIT_CLIENT_TEST_LIST(MGL_DECLARE_PULL_SKIP)
+#undef MGL_DECLARE_PULL_SKIP
+#else
+namespace {
+    using GLContext = MG_State::GLState::GLContext;
+    using MG_State::GLState::MipmapDirtyRegion;
+    using MG_State::GLState::MipmapInput;
+    using MG_State::GLState::MipmapStorage;
+    using MG_State::GLState::RenderbufferObject;
+    using MG_State::GLState::TextureObject2D;
+    using MG_State::GLState::TextureObjectView;
+
+    // AN RAII SCOPE RATHER THAN A gtest FIXTURE, for VertexInputEmitTest's reason: both gates
+    // grep `ctest -R 'TextureEmit\.'`, a TEST_F files its cases under the FIXTURE's name, and
+    // gtest refuses to mix TEST and TEST_F under one suite name - so a fixture would rename
+    // every case out of the gate's reach.
+    //
+    // It ARMS THE SUBSYSTEM BIT, which a unit binary otherwise has cleared:
+    // MG_Config::Features.PipePush defaults to 0 and only ConfigLoader ever sets the phase mask,
+    // so without this every emission below would be correctly skipped and every assertion would
+    // be green for the wrong reason.
+    struct TextureScope {
+        TextureScope() {
+            m_previousPush = MG_Config::Features.PipePush;
+            // D-K2's fourth row, in the fixture: BIT 10 REQUIRES BIT 11.
+            // MGPTextureParams::BuiltinSampler is a SamplerCso handle out of the sampler
+            // family's content-addressed cache, and a null there is Fatal{ProtocolCorruption}.
+            MG_Config::Features.PipePush |= kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
+            m_previousContext = Move(MG_State::pGLContext);
+            MG_State::pGLContext = MakeUnique<GLContext>();
+            MGPipeTextureEmitterInstance().ResetForTest();
+            // AND THE APPLIER IS A PROCESS SINGLETON, so its object records outlive a case. With
+            // kMGPipeWiredTextureSubsystem flipped the emitter's calls actually LAND, and a case
+            // that inherited the previous one's records would assert against state it did not
+            // create - and, worse, a case that wants to prove a REFUSAL could not construct one.
+            // v1 armed the emitter here instead (ArmForTest), which is now gone: the constant is
+            // its own bit, PipeFill.cpp's gate never consulted that latch, and MG_Config's bit is
+            // the switch the shipped build has.
+            MGPipeApplierReset();
+            MGPipeApplierReleaseObjectRecords();
+        }
+        ~TextureScope() {
+            MGPipeTextureEmitterInstance().ResetForTest();
+            MGPipeApplierReset();
+            MGPipeApplierReleaseObjectRecords();
+            MG_State::pGLContext.reset();
+            MG_State::pGLContext = Move(m_previousContext);
+            MG_Config::Features.PipePush = m_previousPush;
+        }
+        TextureScope(const TextureScope&) = delete;
+        TextureScope& operator=(const TextureScope&) = delete;
+
+        UniquePtr<GLContext> m_previousContext;
+        Uint64 m_previousPush = 0;
+    };
+
+    MGPipeTextureEmitter& Textures() { return MGPipeTextureEmitterInstance(); }
+    GLContext& Ctx() { return *MG_State::pGLContext; }
+
+    // The APPLIER's own view of what this emitter sent. With the family's wired constant flipped
+    // the calls actually land, so a case can read the record rather than the emitter's staging
+    // copy - which is the whole of M1 (v1's four region cases all read LastRegions(), the
+    // emitter's own vector, and could not see that the tail was never passed).
+    const MGPipeResourceRecord* AppliedTexture(MGPipeHandle handle) {
+        const SizeT slot = handle.Slot;
+        if (slot >= MGPipeApplier().TextureResources.size()) return nullptr;
+        const MGPipeResourceRecord& record = MGPipeApplier().TextureResources[slot];
+        if (!record.Live || record.Gen != handle.Gen) return nullptr;
+        return &record;
+    }
+
+    const MGPipeResourceRecord::PendingUpload* AppliedUpload(const MGPipeResourceRecord& record,
+                                                             Uint16 target, Uint16 level) {
+        for (const auto& pending : record.PendingUploads) {
+            if (pending.UploadTarget == target && pending.Level == level) return &pending;
+        }
+        return nullptr;
+    }
+
+    // A 2D texture with `levels` levels, each RGBA8 and each half the previous one, so the
+    // bytes-per-texel the emitter derives from (byteSize / texelCount) is exactly 4 and every
+    // stride assertion below is an exact number rather than a range.
+    SharedPtr<TextureObject2D> MakeTexture2D(Uint name, Int size, Uint levels = 1) {
+        auto texture = MakeShared<TextureObject2D>(name);
+        texture->SetInternalFormat(TextureInternalFormat::RGBA8);
+        for (Uint level = 0; level < levels; ++level) {
+            const Int extent = std::max<Int>(size >> level, 1);
+            texture->AllocateStorage(TextureUploadTarget::Texture2D, level,
+                                     MipmapInput{IntVec3{extent, extent, 1},
+                                                 static_cast<SizeT>(extent) * static_cast<SizeT>(extent) * 4});
+        }
+        return texture;
+    }
+} // namespace
+
+// ============================ D-A3 ============================
+//
+// The exhaustiveness the contract's static_assert already pins, walked at RUNTIME over every
+// enumerator - because the assert answers "is every target mapped" and this answers the
+// stronger "does every target map to its OWN row". Folding rectangle onto 2D is the one
+// collapse anybody would be tempted by, and it is a distinction the frontend keeps and both
+// backends switch on.
+TEST(TextureEmit, EveryTextureTargetMapsToItsOwnResourceTarget) {
+    Vector<Uint32> seen;
+    for (Int i = 0; i < static_cast<Int>(TextureTarget::TextureTargetCount); ++i) {
+        const auto target = static_cast<TextureTarget>(i);
+        const Uint32 resourceTarget = MGPipeResourceTargetForTextureTarget(target);
+        EXPECT_NE(resourceTarget, kMGPipeResourceTargetUnmapped)
+            << "TextureTarget " << i << " has no MGPResourceDesc::Target row";
+        EXPECT_NE(resourceTarget, static_cast<Uint32>(MGPipeResourceTarget::Buffer))
+            << "TextureTarget " << i << " maps onto the BUFFER row, which the ack predicate reads";
+        EXPECT_NE(resourceTarget, static_cast<Uint32>(MGPipeResourceTarget::Renderbuffer))
+            << "TextureTarget " << i << " maps onto the RENDERBUFFER row";
+        for (const Uint32 previous : seen) {
+            EXPECT_NE(previous, resourceTarget)
+                << "TextureTarget " << i << " shares its resource target with an earlier one";
+        }
+        seen.push_back(resourceTarget);
+    }
+    EXPECT_EQ(seen.size(), static_cast<SizeT>(TextureTarget::TextureTargetCount));
+}
+
+// ============================ D-A4 ============================
+TEST(TextureEmit, EveryBindKindSetsItsBindMaskBit) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(1, 8);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+
+    const Uint16 bits[] = {kMGPipeBindSampler, kMGPipeBindShaderImage, kMGPipeBindRenderTarget,
+                           kMGPipeBindDepthStencil};
+    Uint16 expected = 0;
+    for (const Uint16 bit : bits) {
+        Textures().NoteTextureBoundAs(handle, bit);
+        expected = static_cast<Uint16>(expected | bit);
+        EXPECT_EQ(Textures().TextureBindMask(handle), expected) << "bind bit " << bit;
+    }
+    // ORed, never cleared: re-noting one bit cannot drop the others.
+    Textures().NoteTextureBoundAs(handle, kMGPipeBindSampler);
+    EXPECT_EQ(Textures().TextureBindMask(handle), expected);
+}
+
+TEST(TextureEmit, ABindMaskBitIsStickyAcrossARespecify) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(2, 8);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    Textures().NoteTextureBoundAs(handle, kMGPipeBindRenderTarget);
+
+    // A storage definition REPUBLISHES the mask; it does not rebuild it.
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0,
+                             MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
+    EXPECT_TRUE(Textures().LastDesc().Resource == handle);
+    EXPECT_NE(Textures().LastDesc().BindMask & kMGPipeBindRenderTarget, 0)
+        << "MGPResourceDesc::BindMask lost the RENDER_TARGET bit across a respecify";
+    EXPECT_EQ(Textures().LastDesc().Width, 16u);
+}
+
+TEST(TextureEmit, AnImageBoundTextureCarriesTheImageBindableHintForever) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(3, 8);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 0);
+
+    Textures().NoteTextureBoundAs(handle, kMGPipeBindShaderImage);
+    // The next respecify carries the hint - and it is the PREVENTION half of the texture-remint
+    // stall class, so it must never go back to 0 afterwards.
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 1, MipmapInput{IntVec3{4, 4, 1}, 4 * 4 * 4});
+    EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 1);
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 2, MipmapInput{IntVec3{2, 2, 1}, 2 * 2 * 4});
+    EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 1);
+
+    // AND THE ORDER THE OTHER WAY ROUND, WHICH IS THE ORDER THE BUG WAS IN (M4). v1's case only
+    // ever bound BEFORE allocating - the one order in which the mask reaches the wire on the
+    // next respecify - so reversing the two statements turned it red. An allocation followed by
+    // a bind is the CANONICAL order and the only one an immutable texture has.
+    const auto later = MakeTexture2D(31, 8);
+    const MGPipeHandle laterHandle = Textures().FindTexture(*later);
+    later->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{8, 8, 1}, 8 * 8 * 4});
+    ASSERT_EQ(Textures().LastDesc().ImageBindableHint, 0);
+    const Uint64 respecifiesBefore = Textures().RespecifyCount();
+    Textures().NoteTextureBoundAs(laterHandle, kMGPipeBindShaderImage);
+    EXPECT_GT(Textures().RespecifyCount(), respecifiesBefore)
+        << "a mask change after the allocation emitted nothing, so the hint can never reach the "
+           "server for a texture that has no further respecify";
+    EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 1);
+    EXPECT_NE(Textures().LastDesc().BindMask & kMGPipeBindShaderImage, 0);
+    // A SECOND note of the same bit moves nothing: the mask did not change, so there is no
+    // metadata update to send.
+    const Uint64 afterFirst = Textures().RespecifyCount();
+    Textures().NoteTextureBoundAs(laterHandle, kMGPipeBindShaderImage);
+    EXPECT_EQ(Textures().RespecifyCount(), afterFirst);
+
+    // And the transition armed the ONE resync the client is allowed to ask for (D-E2): the
+    // widened-channel carrier needs a swizzle override the frontend params version never moves
+    // for. It is one-shot - the server clears its own copy, the client never clears a server
+    // flag, and the client must not keep asking.
+    texture->SetSwizzleParam(TextureSwizzleParam::Red, TextureSwizzleParam::Blue);
+    EXPECT_EQ(Textures().LastParams().ForceResync, 1);
+    texture->SetSwizzleParam(TextureSwizzleParam::Green, TextureSwizzleParam::Blue);
+    EXPECT_EQ(Textures().LastParams().ForceResync, 0);
+}
+
+// ============================ D-D3 / D-D6 ============================
+//
+// THE INVARIANT THAT MAKES THE SERVER'S CHOICE SAFE, and nothing else in the tree can see it:
+// SSIM is completely blind to whether the server uploaded one union box or N rects, and the
+// Mali cliff behind that choice is ~+6 ms/frame for a hundred one-rect jobs against one box. So
+// the two representations have to describe the SAME texels - every rect inside the box, and
+// their union exactly the box.
+TEST(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(4, 256);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{1, 1, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{255, 255, 0},
+                                    IntVec3{1, 1, 1});
+    ASSERT_EQ(Textures().DrainListSize(), 1u);
+
+    Textures().DrainTextureSubData(Ctx());
+    const MGPSubData record = Textures().LastSubData();
+    const Vector<MGPSubRegion> regions = Textures().LastRegions();
+    ASSERT_EQ(record.RegionCount, regions.size());
+    ASSERT_GE(record.RegionCount, 2u) << "two far-apart one-texel writes must survive as two rects";
+
+    Int32 loX = record.UnionBox.X + static_cast<Int32>(record.UnionBox.W);
+    Int32 loY = record.UnionBox.Y + static_cast<Int32>(record.UnionBox.H);
+    Int32 hiX = record.UnionBox.X;
+    Int32 hiY = record.UnionBox.Y;
+    for (const MGPSubRegion& region : regions) {
+        EXPECT_GE(region.X, record.UnionBox.X) << "a rect starts left of the union box";
+        EXPECT_GE(region.Y, record.UnionBox.Y) << "a rect starts above the union box";
+        EXPECT_LE(region.X + static_cast<Int32>(region.W),
+                  record.UnionBox.X + static_cast<Int32>(record.UnionBox.W))
+            << "a rect ends right of the union box";
+        EXPECT_LE(region.Y + static_cast<Int32>(region.H),
+                  record.UnionBox.Y + static_cast<Int32>(record.UnionBox.H))
+            << "a rect ends below the union box";
+        loX = std::min(loX, region.X);
+        loY = std::min(loY, region.Y);
+        hiX = std::max(hiX, region.X + static_cast<Int32>(region.W));
+        hiY = std::max(hiY, region.Y + static_cast<Int32>(region.H));
+    }
+    EXPECT_EQ(loX, record.UnionBox.X) << "the rects' union does not reach the box's left edge";
+    EXPECT_EQ(loY, record.UnionBox.Y) << "the rects' union does not reach the box's top edge";
+    EXPECT_EQ(hiX, record.UnionBox.X + static_cast<Int32>(record.UnionBox.W));
+    EXPECT_EQ(hiY, record.UnionBox.Y + static_cast<Int32>(record.UnionBox.H));
+}
+
+TEST(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(5, 256);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{4, 8, 0}, IntVec3{2, 2, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{200, 220, 0},
+                                    IntVec3{2, 2, 1});
+    Textures().DrainTextureSubData(Ctx());
+    const Vector<MGPSubRegion> regions = Textures().LastRegions();
+    ASSERT_GE(regions.size(), 2u);
+    // A SUB-RECT'S ROWS ARE NOT CONTIGUOUS IN THE SHADOW, so it must carry the LEVEL's pitches -
+    // not its own width - or the staging planner on the far side repacks the wrong bytes.
+    for (const MGPSubRegion& region : regions) {
+        EXPECT_EQ(region.SrcRowStride, 256u * 4u) << "SrcRowStride is not the LEVEL's row pitch";
+        EXPECT_EQ(region.SrcSliceStride, 256u * 4u * 256u)
+            << "SrcSliceStride is not the LEVEL's slice pitch";
+        const Uint64 expectedOffset =
+            static_cast<Uint64>(region.Y) * 256u * 4u + static_cast<Uint64>(region.X) * 4u;
+        EXPECT_EQ(region.SrcOffset, expectedOffset) << "SrcOffset is not the first texel's byte offset";
+    }
+}
+
+TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(6, 64);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
+                                    IntVec3{64, 64, 1});
+    Textures().DrainTextureSubData(Ctx());
+    const MGPSubData record = Textures().LastSubData();
+    EXPECT_EQ(record.RegionCount, 0u) << "a single whole-level rect IS the union box, not a list";
+    EXPECT_EQ(record.UnionBox.X, 0);
+    EXPECT_EQ(record.UnionBox.Y, 0);
+    EXPECT_EQ(record.UnionBox.W, 64u);
+    EXPECT_EQ(record.UnionBox.H, 64u);
+    EXPECT_EQ(record.SourceIsVerbatimLevelShadow, 1)
+        << "the client always declares the level shadow; the server clears it when it converts";
+    EXPECT_EQ(record.Blob.Seg, kMGHostSpanSegNone);
+    EXPECT_EQ(record.Blob.Size, 0u) << "a monolith record does not declare its blob";
+    EXPECT_NE(record.Blob.Offset, 0u) << "Blob.Offset is the level shadow's address in monolith";
+    // The upload target rides in the record's Target byte beside the resource target, which is
+    // the only place a cube face could ever be carried.
+    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target),
+              static_cast<Uint8>(MGPipeResourceTarget::Tex2D));
+    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target),
+              static_cast<Uint8>(TextureUploadTarget::Texture2D));
+    // And the whole-level builder really does say TIGHTLY PACKED.
+    const MGPipeLevelPitch pitch = MGPipeLevelPitchOf(IntVec3{64, 64, 1}, 64 * 64 * 4);
+    const MGPSubRegion whole = MGPipeBuildSubRegion(record.UnionBox, IntVec3{64, 64, 1}, pitch);
+    EXPECT_EQ(whole.SrcRowStride, 0u);
+    EXPECT_EQ(whole.SrcSliceStride, 0u);
+    EXPECT_EQ(whole.SrcOffset, 0u);
+}
+
+TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(7, 128);
+    // Far more writes than the rect cap. The storage MERGES rather than truncates - a dropped
+    // rect is a dropped write - and degrades toward the union box; what the emitter must never
+    // do is invent or truncate. So the storage's own answer is the oracle, read BEFORE the drain
+    // clears the level, and 0 means "the union box is the whole story".
+    for (Int i = 0; i < 4 * static_cast<Int>(MipmapStorage::kMaxDirtyRects); ++i) {
+        const Int x = (i * 7) % 120;
+        const Int y = (i * 11) % 120;
+        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0},
+                                        IntVec3{2, 2, 1});
+    }
+    MipmapDirtyRegion oracle[MipmapStorage::kMaxDirtyRects];
+    const SizeT oracleCount = texture->GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, oracle,
+                                                            MipmapStorage::kMaxDirtyRects);
+    EXPECT_LE(oracleCount, MipmapStorage::kMaxDirtyRects);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(oracleCount))
+        << "the emitted region count is not the storage's own answer";
+    EXPECT_EQ(Textures().LastRegions().size(), oracleCount);
+}
+
+// ============================ D-D4 ============================
+TEST(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner) {
+    TextureScope scope;
+    const auto owner = MakeTexture2D(8, 64, 3);
+    owner->SetImmutableLevels(3);
+    const MGPipeHandle ownerHandle = Textures().FindTexture(*owner);
+    const auto view = MakeShared<TextureObjectView>(9, TextureTarget::Texture2D, owner, 1, 2, 0, 1);
+    const MGPipeHandle viewHandle = Textures().FindTexture(*view);
+    ASSERT_FALSE(MGPipeHandleIsNull(ownerHandle));
+    ASSERT_FALSE(MGPipeHandleIsNull(viewHandle));
+    ASSERT_FALSE(ownerHandle == viewHandle);
+    // ViewOf names the storage owner, and ONE HOP always reaches storage.
+    EXPECT_TRUE(Textures().LastDesc().Resource == viewHandle);
+    EXPECT_TRUE(Textures().LastDesc().ViewOf == ownerHandle)
+        << "the view's descriptor does not name its storage owner";
+
+    // An upload through the VIEW: TextureObjectView forwards the mark to the OWNER's method
+    // after remapping the level, so the drain list holds exactly one entry and it is the
+    // owner's - which is what makes an upload through a view and an upload through the owner one
+    // key rather than two.
+    view->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    ASSERT_EQ(Textures().DrainListSize(), 1u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_TRUE(Textures().LastSubData().Res == ownerHandle)
+        << "an upload through a view was keyed on the view instead of on its storage owner";
+    // The view's level 0 IS the owner's level 1.
+    EXPECT_EQ(Textures().LastSubData().Level, 1u);
+}
+
+// ============================ D-E1 ============================
+TEST(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(10, 8);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    texture->SetSwizzleParamRGBA(Vec4<TextureSwizzleParam>{TextureSwizzleParam::Alpha,
+                                                           TextureSwizzleParam::Blue,
+                                                           TextureSwizzleParam::Green,
+                                                           TextureSwizzleParam::Red});
+    const MGPTextureParams params = Textures().LastParams();
+    EXPECT_TRUE(params.Res == handle);
+    // kMGPipeNullHandle is ILLEGAL here: every texture object owns a sampler object, so a null
+    // is Fatal{ProtocolCorruption} on the far side rather than "no sampler".
+    EXPECT_FALSE(MGPipeHandleIsNull(params.BuiltinSampler))
+        << "MGPTextureParams::BuiltinSampler must never be the null handle";
+    // IT COMES FROM THE SAMPLER FAMILY'S CONTENT-ADDRESSED CACHE (ID-14), not from a slot this
+    // package mints. v1 took MGPipeSlots().Acquire(SamplerCso, the SamplerObject's lifetime id),
+    // which no create_sampler_state ever names - so on the integrated tree the applier would hold
+    // nothing for the handle every texture's params record carries. A content-addressed CSO has
+    // NO lifetime-id mapping at all, so FindByLifetimeId is the wrong question to ask about it.
+    EXPECT_TRUE(MGPipeSamplerCsoCacheInstance().RecordIsPublished(params.BuiltinSampler))
+        << "MGPTextureParams::BuiltinSampler names a handle the sampler CSO cache never minted a "
+           "create_sampler_state for";
+    EXPECT_GE(MGPipeSamplerCsoCacheInstance().RefCountOf(params.BuiltinSampler), 1u)
+        << "the texture holds no reference on its built-in sampler, so an LRU eviction could take "
+           "the handle out from under a standing set_texture_params record";
+    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeSlots().FindByLifetimeId(
+        MGPipeKind::SamplerCso, texture->GetSamplerObject()->GetLifetimeId())))
+        << "a SamplerCso slot was minted against the SamplerObject's lifetime id; the cache "
+           "deliberately allocates without one, so ~SamplerObject frees nothing for this kind";
+    EXPECT_EQ(params.Swizzle[0], static_cast<Uint8>(TextureSwizzleParam::Alpha));
+    EXPECT_EQ(params.Swizzle[1], static_cast<Uint8>(TextureSwizzleParam::Blue));
+    EXPECT_EQ(params.Swizzle[2], static_cast<Uint8>(TextureSwizzleParam::Green));
+    EXPECT_EQ(params.Swizzle[3], static_cast<Uint8>(TextureSwizzleParam::Red));
+    EXPECT_EQ(params.DepthStencilMode, kMGPipeDepthStencilModeDepth);
+    // D-E3's deliverable at the one site that proves it: a texture nothing has bound - no
+    // sampler view, no image unit, only ever an attachment - still publishes the mode, because
+    // set_texture_params is addressed by RESOURCE and is independent of every binding.
+    texture->SetDepthStencilTextureMode(GL_STENCIL_INDEX);
+    EXPECT_EQ(Textures().LastParams().DepthStencilMode, kMGPipeDepthStencilModeStencil);
+}
+
+TEST(TextureEmit, TwoTexturesWithIdenticalSamplingShareOneBuiltinCso) {
+    TextureScope scope;
+    static_assert(kMGPipeWiredSamplerSubsystem != 0,
+                  "ID-14: this package takes MGPTextureParams::BuiltinSampler from the sampler "
+                  "family's content-addressed cache, so bit 10 requires bit 11 and this case is "
+                  "no longer allowed to skip");
+    const auto first = MakeTexture2D(11, 8);
+    const auto second = MakeTexture2D(12, 8);
+    first->SetSwizzleParam(TextureSwizzleParam::Red, TextureSwizzleParam::Green);
+    const MGPipeHandle firstCso = Textures().LastParams().BuiltinSampler;
+    second->SetSwizzleParam(TextureSwizzleParam::Red, TextureSwizzleParam::Green);
+    EXPECT_TRUE(Textures().LastParams().BuiltinSampler == firstCso);
+}
+
+// ============================ D-I1 ============================
+TEST(TextureEmit, ADestroyedTextureReleasesItsResourceViewAndBuiltinSamplerSlots) {
+    TextureScope scope;
+    const Uint32 texturesBefore = MGPipeSlots().LiveCount(MGPipeKind::Texture);
+    const Uint32 viewsBefore = MGPipeSlots().LiveCount(MGPipeKind::SamplerViewCso);
+    MGPipeHandle handle{};
+    {
+        const auto texture = MakeTexture2D(13, 8);
+        handle = Textures().FindTexture(*texture);
+        ASSERT_FALSE(MGPipeHandleIsNull(handle));
+        EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::Texture, handle));
+        // The sampler VIEW is minted off the TEXTURE's own lifetime id - one per ITextureObject
+        // (D-F2) - so the texture's death is the only thing that can release it.
+        (void)MGPipeSlots().Acquire(MGPipeKind::SamplerViewCso, texture->GetLifetimeId());
+    }
+    EXPECT_FALSE(MGPipeSlots().IsLive(MGPipeKind::Texture, handle))
+        << "~TextureObjectBase did not return the texture's slot";
+    EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::Texture), texturesBefore)
+        << "a destroyed texture leaked its resource slot";
+    EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::SamplerViewCso), viewsBefore)
+        << "a destroyed texture leaked the sampler view minted off its lifetime id";
+    // THE BUILT-IN SAMPLER'S CSO SLOT IS NOT CHECKED HERE, and the absence is a statement rather
+    // than an omission (ID-14/ID-17): a content-addressed CSO belongs to a VALUE and not to this
+    // object - two identical SamplerObjects share one - so it is allocated with NO lifetime id,
+    // ~SamplerObject's helper correctly frees nothing for it, and the only death path for that
+    // slot is the cache's own LRU eviction. What this package owes is the REFERENCE, and it is
+    // dropped when the texture's slot is recycled (the one moment a client emitter can see a
+    // texture die, the death helper being the contract's).
+    //
+    // A second release on the same handle is a proven no-op: Free bumps no generation of its
+    // own, so a double free cannot skip one.
+    MGPipeSlots().Free(MGPipeKind::Texture, handle);
+    EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::Texture), texturesBefore);
+}
+
+// ============================ D-D2 ============================
+TEST(TextureEmit, ARenderbufferRespecifyPublishesItsExtentWithoutAVersionCounter) {
+    TextureScope scope;
+    const auto renderbuffer = MakeShared<RenderbufferObject>(1);
+    const MGPipeHandle handle = Textures().FindRenderbuffer(*renderbuffer);
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+    EXPECT_TRUE(Textures().LastDesc().Resource == handle);
+    EXPECT_EQ(Textures().LastDesc().Target, static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer));
+    EXPECT_EQ(Textures().LastDesc().HasDefinedContent, 0) << "a create carries no storage";
+
+    // The three setters bump no version and raise no notice, and the framebuffer bit's shutter
+    // does not move for an ALREADY-ATTACHED renderbuffer - which is exactly why the hole is
+    // closed by EMISSION from the storage entry point rather than by a new counter (a member
+    // would resize the pull build's object) or a wider shutter.
+    renderbuffer->SetInternalFormat(TextureInternalFormat::Depth24Stencil8);
+    renderbuffer->AllocateStorage(IntVec2{320, 240});
+    renderbuffer->SetSamples(4);
+    const MGPResourceDesc desc = Textures().LastDesc();
+    EXPECT_TRUE(desc.Resource == handle);
+    EXPECT_EQ(desc.Width, 320u);
+    EXPECT_EQ(desc.Height, 240u);
+    EXPECT_EQ(desc.Samples, 4u);
+    EXPECT_EQ(desc.HasDefinedContent, 1);
+    EXPECT_EQ(desc.InternalFormat, static_cast<Uint32>(TextureInternalFormat::Depth24Stencil8));
+
+    // THE DEDUPE, which is what keeps one glRenderbufferStorage one record rather than three.
+    const Uint64 respecifiesBefore = Textures().RespecifyCount();
+    renderbuffer->AllocateStorage(IntVec2{320, 240});
+    EXPECT_EQ(Textures().RespecifyCount(), respecifiesBefore);
+}
+
+// ============================ D-D5 ============================
+TEST(TextureEmit, ABailedLevelStaysDirtyAndStaysOnTheDrainList) {
+    TextureScope scope;
+    // A level with no storage at all: there is nothing to upload, the record cannot be built,
+    // and the texels are still owed. Naively clearing the flag here is exactly how a bail loses
+    // texels, which is the failure D-D5's three steps exist to make impossible.
+    // A level with a real EXTENT and no BYTES: the region is non-empty so the level is genuinely
+    // dirty, and the emitter cannot derive a bytes-per-texel or find a shadow to point at.
+    const auto texture = MakeShared<TextureObject2D>(14);
+    texture->SetInternalFormat(TextureInternalFormat::RGBA8);
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{8, 8, 1}, 0});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    ASSERT_TRUE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+    ASSERT_EQ(Textures().DrainListSize(), 1u);
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().DrainListSize(), 1u)
+        << "a level the emitter could not describe was dropped from the drain list";
+    EXPECT_EQ(Textures().SubDataCount(), 0u);
+
+    // And a level whose record the applier ACCEPTED leaves both the flag and the list entry
+    // behind it. The acceptance is the applier's answer and not the emitter's - see
+    // ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList for the other half, which is the one
+    // v1 could not distinguish.
+    const auto good = MakeTexture2D(15, 16);
+    good->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 1u);
+    EXPECT_EQ(Textures().RefusedSubDataCount(), 0u) << "the applier refused a record it holds";
+    EXPECT_FALSE(good->IsStorageDirty(TextureUploadTarget::Texture2D, 0))
+        << "the client must clear its own flag for a level whose record the applier accepted";
+}
+
+// ============================ M1 ============================
+//
+// THE REGION LIST IS BUILT, COUNTED AND HANDED OVER. v1 filled m_regions, wrote its size into
+// MGPSubData::RegionCount and passed NOTHING - and every case that touched regions read the
+// emitter's own staging vector back, so the omission was invisible to the whole suite. On this
+// base the applier's tail exists, so the oracle is what the APPLIER stored: a record declaring
+// N regions with a null tail is refused outright, and one whose rects the applier never saw
+// would let Espryt fall back to the union box and silently discard D-D6's entire measured
+// argument (a 635 KB/frame box against 40 KB/frame of rects).
+TEST(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(16, 64);
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    // Two FAR-APART writes, which is the scattered case D-D5 names by fixture (atlas traffic):
+    // the storage keeps two rects and their union box is most of the level.
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{48, 48, 0}, IntVec3{4, 4, 1});
+    Textures().DrainTextureSubData(Ctx());
+    ASSERT_EQ(Textures().RefusedSubDataCount(), 0u)
+        << "the applier refused the record, which is what a declared-but-missing tail looks like";
+    const Vector<MGPSubRegion>& emitted = Textures().LastRegions();
+    ASSERT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(emitted.size()));
+    ASSERT_GE(emitted.size(), 2u) << "the storage merged the two writes; the case proves nothing";
+
+    const MGPipeResourceRecord* stored = AppliedTexture(handle);
+    ASSERT_NE(stored, nullptr);
+    const MGPipeResourceRecord::PendingUpload* pending =
+        AppliedUpload(*stored, Textures().LastSubData().Target, 0);
+    ASSERT_NE(pending, nullptr) << "the applier accumulated no pending upload for the level";
+    ASSERT_EQ(pending->Regions.size(), emitted.size())
+        << "the applier's stored region count is not the emitted one";
+    for (SizeT i = 0; i < pending->Regions.size(); ++i) {
+        EXPECT_EQ(pending->Regions[i].X, emitted[i].X) << "MGPSubRegion::X at region " << i;
+        EXPECT_EQ(pending->Regions[i].Y, emitted[i].Y) << "MGPSubRegion::Y at region " << i;
+        EXPECT_EQ(pending->Regions[i].W, emitted[i].W) << "MGPSubRegion::W at region " << i;
+        EXPECT_EQ(pending->Regions[i].H, emitted[i].H) << "MGPSubRegion::H at region " << i;
+        EXPECT_EQ(pending->Regions[i].SrcOffset, emitted[i].SrcOffset)
+            << "MGPSubRegion::SrcOffset at region " << i;
+        EXPECT_EQ(pending->Regions[i].SrcRowStride, emitted[i].SrcRowStride)
+            << "MGPSubRegion::SrcRowStride at region " << i;
+        EXPECT_EQ(pending->Regions[i].SrcSliceStride, emitted[i].SrcSliceStride)
+            << "MGPSubRegion::SrcSliceStride at region " << i;
+    }
+}
+
+// ============================ M3 ============================
+//
+// D-D5 STEP 1 READ LITERALLY: the client clears a level's flags ONLY for a record the applier
+// ACCEPTED. v1 cleared on dispatch, so any refusal left the server with nothing and the client
+// with a clean flag - and MG_Impl contains no reader of a texture's dirty state, so the level
+// simply stopped updating for the life of the texture.
+TEST(TextureEmit, ARefusedUploadLeavesTheLevelDirtyAndOnTheDrainList) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(17, 32);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
+    ASSERT_EQ(Textures().DrainListSize(), 1u);
+
+    // THE REFUSAL, constructed rather than mocked: the applier is told to drop every object
+    // record, so the handle the record names resolves to nothing. That is the ordinary shape of
+    // a texture born while the subsystem bit was clear, and it is a COUNTED NO-OP on the far
+    // side - invisible from the call site without the acceptance return.
+    MGPipeApplierReleaseObjectRecords();
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), 1u) << "the record was not even emitted";
+    EXPECT_EQ(Textures().RefusedSubDataCount(), 1u) << "the applier did not refuse a record it lost";
+    EXPECT_TRUE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0))
+        << "the client cleared its dirty flag for a level the applier REFUSED, so those texels "
+           "exist nowhere and the level stops updating for the life of the texture";
+    EXPECT_EQ(Textures().DrainListSize(), 1u)
+        << "a refused level was dropped from the drain list, so nothing will retry it";
+
+    // AND IT SELF-HEALS. The publication LATCH cannot drive this half - it answers "did a
+    // create for this handle go out", which is still true after the records were dropped - so
+    // the applier's own REFUSAL of the respecify is what republishes the create. That is the
+    // second use of the acceptance return and the reason the emitter asks for it on all three
+    // calls rather than only on the upload.
+    //
+    // A REAL storage definition, not a restatement of the one it already has: the emitter dedupes
+    // a respecify on the built descriptor itself, so a call that moves no field returns before
+    // reaching the applier at all and there is nothing for the refusal to answer.
+    const Uint64 createsBefore = Textures().CreateCount();
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{64, 64, 1}, 64 * 64 * 4});
+    EXPECT_GT(Textures().CreateCount(), createsBefore)
+        << "a respecify the applier refused did not republish the create it is missing";
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().RefusedSubDataCount(), 1u) << "the retry was refused as well";
+    EXPECT_FALSE(texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0));
+    EXPECT_EQ(Textures().DrainListSize(), 0u);
+}
+
+// ============================ M4 ============================
+//
+// THE CANONICAL ORDER FOR THE TEXTURES THE HINT WAS WRITTEN FOR: glTexStorage2D, then
+// glBindImageTexture. An IMMUTABLE texture has no further respecify - that is what immutable
+// means - so before this the applier's record kept ImageBindableHint = 0 for ever and the
+// PREVENTION half of the texture-remint stall class was a no-op for exactly its own target.
+TEST(TextureEmit, AnImmutableTexturesImageBindableHintReachesTheApplierAfterItsAllocation) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(18, 32);
+    texture->SetImmutableLevels(1);
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{32, 32, 1}, 32 * 32 * 4});
+    const MGPipeHandle handle = Textures().FindTexture(*texture);
+    ASSERT_TRUE(texture->IsImmutable());
+
+    const MGPipeResourceRecord* stored = AppliedTexture(handle);
+    ASSERT_NE(stored, nullptr);
+    ASSERT_EQ(stored->Desc.ImageBindableHint, 0);
+    const Uint64 serialBefore = stored->Serial;
+    const Uint32 width = stored->Desc.Width;
+
+    // A pending upload standing at the moment the mask moves, because the metadata update must
+    // not eat it: a mask change arriving between a glTexSubImage2D and the sync that consumes it
+    // replaces no storage and therefore replaces no coordinate system.
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    Textures().DrainTextureSubData(Ctx());
+    ASSERT_EQ(Textures().RefusedSubDataCount(), 0u);
+    ASSERT_NE(AppliedTexture(handle), nullptr);
+    ASSERT_NE(AppliedUpload(*AppliedTexture(handle), Textures().LastSubData().Target, 0), nullptr);
+
+    Textures().NoteTextureBoundAs(handle, kMGPipeBindShaderImage);
+    const MGPipeResourceRecord* after = AppliedTexture(handle);
+    ASSERT_NE(after, nullptr);
+    EXPECT_EQ(after->Desc.ImageBindableHint, 1)
+        << "an immutable texture bound to an image unit AFTER its allocation never told the "
+           "server it may be image-bound";
+    EXPECT_NE(after->Desc.BindMask & kMGPipeBindShaderImage, 0) << "MGPResourceDesc::BindMask";
+    EXPECT_EQ(after->Desc.Width, width) << "a metadata update moved a storage-defining field";
+    EXPECT_GT(after->Serial, serialBefore) << "the metadata update did not publish";
+    EXPECT_NE(AppliedUpload(*after, Textures().LastSubData().Target, 0), nullptr)
+        << "the metadata respecify dropped a pending upload it does not replace the storage of";
+}
+
+// ============================ M2 ============================
+//
+// THE THIRTEENTH MGP_NOTE_AGGREGATE(TextureParams) SITE. MGPTextureParams takes MinLod, MaxLod
+// and LodBias off the texture's built-in SamplerObject, and every glTexParameter that writes
+// them lands on that object and on nothing the texture's own params version watches - so
+// `glTexStorage2D(...); glTexParameterf(GL_TEXTURE_MIN_LOD, 2.0f); draw;` left the applier's
+// record saying MinLod = 0 and Espryt pushed the wrong LOD clamp. Wrong pixels.
+//
+// THE CALL THIS DRIVES IS EXACTLY THE ONE GL_Texture.cpp MAKES at its three glTexParameter
+// choke points (the granted call sites); what it pins here is the emitter's half - that the
+// hook republishes when either version moved and stays silent when neither did.
+TEST(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(19, 16);
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    const Uint64 paramsBefore = Textures().ParamCount();
+    ASSERT_GT(paramsBefore, 0u);
+    ASSERT_EQ(Textures().LastParams().MinLod, texture->GetSamplerObject()->GetMinLod());
+
+    // NOTHING MOVED: the version-first skip reads both counters and emits nothing.
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_EQ(Textures().ParamCount(), paramsBefore)
+        << "an unchanged texture re-emitted its parameters";
+
+    // A WRITE THAT ONLY THE SAMPLER OBJECT SEES.
+    const Uint16 textureVersionBefore = texture->GetTextureParamsVersion();
+    texture->GetSamplerObject()->SetLodRange(2.0f, 7.0f);
+    EXPECT_EQ(texture->GetTextureParamsVersion(), textureVersionBefore)
+        << "the texture's own params version moved, so this case is not testing the gap";
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_GT(Textures().ParamCount(), paramsBefore)
+        << "a LOD write on the built-in sampler published no set_texture_params, so the applier's "
+           "record keeps the previous LOD clamp";
+    EXPECT_FLOAT_EQ(Textures().LastParams().MinLod, 2.0f);
+    EXPECT_FLOAT_EQ(Textures().LastParams().MaxLod, 7.0f);
+
+    texture->GetSamplerObject()->SetLodBias(1.5f);
+    const Uint64 afterLodRange = Textures().ParamCount();
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    EXPECT_GT(Textures().ParamCount(), afterLodRange);
+    EXPECT_FLOAT_EQ(Textures().LastParams().LodBias, 1.5f);
+}
+
+// ============================ ID-17 ============================
+TEST(TextureEmit, ATexturesBuiltinSamplerHoldsOneCacheReferenceAndSwapsItWithTheContent) {
+    TextureScope scope;
+    MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
+    const auto texture = MakeTexture2D(20, 16);
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    const MGPipeHandle first = Textures().LastParams().BuiltinSampler;
+    ASSERT_FALSE(MGPipeHandleIsNull(first));
+    EXPECT_EQ(cache.RefCountOf(first), 1u)
+        << "EVERY Acquire takes a reference and this emitter owes exactly one - two would pin the "
+           "entry for ever and none would let the LRU take a handle a standing record names";
+
+    // A re-emission with the value unchanged hands the second reference straight back.
+    texture->SetSwizzleParam(TextureSwizzleParam::Red, TextureSwizzleParam::Blue);
+    EXPECT_TRUE(Textures().LastParams().BuiltinSampler == first)
+        << "a texture-only parameter moved the content-addressed sampler handle";
+    EXPECT_EQ(cache.RefCountOf(first), 1u) << "the re-emission leaked a second reference";
+
+    // A SAMPLER write moves the value, so the content-addressed handle moves with it - and the
+    // previous handle's reference is given back at that moment.
+    texture->GetSamplerObject()->SetLodBias(3.25f);
+    MG_Pipe::MGPipeEmitTextureParams(*texture);
+    const MGPipeHandle second = Textures().LastParams().BuiltinSampler;
+    ASSERT_FALSE(second == first) << "a sampler parameter change did not move the CSO handle";
+    EXPECT_EQ(cache.RefCountOf(second), 1u);
+    EXPECT_EQ(cache.RefCountOf(first), 0u)
+        << "the previous built-in sampler handle was never released, so its entry is pinned for "
+           "the life of the process";
+}
+
+// ============================ m4 ============================
+TEST(TextureEmit, ARecycledTextureSlotDoesNotInheritItsPredecessorsBindMask) {
+    TextureScope scope;
+    MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
+    MGPipeHandle firstHandle{};
+    MGPipeHandle firstCso{};
+    {
+        const auto first = MakeTexture2D(21, 8);
+        firstHandle = Textures().FindTexture(*first);
+        ASSERT_FALSE(MGPipeHandleIsNull(firstHandle));
+        // A sampler value NOTHING ELSE in this case shares, so the CSO the entry pins is this
+        // texture's alone and its reference count is an exact statement about this entry.
+        first->GetSamplerObject()->SetLodBias(9.75f);
+        MG_Pipe::MGPipeEmitTextureParams(*first);
+        firstCso = Textures().BuiltinSamplerOf(firstHandle);
+        ASSERT_FALSE(MGPipeHandleIsNull(firstCso));
+        ASSERT_EQ(cache.RefCountOf(firstCso), 1u);
+        // The framebuffer emitter ORs these into the entry whether or not the texture family is
+        // on, so a sticky mask really can outlive its object.
+        Textures().NoteTextureBoundAs(firstHandle, kMGPipeBindRenderTarget);
+        Textures().NoteTextureBoundAs(firstHandle, kMGPipeBindShaderImage);
+        ASSERT_NE(Textures().TextureBindMask(firstHandle) & kMGPipeBindRenderTarget, 0);
+    }
+    const auto second = MakeTexture2D(22, 8);
+    const MGPipeHandle secondHandle = Textures().FindTexture(*second);
+    ASSERT_EQ(secondHandle.Slot, firstHandle.Slot) << "the slot was not recycled; the case proves nothing";
+    ASSERT_NE(secondHandle.Gen, firstHandle.Gen);
+    EXPECT_EQ(Textures().TextureBindMask(secondHandle), 0u)
+        << "a recycled slot's new texture inherited the dead one's sticky bind mask, so its very "
+           "first descriptor said RENDER_TARGET and image-bindable about an object nothing bound";
+    EXPECT_EQ(Textures().LastDesc().ImageBindableHint, 0);
+    EXPECT_TRUE(Textures().BuiltinSamplerOf(secondHandle) != firstCso)
+        << "the recycled entry is still pinning the dead texture's built-in sampler";
+    EXPECT_EQ(cache.RefCountOf(firstCso), 0u)
+        << "the dead texture's cache reference was never given back, so its entry is pinned for "
+           "the life of the process - and this is the only moment a client emitter can see a "
+           "texture die, the death helper being the contract's";
+}
+
+// ============================ the declared clean-arm deviation ============================
+//
+// The contract's MGPipeNoteTextureLevelDirty carries no `dirty` flag, so a level that goes
+// clean is not removed from the drain list at the moment it goes clean - it is COLLECTED at the
+// next drain, where !IsStorageDirty is the first test EmitOneLevel makes. What must never
+// happen is the level being dropped while it is still dirty, or a re-dirty after the collection
+// failing to re-append.
+TEST(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain) {
+    TextureScope scope;
+    const auto texture = MakeTexture2D(23, 16);
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    ASSERT_EQ(Textures().DrainListSize(), 1u);
+
+    texture->MarkStorageDirty(TextureUploadTarget::Texture2D, 0, false);
+    EXPECT_EQ(Textures().DrainListSize(), 1u) << "the entry is collected at the drain, not here";
+    const Uint64 emissionsBefore = Textures().SubDataCount();
+    Textures().DrainTextureSubData(Ctx());
+    EXPECT_EQ(Textures().SubDataCount(), emissionsBefore)
+        << "a level that is no longer dirty was uploaded anyway";
+    EXPECT_EQ(Textures().DrainListSize(), 0u) << "the clean level was never collected";
+
+    // And the key really was dropped from the per-slot list, so a later write re-appends.
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{4, 4, 1});
+    EXPECT_EQ(Textures().DrainListSize(), 1u)
+        << "a re-dirtied level did not go back on the drain list, so its texels are owed for ever";
+}
+#endif // MOBILEGL_PIPE_PUSH
+
+// =========================================================================================
 // The APPLIER's half of the texture family (the wire commits'): set_texture_params on the
 // texture's own record, and the sub-data validator plus the pending-upload set that replaces
 // the frontend dirty flags the client clears at emission. The emitter's half - the descriptor
