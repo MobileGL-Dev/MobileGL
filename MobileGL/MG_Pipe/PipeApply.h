@@ -155,25 +155,11 @@ namespace MobileGL::MG_Pipe {
     // 4-billion-entry resize.
     inline constexpr Uint32 kMGPipeMaxFramebufferSlots = 1u << 16;
 
-    // THE FOURTH set_framebuffer_state TARGET, AND IT IS THE CONTRACT'S TO MINT (c0e:
-    // MGPipeFramebufferTarget::Named = 3). It is declared here as a plain constant because wire
-    // v3 and c0e run in parallel: the applier must ADMIT the value now, and this package may not
-    // write MGPipeTypes.h. When c0e lands, this constant is deleted and every use below becomes
-    // static_cast<Uint8>(MGPipeFramebufferTarget::Named) - wire's verification round retires it,
-    // and the static_assert underneath is what makes forgetting impossible: the day the
-    // enumerator exists, MGPipeFramebufferTarget::Count becomes 4 and this fires.
-    //
-    // ITS MEANING: "this record describes the framebuffer it names; no binding changes." Draw /
-    // Read / Both write the record AND set the bound handle(s); Named writes the record only.
-    // That is what lets the DSA entry points - BlitNamedFramebuffer and the four
-    // ClearNamedFramebuffer* - be handed a record for a framebuffer that is bound to neither
-    // binding, which is the hole esprytobj's C-1 found: the applier used to hold the two BOUND
-    // records only, so a named blit or clear reached a driver FBO that never got its
-    // attachments.
-    inline constexpr Uint8 kMGPipeFramebufferTargetNamed = 3;
-    static_assert(static_cast<Uint8>(MGPipeFramebufferTarget::Count) == kMGPipeFramebufferTargetNamed,
-                  "c0e has landed MGPipeFramebufferTarget::Named: delete kMGPipeFramebufferTargetNamed "
-                  "and spell the enumerator (wire's verification round, ID-21)");
+    // THE FOURTH set_framebuffer_state TARGET is the contract's MGPipeFramebufferTarget::Named (c0e):
+    // "this record describes the framebuffer it names; no binding changes." Draw / Read / Both
+    // write the record AND set the bound handle(s); Named writes the record only, which is how
+    // the DSA entry points - BlitNamedFramebuffer and the four ClearNamedFramebuffer* - hand the
+    // server a record for a framebuffer bound to neither binding (esprytobj review C-1, ID-19).
 
     // The two framebuffer BINDINGS, and there are two rather than three: Both and Named are
     // things a RECORD says, not bindings a server has. MGPipeApplierState::BoundFramebuffer is
@@ -592,7 +578,7 @@ namespace MobileGL::MG_Pipe {
         // described this binding yet", which is what a make-current leaves behind.
         //
         // set_framebuffer_state Draw / Read / Both writes the RECORD at state.Fbo's slot AND
-        // sets the handle(s) here; Named (kMGPipeFramebufferTargetNamed) writes the record and
+        // sets the handle(s) here; Named (MGPipeFramebufferTarget::Named) writes the record and
         // touches nothing here at all - that is the whole of the fourth target's meaning.
         Array<MGPipeHandle, kMGPipeFramebufferBindingCount> BoundFramebuffer{};
         // ONE SERIAL FOR THE FAMILY, and it moves on EVERY write - a Named record's included,
@@ -962,7 +948,7 @@ namespace MobileGL::MG_Pipe {
     //     can never displace another's, and a slot whose object has been recycled is simply
     //     overwritten by its successor's record (D-I2: no wire lifetime, so nothing to retire).
     //   - Draw / Read / Both ADDITIONALLY set BoundFramebuffer[Draw] / [Read] / both.
-    //     kMGPipeFramebufferTargetNamed sets NEITHER: it is how a DSA entry point hands Espryt
+    //     MGPipeFramebufferTarget::Named sets NEITHER: it is how a DSA entry point hands Espryt
     //     a framebuffer it is about to blit into or clear WITHOUT claiming it is bound.
     //
     // FramebufferSerial advances on every applied record, Named included.

@@ -273,7 +273,7 @@ TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
 #else
     ApplierGuard guard;
     MGPFramebufferState bad = FramebufferRecord(MGPipeHandle{7, 4}, MGPipeFramebufferTarget::Draw, 100);
-    bad.Target = static_cast<Uint8>(kMGPipeFramebufferTargetNamed + 1);
+    bad.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Count);
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
 
     ExpectRefusedNaming("set_framebuffer_state {slot=7, gen=4, target=4}: the record names no framebuffer "
@@ -440,7 +440,7 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
 
     MGPFramebufferState named = FramebufferRecord(MGPipeHandle{6, 3}, MGPipeFramebufferTarget::Draw, 300);
-    named.Target = kMGPipeFramebufferTargetNamed;
+    named.Target = static_cast<Uint8>(MGPipeFramebufferTarget::Named);
     named.Color[0].Res = MGPipeHandle{21, 1};
     MGPipeApplySetFramebufferState(named);
 
@@ -451,7 +451,7 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
            "clears into a driver framebuffer with no attachments";
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Width, 300u);
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Color[0].Res, (MGPipeHandle{21, 1}));
-    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Target, kMGPipeFramebufferTargetNamed);
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Target, static_cast<Uint8>(MGPipeFramebufferTarget::Named));
 
     // (b) AND NEITHER BINDING MOVED.
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);

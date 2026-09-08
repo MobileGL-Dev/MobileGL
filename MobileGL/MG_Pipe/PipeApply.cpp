@@ -2145,12 +2145,12 @@ namespace MobileGL::MG_Pipe {
         // GL HAS TWO INDEPENDENT FRAMEBUFFER BINDINGS AND THIS RECORD DESCRIBES ONE FRAMEBUFFER,
         // so Target says which binding - if any - the description also BINDS it to. Both is one
         // object bound to both and moves both handles from one call; Named
-        // (kMGPipeFramebufferTargetNamed) moves neither, which is how the DSA entry points
+        // (MGPipeFramebufferTarget::Named) moves neither, which is how the DSA entry points
         // describe a framebuffer they are about to blit into or clear without claiming it is
         // bound (ID-19). A value above Named is not a target this server has, and guessing one
         // would put a draw's attachments into the read binding or the other way round.
         const char* fault = nullptr;
-        if (state.Target > kMGPipeFramebufferTargetNamed) {
+        if (state.Target >= static_cast<Uint8>(MGPipeFramebufferTarget::Count)) {
             fault = "the record names no framebuffer binding target";
         }
         // THE RECORD IS ADDRESSED BY THE FRAMEBUFFER HANDLE NOW, so the handle has to be one.
